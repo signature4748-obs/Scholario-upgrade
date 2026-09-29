@@ -289,7 +289,8 @@ async function main() {
     },
   })
   await db.payment.create({
-    data: { feeId: paid1.id, amount: 18000, method: 'UPI', status: 'SUCCESS', transactionId: 'pay-demo-t1', note: 'Term 1 tuition' },
+    // Phase 3: Payment.schoolId is required — derived from the fee.
+    data: { schoolId: paid1.schoolId, feeId: paid1.id, amount: 18000, method: 'UPI', status: 'SUCCESS', transactionId: 'pay-demo-t1', note: 'Term 1 tuition' },
   })
   const paid2 = await db.fee.create({
     data: {
@@ -299,7 +300,8 @@ async function main() {
     },
   })
   await db.payment.create({
-    data: { feeId: paid2.id, amount: 18000, method: 'BANK_TRANSFER', status: 'SUCCESS', transactionId: 'pay-demo-t2', note: 'Term 2 tuition' },
+    // Phase 3: Payment.schoolId is required — derived from the fee.
+    data: { schoolId: paid2.schoolId, feeId: paid2.id, amount: 18000, method: 'BANK_TRANSFER', status: 'SUCCESS', transactionId: 'pay-demo-t2', note: 'Term 2 tuition' },
   })
   await db.fee.create({
     data: {

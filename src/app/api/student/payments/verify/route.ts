@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError, newRequestId } from '@/lib/security/errors'
+import { applyPaymentToLedger, resolveFeeIdForTxn } from '@/lib/fee-workflow'
 import { getPaymentProvider } from '@/lib/payments/provider'
 import { paymentMethodFor, prettyMethod } from '@/lib/payments/methods'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
@@ -76,8 +77,48 @@ export async function POST(req: NextRequest) {
         })
       }
 
-      // ── 2. Idempotency — already verified? Return the same payload. ──
+      // ── 2. Idempotency — already verified? ───────────────────────
+      // Phase 3 (SUCCESS-without-ledger hole): when the txn is ALREADY
+      // SUCCESS on arrival (the webhook won the race), do not blindly
+      // early-return — RECONCILE-IF-UNAPPLIED first: if no Payment row
+      // with transactionId === txn.gatewayPaymentId exists yet (legacy
+      // rows transitioned before the webhook applied the ledger), apply
+      // the ledger ONCE through the canonical writer (same idempotency
+      // key — a second application is a no-op), then answer.
       if (txn.status === 'SUCCESS') {
+        const reconcileKey = txn.gatewayPaymentId ?? txn.gatewayOrderId
+        if (reconcileKey) {
+          const appliedAlready = await db.payment.findUnique({
+            where: { transactionId: reconcileKey },
+            select: { id: true },
+          })
+          const txnStudentId = txn.studentId
+          if (!appliedAlready && txnStudentId) {
+            await db.$transaction(async (tx) => {
+              // Same fee targeting as the primary path — the txn's own
+              // feeId, else feeHeadName title, else the oldest unsettled
+              // fee, else a minimal Fee row.
+              const feeId = await resolveFeeIdForTxn(tx, {
+                schoolId: txn.schoolId,
+                studentId: txnStudentId,
+                feeId: txn.feeId,
+                feeHeadName: txn.feeHeadName,
+                amount: txn.amount,
+                method: paymentMethodFor(txn.method),
+              })
+              return applyPaymentToLedger(
+                {
+                  txnId: reconcileKey,
+                  schoolId: txn.schoolId,
+                  feeId,
+                  amount: txn.amount,
+                  method: paymentMethodFor(txn.method),
+                },
+                tx,
+              )
+            })
+          }
+        }
         return {
           receiptNo: txn.receiptNo,
           amount: txn.amount,
@@ -116,8 +157,13 @@ export async function POST(req: NextRequest) {
       const paidAt = new Date()
 
       const updatedTxn = await db.$transaction(async (tx) => {
-        const updated = await tx.feeTransaction.update({
-          where: { id: txn.id },
+        // ── 4a. CONDITIONAL transition — only a PENDING row can become ─
+        // SUCCESS. If count === 0 the webhook (or a concurrent verify)
+        // already transitioned it — and, since Phase 3, applied the ledger
+        // in the SAME transaction — so we answer idempotently and apply
+        // NOTHING (the double-credit race is closed at the winner).
+        const transition = await tx.feeTransaction.updateMany({
+          where: { id: txn.id, status: 'PENDING' },
           data: {
             status: 'SUCCESS',
             gatewayPaymentId: paymentId,
@@ -129,62 +175,42 @@ export async function POST(req: NextRequest) {
             note: `Paid online via ${provider.name} checkout · receipt ${txn.receiptNo}`,
           },
         })
-
-        // Resolve the student's Fee row: prefer an exact title match with
-        // the transaction's fee head, else the student's first fee row.
-        // If none exists, create a minimal paid Fee so the Payment row
-        // (and the event-stream JOIN) always has its Fee linkage.
-        const fee =
-          (txn.feeHeadName
-            ? await tx.fee.findFirst({
-                where: { studentId, title: txn.feeHeadName },
-                orderBy: { createdAt: 'asc' },
-              })
-            : null) ??
-          (await tx.fee.findFirst({ where: { studentId }, orderBy: { createdAt: 'asc' } }))
-
-        let feeId: string
-        if (fee) {
-          feeId = fee.id
-          const newPaid = fee.paid + txn.amount
-          await tx.fee.update({
-            where: { id: fee.id },
-            data: {
-              paid: newPaid,
-              status: newPaid >= fee.amount ? 'PAID' : 'PARTIAL',
-              method: paymentMethod,
-              paidDate: paidAt,
-            },
-          })
-        } else {
-          const created = await tx.fee.create({
-            data: {
-              schoolId: txn.schoolId,
-              studentId,
-              title: txn.feeHeadName ?? 'Student Fee Payment',
-              amount: txn.amount,
-              paid: txn.amount,
-              status: 'PAID',
-              method: paymentMethod,
-              paidDate: paidAt,
-            },
-          })
-          feeId = created.id
+        if (transition.count === 0) {
+          return { raced: true as const, txn: await tx.feeTransaction.findUnique({ where: { id: txn.id } }) }
         }
+        const updated = await tx.feeTransaction.findUnique({ where: { id: txn.id } })
 
-        // Payment event row — the event-stream service polls
-        // Payment JOIN Fee JOIN Student JOIN User WHERE status='SUCCESS',
-        // so creating it fires the live "Fee payment received" stream.
-        await tx.payment.create({
-          data: {
+        // Resolve the student's Fee row (Phase 3 targeting improvement,
+        // documented): the txn's own feeId, else an exact feeHeadName title
+        // match, else the student's OLDEST unsettled fee — never blindly
+        // credit the first fee row (a random paid fee can no longer
+        // silently absorb the money). If none exists, a minimal Fee row is
+        // created so the ledger linkage always exists.
+        const feeId = await resolveFeeIdForTxn(tx, {
+          schoolId: txn.schoolId,
+          studentId,
+          feeId: txn.feeId,
+          feeHeadName: txn.feeHeadName,
+          amount: txn.amount,
+          method: paymentMethod,
+          paidAt,
+        })
+
+        // ── 4b. THE single ledger writer (Phase 3): Fee.paid is credited ─
+        // through applyPaymentToLedger — clamped to the outstanding
+        // balance, idempotent on Payment.transactionId (the gateway
+        // payment id — the SAME key the webhook uses), schoolId stamped
+        // on the mirror row.
+        await applyPaymentToLedger(
+          {
+            txnId: paymentId,
+            schoolId: txn.schoolId,
             feeId,
             amount: txn.amount,
             method: paymentMethod,
-            status: 'SUCCESS',
-            transactionId: txn.receiptNo,
-            note: txn.feeHeadName ? `Online payment · ${txn.feeHeadName}` : 'Online payment',
           },
-        })
+          tx,
+        )
 
         // Staff-facing notification — surfaces in /api/notifications-feed.
         // 3-c fix: audience 'STAFF' (PRINCIPAL/TEACHER see it) — a
@@ -201,8 +227,22 @@ export async function POST(req: NextRequest) {
           },
         })
 
-        return updated
+        return { raced: false as const, txn: updated }
       })
+
+      // Lost the race (webhook won) — idempotent already-processed answer.
+      if (updatedTxn.raced) {
+        const current = updatedTxn.txn ?? txn
+        return {
+          receiptNo: current.receiptNo,
+          amount: current.amount,
+          method: prettyMethod(current.method),
+          status: 'SUCCESS' as const,
+          gatewayPaymentId: current.gatewayPaymentId ?? paymentId,
+          txnId: current.id,
+          paidAt: (current.reconciledAt ?? current.updatedAt).toISOString(),
+        }
+      }
 
       // ── 5. WebhookEvent audit row (duplicate-safe, best-effort) ─────
       try {
@@ -221,7 +261,7 @@ export async function POST(req: NextRequest) {
             }),
             status: 'processed',
             schoolId: txn.schoolId,
-            matchedTransactionId: updatedTxn.id,
+            matchedTransactionId: updatedTxn.txn?.id ?? txn.id,
             processedAt: paidAt,
           },
         })
@@ -244,7 +284,7 @@ export async function POST(req: NextRequest) {
         method: prettyMethod(txn.method),
         status: 'SUCCESS' as const,
         gatewayPaymentId: paymentId,
-        txnId: updatedTxn.id,
+        txnId: updatedTxn.txn?.id ?? txn.id,
         paidAt: paidAt.toISOString(),
       }
     },

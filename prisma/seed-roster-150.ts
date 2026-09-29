@@ -466,6 +466,8 @@ async function main() {
       const txnDate = fee.paidDate ?? new Date()
       await db.payment.create({
         data: {
+          // Phase 3: Payment.schoolId is required — derived from the fee.
+          schoolId: fee.schoolId,
           feeId: fee.id,
           amount: paid,
           method: method === 'NET_BANKING' ? 'Net Banking' : method === 'CARD' ? 'Card' : method,

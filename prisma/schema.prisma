@@ -37,6 +37,7 @@ model School {
   subjects             Subject[]
   exams                Exam[]
   fees                 Fee[]
+  payments             Payment[]
   attendance           Attendance[]
   attendanceAuditLogs  AttendanceAuditLog[]
   attendanceDrafts     AttendanceDraft[]
@@ -174,6 +175,9 @@ model User {
   // cells taught by this user (effective permissions derive from these).
   subjectsTaught      ClassSubjectAssignment[] @relation("SubjectTeacher")
   timetableSlotsTaught Timetable[]             @relation("TimetableTeacher")
+
+  // PHASE 3 — directory/bulk-message queries filter (school, role, status).
+  @@index([schoolId, role, status])
 }
 
 model Teacher {
@@ -241,6 +245,15 @@ model Student {
 
   // Student Growth v2.16
   growthEvents     GrowthEvent[]
+
+  // PHASE 3 — business identity uniques: admission numbers are unique
+  // per school; roll numbers are unique within a class. NULL bypasses
+  // (SQLite uniques treat NULL as distinct) — unassigned numbers stay
+  // allowed, duplicates among assigned numbers become impossible.
+  @@unique([schoolId, admissionNo])
+  @@unique([schoolId, classId, rollNo])
+  @@index([schoolId, classId])
+  @@index([guardianId])
 }
 
 // ─── Room — school-level master facility registry (IQ3000 Phase 1) ──────
@@ -315,6 +328,11 @@ model Class {
 
   // Teacher Workspace v2.15 — curriculum
   curriculumTopics          CurriculumTopic[]
+
+  // PHASE 3 — one class per (school, name, section); class-teacher
+  // lookups are a hot directory query.
+  @@unique([schoolId, name, section])
+  @@index([schoolId, classTeacherId])
 }
 
 model Subject {
@@ -391,6 +409,9 @@ model ClassSubjectAssignment {
 
   // Spec §12/§19: one assignment per (class, subject) — prevents duplicates.
   @@unique([classId, subjectId])
+  // PHASE 3 — the CSA teacher-scope check runs on every marks/attendance
+  // authorization; this index is the hottest permission lookup.
+  @@index([schoolId, teacherUserId, isActive])
 }
 
 model Exam {
@@ -424,6 +445,11 @@ model Exam {
   examAttendance  ExamAttendance[]
   seatAssignments ExamSeatAssignment[]
   resultOutcomes  ExamResultOutcome[]
+
+  // PHASE 3 — one exam per name per session per school; exam lists are
+  // filtered by (school, status, startDate) on every dashboard read.
+  @@unique([schoolId, name, session])
+  @@index([schoolId, status, startDate])
 }
 
 model ExamClass {
@@ -501,6 +527,11 @@ model ExamMark {
   updatedAt      DateTime  @updatedAt
 
   @@unique([examId, classId, subjectId, studentId])
+  // PHASE 3 — roster/analytics/growth read marks by class or student
+  // without an examId prefix; the compound unique above cannot serve
+  // those (leading column is examId).
+  @@index([classId, subjectId])
+  @@index([studentId])
 }
 
 /// Scan Marks Sheet review draft (TWC-SCAN). OCR pre-review state ONLY —
@@ -607,6 +638,13 @@ model Result {
   grade      String?
   remarks    String?
   createdAt  DateTime @default(now())
+
+  // PHASE 3 — report-card rows are idempotent by business key: a retry
+  // of the declare/compute flow can never duplicate a student's subject
+  // result.
+  @@unique([studentId, examId, subjectId])
+  @@index([examId, studentId])
+  @@index([studentId])
 }
 
 model QuestionBank {
@@ -664,18 +702,32 @@ model Fee {
   createdAt DateTime  @default(now())
 
   payments Payment[]
+
+  // PHASE 3 — fee lists are filtered by (school, status) and read per
+  // student on every ledger surface.
+  @@index([schoolId, status])
+  @@index([studentId])
 }
 
 model Payment {
   id            String   @id @default(cuid())
+  /// PHASE 3 — tenant binding: every financial mirror row is school-owned
+  /// (backfilled from Fee.schoolId; writers must set it from the session).
+  schoolId      String
+  school        School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   feeId         String?
   fee           Fee?     @relation(fields: [feeId], references: [id], onDelete: SetNull)
   amount        Float
   method        String?
   status        String   @default("SUCCESS")
-  transactionId String?
+  /// Gateway transaction reference — UNIQUE so a replayed webhook or a
+  /// double-verify can never mint a second mirror row for the same money.
+  transactionId String?  @unique
   note          String?
   createdAt     DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([feeId])
 }
 
 model Attendance {
@@ -692,6 +744,13 @@ model Attendance {
   createdAt DateTime @default(now())
 
   @@unique([studentId, date], name: "studentId_date")
+  // PHASE 3 — attendance reads: class-day sheets (school, class, date)
+  // and school-day aggregates (school, date) are the two hottest report
+  // queries. The (schoolId, studentId, date) variant adds nothing: the
+  // existing unique on (studentId, date) is strictly stronger because
+  // Student.id is globally unique (one student row = one school).
+  @@index([schoolId, classId, date])
+  @@index([schoolId, date])
 }
 
 // ─── Class Teacher Hub v2.17 — canonical attendance workflow ────────────
@@ -797,6 +856,16 @@ model Timetable {
   teacherName String?
   room        String?
   createdAt   DateTime @default(now())
+
+  // PHASE 3 — timetable conflict prevention AT THE DATABASE LEVEL:
+  // one cell per (class, day, period) and one teacher per (day, period)
+  // per school. teacherUserId NULL (legacy name-matched cells) bypasses
+  // the teacher key — the Postgres plan adds a partial unique index
+  // WHERE teacher_user_id IS NOT NULL to close that.
+  @@unique([schoolId, classId, day, period])
+  @@unique([schoolId, teacherUserId, day, period])
+  @@index([schoolId, classId, day])
+  @@index([schoolId, teacherUserId, day])
 }
 
 model Assignment {
@@ -859,6 +928,9 @@ model Homework {
   submissions HomeworkSubmission[]
   auditLogs   HomeworkAuditLog[]
   grievances  ParentGrievance[]
+
+  // PHASE 3 — homework lists are read per (school, class, dueDate).
+  @@index([schoolId, classId, dueDate])
 }
 
 model HomeworkSubmission {
@@ -923,6 +995,9 @@ model Notification {
   expiresAt DateTime?
 
   reads NotificationRead[]
+
+  // PHASE 3 — the bell-feed polls (school, createdAt) on every app open.
+  @@index([schoolId, createdAt])
 }
 
 // Per-user acknowledgement of school-wide announcements so read state
@@ -953,6 +1028,11 @@ model LibraryBook {
   createdAt DateTime @default(now())
 
   issues BookIssue[]
+
+  // PHASE 3 — one catalogue entry per ISBN per school (NULL isbn bypasses
+  // for pre-barcode records).
+  @@unique([schoolId, isbn])
+  @@index([schoolId])
 }
 
 model BookIssue {
@@ -965,6 +1045,10 @@ model BookIssue {
   dueDate    DateTime?
   returnDate DateTime?
   status     String      @default("ISSUED")
+
+  // PHASE 3 — issue/return status lookups per book and per borrower.
+  @@index([bookId, status])
+  @@index([studentId, status])
 }
 
 model Driver {
@@ -1018,6 +1102,10 @@ model ActivityLog {
   action    String
   detail    String?
   createdAt DateTime @default(now())
+
+  // PHASE 3 — audit trails are read (school, createdAt desc) on every
+  // dashboard/activity surface.
+  @@index([schoolId, createdAt])
 }
 
 model Session {
@@ -1032,6 +1120,9 @@ model Session {
   // existed (rendered honestly as "unknown device").
   userAgent String?
   ipAddress String?
+
+  // PHASE 3 — auth/me lists a user's sessions (userId lookup).
+  @@index([userId])
 }
 
 /// SS-1 — server-persisted user preferences (Settings).
@@ -1073,6 +1164,11 @@ model Message {
   body        String
   read        Boolean  @default(false)
   createdAt   DateTime @default(now())
+
+  // PHASE 3 — inbox queries filter (school, recipient, createdAt) and
+  // sent-box (school, sender, createdAt).
+  @@index([schoolId, recipientId, createdAt])
+  @@index([schoolId, senderId, createdAt])
 }
 
 model SchoolEvent {
@@ -1414,6 +1510,12 @@ model FeeTransaction {
   @@index([schoolId, source])
   @@index([studentId])
   @@index([feeId])
+
+  // PHASE 3 — financial document numbers and duplicate-detection
+  // references become DATABASE-unique per school (NULL bypasses for
+  // legacy/unset rows; every minted number is enforced).
+  @@unique([schoolId, receiptNo])
+  @@unique([schoolId, referenceNumber])
 }
 
 /// Gateway payout settlement — a batch of transactions the gateway
@@ -1457,6 +1559,9 @@ model Reconciliation {
   note          String?
 
   @@index([schoolId, transactionId])
+
+  // PHASE 3 — a replayed webhook must not re-insert the same match row.
+  @@unique([transactionId, settlementId])
 }
 
 /// Idempotent webhook event log — every incoming webhook is recorded

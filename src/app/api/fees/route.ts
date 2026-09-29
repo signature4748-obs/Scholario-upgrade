@@ -68,39 +68,46 @@ export async function POST(req: NextRequest) {
 
     // record a payment on an existing fee
     if (body.feeId) {
-      const fee = await db.fee.findUnique({ where: { id: body.feeId } })
-      if (!fee || fee.schoolId !== schoolId) throw new AppError('NOT_FOUND')
       const amount = body.amount
-      const remaining = fee.amount - fee.paid
-      if (remaining <= 0) {
-        throw new AppError('INVALID_INPUT', {
-          publicMessage: 'This fee is already fully paid',
-          internalDetail: `fee ${fee.id} paid=${fee.paid} amount=${fee.amount}`,
-        })
-      }
-      if (amount > remaining) {
-        throw new AppError('INVALID_INPUT', {
-          publicMessage: `Amount exceeds the outstanding balance (₹${remaining})`,
-          internalDetail: `fee ${fee.id} payment ${amount} > remaining ${remaining}`,
-        })
-      }
-      const newPaid = fee.paid + amount
-      const status = newPaid >= fee.amount ? 'PAID' : newPaid > 0 ? 'PARTIAL' : fee.status
-      await db.$transaction([
-        db.payment.create({
+      // Phase 3: the fee is re-read INSIDE the transaction, the outstanding
+      // balance is checked against that fresh row, the credit is written as
+      // a clamped `{ increment }`, and the Payment mirror row carries
+      // schoolId — a concurrent double-POST can no longer overpay the fee
+      // (the Fee.paid DB bound-guard backstops whatever still races).
+      const result = await db.$transaction(async (tx) => {
+        const fee = await tx.fee.findUnique({ where: { id: body.feeId! } })
+        if (!fee || fee.schoolId !== schoolId) throw new AppError('NOT_FOUND')
+        const remaining = fee.amount - fee.paid
+        if (remaining <= 0) {
+          throw new AppError('INVALID_INPUT', {
+            publicMessage: 'This fee is already fully paid',
+            internalDetail: `fee ${fee.id} paid=${fee.paid} amount=${fee.amount}`,
+          })
+        }
+        if (amount > remaining) {
+          throw new AppError('INVALID_INPUT', {
+            publicMessage: `Amount exceeds the outstanding balance (₹${remaining})`,
+            internalDetail: `fee ${fee.id} payment ${amount} > remaining ${remaining}`,
+          })
+        }
+        const newPaid = fee.paid + amount
+        const status = newPaid >= fee.amount ? 'PAID' : newPaid > 0 ? 'PARTIAL' : fee.status
+        await tx.payment.create({
           data: {
+            schoolId,
             feeId: fee.id,
             amount,
             method: body.method || 'CASH',
             note: body.note || null,
           },
-        }),
-        db.fee.update({
+        })
+        await tx.fee.update({
           where: { id: fee.id },
-          data: { paid: newPaid, status, method: body.method || fee.method, paidDate: new Date() },
-        }),
-      ])
-      return { ok: true, feeId: fee.id, paid: newPaid, status }
+          data: { paid: { increment: amount }, status, method: body.method || fee.method, paidDate: new Date() },
+        })
+        return { feeId: fee.id, paid: newPaid, status }
+      })
+      return { ok: true, ...result }
     }
 
     // create a new fee — 3-c fix: student FK must exist in THIS school

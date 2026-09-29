@@ -37,27 +37,32 @@ export async function POST(req: NextRequest) {
       // students POST and src/lib/account-provisioning.ts.
       const { password, generated } = resolveProvisionedPassword(body.password)
       const empId = String(body.employeeId || `EMP-${Date.now()}`)
-      const u = await db.user.create({
-        data: {
-          schoolId,
-          email,
-          passwordHash: hashPassword(password),
-          name,
-          role: 'TEACHER',
-          phone: body.phone || null,
-          status: 'ACTIVE',
-        },
-      })
-      const t = await db.teacher.create({
-        data: {
-          schoolId,
-          userId: u.id,
-          employeeId: empId,
-          department: body.department || null,
-          qualification: body.qualification || null,
-          subjects: body.subjects || null,
-        },
-        include: { user: { select: { name: true, email: true } } },
+      // Phase 3 — the user + teacher rows are created in ONE transaction
+      // (copies the schools POST pattern): a failure between the two
+      // previously orphaned the User row (a login with no teacher record).
+      const t = await db.$transaction(async (tx) => {
+        const u = await tx.user.create({
+          data: {
+            schoolId,
+            email,
+            passwordHash: hashPassword(password),
+            name,
+            role: 'TEACHER',
+            phone: body.phone || null,
+            status: 'ACTIVE',
+          },
+        })
+        return tx.teacher.create({
+          data: {
+            schoolId,
+            userId: u.id,
+            employeeId: empId,
+            department: body.department || null,
+            qualification: body.qualification || null,
+            subjects: body.subjects || null,
+          },
+          include: { user: { select: { name: true, email: true } } },
+        })
       })
       // Additive one-time credential field (only when server-generated).
       return { ...t, ...(generated ? { tempPassword: password } : {}) }

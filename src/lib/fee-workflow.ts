@@ -162,10 +162,14 @@ export async function assertClassTeacherOfStudent(user: AuthUser, schoolId: stri
 
 // ── Duplicate reference detection (MASTER TASK §29-8) ─────────────────
 
-export async function assertReferenceUnique(schoolId: string, referenceNumber: string) {
+export async function assertReferenceUnique(
+  schoolId: string,
+  referenceNumber: string,
+  client: Prisma.TransactionClient = db,
+) {
   const ref = referenceNumber.trim()
   if (!ref) return
-  const dup = await db.feeTransaction.findFirst({
+  const dup = await client.feeTransaction.findFirst({
     where: { schoolId, referenceNumber: ref },
     select: { id: true, receiptNo: true, studentName: true },
   })
@@ -179,6 +183,7 @@ export async function assertReferenceUnique(schoolId: string, referenceNumber: s
 // ── Ledger application (verification time — the ONLY ledger writer) ───
 
 export interface LedgerApplyInput {
+  /** Idempotency key — the Payment.transactionId of the mirror row. */
   txnId: string
   schoolId: string
   feeId: string | null
@@ -186,39 +191,148 @@ export interface LedgerApplyInput {
   method: string
 }
 
+export interface LedgerApplyResult {
+  feeId: string
+  paid: number
+  outstanding: number
+  status: string
+  /** Amount actually credited (clamped to the outstanding balance). */
+  applied: number
+  /** True when a Payment row for this txnId already existed (replay). */
+  alreadyApplied: boolean
+}
+
 /**
- * Apply a VERIFIED payment to the student's fee ledger, inside the
- * caller's transaction:
- *   · Fee.paid += amount, status PAID/PARTIAL, paidDate stamped;
- *   · a legacy Payment mirror row is created (status SUCCESS, note
- *     linking the canonical txn) so every existing ledger view keeps
- *     working from the same numbers.
- * Returns the updated Fee totals for the response payload.
+ * THE canonical ledger writer (Phase 3): apply a VERIFIED payment to the
+ * student's fee ledger.
+ *
+ *   · `tx` (optional, defaults to `db`) — pass the caller's interactive
+ *     transaction client so the ledger apply is atomic with the status
+ *     transition that authorises it (verification / webhook / confirm).
+ *   · IDEMPOTENT: Payment.transactionId is the idempotency key — when a
+ *     mirror row for `txnId` already exists the ledger is NOT re-applied
+ *     (a replayed webhook / retried verify returns the current totals).
+ *     The DB-level @unique on Payment.transactionId backstops this.
+ *   · CLAMPED: the fee is re-read INSIDE this transaction, the applied
+ *     amount is clamped to the outstanding balance and written with
+ *     `{ increment }` — a concurrent double-apply can never overshoot
+ *     Fee.amount (the Fee.paid DB bound-guard backstops this in depth).
+ *   · Every Payment mirror row carries `schoolId` (derived from the fee).
+ *
+ * Returns the (possibly unchanged) Fee totals for the response payload;
+ * null when the fee is missing/foreign (same as before).
  */
 export async function applyPaymentToLedger(
-  tx: Prisma.TransactionClient,
   input: LedgerApplyInput,
-) {
+  tx: Prisma.TransactionClient = db,
+): Promise<LedgerApplyResult | null> {
   if (!input.feeId) return null
   const fee = await tx.fee.findUnique({ where: { id: input.feeId } })
   if (!fee || fee.schoolId !== input.schoolId) return null
-  const newPaid = Math.min(fee.amount, fee.paid + input.amount)
-  const status = newPaid >= fee.amount ? 'PAID' : newPaid > 0 ? 'PARTIAL' : fee.status
+
+  // Idempotency: a Payment mirror for this txnId means the money already
+  // landed — report the current totals, write nothing.
+  const existing = await tx.payment.findUnique({
+    where: { transactionId: input.txnId },
+    select: { id: true },
+  })
+  if (existing) {
+    return {
+      feeId: fee.id,
+      paid: fee.paid,
+      outstanding: Math.max(0, fee.amount - fee.paid),
+      status: fee.status,
+      applied: 0,
+      alreadyApplied: true,
+    }
+  }
+
+  // Clamp: never credit beyond the billed amount.
+  const outstanding = Math.max(0, fee.amount - fee.paid)
+  const applied = Math.min(input.amount, outstanding)
+  if (applied <= 0) {
+    // Fee already fully paid — nothing to apply (Payment.amount must be
+    // > 0 per the DB guard; a zero mirror row would be rejected anyway).
+    return { feeId: fee.id, paid: fee.paid, outstanding, status: fee.status, applied: 0, alreadyApplied: false }
+  }
+
+  const newPaid = fee.paid + applied
+  const status = newPaid >= fee.amount ? 'PAID' : 'PARTIAL'
   await tx.fee.update({
     where: { id: fee.id },
-    data: { paid: newPaid, status, method: input.method, paidDate: new Date() },
+    data: { paid: { increment: applied }, status, method: input.method, paidDate: new Date() },
   })
   await tx.payment.create({
     data: {
+      schoolId: fee.schoolId,
       feeId: fee.id,
-      amount: input.amount,
+      amount: applied,
       method: input.method,
       status: 'SUCCESS',
       transactionId: input.txnId,
       note: `Canonical payment ${input.txnId} — applied on verification`,
     },
   })
-  return { feeId: fee.id, paid: newPaid, outstanding: Math.max(0, fee.amount - newPaid), status }
+  return {
+    feeId: fee.id,
+    paid: newPaid,
+    outstanding: Math.max(0, fee.amount - newPaid),
+    status,
+    applied,
+    alreadyApplied: false,
+  }
+}
+
+// ── Fee targeting for gateway transactions (Phase 3) ─────────────────
+
+/**
+ * Resolve (or create) the Fee row a gateway transaction should credit,
+ * INSIDE the caller's transaction:
+ *   1. the txn's own feeId when present;
+ *   2. else an exact feeHeadName title match (oldest first);
+ *   3. else the student's OLDEST unsettled fee (UNPAID/PARTIAL/PENDING) —
+ *      never a random paid row silently absorbing the money;
+ *   4. else a minimal Fee row so the ledger linkage always exists.
+ */
+export async function resolveFeeIdForTxn(
+  tx: Prisma.TransactionClient,
+  input: {
+    schoolId: string
+    studentId: string
+    feeId: string | null
+    feeHeadName: string | null
+    amount: number
+    method: string
+    paidAt?: Date
+  },
+): Promise<string> {
+  if (input.feeId) return input.feeId
+  const byTitle = input.feeHeadName
+    ? await tx.fee.findFirst({
+        where: { studentId: input.studentId, title: input.feeHeadName },
+        orderBy: { createdAt: 'asc' },
+      })
+    : null
+  const openFee =
+    byTitle ??
+    (await tx.fee.findFirst({
+      where: { studentId: input.studentId, status: { in: ['UNPAID', 'PARTIAL', 'PENDING'] } },
+      orderBy: { createdAt: 'asc' },
+    }))
+  if (openFee) return openFee.id
+  const created = await tx.fee.create({
+    data: {
+      schoolId: input.schoolId,
+      studentId: input.studentId,
+      title: input.feeHeadName ?? 'Student Fee Payment',
+      amount: input.amount,
+      paid: 0,
+      status: 'UNPAID',
+      method: input.method,
+      paidDate: input.paidAt ?? new Date(),
+    },
+  })
+  return created.id
 }
 
 // ── Shared DTO shape (teacher + principal + receipt views) ────────────

@@ -214,6 +214,8 @@ async function main() {
       when.setHours(9 + (idx % 8), (idx * 11) % 60, 0, 0)
       await db.payment.create({
         data: {
+          // Phase 3: Payment.schoolId is required — derived from the fee.
+          schoolId: fee.schoolId,
           feeId: fee.id,
           amount: 25000,
           method: feeMethods[idx % feeMethods.length],

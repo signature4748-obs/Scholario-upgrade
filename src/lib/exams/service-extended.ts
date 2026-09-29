@@ -438,39 +438,45 @@ export async function generateSeatingPlan(
     throw new Error(`Insufficient capacity: ${students.length} students, ${totalCapacity} seats available`)
   }
 
-  // Clear any existing assignments for this exam+class
-  await db.examSeatAssignment.deleteMany({ where: { examId, classId } })
-
-  // Distribute students across rooms, sorted by roll number
+  // Phase 3 — seating regeneration is ONE $transaction: the
+  // deleteMany + the per-seat creates commit atomically (a crash mid-way
+  // previously left the class with a partial seating plan).
   let seatCounter = 0
-  for (const room of rooms) {
-    for (let i = 0; i < room.capacity && seatCounter < students.length; i++) {
-      const s = students[seatCounter]
-      const seatNumber = i + 1
-      const row = Math.floor(i / 5) + 1
-      const col = (i % 5) + 1
-      await db.examSeatAssignment.create({
-        data: {
-          examId,
-          classId,
-          studentId: s.id,
-          room: room.name,
-          seatNumber,
-          row,
-          column: col,
-        },
-      })
-      seatCounter++
-      if (seatCounter >= students.length) break
+  const generated = await db.$transaction(async (tx) => {
+    // Clear any existing assignments for this exam+class
+    await tx.examSeatAssignment.deleteMany({ where: { examId, classId } })
+
+    // Distribute students across rooms, sorted by roll number
+    for (const room of rooms) {
+      for (let i = 0; i < room.capacity && seatCounter < students.length; i++) {
+        const s = students[seatCounter]
+        const seatNumber = i + 1
+        const row = Math.floor(i / 5) + 1
+        const col = (i % 5) + 1
+        await tx.examSeatAssignment.create({
+          data: {
+            examId,
+            classId,
+            studentId: s.id,
+            room: room.name,
+            seatNumber,
+            row,
+            column: col,
+          },
+        })
+        seatCounter++
+        if (seatCounter >= students.length) break
+      }
     }
-  }
+    return seatCounter
+  })
 
   await audit(examId, user, 'SEATING_GENERATED', 'SEATING', null, null, {
     classId,
     studentCount: students.length,
     rooms,
   })
-  return { generated: seatCounter }
+  return { generated }
 }
 
 export async function getSeatingPlan(
@@ -842,31 +848,37 @@ export async function computeAutoOutcomes(
     passPercentage: exam.passPercentage, gradeScale,
   })
 
-  // Clear existing auto outcomes for this class
-  await db.examResultOutcome.deleteMany({ where: { examId, classId } })
+  // Phase 3 — outcome recomputation is ONE $transaction: the deleteMany
+  // + the per-student outcome creates commit atomically (a crash mid-way
+  // previously erased the class's outcomes without recomputing them).
+  const count = await db.$transaction(async (tx) => {
+    // Clear existing auto outcomes for this class
+    await tx.examResultOutcome.deleteMany({ where: { examId, classId } })
 
-  let count = 0
-  for (const r of results) {
-    let outcome: 'PROMOTED' | 'COMPARTMENT' | 'RETEST' | 'NOT_PROMOTED' = 'PROMOTED'
-    if (r.passed) {
-      outcome = 'PROMOTED'
-    } else {
-      const failedCount = r.subjectsCount - r.subjectsPassed
-      if (failedCount <= compartmentThreshold) outcome = 'COMPARTMENT'
-      else if (failedCount <= retestThreshold) outcome = 'RETEST'
-      else outcome = 'NOT_PROMOTED'
+    let created = 0
+    for (const r of results) {
+      let outcome: 'PROMOTED' | 'COMPARTMENT' | 'RETEST' | 'NOT_PROMOTED' = 'PROMOTED'
+      if (r.passed) {
+        outcome = 'PROMOTED'
+      } else {
+        const failedCount = r.subjectsCount - r.subjectsPassed
+        if (failedCount <= compartmentThreshold) outcome = 'COMPARTMENT'
+        else if (failedCount <= retestThreshold) outcome = 'RETEST'
+        else outcome = 'NOT_PROMOTED'
+      }
+      await tx.examResultOutcome.create({
+        data: {
+          examId,
+          studentId: r.studentId,
+          classId,
+          outcome,
+          reason: r.passed ? null : `${r.subjectsCount - r.subjectsPassed} subjects failed`,
+        },
+      })
+      created++
     }
-    await db.examResultOutcome.create({
-      data: {
-        examId,
-        studentId: r.studentId,
-        classId,
-        outcome,
-        reason: r.passed ? null : `${r.subjectsCount - r.subjectsPassed} subjects failed`,
-      },
-    })
-    count++
-  }
+    return created
+  })
   return { autoCount: count }
 }
 
@@ -1051,6 +1063,23 @@ export async function importMarksCsv(
 
   const subjConfig = exam.examSubjects[0]
   if (!subjConfig) throw new Error('Subject not configured for this exam/class')
+
+  // Phase 3 (service-layer bounds, defense BEFORE the DB trigger):
+  // every row's marksObtained is validated against the subject config's
+  // maxMarks up front — out-of-bounds rows are rejected with a 422-style
+  // validation error BEFORE any write (the ExamMark DB bound-guard
+  // backstops direct-DB writes).
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    if (row.status === 'PRESENT' && row.marksObtained !== null) {
+      if (row.marksObtained < 0 || row.marksObtained > subjConfig.maxMarks) {
+        throw new AppError('INVALID_INPUT', {
+          publicMessage: `Row ${i + 2}: marks must be between 0 and ${subjConfig.maxMarks}`,
+          internalDetail: `importMarksCsv: row ${i + 2} marks ${row.marksObtained} out of bounds (max ${subjConfig.maxMarks})`,
+        })
+      }
+    }
+  }
 
   const classLink = exam.examClasses.find((ec) => ec.classId === classId)
   if (!classLink) throw new Error('Class not in this exam')

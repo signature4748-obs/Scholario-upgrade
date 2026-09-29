@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { AppError } from '@/lib/security/errors'
 import { classLabelOf } from '@/lib/teacher-hub'
 import {
   assertClassTeacherOfStudent,
@@ -281,25 +282,42 @@ export async function POST(req: NextRequest) {
       await assertReferenceUnique(schoolId, referenceNumber)
 
       const studentName = student.user.name ?? 'Student'
-      const txn = await db.feeTransaction.create({
-        data: {
-          schoolId,
-          studentId,
-          studentName,
-          className: classLabel,
-          feeId: fee.id,
-          feeHeadName: fee.title,
-          amount,
-          method,
-          status: TXN_STATUS.PENDING_VERIFICATION,
-          source: 'CLASS_TEACHER',
-          referenceNumber: referenceNumber || null,
-          note: notes || null,
-          collectedById: user.id,
-          collectedByName: user.name ?? 'Class Teacher',
-          collectedAt: new Date(),
-        },
-      })
+      // Phase 3: the reference-uniqueness pre-check stays (human copy),
+      // but the DB (schoolId, referenceNumber) unique is now the source of
+      // truth for the RACE — a P2002 from a concurrent duplicate reference
+      // is translated to a clean 409 CONFLICT instead of a 500.
+      const txn = await db.feeTransaction
+        .create({
+          data: {
+            schoolId,
+            studentId,
+            studentName,
+            className: classLabel,
+            feeId: fee.id,
+            feeHeadName: fee.title,
+            amount,
+            method,
+            status: TXN_STATUS.PENDING_VERIFICATION,
+            source: 'CLASS_TEACHER',
+            referenceNumber: referenceNumber || null,
+            note: notes || null,
+            collectedById: user.id,
+            collectedByName: user.name ?? 'Class Teacher',
+            collectedAt: new Date(),
+          },
+        })
+        .catch((e: unknown) => {
+          const err = e as { code?: string; message?: string }
+          if (err?.code === 'P2002' && (err.message ?? '').includes('referenceNumber')) {
+            // Clean 409 CONFLICT — the DB unique caught the race the
+            // pre-check missed; no Prisma internals reach the client.
+            throw new AppError('CONFLICT', {
+              publicMessage: `Duplicate reference number — ${referenceNumber} is already recorded for this school. A payment cannot be recorded twice with the same reference.`,
+              internalDetail: `P2002 (schoolId, referenceNumber) on teacher/fee-collection: ${(err.message ?? '').slice(0, 300)}`,
+            })
+          }
+          throw e
+        })
 
       // ── Verification ping to the principal + audit (best-effort) ────
       const recipients = await principalUserIds(schoolId)

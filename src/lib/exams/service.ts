@@ -373,44 +373,50 @@ export async function createExam(
     }
   }
 
-  const exam = await db.exam.create({
-    data: {
-      schoolId,
-      name: input.name.trim(),
-      type: input.type,
-      session: input.session ?? '2025-2026',
-      startDate: input.startDate ? new Date(input.startDate) : null,
-      endDate: input.endDate ? new Date(input.endDate) : null,
-      status: 'Draft',
-      resultStatus: 'Not Started',
-      passPercentage: input.passPercentage ?? 33,
-      createdBy: user?.id ?? null,
-      examClasses: {
-        create: input.classIds.map((classId) => ({ classId })),
+  // Phase 3 — the exam create, schedule-item creates and mark seeding
+  // are ONE $transaction (was: exam create, then N sequential
+  // examScheduleItem.create + C + S×M sequential examMark.upsert ≈ 2.8k
+  // queries/request — a crash mid-way left an exam with a partial roster).
+  // Mark seeding is now: ONE roster findMany + ONE examMark.createMany
+  // (the exam is brand-new — no mark rows exist yet, so createMany is safe
+  // and the composite unique backstops any duplicate).
+  const exam = await db.$transaction(async (tx) => {
+    const created = await tx.exam.create({
+      data: {
+        schoolId,
+        name: input.name.trim(),
+        type: input.type,
+        session: input.session ?? '2025-2026',
+        startDate: input.startDate ? new Date(input.startDate) : null,
+        endDate: input.endDate ? new Date(input.endDate) : null,
+        status: 'Draft',
+        resultStatus: 'Not Started',
+        passPercentage: input.passPercentage ?? 33,
+        createdBy: user?.id ?? null,
+        examClasses: {
+          create: input.classIds.map((classId) => ({ classId })),
+        },
+        examSubjects: {
+          create: input.classIds.flatMap((classId) =>
+            (input.subjectsByClass[classId] ?? []).map((s, idx) => ({
+              classId,
+              subjectId: s.subjectId,
+              maxMarks: s.maxMarks ?? 100,
+              passMarks: s.passMarks ?? 33,
+              theoryMarks: s.theoryMarks ?? s.maxMarks ?? 100,
+              practicalMarks: s.practicalMarks ?? 0,
+              sortOrder: idx,
+            }))
+          ),
+        },
       },
-      examSubjects: {
-        create: input.classIds.flatMap((classId) =>
-          (input.subjectsByClass[classId] ?? []).map((s, idx) => ({
-            classId,
-            subjectId: s.subjectId,
-            maxMarks: s.maxMarks ?? 100,
-            passMarks: s.passMarks ?? 33,
-            theoryMarks: s.theoryMarks ?? s.maxMarks ?? 100,
-            practicalMarks: s.practicalMarks ?? 0,
-            sortOrder: idx,
-          }))
-        ),
-      },
-    },
-    include: EXAM_INCLUDE,
-  })
+    })
 
-  // Create schedule items if provided
-  if (input.schedule && input.schedule.length > 0) {
-    for (const item of input.schedule) {
-      await db.examScheduleItem.create({
-        data: {
-          examId: exam.id,
+    // Create schedule items if provided (single createMany inside the tx).
+    if (input.schedule && input.schedule.length > 0) {
+      await tx.examScheduleItem.createMany({
+        data: input.schedule.map((item) => ({
+          examId: created.id,
           classId: item.classId,
           subjectId: item.subjectId,
           date: new Date(item.date),
@@ -418,40 +424,45 @@ export async function createExam(
           endTime: item.endTime,
           room: item.room ?? null,
           invigilatorName: item.invigilatorName ?? null,
-        },
+        })),
       })
     }
-  }
 
-  // Auto-create empty ExamMark rows for every student in every class+subject
-  for (const classId of input.classIds) {
-    const students = await db.student.findMany({ where: { classId, schoolId }, select: { id: true } })
-    const subjects = input.subjectsByClass[classId] ?? []
-    for (const student of students) {
-      for (const subject of subjects) {
-        await db.examMark.upsert({
-          where: {
-            examId_classId_subjectId_studentId: {
-              examId: exam.id,
-              classId,
-              subjectId: subject.subjectId,
-              studentId: student.id,
-            },
-          },
-          create: {
-            examId: exam.id,
-            classId,
-            subjectId: subject.subjectId,
-            studentId: student.id,
-            marksObtained: null,
-            status: 'PRESENT',
-            workflowStatus: 'DRAFT',
-          },
-          update: {},
+    // Auto-create empty ExamMark rows for every student in every
+    // class × subject — ONE roster query + ONE createMany.
+    const roster = await tx.student.findMany({
+      where: { classId: { in: input.classIds }, schoolId },
+      select: { id: true, classId: true },
+    })
+    const markRows: Array<{
+      examId: string
+      classId: string
+      subjectId: string
+      studentId: string
+      marksObtained: null
+      status: string
+      workflowStatus: string
+    }> = []
+    for (const student of roster) {
+      if (!student.classId) continue
+      for (const subject of input.subjectsByClass[student.classId] ?? []) {
+        markRows.push({
+          examId: created.id,
+          classId: student.classId,
+          subjectId: subject.subjectId,
+          studentId: student.id,
+          marksObtained: null,
+          status: 'PRESENT',
+          workflowStatus: 'DRAFT',
         })
       }
     }
-  }
+    if (markRows.length > 0) {
+      await tx.examMark.createMany({ data: markRows })
+    }
+
+    return created
+  })
 
   await audit(exam.id, user, 'EXAM_CREATED', 'EXAM', exam.id, null, { name: exam.name, type: exam.type })
 
@@ -528,6 +539,16 @@ export async function updateExam(
 export async function deleteExam(examId: string, schoolId: string, user: AuthUserLike | null): Promise<void> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
+  // Phase 3 — declared results are auditable history: the exam (and its
+  // cascading marks/results rows) must survive for report cards and
+  // compliance. Refuse with 409 CONFLICT — archive instead.
+  if (exam.resultStatus === 'Result Declared') {
+    throw new AppError('CONFLICT', {
+      publicMessage:
+        'Results for this examination have been declared — it is part of the auditable academic record and cannot be deleted. Archive it instead.',
+      internalDetail: `deleteExam: exam ${examId} resultStatus=Result Declared`,
+    })
+  }
   await db.exam.delete({ where: { id: examId } })
   // Audit log is deleted with cascade — but record to an external log if needed.
 }
@@ -751,9 +772,22 @@ export async function setMark(
   }
 
   const max = subjectConfig.maxMarks
+  // Phase 3 (service-layer bounds, defense BEFORE the DB trigger):
+  // 422-style validation error — the ExamMark DB bound-guard backstops
+  // direct-DB writes.
   if (input.status === 'PRESENT' && input.marksObtained !== null) {
-    if (input.marksObtained < 0) throw new Error('Marks cannot be negative')
-    if (input.marksObtained > max) throw new Error(`Marks cannot exceed maximum (${max})`)
+    if (input.marksObtained < 0) {
+      throw new AppError('INVALID_INPUT', {
+        publicMessage: 'Marks cannot be negative',
+        internalDetail: `setMark: negative marks ${input.marksObtained}`,
+      })
+    }
+    if (input.marksObtained > max) {
+      throw new AppError('INVALID_INPUT', {
+        publicMessage: `Marks cannot exceed maximum (${max})`,
+        internalDetail: `setMark: marks ${input.marksObtained} > max ${max}`,
+      })
+    }
   }
   if (input.status !== 'PRESENT' && input.marksObtained !== null && input.marksObtained !== 0) {
     // For ABSENT/MEDICAL/EXEMPTED we typically store null; coerce

@@ -110,6 +110,15 @@ export async function POST(req: NextRequest) {
       const sent: Array<{ studentId: string; name: string; outstanding: number }> = []
       const skipped: Array<{ studentId: string; name: string; reason: string }> = []
 
+      // Phase 3 — one createMany instead of N sequential message.creates
+      // (same data, same rows; the fan-out to 200 defaulters was 200
+      // sequential writes). The `sent` report is computed from the SAME
+      // payloads that are written.
+      const sendable: Array<{
+        t: Target
+        subject: string
+        messageBody: string
+      }> = []
       for (const t of targets.values()) {
         if (recentlyReminded.has(t.userId)) {
           skipped.push({ studentId: t.studentId, name: t.name, reason: 'Reminded in the last 24h' })
@@ -135,17 +144,21 @@ export async function POST(req: NextRequest) {
           `— ${user.name}, ${user.role === 'MANAGEMENT' ? 'School Management' : 'Principal'}, ${school?.name ?? ''}`.trim(),
         ].join('\n')
 
-        await db.message.create({
-          data: {
+        sendable.push({ t, subject, messageBody })
+        sent.push({ studentId: t.studentId, name: t.name, outstanding: t.outstanding })
+      }
+
+      if (sendable.length > 0) {
+        await db.message.createMany({
+          data: sendable.map(({ t, subject, messageBody }) => ({
             schoolId,
             senderId: user.id,
             recipientId: t.userId,
             subject,
             body: messageBody,
             read: false,
-          },
+          })),
         })
-        sent.push({ studentId: t.studentId, name: t.name, outstanding: t.outstanding })
       }
 
       const totalOutstandingCovered = sent.reduce((s, x) => s + x.outstanding, 0)

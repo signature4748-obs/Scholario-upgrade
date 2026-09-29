@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { db } from '@/lib/db'
+import { applyPaymentToLedger } from '@/lib/fee-workflow'
 import { RATE_LIMITS, checkRateLimit, clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { auditRateLimit } from '@/lib/security/audit'
 
@@ -158,11 +159,18 @@ export async function POST(req: NextRequest) {
   //      unique-violation that we catch → ack 200 without re-processing.
   //   3. In-memory Set is a fast-path dedup so we don't even try the insert
   //      for rapid-fire duplicates.
+  //
+  // Phase 3 (event-id fallback): when the payload/header carries NO event
+  // id at all, we derive a DETERMINISTIC id from the signature-verified raw
+  // body — `evt_` + HMAC-SHA256(body, WEBHOOK_SECRET).slice(0,32). A
+  // replayed delivery of the same signed body therefore reuses the SAME id
+  // and hits the dedup path, instead of being processed twice under two
+  // random ids.
   const eventId =
     req.headers.get('x-razorpay-event-id') ||
     payload?.meta?.event_id ||
     payload?.event_id ||
-    `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    `evt_${createHmac('sha256', secret).update(rawBody).digest('hex').slice(0, 32)}`
 
   if (seenEventIds.has(eventId)) {
     console.log(`[webhooks/razorpay] in-mem duplicate ${eventId} — acking.`)
@@ -236,34 +244,69 @@ export async function POST(req: NextRequest) {
         // the gateway doesn't retry. This is a real anomaly to investigate.
         throw new Error(`No FeeTransaction found for gatewayOrderId ${orderId}`)
       }
-      // Update the transaction to SUCCESS + reconciled.
-      const updated = await db.feeTransaction.update({
-        where: { id: txn.id },
-        data: {
-          status: 'SUCCESS',
-          gatewayPaymentId: gatewayPaymentId || null,
-          gatewaySignature: signature,
-          reconciliationStatus: 'reconciled',
-          reconciledAt: new Date(),
-          reconciledBy: 'razorpay-webhook',
-          reconciliationNote: `Auto-reconciled by webhook ${eventId}`,
-        },
+
+      // Phase 3 (CRITICAL): the SUCCESS transition and the LEDGER
+      // application are now ONE atomic unit — a captured payment can no
+      // longer be marked SUCCESS while Fee.paid (and the Payment mirror
+      // row) miss the money. applyPaymentToLedger is IDEMPOTENT on
+      // Payment.transactionId (gatewayPaymentId, falling back to the
+      // gateway order id): a replayed webhook delivery — or a webhook
+      // racing /api/student/payments/verify — applies the ledger exactly
+      // once (the DB @unique on Payment.transactionId backstops this).
+      const ledgerKey = gatewayPaymentId || txn.gatewayPaymentId || orderId
+      const updated = await db.$transaction(async (tx) => {
+        const u = await tx.feeTransaction.update({
+          where: { id: txn.id },
+          data: {
+            status: 'SUCCESS',
+            gatewayPaymentId: gatewayPaymentId || null,
+            gatewaySignature: signature,
+            reconciliationStatus: 'reconciled',
+            reconciledAt: new Date(),
+            reconciledBy: 'razorpay-webhook',
+            reconciliationNote: `Auto-reconciled by webhook ${eventId}`,
+          },
+        })
+        await applyPaymentToLedger(
+          {
+            txnId: ledgerKey,
+            schoolId: txn.schoolId,
+            feeId: txn.feeId,
+            amount: txn.amount,
+            method: txn.method,
+          },
+          tx,
+        )
+        return u
       })
       matchedTransactionId = updated.id
 
-      // Create a Reconciliation audit row.
-      await db.reconciliation.create({
-        data: {
-          schoolId: txn.schoolId,
-          transactionId: txn.id,
-          settlementId: txn.settlementId,
-          status: 'reconciled',
-          matchedBy: 'razorpay-webhook',
-          note: `Auto-matched via gateway order_id ${orderId} (event ${eventId})`,
-        },
-      }).catch(() => {/* idempotency — if a recon row already exists for this txn, ignore */})
+      // Create a Reconciliation audit row — Phase 3: existence-checked
+      // (transactionId + settlementId) BEFORE the create so a replayed
+      // event cannot duplicate recon rows (the DB unique on
+      // (transactionId, settlementId) backstops the residual race).
+      const reconExists = await db.reconciliation.findFirst({
+        where: { transactionId: txn.id, settlementId: txn.settlementId },
+        select: { id: true },
+      })
+      if (!reconExists) {
+        await db.reconciliation
+          .create({
+            data: {
+              schoolId: txn.schoolId,
+              transactionId: txn.id,
+              settlementId: txn.settlementId,
+              status: 'reconciled',
+              matchedBy: 'razorpay-webhook',
+              note: `Auto-matched via gateway order_id ${orderId} (event ${eventId})`,
+            },
+          })
+          .catch(() => {
+            /* idempotency — if a recon row already exists for this txn, ignore */
+          })
+      }
 
-      console.log(`[webhooks/razorpay] reconciled txn ${txn.id} for order ${orderId}`)
+      console.log(`[webhooks/razorpay] reconciled txn ${txn.id} for order ${orderId} (ledger key ${ledgerKey})`)
     } else if (eventType === 'payment.failed') {
       if (orderId) {
         const txn = await db.feeTransaction.findUnique({ where: { gatewayOrderId: orderId } })
@@ -339,50 +382,62 @@ export async function POST(req: NextRequest) {
           `[webhooks/razorpay] settlement ${payoutId} has no attributable orders — recorded unattributed, linking skipped`,
         )
       } else {
-        const upsertedSettlement = await db.settlement.upsert({
-          where: { payoutId },
-          create: {
-            schoolId: resolvedSchoolId,
-            payoutId,
-            gatewayName: 'razorpay',
-            periodStart,
-            periodEnd,
-            grossAmount: grossPaise / 100,
-            fees: feePaise / 100,
-            netAmount: (grossPaise - feePaise) / 100,
-            status: 'settled',
-            bankReference: bankRef,
-            paidOutAt: settledAt,
-          },
-          update: {
-            periodStart,
-            periodEnd,
-            grossAmount: grossPaise / 100,
-            fees: feePaise / 100,
-            netAmount: (grossPaise - feePaise) / 100,
-            status: 'settled',
-            bankReference: bankRef,
-            paidOutAt: settledAt,
-          },
-        })
+        // Phase 3 (atomicity + link precision): the settlement upsert and
+        // the transaction linking run in ONE $transaction. The link is
+        // constrained to the transfers' OWN order ids (plus the settlement
+        // period window) — NOT every SUCCESS txn in the window, so one
+        // school's payout can never claim unrelated payments. Only when the
+        // transfers array is EMPTY do we fall back to the documented
+        // window-wide catch-all (a settlement summary without itemised
+        // transfers).
+        const linkedCount = await db.$transaction(async (tx) => {
+          const upsertedSettlement = await tx.settlement.upsert({
+            where: { payoutId },
+            create: {
+              schoolId: resolvedSchoolId,
+              payoutId,
+              gatewayName: 'razorpay',
+              periodStart,
+              periodEnd,
+              grossAmount: grossPaise / 100,
+              fees: feePaise / 100,
+              netAmount: (grossPaise - feePaise) / 100,
+              status: 'settled',
+              bankReference: bankRef,
+              paidOutAt: settledAt,
+            },
+            update: {
+              periodStart,
+              periodEnd,
+              grossAmount: grossPaise / 100,
+              fees: feePaise / 100,
+              netAmount: (grossPaise - feePaise) / 100,
+              status: 'settled',
+              bankReference: bankRef,
+              paidOutAt: settledAt,
+            },
+          })
 
-        // Link every transaction created between periodStart and periodEnd
-        // for this school to this settlement (auto-reconciliation of payouts).
-        const linkedTxns = await db.feeTransaction.updateMany({
-          where: {
-            schoolId: resolvedSchoolId,
-            createdAt: { gte: periodStart, lte: periodEnd },
-            status: 'SUCCESS',
-            reconciliationStatus: { in: ['reconciled', 'unreconciled', 'pending'] },
-          },
-          data: {
-            settlementId: upsertedSettlement.id,
-            reconciliationStatus: 'reconciled',
-            reconciledAt: new Date(),
-            reconciledBy: 'razorpay-webhook-settlement',
-          },
+          const linkedTxns = await tx.feeTransaction.updateMany({
+            where: {
+              schoolId: resolvedSchoolId,
+              ...(transferOrderIds.length > 0
+                ? { gatewayOrderId: { in: transferOrderIds } }
+                : {}),
+              createdAt: { gte: periodStart, lte: periodEnd },
+              status: 'SUCCESS',
+              reconciliationStatus: { in: ['reconciled', 'unreconciled', 'pending'] },
+            },
+            data: {
+              settlementId: upsertedSettlement.id,
+              reconciliationStatus: 'reconciled',
+              reconciledAt: new Date(),
+              reconciledBy: 'razorpay-webhook-settlement',
+            },
+          })
+          return linkedTxns.count
         })
-        console.log(`[webhooks/razorpay] settlement ${payoutId} linked ${linkedTxns.count} transactions`)
+        console.log(`[webhooks/razorpay] settlement ${payoutId} linked ${linkedCount} transactions`)
       }
     } else {
       console.log(`[webhooks/razorpay] event type ${eventType} — no auto-reconciliation handler.`)

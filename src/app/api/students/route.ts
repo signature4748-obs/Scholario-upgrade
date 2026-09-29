@@ -69,33 +69,38 @@ export async function POST(req: NextRequest) {
         }
       }
       const admNo = String(body.admissionNo || `ADM-${Date.now()}`)
-      const u = await db.user.create({
-        data: {
-          schoolId,
-          email,
-          passwordHash: hashPassword(password),
-          name,
-          role: 'STUDENT',
-          phone: body.phone || null,
-          status: 'ACTIVE',
-        },
-      })
-      const s = await db.student.create({
-        data: {
-          schoolId,
-          userId: u.id,
-          classId,
-          rollNo: body.rollNo || null,
-          admissionNo: admNo,
-          guardianName: body.guardianName || null,
-          guardianPhone: body.guardianPhone || null,
-          dob: body.dob || null,
-          gender: body.gender || null,
-          bloodGroup: body.bloodGroup || null,
-          address: body.address || null,
-          routeId,
-        },
-        include: { class: true, user: { select: { name: true, email: true } } },
+      // Phase 3 — the user + student rows are created in ONE transaction
+      // (copies the schools POST pattern): a failure between the two
+      // previously orphaned the User row (a login with no student record).
+      const s = await db.$transaction(async (tx) => {
+        const u = await tx.user.create({
+          data: {
+            schoolId,
+            email,
+            passwordHash: hashPassword(password),
+            name,
+            role: 'STUDENT',
+            phone: body.phone || null,
+            status: 'ACTIVE',
+          },
+        })
+        return tx.student.create({
+          data: {
+            schoolId,
+            userId: u.id,
+            classId,
+            rollNo: body.rollNo || null,
+            admissionNo: admNo,
+            guardianName: body.guardianName || null,
+            guardianPhone: body.guardianPhone || null,
+            dob: body.dob || null,
+            gender: body.gender || null,
+            bloodGroup: body.bloodGroup || null,
+            address: body.address || null,
+            routeId,
+          },
+          include: { class: true, user: { select: { name: true, email: true } } },
+        })
       })
       // Additive field: the ONE-TIME generated credential for the operator
       // to hand over (only present when the server generated it). No client

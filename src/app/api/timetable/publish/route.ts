@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { AppError } from '@/lib/security/errors'
 import { slotsToServerRows, type PublishableSlot } from '@/lib/timetable/server-mapping'
 
 export const runtime = 'nodejs'
@@ -86,31 +87,13 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 3 — resolve subjects (name → row; create when missing).
+      // 3 — subject names are resolved INSIDE the publish transaction below
+      //     (Phase 3: subject auto-create + CSA ensure + deleteMany +
+      //     createMany are ONE atomic unit — a crash between the delete and
+      //     the write previously left the school with NO timetable at all;
+      //     a subject (schoolId, code) collision retries once with a
+      //     deterministic suffix).
       const subjectNames = [...new Set(drafts.map((d) => d.subject))].filter(Boolean)
-      const subjectByKey = new Map<string, { id: string }>()
-      for (const name of subjectNames) {
-        const existing = await db.subject.findFirst({
-          where: { schoolId, name },
-          select: { id: true },
-        })
-        if (existing) {
-          subjectByKey.set(name, existing)
-        } else {
-          subjectByKey.set(
-            name,
-            await db.subject.create({
-              data: {
-                schoolId,
-                name,
-                code: name.slice(0, 4).toUpperCase(),
-                status: 'Active',
-              },
-              select: { id: true },
-            }),
-          )
-        }
-      }
 
       // 4 — STALE-SNAPSHOT GUARD (data-integrity backstop): the school has
       //     real rows, but NONE of the payload's classes match any existing
@@ -143,53 +126,123 @@ export async function POST(req: NextRequest) {
         teacherUserId: d.teacherName ? (teacherIdByName.get(d.teacherName.trim().toLowerCase()) ?? null) : null,
       }))
 
-      // 5 — replace-all within the school (publish = the new truth).
-      //     The publish IS a Principal configuration act: every (class,
-      //     subject) it schedules becomes ACTIVE ClassSubjectAssignment
-      //     config, so a published timetable can never contain an
-      //     "unconfigured subject" cell (no orphaned rows, ever).
-      const pairs = new Set(
-        drafts.flatMap((d) => {
-          const cls = classByKey.get(d.className)
-          const subj = subjectByKey.get(d.subject)
-          return cls && subj ? [[cls.id, subj.id] as const] : []
-        })
-      )
+      // 5 — replace-all within the school (publish = the new truth) — ONE
+      //     $transaction (Phase 3): subject auto-create (with code-collision
+      //     retry), CSA ensure, the deleteMany and the createMany commit
+      //     atomically. The new Timetable DB uniques — (schoolId, classId,
+      //     day, period) and (schoolId, teacherUserId, day, period) — make
+      //     the DB the source of truth for class-slot / teacher-booking
+      //     conflicts; a P2002 is translated to a clean 409
+      //     TIMETABLE_CONFLICT (the payload itself scheduled the same class
+      //     or teacher twice at one day/period).
+      let removedCount = 0
+      let writtenCount = 0
       let csaCreated = 0
-      for (const [classId, subjectId] of pairs) {
-        const existing = await db.classSubjectAssignment.findUnique({
-          where: { classId_subjectId: { classId, subjectId } },
-          select: { id: true, isActive: true },
-        })
-        if (!existing) {
-          await db.classSubjectAssignment.create({
-            data: { schoolId, classId, subjectId, isActive: true },
-          })
-          csaCreated += 1
-        } else if (!existing.isActive) {
-          await db.classSubjectAssignment.update({
-            where: { id: existing.id },
-            data: { isActive: true },
-          })
-          csaCreated += 1
-        }
-      }
+      let subjectCount = 0
+      try {
+        const txResult = await db.$transaction(async (tx) => {
+          // 3 — resolve subjects (name → row; create when missing). A
+          //     (schoolId, code) collision (two subjects mapping to the
+          //     same 4-letter code) retries ONCE with a deterministic
+          //     suffix.
+          const subjectByKey = new Map<string, { id: string }>()
+          for (const name of subjectNames) {
+            const existing = await tx.subject.findFirst({
+              where: { schoolId, name },
+              select: { id: true },
+            })
+            if (existing) {
+              subjectByKey.set(name, existing)
+            } else {
+              const baseCode = name.slice(0, 4).toUpperCase()
+              let created: { id: string }
+              try {
+                created = await tx.subject.create({
+                  data: { schoolId, name, code: baseCode, status: 'Active' },
+                  select: { id: true },
+                })
+              } catch (e) {
+                const err = e as { code?: string }
+                if (err?.code !== 'P2002') throw e
+                created = await tx.subject.create({
+                  data: { schoolId, name, code: `${baseCode}-2`, status: 'Active' },
+                  select: { id: true },
+                })
+              }
+              subjectByKey.set(name, created)
+            }
+          }
 
-      const removed = await db.timetable.deleteMany({ where: { schoolId } })
-      const written = await db.timetable.createMany({
-        data: draftsResolved.map((d) => ({
-          schoolId,
-          classId: classByKey.get(d.className)!.id,
-          subjectId: subjectByKey.get(d.subject)?.id ?? null,
-          day: d.day,
-          period: d.period,
-          startTime: d.startTime,
-          endTime: d.endTime,
-          teacherUserId: d.teacherUserId,
-          teacherName: d.teacherName,
-          room: d.room || null,
-        })),
-      })
+          // The publish IS a Principal configuration act: every (class,
+          // subject) it schedules becomes ACTIVE ClassSubjectAssignment
+          // config, so a published timetable can never contain an
+          // "unconfigured subject" cell (no orphaned rows, ever).
+          const pairs = new Set(
+            drafts.flatMap((d) => {
+              const cls = classByKey.get(d.className)
+              const subj = subjectByKey.get(d.subject)
+              return cls && subj ? [[cls.id, subj.id] as const] : []
+            })
+          )
+          let csaEnsureCount = 0
+          for (const [classId, subjectId] of pairs) {
+            const existing = await tx.classSubjectAssignment.findUnique({
+              where: { classId_subjectId: { classId, subjectId } },
+              select: { id: true, isActive: true },
+            })
+            if (!existing) {
+              await tx.classSubjectAssignment.create({
+                data: { schoolId, classId, subjectId, isActive: true },
+              })
+              csaEnsureCount += 1
+            } else if (!existing.isActive) {
+              await tx.classSubjectAssignment.update({
+                where: { id: existing.id },
+                data: { isActive: true },
+              })
+              csaEnsureCount += 1
+            }
+          }
+
+          const removed = await tx.timetable.deleteMany({ where: { schoolId } })
+          const written = await tx.timetable.createMany({
+            data: draftsResolved.map((d) => ({
+              schoolId,
+              classId: classByKey.get(d.className)!.id,
+              subjectId: subjectByKey.get(d.subject)?.id ?? null,
+              day: d.day,
+              period: d.period,
+              startTime: d.startTime,
+              endTime: d.endTime,
+              teacherUserId: d.teacherUserId,
+              teacherName: d.teacherName,
+              room: d.room || null,
+            })),
+          })
+          return {
+            removedCount: removed.count,
+            writtenCount: written.count,
+            csaEnsureCount,
+            subjectCount: subjectByKey.size,
+          }
+        })
+        removedCount = txResult.removedCount
+        writtenCount = txResult.writtenCount
+        csaCreated = txResult.csaEnsureCount
+        subjectCount = txResult.subjectCount
+      } catch (e) {
+        const err = e as { code?: string; message?: string }
+        if (err?.code === 'P2002') {
+          const teacherConflict = (err.message ?? '').includes('teacherUserId')
+          throw new AppError('CONFLICT', {
+            publicMessage: teacherConflict
+              ? 'Timetable conflict — this teacher is already booked at that day and period. Resolve the overlap before publishing.'
+              : 'Timetable conflict — this class already has a slot at that day and period. Resolve the overlap before publishing.',
+            internalDetail: `TIMETABLE_CONFLICT P2002: ${(err.message ?? '').slice(0, 300)}`,
+          })
+        }
+        throw e
+      }
 
       // 5 — audit trail (platform activity feed reads these).
       await db.activityLog.create({
@@ -197,15 +250,15 @@ export async function POST(req: NextRequest) {
           schoolId,
           userId: user.id,
           action: 'TIMETABLE_PUBLISHED',
-          detail: `${written.count} slots across ${classByKey.size} classes (replaced ${removed.count} rows)`,
+          detail: `${writtenCount} slots across ${classByKey.size} classes (replaced ${removedCount} rows)`,
         },
       })
 
       return {
-        rowsWritten: written.count,
-        rowsReplaced: removed.count,
+        rowsWritten: writtenCount,
+        rowsReplaced: removedCount,
         classes: classByKey.size,
-        subjects: subjectByKey.size,
+        subjects: subjectCount,
         subjectConfigsEnsured: csaCreated,
       }
     },

@@ -194,13 +194,16 @@ export async function POST(req: NextRequest) {
               reconciledBy: user.name ?? 'principal',
             },
           })
-          const ledger = await applyPaymentToLedger(tx, {
-            txnId: txn.id,
-            schoolId,
-            feeId: txn.feeId,
-            amount: txn.amount,
-            method: txn.method,
-          })
+          const ledger = await applyPaymentToLedger(
+            {
+              txnId: txn.id,
+              schoolId,
+              feeId: txn.feeId,
+              amount: txn.amount,
+              method: txn.method,
+            },
+            tx,
+          )
           return { txn: updated, ledger }
         })
 
@@ -294,21 +297,28 @@ export async function POST(req: NextRequest) {
           include: { class: true, user: { select: { name: true } } },
         })
         if (!student) throw new Error('NOT_FOUND')
-        const fee = await db.fee.findFirst({ where: { id: feeId, studentId, schoolId } })
-        if (!fee) throw new Error('Fee record not found for this student')
-        const outstanding = Math.max(0, fee.amount - fee.paid)
-        if (outstanding <= 0) throw new Error('This fee is already fully paid')
-        if (amount > outstanding) {
-          throw new Error(
-            `Amount exceeds the outstanding balance of this fee (₹${outstanding.toLocaleString('en-IN')}).`,
-          )
-        }
-        await assertReferenceUnique(schoolId, referenceNumber)
 
         const classLabel = student.class ? classLabelOf(student.class) : 'Unassigned'
         const studentName = student.user.name ?? 'Student'
 
+        // Phase 3 (TOCTOU fix): the fee lookup, the outstanding-balance
+        // check AND the reference-uniqueness check all run INSIDE the
+        // transaction now — a concurrent direct-record (or a webhook racing
+        // this call) can no longer slip a second ₹amount past the pre-check
+        // window. The Fee.paid DB bound-guard + the (schoolId, referenceNumber)
+        // unique constraint backstop anything still racing inside the tx.
         const result = await db.$transaction(async (tx) => {
+          const fee = await tx.fee.findFirst({ where: { id: feeId, studentId, schoolId } })
+          if (!fee) throw new Error('Fee record not found for this student')
+          const outstanding = Math.max(0, fee.amount - fee.paid)
+          if (outstanding <= 0) throw new Error('This fee is already fully paid')
+          if (amount > outstanding) {
+            throw new Error(
+              `Amount exceeds the outstanding balance of this fee (₹${outstanding.toLocaleString('en-IN')}).`,
+            )
+          }
+          await assertReferenceUnique(schoolId, referenceNumber, tx)
+
           const receiptNo = await mintReceiptNo(schoolId, tx)
           const txn = await tx.feeTransaction.create({
             data: {
@@ -336,13 +346,16 @@ export async function POST(req: NextRequest) {
               reconciledBy: user.name ?? 'principal',
             },
           })
-          const ledger = await applyPaymentToLedger(tx, {
-            txnId: txn.id,
-            schoolId,
-            feeId: fee.id,
-            amount,
-            method,
-          })
+          const ledger = await applyPaymentToLedger(
+            {
+              txnId: txn.id,
+              schoolId,
+              feeId: fee.id,
+              amount,
+              method,
+            },
+            tx,
+          )
           return { txn, ledger }
         })
 
@@ -355,7 +368,7 @@ export async function POST(req: NextRequest) {
             user.id,
             cls.classTeacherId,
             `Direct fee payment · ${studentName}`,
-            `A fee payment of ₹${amount.toLocaleString('en-IN')} from ${studentName} (${classLabel}) towards "${fee.title}" was recorded directly through ${source === 'PRINCIPAL' ? 'the Principal' : 'the School Office'} by ${user.name ?? 'the Principal'}. Receipt ${result.txn.receiptNo} is issued — no further collection is needed for this amount.`,
+            `A fee payment of ₹${amount.toLocaleString('en-IN')} from ${studentName} (${classLabel}) towards "${result.txn.feeHeadName}" was recorded directly through ${source === 'PRINCIPAL' ? 'the Principal' : 'the School Office'} by ${user.name ?? 'the Principal'}. Receipt ${result.txn.receiptNo} is issued — no further collection is needed for this amount.`,
           )
         }
         await audit(

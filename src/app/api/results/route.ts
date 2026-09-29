@@ -131,13 +131,30 @@ export async function POST(req: NextRequest) {
         if (!exam) throw new Error('Unknown exam in this school')
       }
 
-      const created = await db.$transaction(
+      // Phase 3 — idempotent publish: every entry is an UPSERT on the new
+      // (studentId, examId, subjectId) unique. A retried POST (or two staff
+      // publishing the same sheet) can no longer mint duplicate Result rows
+      // for one student's subject — the row is updated in place.
+      const written = await db.$transaction(
         entries.map((e) =>
-          db.result.create({
-            data: {
+          db.result.upsert({
+            where: {
+              studentId_examId_subjectId: {
+                studentId: e.studentId,
+                examId: body.examId || null,
+                subjectId: e.subjectId,
+              },
+            },
+            create: {
               studentId: e.studentId,
               examId: body.examId || null,
               subjectId: e.subjectId,
+              marks: Number(e.marks),
+              totalMarks: Number(e.totalMarks) || 100,
+              grade: gradeFor(Number(e.marks), Number(e.totalMarks) || 100),
+              remarks: body.remarks || null,
+            },
+            update: {
               marks: Number(e.marks),
               totalMarks: Number(e.totalMarks) || 100,
               grade: gradeFor(Number(e.marks), Number(e.totalMarks) || 100),
@@ -147,9 +164,9 @@ export async function POST(req: NextRequest) {
         ),
       )
       await db.activityLog.create({
-        data: { schoolId, userId: user.id, action: 'RESULTS_PUBLISHED', detail: `${created.length} result(s) published` },
+        data: { schoolId, userId: user.id, action: 'RESULTS_PUBLISHED', detail: `${written.length} result(s) published` },
       })
-      return { count: created.length }
+      return { count: written.length }
     },
     { roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
   )

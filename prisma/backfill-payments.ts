@@ -14,6 +14,8 @@ async function main() {
     if (fee.payments.length > 0) continue
     await db.payment.create({
       data: {
+        // Phase 3: Payment.schoolId is required — derived from the fee.
+        schoolId: fee.schoolId,
         feeId: fee.id,
         amount: fee.paid,
         method: methods[idx % methods.length],

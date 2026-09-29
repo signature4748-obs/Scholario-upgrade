@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
+import { applyPaymentToLedger, resolveFeeIdForTxn } from '@/lib/fee-workflow'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
@@ -177,32 +178,75 @@ export async function POST(req: NextRequest) {
 
       // UPI / CARD → captured. gatewayPaymentId minted server-side; the
       // demo gateway carries no signature (production: the webhook's HMAC).
+      //
+      // Phase 3: the SUCCESS transition and the LEDGER application are ONE
+      // atomic unit — the demo flow can no longer produce SUCCESS rows
+      // with no Fee.paid effect. The ledger is credited through the
+      // canonical applyPaymentToLedger, idempotent on
+      // Payment.transactionId = the minted gateway payment id (the same
+      // key family the webhook/verify paths use), with the same fee
+      // targeting (txn feeId → feeHeadName title → oldest unsettled fee →
+      // minimal fee row).
       const gatewayPaymentId = `pay_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
-      const updated = await db.feeTransaction.update({
-        where: { id: txn.id },
-        data: {
-          status: 'SUCCESS',
-          gatewayPaymentId,
-          gatewaySignature: null,
-          reconciliationStatus: 'reconciled',
-          reconciledAt: new Date(),
-          reconciledBy: 'demo-gateway',
-          note: 'Settled server-side by the demo gateway',
-        },
-      })
-      // Audit parity with the webhook's auto-reconciliation (best-effort).
-      await db.reconciliation
-        .create({
+      const updated = await db.$transaction(async (tx) => {
+        const u = await tx.feeTransaction.update({
+          where: { id: txn.id },
           data: {
-            schoolId,
-            transactionId: txn.id,
-            settlementId: txn.settlementId,
-            status: 'reconciled',
-            matchedBy: 'demo-gateway',
-            note: `Settled via gateway order ${orderId}`,
+            status: 'SUCCESS',
+            gatewayPaymentId,
+            gatewaySignature: null,
+            reconciliationStatus: 'reconciled',
+            reconciledAt: new Date(),
+            reconciledBy: 'demo-gateway',
+            note: 'Settled server-side by the demo gateway',
           },
         })
-        .catch(() => {/* best-effort audit row */ })
+        if (txn.studentId) {
+          const feeId = await resolveFeeIdForTxn(tx, {
+            schoolId: txn.schoolId,
+            studentId: txn.studentId,
+            feeId: txn.feeId,
+            feeHeadName: txn.feeHeadName,
+            amount: txn.amount,
+            method: txn.method,
+          })
+          await applyPaymentToLedger(
+            {
+              txnId: gatewayPaymentId,
+              schoolId: txn.schoolId,
+              feeId,
+              amount: txn.amount,
+              method: txn.method,
+            },
+            tx,
+          )
+        }
+        return u
+      })
+      // Audit parity with the webhook's auto-reconciliation — Phase 3:
+      // existence-checked (transactionId + settlementId) before the create
+      // so a retried confirm cannot duplicate recon rows (the DB unique
+      // on (transactionId, settlementId) backstops).
+      const reconExists = await db.reconciliation.findFirst({
+        where: { transactionId: txn.id, settlementId: txn.settlementId },
+        select: { id: true },
+      })
+      if (!reconExists) {
+        await db.reconciliation
+          .create({
+            data: {
+              schoolId,
+              transactionId: txn.id,
+              settlementId: txn.settlementId,
+              status: 'reconciled',
+              matchedBy: 'demo-gateway',
+              note: `Settled via gateway order ${orderId}`,
+            },
+          })
+          .catch(() => {
+            /* best-effort audit row */
+          })
+      }
 
       return settlementOf(updated)
     },

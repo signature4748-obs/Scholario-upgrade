@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
+import { applyPaymentToLedger, mintReceiptNo } from '@/lib/fee-workflow'
 
 export const runtime = 'nodejs'
 
@@ -51,12 +52,23 @@ export async function GET(req: NextRequest) {
 /// after gateway callback.)
 ///
 /// Body: { studentId?, studentName?, className?, feeHeadName?, amount, method,
-///         note?, receiptNo? }
+///         note?, referenceNumber?, feeId? }
 /// Returns the created transaction.
 ///
 /// 3-c fix: a provided body.studentId is FK-validated in-tenant BEFORE
 /// the write (db.student.findFirst({ id, schoolId }) → 404) — was a bare
 /// cross-tenant FK write.
+///
+/// Phase 3 fixes:
+///   · body.receiptNo is IGNORED — the receipt number is minted
+///     server-side via mintReceiptNo INSIDE the transaction (the
+///     (schoolId, receiptNo) DB unique backstops the mint race).
+///   · body.referenceNumber is kept, but duplicates are a clean 409
+///     CONFLICT with a human message (P2002 on (schoolId, referenceNumber)
+///     is translated — no Prisma internals reach the client).
+///   · a SUCCESS manual txn created with feeId credits the student ledger
+///     through the canonical applyPaymentToLedger, idempotent on
+///     Payment.transactionId = `manual:{txn.id}`.
 export async function POST(req: NextRequest) {
   return withAuthz(
     { roles: ['PRINCIPAL', 'MANAGEMENT'] },
@@ -83,25 +95,87 @@ export async function POST(req: NextRequest) {
         studentId = student.id
       }
 
-      const receiptNo = body.receiptNo || `RCP-${Date.now()}`
-      const txn = await db.feeTransaction.create({
-        data: {
-          schoolId,
-          studentId,
-          studentName: body.studentName ? String(body.studentName).slice(0, 120) : null,
-          className: body.className ? String(body.className).slice(0, 80) : null,
-          feeHeadName: body.feeHeadName ? String(body.feeHeadName).slice(0, 120) : null,
-          amount,
-          method: String(body.method || 'Cash').toUpperCase().replace(' ', '_'),
-          status: 'SUCCESS',
-          gatewayName: 'manual',
-          receiptNo,
-          note: body.note ? String(body.note).slice(0, 500) : null,
-          reconciliationStatus: 'unreconciled',
-          reconciledAt: null,
-          reconciledBy: ctx.user.id,
-        },
-      })
+      // Phase 3: optional feeId — FK-validated in-tenant; when present the
+      // manual SUCCESS txn credits the ledger atomically.
+      let feeId: string | null = null
+      if (body.feeId) {
+        const fee = await db.fee.findFirst({
+          where: { id: String(body.feeId), schoolId },
+          select: { id: true },
+        })
+        if (!fee) {
+          throw new AppError('NOT_FOUND', {
+            publicMessage: 'Fee record not found',
+            internalDetail: `transactions POST: fee ${body.feeId} missing or foreign tenant`,
+          })
+        }
+        feeId = fee.id
+      }
+
+      const referenceNumber = body.referenceNumber ? String(body.referenceNumber).trim().slice(0, 80) : ''
+      const method = String(body.method || 'Cash').toUpperCase().replace(' ', '_')
+
+      const txn = await db
+        .$transaction(async (tx) => {
+          // Phase 3: receipt numbers are ALWAYS server-minted inside the tx —
+          // client-supplied receiptNo is ignored (it can neither collide with
+          // another school's series nor spoof an existing receipt).
+          const receiptNo = await mintReceiptNo(schoolId, tx)
+          const created = await tx.feeTransaction.create({
+            data: {
+              schoolId,
+              studentId,
+              studentName: body.studentName ? String(body.studentName).slice(0, 120) : null,
+              className: body.className ? String(body.className).slice(0, 80) : null,
+              feeHeadName: body.feeHeadName ? String(body.feeHeadName).slice(0, 120) : null,
+              feeId,
+              amount,
+              method,
+              status: 'SUCCESS',
+              gatewayName: 'manual',
+              receiptNo,
+              referenceNumber: referenceNumber || null,
+              note: body.note ? String(body.note).slice(0, 500) : null,
+              reconciliationStatus: 'unreconciled',
+              reconciledAt: null,
+              reconciledBy: ctx.user.id,
+            },
+          })
+
+          // Phase 3: a manual SUCCESS txn with a feeId credits the student
+          // ledger — canonical writer, idempotent key `manual:{txn.id}` so a
+          // retried POST can never double-credit (Payment.transactionId
+          // @unique backstops).
+          if (feeId) {
+            await applyPaymentToLedger(
+              {
+                txnId: `manual:${created.id}`,
+                schoolId,
+                feeId,
+                amount,
+                method,
+              },
+              tx,
+            )
+          }
+          return created
+        })
+        .catch((e: unknown) => {
+          const err = e as { code?: string; message?: string }
+          if (err?.code === 'P2002') {
+            // (schoolId, referenceNumber) duplicate — clean 409 with a
+            // human message; anything else (e.g. a receipt-mint race) is a
+            // generic retryable conflict. Prisma internals never surface.
+            throw new AppError('CONFLICT', {
+              publicMessage:
+                referenceNumber && (err.message ?? '').includes('referenceNumber')
+                  ? `Reference number ${referenceNumber} is already recorded for this school. A payment cannot be recorded twice with the same reference.`
+                  : 'This payment conflicts with an existing record — please retry.',
+              internalDetail: `P2002 on fees/transactions POST: ${(err.message ?? '').slice(0, 300)}`,
+            })
+          }
+          throw e
+        })
       return txn
     },
   )

@@ -59,28 +59,60 @@ export async function POST(req: NextRequest) {
         })
       }
 
-      const issue = await db.$transaction([
-        db.bookIssue.create({
+      // Phase 3: the issue + the stock decrement are one interactive
+      // transaction with the availability RE-CHECKED inside it — two
+      // concurrent issues of the last copy can no longer both decrement
+      // (the available 0..copies DB bound-guard backstops).
+      const issue = await db.$transaction(async (tx) => {
+        const fresh = await tx.libraryBook.findUnique({
+          where: { id: book.id },
+          select: { available: true },
+        })
+        if (!fresh || fresh.available <= 0) {
+          throw new AppError('INVALID_INPUT', { publicMessage: 'No copies available' })
+        }
+        const created = await tx.bookIssue.create({
           data: {
             bookId: book.id,
             studentId: student.id,
             dueDate: body.dueDate ? new Date(body.dueDate) : new Date(Date.now() + 14 * 86400000),
             status: 'ISSUED',
           },
-        }),
-        db.libraryBook.update({ where: { id: book.id }, data: { available: { decrement: 1 } } }),
-      ])
-      return issue[0]
+        })
+        await tx.libraryBook.update({ where: { id: book.id }, data: { available: { decrement: 1 } } })
+        return created
+      })
+      return issue
     }
 
     if (action === 'return') {
       const issue = await db.bookIssue.findUnique({ where: { id: body.issueId }, include: { book: true } })
       if (!issue) throw new AppError('NOT_FOUND')
       if (issue.book.schoolId !== schoolId) throw new AppError('FORBIDDEN')
-      await db.$transaction([
-        db.bookIssue.update({ where: { id: issue.id }, data: { returnDate: new Date(), status: 'RETURNED' } }),
-        db.libraryBook.update({ where: { id: issue.bookId }, data: { available: { increment: 1 } } }),
-      ])
+      const returnedAt = new Date()
+      // Phase 3: CONDITIONAL transition — only an ISSUED row can be
+      // returned. count === 0 → the book was already returned (a replayed
+      // request lost the race) → 409 CONFLICT, and the stock counter is
+      // NOT incremented again (closes the double-increment bug).
+      const transitioned = await db.$transaction(async (tx) => {
+        const transition = await tx.bookIssue.updateMany({
+          where: { id: issue.id, status: 'ISSUED' },
+          data: { returnDate: returnedAt, status: 'RETURNED' },
+        })
+        if (transition.count === 1) {
+          await tx.libraryBook.update({
+            where: { id: issue.bookId },
+            data: { available: { increment: 1 } },
+          })
+        }
+        return transition.count
+      })
+      if (transitioned === 0) {
+        throw new AppError('CONFLICT', {
+          publicMessage: 'This book is already returned',
+          internalDetail: `library return: issue ${issue.id} was not in ISSUED state (already returned)`,
+        })
+      }
       return { ok: true }
     }
 

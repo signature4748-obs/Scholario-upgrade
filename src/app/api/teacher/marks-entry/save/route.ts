@@ -1,5 +1,6 @@
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { AppError } from '@/lib/security/errors'
 import { teacherCanEnterMarks } from '@/lib/teacher-scope'
 
 export const runtime = 'nodejs'
@@ -83,12 +84,23 @@ export async function POST(request: Request) {
           if (typeof e.marks !== 'number' || !Number.isFinite(e.marks)) {
             throw new Error('Invalid marks value')
           }
+          // Phase 3 (service-layer bounds, defense BEFORE the DB trigger):
+          // 422-style rejection — the ExamMark DB bound-guard backstops
+          // direct-DB writes.
           if (e.marks < 0 || e.marks > config.maxMarks) {
-            throw new Error(`Marks must be between 0 and ${config.maxMarks}`)
+            throw new AppError('INVALID_INPUT', {
+              publicMessage: `Marks must be between 0 and ${config.maxMarks}`,
+              internalDetail: `marks-entry/save: marks ${e.marks} out of bounds (max ${config.maxMarks})`,
+            })
           }
         }
         const remarks =
           typeof e.remarks === 'string' && e.remarks.trim() ? e.remarks.trim().slice(0, 200) : null
+        // Phase 3: ExamMark.enteredBy stores the USER ID — the principal's
+        // marks module resolves ids to display names via the teacher
+        // directory (marks-hooks resolveEnteredBy; whitespace values are
+        // the legacy display-name fallback). The canonical service
+        // (setMark) already stores user ids.
         await db.examMark.upsert({
           where: {
             examId_classId_subjectId_studentId: {
@@ -107,14 +119,14 @@ export async function POST(request: Request) {
             status: absent ? 'ABSENT' : 'PRESENT',
             workflowStatus: 'DRAFT',
             remarks,
-            enteredBy: user.name ?? 'Teacher',
+            enteredBy: user.id,
             enteredAt: new Date(),
           },
           update: {
             marksObtained: absent ? null : e.marks,
             status: absent ? 'ABSENT' : 'PRESENT',
             remarks,
-            enteredBy: user.name ?? 'Teacher',
+            enteredBy: user.id,
             enteredAt: new Date(),
           },
         })

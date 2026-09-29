@@ -72,13 +72,16 @@ export async function POST(req: NextRequest) {
       const priorCount = await db.feeTransaction.count({
         where: { schoolId, receiptNo: { startsWith: `RCP-${year}-` } },
       })
-      const receiptNo = `RCP-${year}-${String(priorCount + 1).padStart(4, '0')}`
+      // Phase 3: the count+1 scheme is retained (format preserved); the
+      // (schoolId, receiptNo) DB unique now backstops the residual race —
+      // a P2002 collision is retried ONCE with a deterministic suffix.
+      const baseReceiptNo = `RCP-${year}-${String(priorCount + 1).padStart(4, '0')}`
 
       // ── Create the gateway order ──────────────────────────────────
       const amountPaise = Math.round(amount * 100)
       const order = await provider.createOrder({
         amountPaise,
-        receipt: receiptNo,
+        receipt: baseReceiptNo,
         notes: {
           studentId: dbStudent.id,
           studentName: user.name,
@@ -89,23 +92,54 @@ export async function POST(req: NextRequest) {
       })
 
       // ── Persist the PENDING FeeTransaction ─────────────────────────
-      const txn = await db.feeTransaction.create({
-        data: {
-          schoolId,
-          studentId: dbStudent.id,
-          studentName: user.name,
-          className: dbStudent.class?.name ?? '',
-          feeHeadName,
-          amount,
-          method,
-          status: 'PENDING',
-          gatewayName: provider.name,
-          gatewayOrderId: order.orderId,
-          receiptNo,
-          reconciliationStatus: 'pending',
-          note: 'Order created by student self-service checkout',
-        },
-      })
+      // Phase 3: receipt-mint race guard — if the (schoolId, receiptNo)
+      // DB unique rejects the minted number (a concurrent order took the
+      // same slot), retry ONCE with a deterministic suffix. The gateway
+      // order's receipt metadata may then differ cosmetically from the
+      // persisted receiptNo — matching is by gatewayOrderId, never by
+      // receipt.
+      let receiptNo = baseReceiptNo
+      let txn
+      try {
+        txn = await db.feeTransaction.create({
+          data: {
+            schoolId,
+            studentId: dbStudent.id,
+            studentName: user.name,
+            className: dbStudent.class?.name ?? '',
+            feeHeadName,
+            amount,
+            method,
+            status: 'PENDING',
+            gatewayName: provider.name,
+            gatewayOrderId: order.orderId,
+            receiptNo,
+            reconciliationStatus: 'pending',
+            note: 'Order created by student self-service checkout',
+          },
+        })
+      } catch (e) {
+        const err = e as { code?: string }
+        if (err?.code !== 'P2002') throw e
+        receiptNo = `${baseReceiptNo}-2`
+        txn = await db.feeTransaction.create({
+          data: {
+            schoolId,
+            studentId: dbStudent.id,
+            studentName: user.name,
+            className: dbStudent.class?.name ?? '',
+            feeHeadName,
+            amount,
+            method,
+            status: 'PENDING',
+            gatewayName: provider.name,
+            gatewayOrderId: order.orderId,
+            receiptNo,
+            reconciliationStatus: 'pending',
+            note: 'Order created by student self-service checkout',
+          },
+        })
+      }
 
       // ── Sandbox: mint the signed confirmation server-side ─────────
       let sandbox: { paymentId: string; signature: string } | undefined

@@ -526,17 +526,21 @@ export async function createHomework(
     include: HOMEWORK_INCLUDE,
   })
 
-  // Auto-create empty submission rows for every student in the class
+  // Auto-create empty submission rows for every student in the class —
+  // Phase 3: ONE createMany instead of N sequential creates (all rows are
+  // attempt 1 of a BRAND-NEW homework, so the (homeworkId, studentId,
+  // attemptNumber) unique cannot collide; a crash mid-loop previously
+  // left a partially-seeded roster).
   const students = await db.student.findMany({ where: { classId: input.classId, schoolId } })
-  for (const s of students) {
-    await db.homeworkSubmission.create({
-      data: {
+  if (students.length > 0) {
+    await db.homeworkSubmission.createMany({
+      data: students.map((s) => ({
         homeworkId: h.id,
         studentId: s.id,
         schoolId,
         attemptNumber: 1,
         status: 'NOT_STARTED',
-      },
+      })),
     })
   }
 
@@ -685,10 +689,19 @@ export async function duplicateHomework(id: string, schoolId: string, user: Auth
     },
     include: HOMEWORK_INCLUDE,
   })
+  // Phase 3: ONE createMany instead of N sequential creates (attempt 1 of
+  // a brand-new homework — the (homeworkId, studentId, attemptNumber)
+  // unique cannot collide).
   const students = await db.student.findMany({ where: { classId: original.classId, schoolId } })
-  for (const s of students) {
-    await db.homeworkSubmission.create({
-      data: { homeworkId: newHomework.id, studentId: s.id, schoolId, attemptNumber: 1, status: 'NOT_STARTED' },
+  if (students.length > 0) {
+    await db.homeworkSubmission.createMany({
+      data: students.map((s) => ({
+        homeworkId: newHomework.id,
+        studentId: s.id,
+        schoolId,
+        attemptNumber: 1,
+        status: 'NOT_STARTED',
+      })),
     })
   }
   await audit(newHomework.id, schoolId, user, 'HOMEWORK_DUPLICATED', 'HOMEWORK', newHomework.id, { originalId: id }, { newId: newHomework.id })

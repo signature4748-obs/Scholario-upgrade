@@ -121,29 +121,60 @@ export async function POST(req: NextRequest) {
       //
       // For the demo, we just mint a unique order id locally and persist
       // it on the FeeTransaction row so the webhook can match it back.
-      const receiptNo = `RCP-${Date.now()}`
+      // Phase 3: receipt-mint race guard — the Date.now() scheme is kept
+      // (format preserved); if the (schoolId, receiptNo) DB unique rejects
+      // a same-millisecond collision, retry ONCE with a deterministic
+      // suffix.
+      const baseReceiptNo = `RCP-${Date.now()}`
       const gatewayOrderId = `order_${Math.random().toString(36).slice(2, 14)}${Date.now().toString(36)}`
       const gatewayName = String(body.gateway || 'razorpay').slice(0, 40)
 
-      const txn = await db.feeTransaction.create({
-        data: {
-          schoolId,
-          studentId: studentId ?? null,
-          studentName: studentName ?? null,
-          className: className ?? null,
-          feeHeadName: feeHead || null,
-          amount,
-          method: String(body.method || 'UPI').toUpperCase().replace(' ', '_'),
-          status: 'PENDING',
-          gatewayName,
-          gatewayOrderId,
-          gatewaySignature: null,
-          gatewayPaymentId: null,
-          receiptNo,
-          reconciliationStatus: 'pending',
-          note: 'Order created — awaiting gateway payment.captured webhook',
-        },
-      })
+      let receiptNo = baseReceiptNo
+      let txn
+      try {
+        txn = await db.feeTransaction.create({
+          data: {
+            schoolId,
+            studentId: studentId ?? null,
+            studentName: studentName ?? null,
+            className: className ?? null,
+            feeHeadName: feeHead || null,
+            amount,
+            method: String(body.method || 'UPI').toUpperCase().replace(' ', '_'),
+            status: 'PENDING',
+            gatewayName,
+            gatewayOrderId,
+            gatewaySignature: null,
+            gatewayPaymentId: null,
+            receiptNo,
+            reconciliationStatus: 'pending',
+            note: 'Order created — awaiting gateway payment.captured webhook',
+          },
+        })
+      } catch (e) {
+        const err = e as { code?: string }
+        if (err?.code !== 'P2002') throw e
+        receiptNo = `${baseReceiptNo}-2`
+        txn = await db.feeTransaction.create({
+          data: {
+            schoolId,
+            studentId: studentId ?? null,
+            studentName: studentName ?? null,
+            className: className ?? null,
+            feeHeadName: feeHead || null,
+            amount,
+            method: String(body.method || 'UPI').toUpperCase().replace(' ', '_'),
+            status: 'PENDING',
+            gatewayName,
+            gatewayOrderId,
+            gatewaySignature: null,
+            gatewayPaymentId: null,
+            receiptNo,
+            reconciliationStatus: 'pending',
+            note: 'Order created — awaiting gateway payment.captured webhook',
+          },
+        })
+      }
 
       return {
         orderId: gatewayOrderId,

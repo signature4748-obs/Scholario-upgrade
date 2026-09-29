@@ -166,9 +166,12 @@ async function main() {
   }
 
   // ── Clean previous exam-ops rows (configs + marks are owned elsewhere) ─
-  const delA = await db.examAttendance.deleteMany({})
-  const delS = await db.examScheduleItem.deleteMany({})
-  const delSeats = await db.examSeatAssignment.deleteMany({})
+  // Phase 3: the deletes are scoped to THIS school's exams (tenancy is
+  // transitive via examId — a global deleteMany previously wiped every
+  // other tenant's schedule/seats/attendance).
+  const delA = await db.examAttendance.deleteMany({ where: { exam: { schoolId: school.id } } })
+  const delS = await db.examScheduleItem.deleteMany({ where: { exam: { schoolId: school.id } } })
+  const delSeats = await db.examSeatAssignment.deleteMany({ where: { exam: { schoolId: school.id } } })
   console.log(
     `  Cleared ${delS.count} schedule items, ${delSeats.count} seats, ${delA.count} attendance`,
   )
