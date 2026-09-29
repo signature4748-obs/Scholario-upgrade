@@ -7,6 +7,7 @@ import {
   auditTeacherAction,
   parseString,
 } from '@/lib/teacher-hub'
+import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
 
@@ -25,6 +26,9 @@ const CATEGORIES = ['general', 'academic', 'attendance', 'behavior', 'wellbeing'
 export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
+      // Message send — per-user throttle (same profile as the messaging
+      // routes; see rate-limit.ts RATE_LIMITS.message).
+      enforceRateLimit(`rl:msg:${user.id}`, RATE_LIMITS.message)
       const ctx = await requireTeacher(user)
       const body = await req.json().catch(() => null)
       if (!body || typeof body !== 'object') throw new Error('Invalid request body')

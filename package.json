@@ -18,6 +18,7 @@
     "db:seed-dashboard": "bun prisma/seed-student-dashboard.ts",
     "db:seed-teacher-hub": "bun prisma/seed-teacher-hub.ts",
     "db:seed-teacher-academics": "bun prisma/seed-teacher-academics.ts",
+    "db:seed-tenant-isolation": "bun prisma/seed-tenant-isolation.ts",
     "test:security": "bun test tests/security/",
     "typecheck": "tsc --noEmit"
   },

@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { requireStudent, authorizedMaterials } from '@/lib/learning'
 import { requireTeacher, authorizedStudentWhere, classLabelOf } from '@/lib/teacher-hub'
-import { notificationVisibilityWhere } from '@/lib/notices'
+import { notificationVisibilityWhere, audienceAllows } from '@/lib/notices'
 import type { SearchResultItem } from '@/lib/search-service/types'
 
 export const runtime = 'nodejs'
@@ -23,6 +23,16 @@ export async function GET(req: NextRequest) {
     if (!schoolId) return { results: [] }
 
     const isStudent = user.role === 'STUDENT'
+    // Task 4-d (audit 3-a fix #15a): the directory sections (students,
+    // teachers, staff-fee rows, guardians) enumerate school people — only
+    // the staff directory roles (P/M/T) get them. Previously any
+    // !isStudent caller (PARENT/DRIVER/ACCOUNTANT) could enumerate the
+    // student body, staff list, fee titles and guardian contacts.
+    // SUPER_ADMIN never reaches here (schoolId null → early return).
+    // Client evidence: the global search is the command palette used by
+    // the principal/teacher/student panels only — PARENT/DRIVER have no
+    // panel surface, so no legit flow changes.
+    const isStaffDirectory = ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'].includes(user.role)
     // Students navigate the student workspace — module keys resolve there.
     const navNotice = isStudent ? 'notices' : 'communication'
     const navMessaging = isStudent ? 'messages' : 'messaging'
@@ -31,8 +41,9 @@ export async function GET(req: NextRequest) {
     const take = 6
 
     // 1. STUDENTS — search by name (User relation), admission no, roll no
-    //    (staff surfaces only — students must not enumerate classmates)
-    if (!isStudent) {
+    //    (staff directory only — students/parents/drivers must not
+    //    enumerate the student body)
+    if (isStaffDirectory) {
     const students = await db.student.findMany({
       where: {
         schoolId,
@@ -66,8 +77,8 @@ export async function GET(req: NextRequest) {
     }
 
     // 2. TEACHERS — search by name, employee id (staff directory — not a
-    //    student surface; students get faculty context via Learning instead)
-    if (!isStudent) {
+    //    student/parent surface; students get faculty context via Learning)
+    if (isStaffDirectory) {
     const teachers = await db.teacher.findMany({
       where: {
         schoolId,
@@ -94,11 +105,11 @@ export async function GET(req: NextRequest) {
         keywords: `${t.employeeId ?? ''} ${t.department ?? ''} ${t.qualification ?? ''} teacher faculty`,
       })
     })
-    } // end !isStudent (staff directory)
+    } // end staff directory (teachers)
 
-    // 3. FEES — staff search by fee title + student name; STUDENTS see
-    //    only THEIR OWN fee rows (RLS by studentId — never classmates')
-    if (!isStudent) {
+    // 3. FEES — staff (P/M/T) search by fee title + student name; STUDENTS
+    //    see only THEIR OWN fee rows (RLS by studentId — never classmates')
+    if (isStaffDirectory) {
       const fees = await db.fee.findMany({
         where: {
           schoolId,
@@ -126,7 +137,7 @@ export async function GET(req: NextRequest) {
           keywords: `fee payment dues finance ${f.type ?? ''} ${f.status}`,
         })
       })
-    } else {
+    } else if (isStudent) {
       // Student — only their own fee rows (RLS by studentId).
       const ctx = await requireStudent(user)
       const myFees = await db.fee.findMany({
@@ -169,9 +180,19 @@ export async function GET(req: NextRequest) {
       take: 18,
       orderBy: { createdAt: 'desc' },
     })
+    // Task 4-d (audit 3-a fix #15b): STUDENT/PARENT callers only see
+    // notices their role's audience allows — searching for a word that
+    // appears in a TEACHERS/STAFF/PARENTS-only notice must not leak the
+    // title or message snippet. Staff roles keep the full oversight view
+    // (identical behavior to before).
+    let visibleNotifications = notifications
+    if (user.role === 'STUDENT' || user.role === 'PARENT') {
+      const flags = await Promise.all(notifications.map((n) => audienceAllows(n.audience, user)))
+      visibleNotifications = notifications.filter((_, i) => flags[i])
+    }
     const seenBroadcasts = new Set<string>()
     const broadcastAudiences = new Map<string, string[]>()
-    notifications.forEach((n) => {
+    visibleNotifications.forEach((n) => {
       const key = `${n.title}\u0000${n.message}`
       if (seenBroadcasts.has(key)) {
         const auds = broadcastAudiences.get(key)
@@ -182,7 +203,7 @@ export async function GET(req: NextRequest) {
       broadcastAudiences.set(key, n.audience ? [n.audience] : [])
     })
     let noticeCount = 0
-    notifications.forEach((n) => {
+    visibleNotifications.forEach((n) => {
       if (noticeCount >= take) return
       const key = `${n.title}\u0000${n.message}`
       const auds = broadcastAudiences.get(key) ?? []
@@ -241,10 +262,12 @@ export async function GET(req: NextRequest) {
     })
 
     // 6. PARENTS & GUARDIANS — from Student.guardian* fields (replaces mock
-    // parentConversations). Staff-only: students/parents must not enumerate
-    // other families' contact details. Teachers deep-link into Parent
-    // Connect; other staff land in messaging.
-    if (user.role !== 'STUDENT' && user.role !== 'PARENT') {
+    // parentConversations). Staff-directory only (Task 4-d, fix #15a —
+    // was "not STUDENT/PARENT", which let DRIVER/ACCOUNTANT enumerate
+    // other families' contacts): students/parents/drivers must not
+    // enumerate other families' contact details. Teachers deep-link into
+    // Parent Connect; other staff land in messaging.
+    if (isStaffDirectory) {
       const guardians = await db.student.findMany({
         where: {
           schoolId,

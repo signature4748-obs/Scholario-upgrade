@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { declareResults } from '@/lib/exams/service'
 
 export const runtime = 'nodejs'
@@ -9,13 +9,9 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
-      const { id } = await params
-      const result = await declareResults(id, schoolId, user)
-      return result
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
-  )
+  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+    const { id } = await params
+    const result = await declareResults(id, ctx.schoolId, ctx.user)
+    return result
+  })
 }

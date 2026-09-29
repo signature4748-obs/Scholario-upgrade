@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { audienceAllows } from '@/lib/notices'
 
 export const runtime = 'nodejs'
 
@@ -116,10 +117,23 @@ export async function POST(req: NextRequest) {
 // GET /api/announcements — recent published announcements (newest first).
 // Lets the Communication Center History tab show which broadcasts actually
 // reached the platform (vs draft/mock-only records).
+//
+// Task 4-d (audit 3-a fix #14): non-staff callers (STUDENT/PARENT/DRIVER)
+// only receive rows their role is allowed to see (audienceAllows from
+// @/lib/notices — the SAME helper the bell feed and student notices use);
+// staff roles keep the full oversight view. Grep-verified: the only client
+// consumer of this GET is the PRINCIPAL Communication Center
+// (comm-platform-broadcasts.tsx) — staff behavior is unchanged.
 export async function GET() {
   return withUser(async (user) => {
     const schoolId = schoolScoped(user)
-    const rows = await db.notification.findMany({
+    const isStaff =
+      user.role === 'PRINCIPAL' ||
+      user.role === 'MANAGEMENT' ||
+      user.role === 'TEACHER' ||
+      user.role === 'ACCOUNTANT' ||
+      user.role === 'SUPER_ADMIN'
+    let rows = await db.notification.findMany({
       where: { schoolId },
       orderBy: { createdAt: 'desc' },
       take: 20,
@@ -128,6 +142,12 @@ export async function GET() {
         _count: { select: { reads: true } },
       },
     })
+    if (!isStaff) {
+      const visibility = await Promise.all(
+        rows.map(async (n) => ((await audienceAllows(n.audience, user)) ? n : null)),
+      )
+      rows = visibility.filter((n) => n !== null)
+    }
     // Estimated audience size per broadcast powers the delivery-rate bar in
     // the History tab (acks ÷ estimated recipients). Distinct audiences are
     // resolved once each and reused across rows sharing the same audience.

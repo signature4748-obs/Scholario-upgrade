@@ -45,6 +45,8 @@ export async function POST(req: NextRequest) {
   return api(async () => {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
+    // Task 4-d (fix #9) — mirror withUser semantics (ACTIVE accounts only).
+    if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
 
     // Per-account throttle — wrong current-password attempts are limited.
     enforceRateLimit(`rl:pwchange:${user.id}`, RATE_LIMITS.passwordChange)

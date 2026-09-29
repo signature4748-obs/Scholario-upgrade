@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
+import { z } from 'zod'
 import { db } from '@/lib/db'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
+import { parseJsonBody, idSchema, safeText } from '@/lib/security/validation'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
@@ -27,27 +29,55 @@ async function getAIClient() {
   return aiClient
 }
 
+const aiBodySchema = z
+  .object({
+    subject: safeText(100, 0).optional(),
+    topic: safeText(200, 0).optional(),
+    gradeLevel: safeText(10, 0).optional(),
+    difficulty: safeText(10, 0).optional(),
+    count: z.number().int().min(1).max(15).optional(),
+    type: safeText(20, 0).optional(),
+    autoSave: z.boolean().optional(),
+    subjectId: idSchema.optional(),
+    classId: idSchema.optional(),
+  })
+  .strict()
+
 export async function POST(req: NextRequest) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
+  return withAuthz({ permission: 'school.questionbank.write' }, async (ctx) => {
+    // Phase 1 — AI generation is expensive: strict per-user rate limit
+    // (12/hour) blunts abuse and runaway cost.
+    enforceRateLimit(`rl:ai:${ctx.user.id}`, RATE_LIMITS.ai)
 
-      // Phase 1 — AI generation is expensive: strict per-user rate limit
-      // (12/hour) blunts abuse and runaway cost.
-      enforceRateLimit(`rl:ai:${user.id}`, RATE_LIMITS.ai)
+    const body = await parseJsonBody(req, aiBodySchema)
 
-      const body = await req.json().catch(() => ({}))
+    // FK-in-tenant (audit 3-b LOW): when auto-saving, subjectId/classId
+    // must belong to the caller's school before rows are linked.
+    if (body.autoSave && body.subjectId) {
+      const subject = await db.subject.findFirst({
+        where: { id: body.subjectId, schoolId: ctx.schoolId },
+        select: { id: true },
+      })
+      if (!subject) throw new Error('NOT_FOUND')
+    }
+    if (body.autoSave && body.classId) {
+      const cls = await db.class.findFirst({
+        where: { id: body.classId, schoolId: ctx.schoolId },
+        select: { id: true },
+      })
+      if (!cls) throw new Error('NOT_FOUND')
+    }
 
-      const subject = String(body.subject || 'General Knowledge')
-      const topic = String(body.topic || '')
-      const gradeLevel = String(body.gradeLevel || '9')
-      const difficulty = String(body.difficulty || 'MEDIUM').toUpperCase()
-      const count = Math.min(15, Math.max(1, Number(body.count) || 5))
-      const questionType = String(body.type || 'MCQ').toUpperCase()
+    const subject = body.subject || 'General Knowledge'
+    const topic = body.topic || ''
+    const gradeLevel = body.gradeLevel || '9'
+    const difficulty = (body.difficulty || 'MEDIUM').toUpperCase()
+    const count = body.count ?? 5
+    const questionType = (body.type || 'MCQ').toUpperCase()
 
-      const systemPrompt = `You are an expert examination question setter for schools. You create high-quality, pedagogically sound ${questionType} questions for grade ${gradeLevel} students. Your questions must be accurate, age-appropriate, and follow standard curriculum guidelines. Always respond with ONLY valid JSON — no markdown, no explanation, no code fences.`
+    const systemPrompt = `You are an expert examination question setter for schools. You create high-quality, pedagogically sound ${questionType} questions for grade ${gradeLevel} students. Your questions must be accurate, age-appropriate, and follow standard curriculum guidelines. Always respond with ONLY valid JSON — no markdown, no explanation, no code fences.`
 
-      const userPrompt = `Generate ${count} ${difficulty.toLowerCase()} difficulty ${questionType} questions${topic ? ` on the topic "${topic}"` : ''} for the subject "${subject}" at grade ${gradeLevel} level.
+    const userPrompt = `Generate ${count} ${difficulty.toLowerCase()} difficulty ${questionType} questions${topic ? ` on the topic "${topic}"` : ''} for the subject "${subject}" at grade ${gradeLevel} level.
 
 Return a JSON array where each object has EXACTLY these fields:
 {
@@ -69,111 +99,109 @@ Requirements:
 - Vary question styles (conceptual, numerical, application-based)
 - Return ONLY the JSON array, nothing else`
 
-      let parsed: GeneratedQuestion[] = []
-      let usedFallback = false
-      let raw = ''
+    let parsed: GeneratedQuestion[] = []
+    let usedFallback = false
+    let raw = ''
 
-      try {
-        const ai = await getAIClient()
-        if (ai) {
-          const completion = await ai.chat.completions.create({
-            messages: [
-              { role: 'assistant', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            thinking: { type: 'disabled' },
-          })
+    try {
+      const ai = await getAIClient()
+      if (ai) {
+        const completion = await ai.chat.completions.create({
+          messages: [
+            { role: 'assistant', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          thinking: { type: 'disabled' },
+        })
 
-          raw = completion.choices[0]?.message?.content || '[]'
+        raw = completion.choices[0]?.message?.content || '[]'
 
-          // Parse the JSON response — handle markdown code fences if present
-          let cleaned = raw.trim()
-          if (cleaned.startsWith('```')) {
-            cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
-          }
-          // Extract the first JSON array found
-          const arrMatch = cleaned.match(/\[[\s\S]*\]/)
-          if (arrMatch) cleaned = arrMatch[0]
+        // Parse the JSON response — handle markdown code fences if present
+        let cleaned = raw.trim()
+        if (cleaned.startsWith('```')) {
+          cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
+        }
+        // Extract the first JSON array found
+        const arrMatch = cleaned.match(/\[[\s\S]*\]/)
+        if (arrMatch) cleaned = arrMatch[0]
 
-          try {
-            parsed = JSON.parse(cleaned)
-          } catch {
-            usedFallback = true
-            parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
-          }
-        } else {
+        try {
+          parsed = JSON.parse(cleaned)
+        } catch {
           usedFallback = true
           parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
         }
-      } catch {
-        // SDK request failed — use template fallback
+      } else {
         usedFallback = true
         parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
       }
+    } catch {
+      // SDK request failed — use template fallback
+      usedFallback = true
+      parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
+    }
 
-      if (!Array.isArray(parsed) || parsed.length === 0) {
-        return {
-          ok: false,
-          generated: [],
-          raw,
-          error: 'AI returned no valid questions. Please try again with different parameters.',
-        }
-      }
-
-      // Validate and clean each question
-      const valid = parsed.filter(
-        (q) =>
-          q.question &&
-          q.optionA &&
-          q.optionB &&
-          q.optionC &&
-          q.optionD &&
-          ['A', 'B', 'C', 'D'].includes(q.answer)
-      )
-
-      if (valid.length === 0) {
-        return {
-          ok: false,
-          generated: [],
-          raw,
-          error: 'AI returned questions but none were valid. Please try again.',
-        }
-      }
-
-      // Optionally save to question bank if autoSave is true
-      const saved: string[] = []
-      if (body.autoSave && body.subjectId) {
-        for (const q of valid) {
-          const created = await (db as any).questionBank.create({
-            data: {
-              schoolId,
-              subjectId: body.subjectId,
-              classId: body.classId || null,
-              question: q.question,
-              optionA: q.optionA,
-              optionB: q.optionB,
-              optionC: q.optionC,
-              optionD: q.optionD,
-              answer: q.answer,
-              type: questionType,
-              difficulty: q.difficulty || difficulty,
-              marks: q.marks || (difficulty === 'HARD' ? 5 : difficulty === 'MEDIUM' ? 3 : 2),
-            },
-          })
-          saved.push(created.id)
-        }
-      }
-
+    if (!Array.isArray(parsed) || parsed.length === 0) {
       return {
-        ok: true,
-        generated: valid,
-        savedIds: saved,
-        savedCount: saved.length,
-        usedFallback,
+        ok: false,
+        generated: [],
+        raw,
+        error: 'AI returned no valid questions. Please try again with different parameters.',
       }
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] }
-  )
+    }
+
+    // Validate and clean each question
+    const valid = parsed.filter(
+      (q) =>
+        q.question &&
+        q.optionA &&
+        q.optionB &&
+        q.optionC &&
+        q.optionD &&
+        ['A', 'B', 'C', 'D'].includes(q.answer)
+    )
+
+    if (valid.length === 0) {
+      return {
+        ok: false,
+        generated: [],
+        raw,
+        error: 'AI returned questions but none were valid. Please try again.',
+      }
+    }
+
+    // Optionally save to question bank if autoSave is true
+    const saved: string[] = []
+    if (body.autoSave && body.subjectId) {
+      for (const q of valid) {
+        const created = await (db as any).questionBank.create({
+          data: {
+            schoolId: ctx.schoolId,
+            subjectId: body.subjectId,
+            classId: body.classId || null,
+            question: q.question,
+            optionA: q.optionA,
+            optionB: q.optionB,
+            optionC: q.optionC,
+            optionD: q.optionD,
+            answer: q.answer,
+            type: questionType,
+            difficulty: q.difficulty || difficulty,
+            marks: q.marks || (difficulty === 'HARD' ? 5 : difficulty === 'MEDIUM' ? 3 : 2),
+          },
+        })
+        saved.push(created.id)
+      }
+    }
+
+    return {
+      ok: true,
+      generated: valid,
+      savedIds: saved,
+      savedCount: saved.length,
+      usedFallback,
+    }
+  })
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,13 +1,19 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 
 export const runtime = 'nodejs'
 
 /// GET /api/fees/settlements — list all gateway settlements for the school.
+///
+/// 3-c fix: gated to 'school.finance.read' (PRINCIPAL / MANAGEMENT /
+/// ACCOUNTANT). Before, ANY authenticated role could read the payout
+/// register with per-transaction student names. (Client-grep: no client
+/// surface fetches this route — the finance dashboard renders the
+/// fee-store's settlement mock; the gate breaks no legit flow.)
 export async function GET(req: NextRequest) {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
+  return withAuthz({ permission: 'school.finance.read' }, async (ctx) => {
+    const schoolId = ctx.schoolId
     const { searchParams } = new URL(req.url)
     const status = searchParams.get('status')
     const from = searchParams.get('from')

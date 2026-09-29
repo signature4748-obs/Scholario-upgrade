@@ -95,6 +95,10 @@ model School {
 
   // Communication Hub — per-user direct-thread state rows
   directThreadStates DirectThreadState[]
+
+  // Phase 2 (3-c V5/V10) — cross-tenant file ownership registry for the
+  // local-disk upload store (db/uploads/{teachers,admissions}/…).
+  uploadedFiles UploadedFile[]
 }
 
 /// Per-user conversation state for DIRECT (Message-row) threads. The
@@ -2070,4 +2074,35 @@ model GrowthSetting {
   /// manual events per student per rolling 7 days across ALL staff (school-wide)
   manualWeeklySchoolLimit      Int @default(5)
   updatedAt          DateTime @updatedAt
+}
+
+/// Phase 2 (3-c audit V5/V10) — UploadedFile: the cross-tenant OWNERSHIP
+/// REGISTRY for the local-disk upload store. Every file stored by
+/// POST /api/teachers/upload or POST /api/admissions/upload gets a row
+/// binding the stored fileId to the school whose session uploaded it.
+///
+///   · id            = the stored fileId (the opaque server-minted filename,
+///                     e.g. `photo-lx3k-f3a9c2.jpg`) — the read/delete/
+///                     access routes resolve the row by exactly this value.
+///   · scope         = 'teachers' | 'admissions' (the upload family).
+///   · uploadedById  = the uploading User.id (audit + provenance).
+///
+/// Read/delete/token-mint routes fail-safe on the registry: a row whose
+/// schoolId ≠ the caller's school is a 404; a LEGACY file (stored before
+/// this registry existed, no row) is readable only through a valid signed
+/// token (unguessable HMAC) — deletes and token mints are refused, because
+/// ownership cannot be verified. ADDITIVE model — no existing column was
+/// touched.
+model UploadedFile {
+  /// The stored fileId / safe filename (server-minted, opaque).
+  id           String   @id
+  schoolId     String
+  school       School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// 'teachers' | 'admissions'
+  scope        String
+  uploadedById String
+  size         Int?
+  createdAt    DateTime @default(now())
+
+  @@index([schoolId, scope])
 }

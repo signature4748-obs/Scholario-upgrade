@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
+import { parseJsonBody } from '@/lib/security/validation'
+import { marksWorkflowFilterSchema } from '@/lib/exams/api-schemas'
 import { verifyMarks } from '@/lib/exams/service'
 
 export const runtime = 'nodejs'
@@ -9,17 +11,13 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
-      const { id } = await params
-      const body = await req.json().catch(() => ({}))
-      const result = await verifyMarks(id, schoolId, user, {
-        classId: body.classId,
-        subjectId: body.subjectId,
-      })
-      return result
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
-  )
+  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+    const { id } = await params
+    const body = await parseJsonBody(req, marksWorkflowFilterSchema)
+    const result = await verifyMarks(id, ctx.schoolId, ctx.user, {
+      classId: body.classId,
+      subjectId: body.subjectId,
+    })
+    return result
+  })
 }

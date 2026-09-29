@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomBytes } from 'crypto'
-import { mkdir, writeFile } from 'fs/promises'
+import { mkdir, writeFile, unlink } from 'fs/promises'
 import path from 'path'
 import { getCurrentUser } from '@/lib/auth'
+import { db } from '@/lib/db'
 import { newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { auditEvent } from '@/lib/security/audit'
@@ -34,6 +35,12 @@ export const runtime = 'nodejs'
  *     is sanitized display metadata only.
  *   - Audit row on every stored file.
  *
+ * Phase 2 (3-c V5/V10): every stored file is registered in the
+ * UploadedFile OWNERSHIP REGISTRY (id = stored fileId, schoolId = the
+ * session school, scope 'teachers') — the read/delete/token-mint routes
+ * now verify the file belongs to the CALLER's school. Upload requires a
+ * school-scoped session (the registry row is the tenancy anchor).
+ *
  * Files are stored under db/uploads/teachers/ (local-disk storage seam —
  * object storage is a later phase per the Phase-0 plan).
  */
@@ -51,6 +58,11 @@ export async function POST(req: NextRequest) {
   }
   if (user.role !== 'PRINCIPAL' && user.role !== 'MANAGEMENT') {
     return NextResponse.json({ success: false, error: 'Not authorized for media uploads.' }, { status: 403 })
+  }
+  // 3-c V5/V10: the ownership registry binds the file to a school — a
+  // schoolless staff account has no tenant to bind to.
+  if (!user.schoolId) {
+    return NextResponse.json({ success: false, error: 'No school scope for this account.' }, { status: 403 })
   }
   try {
     enforceRateLimit(`rl:upload:${user.id}`, RATE_LIMITS.upload)
@@ -127,6 +139,28 @@ export async function POST(req: NextRequest) {
     // Server-minted opaque id — client filenames never touch the disk.
     const fileId = `${kind}-${Date.now().toString(36)}-${randomBytes(6).toString('hex')}.${EXT_BY_TYPE[sniffed]}`
     await writeFile(path.join(UPLOAD_DIR, fileId), bytes)
+
+    // Phase 2 (3-c V5/V10) — register the file's SCHOOL ownership. The
+    // registry row is what the read/delete/token-mint routes verify;
+    // failure to register means the file can never be managed again, so
+    // a failed registration fails the upload (no orphan PII on disk).
+    try {
+      await db.uploadedFile.create({
+        data: {
+          id: fileId,
+          schoolId: user.schoolId!,
+          scope: 'teachers',
+          uploadedById: user.id,
+          size: file.size,
+        },
+      })
+    } catch {
+      await unlink(path.join(UPLOAD_DIR, fileId)).catch(() => {})
+      return NextResponse.json(
+        { success: false, error: 'Upload failed. Please try again.' },
+        { status: 500 },
+      )
+    }
 
     await auditEvent({
       schoolId: user.schoolId ?? null,

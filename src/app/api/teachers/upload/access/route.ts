@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server'
+import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
+import { AppError } from '@/lib/security/errors'
 import { newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { signFileToken } from '@/lib/security/file-signing'
@@ -15,11 +17,12 @@ export const runtime = 'nodejs'
  * file, so `<img src>` / `<a href>` navigation can authorize without an
  * Authorization header (dev preview iframe; any future embed).
  *
- * Phase 1 note: local-disk storage has no per-file ownership registry
- * (fileIds are unguessable server-minted ids). Access is therefore gated
- * to authenticated staff (PRINCIPAL / MANAGEMENT), rate-limited, and
- * every grant is audited. The ownership registry arrives with the
- * object-storage phase.
+ * Phase 2 (3-c audit V5/V10) — the token binds scope+fileId but never a
+ * tenant, so the MINT is now ownership-checked against the UploadedFile
+ * registry: the file must be REGISTERED and belong to the CALLER's
+ * school. An unregistered (legacy pre-registry) file is refused — we
+ * cannot prove ownership, so we never sign a URL for it. (Access remains
+ * PRINCIPAL / MANAGEMENT, rate-limited, every grant audited.)
  */
 export async function POST(req: NextRequest) {
   const requestId = newRequestId()
@@ -34,9 +37,19 @@ export async function POST(req: NextRequest) {
       const download = body?.download === true || body?.download === '1'
 
       if (!fileIdRaw || !isValidStoredFileId(fileIdRaw, TEACHER_UPLOAD_POLICY.allowedExts)) {
-        throw new Error('NOT_FOUND')
+        throw new AppError('NOT_FOUND')
       }
       const fileId = fileIdRaw
+
+      // ── 3-c V5/V10: registry ownership check before minting ────────
+      // A foreign school's file "does not exist" (fail-safe 404); a
+      // legacy unregistered file cannot be ownership-verified → refuse.
+      const row = await db.uploadedFile.findUnique({ where: { id: fileId } })
+      if (!row || row.scope !== 'teachers' || !user.schoolId || row.schoolId !== user.schoolId) {
+        throw new AppError('NOT_FOUND', {
+          internalDetail: `teachers upload access: file ${fileId} unregistered or foreign tenant`,
+        })
+      }
 
       const { token, expiresAt } = signFileToken(fileId, 'teachers')
       const qs = new URLSearchParams({ t: token })

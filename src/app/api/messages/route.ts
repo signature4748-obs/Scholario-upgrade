@@ -90,12 +90,18 @@ export async function POST(req: NextRequest) {
         throw new Error('Recipient is required (or use bulk mode with role)')
       }
 
-      // Verify recipient is in the same school
+      // Verify recipient is in the same school AND ACTIVE — a suspended
+      // or deactivated account must not receive new mail (fail-safe
+      // NOT_FOUND, same message shape the compose flows expect).
+      // (Task 4-d, audit 3-a fix #18; recipient schoolId was already
+      // enforced in Phase 1.)
       const recipient = await db.user.findFirst({
-        where: { id: recipientId, schoolId },
+        where: { id: recipientId, schoolId, status: 'ACTIVE' },
         select: { id: true, name: true },
       })
-      if (!recipient) throw new Error('Recipient not found in your school')
+      if (!recipient) {
+        throw new AppError('NOT_FOUND', { publicMessage: 'Recipient not found' })
+      }
 
       const msg = await db.message.create({
         data: {

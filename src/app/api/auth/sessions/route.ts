@@ -16,6 +16,8 @@ export async function GET() {
   return api(async () => {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
+    // Task 4-d (fix #9) — mirror withUser semantics (ACTIVE accounts only).
+    if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
 
     // Expired rows are pruned opportunistically (same policy as login).
     await db.session.deleteMany({ where: { userId: user.id, expiresAt: { lt: new Date() } } })
@@ -53,6 +55,8 @@ export async function DELETE() {
   return api(async () => {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
+    // Task 4-d (fix #9) — mirror withUser semantics (ACTIVE accounts only).
+    if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
 
     // Sensitive authentication operation — throttled (Phase 1).
     enforceRateLimit(`rl:sessrevoke:${user.id}`, RATE_LIMITS.sessionRevoke)

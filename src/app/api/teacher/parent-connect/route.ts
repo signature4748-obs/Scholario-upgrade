@@ -1,3 +1,4 @@
+import { AppError } from '@/lib/security/errors'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
@@ -9,6 +10,7 @@ import {
   toStudentRef,
   toFollowUpItem,
 } from '@/lib/teacher-hub'
+import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 import type {
   ConversationSummary,
   ParentConnectPayload,
@@ -262,6 +264,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
+      // Message send — per-user throttle (same profile as the messaging
+      // routes; see rate-limit.ts RATE_LIMITS.message).
+      enforceRateLimit(`rl:msg:${user.id}`, RATE_LIMITS.message)
       const ctx = await requireTeacher(user)
       const body = await req.json().catch(() => null)
       if (!body || typeof body !== 'object') throw new Error('Invalid request body')
@@ -276,7 +281,7 @@ export async function POST(req: NextRequest) {
           user: { select: { name: true } },
         },
       })
-      if (!student) throw new Error('Student not found in your scope')
+      if (!student) throw new AppError('NOT_FOUND', { publicMessage: 'Student not found in your scope', internalDetail: 'parent-connect: student missing or outside teacher scope' })
       if (!student.guardianId) throw new Error('This student has no linked guardian account')
 
       const guardian = await db.user.findFirst({

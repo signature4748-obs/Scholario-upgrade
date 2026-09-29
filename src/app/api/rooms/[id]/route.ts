@@ -2,8 +2,25 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
+import { AppError } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
+
+// Task 4-d (audit 3-a fix #12): the SAME room-type whitelist the POST
+// route applies (duplicated here — route.ts modules must not import from
+// each other under Next's route-export validation).
+const ROOM_TYPES = [
+  'Classroom',
+  'Science Lab',
+  'Computer Lab',
+  'Library',
+  'Auditorium',
+  'Music Room',
+  'Art Room',
+  'Sports Facility',
+  'Staff Room',
+  'Other',
+] as const
 
 /**
  * PATCH /api/rooms/[id] — edit or archive a room (PRINCIPAL/MANAGEMENT).
@@ -64,7 +81,16 @@ export async function PATCH(
         const c = Number(body.capacity)
         patch.capacity = Number.isFinite(c) && c > 0 ? Math.round(c) : null
       }
-      if (body.type !== undefined && typeof body.type === 'string') patch.type = body.type
+      if (body.type !== undefined && typeof body.type === 'string') {
+        // Type must be a whitelisted room kind — free-form strings are
+        // rejected (the POST route coerces to 'Classroom'; PATCH is an
+        // explicit edit, so a bad value is a 422 the caller can fix).
+        const type = body.type.trim()
+        if (!ROOM_TYPES.includes(type as (typeof ROOM_TYPES)[number])) {
+          throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid room type' })
+        }
+        patch.type = type
+      }
 
       if (body.active !== undefined) {
         const nextActive = Boolean(body.active)

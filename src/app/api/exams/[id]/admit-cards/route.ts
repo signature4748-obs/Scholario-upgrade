@@ -1,29 +1,29 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
+import { parseJsonBody } from '@/lib/security/validation'
+import { admitCardsSchema } from '@/lib/exams/api-schemas'
 import { db } from '@/lib/db'
 
 export const runtime = 'nodejs'
 
 // POST /api/exams/[id]/admit-cards  body: { classId, studentIds?: string[] (omit = all) }
 // Returns student+schedule data needed for batch admit card PDF generation client-side.
+// Staff-only (audit 3-b MEDIUM): roster + seating is not student-facing data.
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
+  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
     const { id } = await params
-    const body = await req.json().catch(() => ({}))
-    const { classId, studentIds } = body
-    if (!classId) throw new Error('classId is required')
+    const { classId, studentIds } = await parseJsonBody(req, admitCardsSchema)
 
     // Validate
-    const exam = await db.exam.findFirst({ where: { id, schoolId }, select: { id: true, name: true, type: true, session: true, startDate: true, endDate: true } })
+    const exam = await db.exam.findFirst({ where: { id, schoolId: ctx.schoolId }, select: { id: true, name: true, type: true, session: true, startDate: true, endDate: true } })
     if (!exam) throw new Error('Exam not found')
 
     // Get real students
-    const where: any = { classId, schoolId }
-    if (studentIds && Array.isArray(studentIds) && studentIds.length > 0) {
+    const where: any = { classId, schoolId: ctx.schoolId }
+    if (studentIds && studentIds.length > 0) {
       where.id = { in: studentIds }
     }
     const students = await db.student.findMany({

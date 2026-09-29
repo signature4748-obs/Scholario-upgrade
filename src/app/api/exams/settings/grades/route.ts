@@ -1,28 +1,26 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { listGradeScales, createGradeScale } from '@/lib/exams/settings-service'
+import { parseJsonBody } from '@/lib/security/validation'
+import { gradeScaleCreateSchema } from '@/lib/exams/api-schemas'
 
 export const runtime = 'nodejs'
 
+// Grade scales — staff read; mutations are Principal/Management.
 export async function GET() {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
-    return await listGradeScales(schoolId)
+  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+    return await listGradeScales(ctx.schoolId)
   })
 }
 
 export async function POST(req: NextRequest) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
-      const body = await req.json().catch(() => ({}))
-      return await createGradeScale(schoolId, {
-        grade: body.grade,
-        minPct: Number(body.minPct),
-        maxPct: Number(body.maxPct),
-        color: body.color,
-      })
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
-  )
+  return withAuthz({ permission: 'exams.settings.write' }, async (ctx) => {
+    const body = await parseJsonBody(req, gradeScaleCreateSchema)
+    return await createGradeScale(ctx.schoolId, {
+      grade: body.grade,
+      minPct: body.minPct,
+      maxPct: body.maxPct,
+      color: body.color,
+    })
+  })
 }

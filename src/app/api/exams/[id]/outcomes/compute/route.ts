@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { z } from 'zod'
+import { withAuthz } from '@/lib/security/authz'
+import { parseJsonBody, idSchema } from '@/lib/security/validation'
 import { computeAutoOutcomes } from '@/lib/exams/service-extended'
 
 export const runtime = 'nodejs'
@@ -9,14 +11,10 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
-      const { id } = await params
-      const body = await req.json().catch(() => ({}))
-      const result = await computeAutoOutcomes(id, body.classId, schoolId)
-      return result
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
-  )
+  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+    const { id } = await params
+    const body = await parseJsonBody(req, z.object({ classId: idSchema }).strict())
+    const result = await computeAutoOutcomes(id, body.classId, ctx.schoolId)
+    return result
+  })
 }

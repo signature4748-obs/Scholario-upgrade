@@ -7,6 +7,19 @@ export const runtime = 'nodejs'
 // Per-school overview stats (principal/management/teacher) or super-admin platform stats
 export async function GET() {
   return withUser(async (user) => {
+    // Task 4-d (audit 3-a fix #7): gate the school branch to the
+    // 'school.dashboard.read' capability roles (P/M/T) while keeping the
+    // SUPER_ADMIN platform branch reachable. STUDENT/PARENT/DRIVER/
+    // ACCOUNTANT get 403 (the school branch carries financials + the
+    // activity log). Grep-verified: the only GET consumer is the principal
+    // dashboard (use-school-stats.ts); the student and teacher panels use
+    // /api/student/dashboard + /api/teacher/dashboard.
+    if (
+      user.role !== 'SUPER_ADMIN' &&
+      !['PRINCIPAL', 'MANAGEMENT', 'TEACHER'].includes(user.role)
+    ) {
+      throw new Error('FORBIDDEN')
+    }
     if (user.role === 'SUPER_ADMIN') {
       const setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
       const showDemo = setting ? setting.showDemoSchool : true
@@ -277,9 +290,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (user.role === 'TEACHER') {
+      // Task 4-d: session-derived tenant (schoolScoped throws the safe
+      // NO_SCHOOL 403 for schoolless callers — replaces four `user.schoolId!`
+      // non-null assertions that 500-crashed for schoolless identities).
+      const schoolId = schoolScoped(user)
       const teacher = await db.teacher.findUnique({ where: { userId: user.id } })
       const myClasses = await db.class.findMany({
-        where: { schoolId: user.schoolId! },
+        where: { schoolId },
         include: { _count: { select: { students: true, subjects: true } } },
       })
       const myAssignments = await db.assignment.findMany({
@@ -288,19 +305,19 @@ export async function POST(req: NextRequest) {
         take: 10,
         include: { class: true, subject: true },
       })
-      const myQuestions = await db.questionBank.count({ where: { schoolId: user.schoolId! } })
+      const myQuestions = await db.questionBank.count({ where: { schoolId } })
       const myPapers = await db.examPaper.count({ where: { createdBy: user.id } })
-      const studentsCount = await db.student.count({ where: { schoolId: user.schoolId! } })
+      const studentsCount = await db.student.count({ where: { schoolId } })
       // Today's timetable for this teacher
       const todayKey = new Date().toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase().slice(0, 3)
       const todaySchedule = await db.timetable.findMany({
-        where: { schoolId: user.schoolId!, day: todayKey, teacherName: { contains: user.name } },
+        where: { schoolId, day: todayKey, teacherName: { contains: user.name } },
         include: { subject: true, class: true },
         orderBy: { period: 'asc' },
         take: 10,
       })
       const recentResults = await db.result.count({
-        where: { exam: { schoolId: user.schoolId! } },
+        where: { exam: { schoolId } },
       })
       return { scope: 'TEACHER', teacher, myClasses, myAssignments, myQuestions, myPapers, studentsCount, todaySchedule, recentResults }
     }

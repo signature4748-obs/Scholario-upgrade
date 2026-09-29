@@ -16,6 +16,7 @@
  */
 
 import { db } from '@/lib/db'
+import { AppError } from '@/lib/security/errors'
 import { schoolScoped } from '@/lib/api'
 import type { AuthUser } from '@/lib/auth'
 import type { FollowUpItem, StudentRef } from '@/lib/teacher-hub-types'
@@ -156,7 +157,7 @@ export async function assertStudentInScope(
       user: { select: { id: true, name: true } },
     },
   })
-  if (!student) throw new Error('Student not found in your scope')
+  if (!student) throw new AppError('NOT_FOUND', { publicMessage: 'Student not found in your scope', internalDetail: 'assertStudentInScope: student missing or outside teacher scope' })
   return student as ScopedStudent
 }
 

@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
+import { AppError } from '@/lib/security/errors'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
 
@@ -28,12 +30,23 @@ export const runtime = 'nodejs'
 ///                                           and honest (no money moved).
 ///
 /// Authorisation:
-///   · withUser roles [PRINCIPAL, MANAGEMENT, ACCOUNTANT, PARENT, STUDENT]
-///   · schoolScoped(user) — the order is looked up by gatewayOrderId AND
-///     schoolId: a student from school X can never settle school Y's order.
+///   · roles [PRINCIPAL, MANAGEMENT, ACCOUNTANT, PARENT, STUDENT] (school
+///     tenants only — the demo settlement rail is not a platform surface).
+///   · the order is looked up by gatewayOrderId AND schoolId: a student
+///     from school X can never settle school Y's order.
 ///   · STUDENT: the txn's studentId must equal the session's linked Student
 ///     row id (User → Student by userId) — student A can never confirm
 ///     student B's order (§25).
+///   · PARENT (3-c fix): the txn's studentId must be one of the caller's
+///     OWN children (db.student.findMany({ schoolId, guardianId: user.id }))
+///     — a parent could previously settle/cancel ANY family's pending order.
+///
+/// Environment gate (3-c fix):
+///   In production this route is refused outright unless
+///   PAYMENTS_SANDBOX=1 is set — the real money movement in production is
+///   the HMAC-verified webhook, never a client-invoked settlement call.
+///   In development (and explicit sandbox deployments) the demo payment
+///   flow keeps working unchanged.
 ///
 /// Idempotency (the webhook's discipline, mirrored here):
 ///   · SUCCESS → return the SAME authoritative result again (no double
@@ -74,25 +87,54 @@ function settlementOf(txn: {
 }
 
 export async function POST(req: NextRequest) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
+  return withAuthz(
+    { roles: ['PRINCIPAL', 'MANAGEMENT', 'ACCOUNTANT', 'PARENT', 'STUDENT'] },
+    async (ctx) => {
+      const schoolId = ctx.schoolId
+      const user = ctx.user
+
+      // ── 3-c fix: production env gate ────────────────────────────────
+      // The demo settlement rail is a DEV/sandbox affordance. In production
+      // the only PENDING → SUCCESS transition is the signed webhook.
+      if (process.env.NODE_ENV === 'production' && process.env.PAYMENTS_SANDBOX !== '1') {
+        throw new AppError('FORBIDDEN', {
+          publicMessage: 'Payment confirmation is disabled',
+          internalDetail:
+            'demo-gateway settlement endpoint refused: NODE_ENV=production and PAYMENTS_SANDBOX is not "1"',
+        })
+      }
+
+      // ── 3-c fix: settlement attempts are rate-limited (20/hour) ─────
+      enforceRateLimit(`rl:payconfirm:${user.id}`, RATE_LIMITS.payment)
+
       const body = await req.json().catch(() => ({}))
       const orderId = String(body.orderId || '')
-      if (!orderId) throw new Error('orderId is required.')
+      if (!orderId) throw new AppError('INVALID_INPUT', { publicMessage: 'orderId is required.' })
       const cancelled = body.outcome === 'cancelled'
 
       // ── Tenant isolation: the order must belong to THIS school ────
       const txn = await db.feeTransaction.findFirst({
         where: { gatewayOrderId: orderId, schoolId },
       })
-      if (!txn) throw new Error('Order not found for this school.')
+      if (!txn) throw new AppError('NOT_FOUND', { publicMessage: 'Order not found for this school.' })
 
       // ── §25 student authorisation: only your OWN orders ───────────
       if (user.role === 'STUDENT') {
         const me = await db.student.findFirst({ where: { userId: user.id } })
         if (!me || me.schoolId !== schoolId || txn.studentId !== me.id) {
-          throw new Error('FORBIDDEN')
+          throw new AppError('FORBIDDEN')
+        }
+      }
+
+      // ── 3-c fix: PARENT authorisation: only your OWN children's orders ──
+      if (user.role === 'PARENT') {
+        const children = await db.student.findMany({
+          where: { schoolId, guardianId: user.id },
+          select: { id: true },
+        })
+        const childIds = new Set(children.map((c) => c.id))
+        if (!txn.studentId || !childIds.has(txn.studentId)) {
+          throw new AppError('FORBIDDEN')
         }
       }
 
@@ -103,7 +145,9 @@ export async function POST(req: NextRequest) {
       if (txn.status !== 'PENDING') {
         // UNDER_VERIFICATION / REFUNDED are office-managed states — the
         // gateway rail never rewrites them.
-        throw new Error(`This order is ${txn.status.toLowerCase()} — settlement is handled by the school office.`)
+        throw new AppError('INVALID_INPUT', {
+          publicMessage: `This order is ${txn.status.toLowerCase()} — settlement is handled by the school office.`,
+        })
       }
 
       // ── outcome: cancelled (user abandoned the gateway page) ──────
@@ -162,6 +206,5 @@ export async function POST(req: NextRequest) {
 
       return settlementOf(updated)
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT', 'ACCOUNTANT', 'PARENT', 'STUDENT'] }
   )
 }

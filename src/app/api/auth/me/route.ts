@@ -19,6 +19,9 @@ export async function GET() {
   return api(async () => {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
+    // Task 4-d (fix #9) — mirror withUser semantics: a non-ACTIVE account
+    // (suspended/pending) must not read its own session context.
+    if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
 
     const session = await getCurrentSession()
     const ua = parseUserAgent(session?.userAgent ?? null)

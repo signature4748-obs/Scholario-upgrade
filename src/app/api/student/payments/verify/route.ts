@@ -1,11 +1,11 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
+import { AppError, newRequestId } from '@/lib/security/errors'
 import { getPaymentProvider } from '@/lib/payments/provider'
 import { paymentMethodFor, prettyMethod } from '@/lib/payments/methods'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { auditEvent } from '@/lib/security/audit'
-import { newRequestId } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -42,23 +42,39 @@ export const runtime = 'nodejs'
 ///     gatewayPaymentId, txnId, paidAt }
 export async function POST(req: NextRequest) {
   const requestId = newRequestId()
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
+  return withAuthz(
+    { roles: ['STUDENT'] },
+    async (ctx) => {
+      const schoolId = ctx.schoolId
 
       // Phase 1 — verification attempts are rate-limited (20/hour).
-      enforceRateLimit(`rl:payverify:${user.id}`, RATE_LIMITS.payment)
+      enforceRateLimit(`rl:payverify:${ctx.user.id}`, RATE_LIMITS.payment)
 
       const body = await req.json().catch(() => ({}))
       const orderId = typeof body?.orderId === 'string' ? body.orderId.trim() : ''
       const paymentId = typeof body?.paymentId === 'string' ? body.paymentId.trim() : ''
       const signature = typeof body?.signature === 'string' ? body.signature.trim() : ''
-      if (!orderId || !paymentId || !signature) throw new Error('orderId, paymentId and signature are required')
+      if (!orderId || !paymentId || !signature) throw new AppError('INVALID_INPUT', { publicMessage: 'orderId, paymentId and signature are required' })
 
       // ── 1. Locate the transaction (RLS: same school as the session) ──
       const txn = await db.feeTransaction.findUnique({ where: { gatewayOrderId: orderId } })
-      if (!txn) throw new Error('NOT_FOUND')
-      if (txn.schoolId !== schoolId) throw new Error('FORBIDDEN')
+      if (!txn) throw new AppError('NOT_FOUND')
+      if (txn.schoolId !== schoolId) throw new AppError('FORBIDDEN')
+
+      // ── 1b. 3-c fix: OWNERSHIP — only the CALLER's own orders ──────
+      // The route previously checked txn.schoolId but NOT txn.studentId:
+      // any student of the school could complete ANOTHER student's order
+      // given the signature triple (which the order creator relays).
+      // Both rows are in-tenant, so a mismatch is a straight FORBIDDEN.
+      const me = await db.student.findFirst({
+        where: { schoolId, userId: ctx.user.id },
+        select: { id: true },
+      })
+      if (!me || txn.studentId !== me.id) {
+        throw new AppError('FORBIDDEN', {
+          internalDetail: `student/payments/verify: txn ${txn.id} studentId ${txn.studentId ?? 'null'} ≠ caller student ${me?.id ?? 'none'}`,
+        })
+      }
 
       // ── 2. Idempotency — already verified? Return the same payload. ──
       if (txn.status === 'SUCCESS') {
@@ -170,15 +186,18 @@ export async function POST(req: NextRequest) {
           },
         })
 
-        // School-wide notification — surfaces in /api/notifications-feed.
+        // Staff-facing notification — surfaces in /api/notifications-feed.
+        // 3-c fix: audience 'STAFF' (PRINCIPAL/TEACHER see it) — a
+        // student's payment receipt broadcast to 'ALL' leaked fee
+        // amounts + names to every student/parent in the school.
         await tx.notification.create({
           data: {
             schoolId: txn.schoolId,
             title: 'Fee payment received',
-            message: `${user.name} paid ₹${txn.amount} via ${prettyMethod(txn.method)} · Receipt ${txn.receiptNo}`,
-            audience: 'ALL',
+            message: `${ctx.user.name} paid ₹${txn.amount} via ${prettyMethod(txn.method)} · Receipt ${txn.receiptNo}`,
+            audience: 'STAFF',
             priority: 'NORMAL',
-            senderId: user.id,
+            senderId: ctx.user.id,
           },
         })
 
@@ -213,7 +232,7 @@ export async function POST(req: NextRequest) {
 
       await auditEvent({
         schoolId: txn.schoolId,
-        userId: user.id,
+        userId: ctx.user.id,
         action: 'PAYMENT_VERIFIED',
         requestId,
         detail: `FeeTransaction ${txn.id} verified · receipt ${txn.receiptNo} · ₹${txn.amount}`,
@@ -229,6 +248,5 @@ export async function POST(req: NextRequest) {
         paidAt: paidAt.toISOString(),
       }
     },
-    { roles: ['STUDENT'] }
   )
 }

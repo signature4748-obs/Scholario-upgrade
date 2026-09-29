@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { getCurrentUser } from '@/lib/auth'
-import { api } from '@/lib/api'
+import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
 import { getTeacherPreferences, saveTeacherPreferences } from '@/lib/user-preferences'
 
@@ -47,43 +46,45 @@ async function authorizedClasses(schoolId: string, userId: string, teacherName: 
  * account/workspace context the Settings module renders: Teacher record,
  * authorized classes (for the default-class picker) and the school's
  * academic session (read-only — school-managed, not teacher-editable).
+ * 3-d audit fix: routed through withUser (session identity + ACTIVE-status
+ * enforcement + role gate) instead of a manual getCurrentUser/role check
+ * that ignored account status.
  */
 export async function GET() {
-  return api(async () => {
-    const user = await getCurrentUser()
-    if (!user) throw new Error('UNAUTHORIZED')
-    if (user.role !== 'TEACHER') throw new Error('FORBIDDEN')
-    if (!user.schoolId) throw new Error('NO_SCHOOL')
+  return withUser(
+    async (user) => {
+      const schoolId = schoolScoped(user)
+      const teacherName = (user.name || '').trim().toLowerCase()
+      const [prefs, classes, teacherRow, school] = await Promise.all([
+        getTeacherPreferences(user.id),
+        authorizedClasses(schoolId, user.id, teacherName),
+        db.teacher.findUnique({
+          where: { userId: user.id },
+          select: { employeeId: true, department: true, qualification: true, subjects: true },
+        }),
+        db.school.findUnique({
+          where: { id: schoolId },
+          select: { academicYear: true, name: true },
+        }),
+      ])
 
-    const teacherName = (user.name || '').trim().toLowerCase()
-    const [prefs, classes, teacherRow, school] = await Promise.all([
-      getTeacherPreferences(user.id),
-      authorizedClasses(user.schoolId, user.id, teacherName),
-      db.teacher.findUnique({
-        where: { userId: user.id },
-        select: { employeeId: true, department: true, qualification: true, subjects: true },
-      }),
-      db.school.findUnique({
-        where: { id: user.schoolId },
-        select: { academicYear: true, name: true },
-      }),
-    ])
-
-    return {
-      ...prefs,
-      teacher: {
-        employeeId: teacherRow?.employeeId ?? null,
-        department: teacherRow?.department ?? null,
-        qualification: teacherRow?.qualification ?? null,
-        subjects: teacherRow?.subjects ?? null,
-      },
-      classes,
-      school: {
-        name: school?.name ?? null,
-        academicYear: school?.academicYear ?? null,
-      },
-    }
-  })
+      return {
+        ...prefs,
+        teacher: {
+          employeeId: teacherRow?.employeeId ?? null,
+          department: teacherRow?.department ?? null,
+          qualification: teacherRow?.qualification ?? null,
+          subjects: teacherRow?.subjects ?? null,
+        },
+        classes,
+        school: {
+          name: school?.name ?? null,
+          academicYear: school?.academicYear ?? null,
+        },
+      }
+    },
+    { roles: ['TEACHER'] },
+  )
 }
 
 /**
@@ -93,29 +94,29 @@ export async function GET() {
  * defaultClassId is validated against the teacher's authorized classes —
  * a tampered id from another school (or a class she has nothing to do
  * with) is rejected, never silently stored.
+ * 3-d audit fix: withUser envelope (ACTIVE enforcement + role gate).
  */
 export async function PUT(req: NextRequest) {
-  return api(async () => {
-    const user = await getCurrentUser()
-    if (!user) throw new Error('UNAUTHORIZED')
-    if (user.role !== 'TEACHER') throw new Error('FORBIDDEN')
-    if (!user.schoolId) throw new Error('NO_SCHOOL')
+  return withUser(
+    async (user) => {
+      const schoolId = schoolScoped(user)
+      const body = await req.json().catch(() => ({}))
 
-    const body = await req.json().catch(() => ({}))
-
-    // Validate the workspace default class BEFORE writing anything.
-    if (body?.workspace?.defaultClassId != null) {
-      const teacherName = (user.name || '').trim().toLowerCase()
-      const classes = await authorizedClasses(user.schoolId, user.id, teacherName)
-      const wanted = body.workspace.defaultClassId
-      if (typeof wanted !== 'string' || !classes.some((c) => c.id === wanted)) {
-        throw new Error('That class is not available to you.')
+      // Validate the workspace default class BEFORE writing anything.
+      if (body?.workspace?.defaultClassId != null) {
+        const teacherName = (user.name || '').trim().toLowerCase()
+        const classes = await authorizedClasses(schoolId, user.id, teacherName)
+        const wanted = body.workspace.defaultClassId
+        if (typeof wanted !== 'string' || !classes.some((c) => c.id === wanted)) {
+          throw new Error('That class is not available to you.')
+        }
       }
-    }
 
-    return await saveTeacherPreferences(user.id, user.schoolId, {
-      notifications: body?.notifications,
-      workspace: body?.workspace,
-    })
-  })
+      return await saveTeacherPreferences(user.id, schoolId, {
+        notifications: body?.notifications,
+        workspace: body?.workspace,
+      })
+    },
+    { roles: ['TEACHER'] },
+  )
 }

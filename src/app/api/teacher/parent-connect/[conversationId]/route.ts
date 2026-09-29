@@ -7,6 +7,7 @@ import {
   parseString,
   toStudentRef,
 } from '@/lib/teacher-hub'
+import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 import type { ThreadPayload } from '@/lib/teacher-hub-types'
 
 export const runtime = 'nodejs'
@@ -96,6 +97,9 @@ export async function POST(
 ) {
   return withUser(
     async (user) => {
+      // Message send — per-user throttle (same profile as the messaging
+      // routes; see rate-limit.ts RATE_LIMITS.message).
+      enforceRateLimit(`rl:msg:${user.id}`, RATE_LIMITS.message)
       const ctx = await requireTeacher(user)
       const { conversationId } = await params
       const conversation = await ownedConversation(ctx, conversationId)

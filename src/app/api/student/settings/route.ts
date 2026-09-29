@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { api } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { getUserPreferences, saveUserPreferences } from '@/lib/user-preferences'
 
 export const runtime = 'nodejs'
@@ -8,17 +7,15 @@ export const runtime = 'nodejs'
 /**
  * GET /api/student/settings — the signed-in student's preferences.
  * Identity (and school scope) is derived from the erp_session cookie via
- * requireStudent — the same RLS-safe resolver every /api/student/* route
- * uses. A student never sees another student's or another school's rows:
- * the lookup key is the SESSION's user id, full stop.
+ * the central withAuthz pipeline (ACTIVE-status enforced — 3-c fix: the
+ * previous raw getCurrentUser check never verified the account status, so
+ * a SUSPENDED student could still read/write preferences). A student
+ * never sees another student's or another school's rows: the lookup key
+ * is the SESSION's user id, full stop.
  */
 export async function GET() {
-  return api(async () => {
-    const user = await getCurrentUser()
-    if (!user) throw new Error('UNAUTHORIZED')
-    if (user.role !== 'STUDENT') throw new Error('FORBIDDEN')
-
-    return await getUserPreferences(user.id)
+  return withAuthz({ roles: ['STUDENT'] }, async (ctx) => {
+    return await getUserPreferences(ctx.user.id)
   })
 }
 
@@ -30,14 +27,9 @@ export async function GET() {
  * schoolId comes from the session, never the body.
  */
 export async function PUT(req: NextRequest) {
-  return api(async () => {
-    const user = await getCurrentUser()
-    if (!user) throw new Error('UNAUTHORIZED')
-    if (user.role !== 'STUDENT') throw new Error('FORBIDDEN')
-    if (!user.schoolId) throw new Error('NO_SCHOOL')
-
+  return withAuthz({ roles: ['STUDENT'] }, async (ctx) => {
     const body = await req.json().catch(() => ({}))
-    return await saveUserPreferences(user.id, user.schoolId, {
+    return await saveUserPreferences(ctx.user.id, ctx.schoolId, {
       notifications: body?.notifications,
       learning: body?.learning,
     })

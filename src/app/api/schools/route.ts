@@ -2,8 +2,22 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { withUser } from '@/lib/api'
+import { resolveProvisionedPassword } from '@/lib/account-provisioning'
+import { AppError } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
+
+// Task 4-d (audit 3-a fix #13): plan/status free strings on school
+// create/update are whitelisted to the vocabulary in use — schema default
+// 'STANDARD' (prisma), the deployed demo school 'ENTERPRISE', and the
+// conventional FREE/PRO tiers (grep: no other plan value exists in the
+// codebase; the mock control plane's starter/growth/enterprise vocabulary
+// never reaches School.plan). Status: 'ACTIVE' (schema default + the only
+// value in the DB), plus the lifecycle states the super-admin surface
+// uses (SUSPENDED / TRIAL — matching the mock control-plane vocabulary,
+// upper-cased).
+const SCHOOL_PLANS = ['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'] as const
+const SCHOOL_STATUSES = ['ACTIVE', 'TRIAL', 'SUSPENDED'] as const
 
 // List all schools (super admin) OR the caller's school
 export async function GET(req: NextRequest) {
@@ -54,7 +68,11 @@ export async function GET(req: NextRequest) {
         counts: s._count,
       }))
     }
-    const s = await db.school.findUnique({ where: { id: user.schoolId! } })
+    // Non-admin caller: their own school only. A schoolless identity
+    // gets the NO_SCHOOL 403 — never a `user.schoolId!` non-null-assertion
+    // 500 (Task 4-d, audit 3-a fix #13).
+    if (!user.schoolId) throw new Error('NO_SCHOOL')
+    const s = await db.school.findUnique({ where: { id: user.schoolId } })
     return s ? [{
       ...s,
       isDemo: Boolean(s.isDemo),
@@ -77,7 +95,24 @@ export async function POST(req: NextRequest) {
 
       const principalName = String(body.principalName || '').trim() || 'Principal'
       const principalEmail = String(body.principalEmail || '').trim().toLowerCase() || `principal@${slug}.edu`
-      const principalPassword = String(body.principalPassword || '') || 'password123'
+      // Task 4-d (audit 3-a fix #13): NO shared 'password123' default —
+      // random temp password (returned below so the operator can hand it
+      // over) or the SCHOLARIO_DEFAULT_PASSWORD dev override (non-prod).
+      const { password: principalPassword, generated } = resolveProvisionedPassword(body.principalPassword)
+
+      // plan/status whitelists (fail-closed on unknown values).
+      const plan = body.plan === undefined || body.plan === null || body.plan === ''
+        ? 'STANDARD'
+        : String(body.plan).trim().toUpperCase()
+      if (!SCHOOL_PLANS.includes(plan as (typeof SCHOOL_PLANS)[number])) {
+        throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid plan' })
+      }
+      const status = body.status === undefined || body.status === null || body.status === ''
+        ? 'ACTIVE'
+        : String(body.status).trim().toUpperCase()
+      if (!SCHOOL_STATUSES.includes(status as (typeof SCHOOL_STATUSES)[number])) {
+        throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid status' })
+      }
 
       const school = await db.$transaction(async (tx) => {
         const s = await tx.school.create({
@@ -92,8 +127,8 @@ export async function POST(req: NextRequest) {
             email: body.email || `office@${slug}.edu`,
             themeColor: body.themeColor || '#0f766e',
             accentColor: body.accentColor || '#f59e0b',
-            plan: body.plan || 'STANDARD',
-            status: body.status || 'ACTIVE',
+            plan,
+            status,
             academicYear: body.academicYear || '2025-2026',
             isDemo: false,
           },
@@ -123,7 +158,11 @@ export async function POST(req: NextRequest) {
         domain: school.school.domain,
         isDemo: false,
         principalEmail: school.principalEmail,
+        // The provisioning credential is surfaced ONCE here (the deploy
+        // response has always carried it); `generated` mirrors the
+        // tempPassword convention of the student/teacher create routes.
         principalPassword: school.principalPassword,
+        ...(generated ? { tempPassword: school.principalPassword } : {}),
       }
     },
     { roles: ['SUPER_ADMIN'] }

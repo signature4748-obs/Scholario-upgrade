@@ -50,6 +50,22 @@ export async function GET() {
         subjectByClass.set(r.classId, set)
       }
 
+      // Phase 2 — canonical CSA appointments UNION the legacy timetable
+      // fallback (mirrors getTeacherSubjectAssignments in teacher-scope.ts:
+      // CSA is the authoritative appointment record; the name-matched
+      // timetable remains as the transition fallback). A teacher with a
+      // CSA appointment sees the class directory even without timetable
+      // rows.
+      const csaRows = await db.classSubjectAssignment.findMany({
+        where: { schoolId, isActive: true, teacherUserId: user.id },
+        select: { classId: true, subject: { select: { name: true } } },
+      })
+      for (const r of csaRows) {
+        const set = subjectByClass.get(r.classId) ?? new Set<string>()
+        if (r.subject?.name) set.add(r.subject.name)
+        subjectByClass.set(r.classId, set)
+      }
+
       // Classes where this teacher is class teacher.
       const classTeacherOf = await db.class.findMany({
         where: { schoolId, classTeacherId: user.id },

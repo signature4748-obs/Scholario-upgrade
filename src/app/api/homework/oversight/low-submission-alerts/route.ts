@@ -1,11 +1,12 @@
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { getLowSubmissionAlerts } from '@/lib/homework/oversight-service'
 
 export const runtime = 'nodejs'
 
-export async function GET() {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
+// 3-d audit: per-class submission shortfalls — oversight (P/M).
+export function GET() {
+  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+    const schoolId = ctx.schoolId
     return await getLowSubmissionAlerts(schoolId)
-  })
+  }) as Promise<Response>
 }

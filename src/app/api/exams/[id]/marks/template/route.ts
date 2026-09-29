@@ -1,17 +1,16 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { db } from '@/lib/db'
 
 export const runtime = 'nodejs'
 
 // GET /api/exams/[id]/marks/template?classId=&subjectId=
-// Returns a CSV template for marks import
+// Returns a CSV template for marks import — staff-only (audit 3-b MEDIUM).
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
+  return withAuthz({ permission: 'exams.marks.read' }, async (ctx) => {
     const { id } = await params
     const url = new URL(req.url)
     const classId = url.searchParams.get('classId')!
@@ -20,7 +19,7 @@ export async function GET(
     if (!classId || !subjectId) throw new Error('classId and subjectId are required')
 
     // Validate exam + class
-    const exam = await db.exam.findFirst({ where: { id, schoolId } })
+    const exam = await db.exam.findFirst({ where: { id, schoolId: ctx.schoolId } })
     if (!exam) throw new Error('Exam not found')
 
     const subjectConfig = await db.examSubjectConfig.findFirst({
@@ -31,7 +30,7 @@ export async function GET(
 
     // Get real students
     const students = await db.student.findMany({
-      where: { classId, schoolId },
+      where: { classId, schoolId: ctx.schoolId },
       orderBy: { rollNo: 'asc' },
       include: { user: { select: { name: true } } },
     })

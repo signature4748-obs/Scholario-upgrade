@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { stat, readFile, unlink } from 'fs/promises'
 import path from 'path'
 import { getCurrentUser } from '@/lib/auth'
+import { db } from '@/lib/db'
 import { newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { verifyFileToken } from '@/lib/security/file-signing'
@@ -24,22 +25,51 @@ export const runtime = 'nodejs'
  *   - DELETE requires an authenticated PRINCIPAL / MANAGEMENT session and
  *     is rate-limited + audited.
  *   - fileId stays an opaque server-minted id (traversal-proof regex).
+ *
+ * Phase 2 (3-c audit V5/V10) — UploadedFile OWNERSHIP REGISTRY:
+ *   · GET (session path): when the file is REGISTERED, it must belong to
+ *     the caller's school — a foreign-school row is a fail-safe 404 (it
+ *     "does not exist"). UNREGISTERED (legacy, pre-registry) files keep
+ *     the Phase-1 behavior: any school's PRINCIPAL/MANAGEMENT may read.
+ *   · GET via a VALID SIGNED TOKEN stays allowed regardless of the
+ *     registry — the token is an unguessable server-minted HMAC bound to
+ *     this exact fileId (backward compatibility for links minted before
+ *     the registry existed).
+ *   · DELETE: registered file + foreign school → 404; NO registry row →
+ *     404 (ownership cannot be verified, so the delete is refused).
  */
 
 const UPLOAD_DIR = path.join(process.cwd(), 'db', 'uploads', 'teachers')
 
-async function authorizeFileRead(req: NextRequest, fileId: string): Promise<boolean> {
-  // Path 1 — signed URL token (works for <img>/<a> where auth headers
-  // cannot ride along, e.g. the dev preview iframe).
-  const token = req.nextUrl.searchParams.get('t')
-  if (verifyFileToken(fileId, 'teachers', token)) return true
+/** Registry row for this fileId (null = legacy pre-registry file). */
+async function registryRow(fileId: string) {
+  return db.uploadedFile.findUnique({ where: { id: fileId } })
+}
 
-  // Path 2 — session (cookie or dev Bearer).
+type ReadVerdict = 'allow' | 'not-found' | 'unauthorized'
+
+async function authorizeFileRead(req: NextRequest, fileId: string): Promise<ReadVerdict> {
+  // Path 1 — signed URL token (works for <img>/<a> where auth headers
+  // cannot ride along, e.g. the dev preview iframe). The token is an
+  // unguessable HMAC over fileId|scope|exp — validity alone authorizes
+  // the read (legacy files included).
+  const token = req.nextUrl.searchParams.get('t')
+  if (token && verifyFileToken(fileId, 'teachers', token)) return 'allow'
+
+  // Path 2 — session (cookie or dev Bearer): PRINCIPAL / MANAGEMENT.
   const user = await getCurrentUser()
   if (user && user.status === 'ACTIVE' && (user.role === 'PRINCIPAL' || user.role === 'MANAGEMENT')) {
-    return true
+    if (user.schoolId) {
+      // 3-c V5/V10: prefer the registry when a row exists.
+      const row = await registryRow(fileId)
+      if (row) {
+        return row.schoolId === user.schoolId && row.scope === 'teachers' ? 'allow' : 'not-found'
+      }
+    }
+    // Legacy (unregistered) file — pre-Phase-2 behavior stands.
+    return 'allow'
   }
-  return false
+  return 'unauthorized'
 }
 
 export async function GET(
@@ -51,7 +81,15 @@ export async function GET(
     return NextResponse.json({ success: false, error: 'Invalid file id.' }, { status: 400 })
   }
 
-  if (!(await authorizeFileRead(req, fileId))) {
+  const verdict = await authorizeFileRead(req, fileId)
+  if (verdict === 'not-found') {
+    // Fail-safe: a foreign school's file "does not exist".
+    return NextResponse.json(
+      { success: false, error: 'File not found. It may have been removed.' },
+      { status: 404 },
+    )
+  }
+  if (verdict === 'unauthorized') {
     return NextResponse.json(
       { success: false, error: 'Authentication required to access this file.' },
       { status: 401 },
@@ -90,7 +128,7 @@ export async function GET(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: Promise<{ fileId: string }> },
+  { params }: { params: Promise<{ fileId: string }> }
 ) {
   const requestId = newRequestId()
   const { fileId } = await params
@@ -114,8 +152,21 @@ export async function DELETE(
     )
   }
 
+  // 3-c V5/V10: ownership MUST be verifiable before a destructive action.
+  // A registered file that belongs to another school "does not exist";
+  // an unregistered legacy file cannot be verified → refuse the delete.
+  const row = await registryRow(fileId)
+  if (!row || row.scope !== 'teachers' || !user.schoolId || row.schoolId !== user.schoolId) {
+    return NextResponse.json(
+      { success: false, error: 'File not found. It may have been removed.' },
+      { status: 404 },
+    )
+  }
+
   try {
     await unlink(path.join(UPLOAD_DIR, fileId))
+    // The registry row goes with the file (no stale ownership records).
+    await db.uploadedFile.delete({ where: { id: fileId } }).catch(() => {})
     await auditEvent({
       schoolId: user.schoolId ?? null,
       userId: user.id,
@@ -126,6 +177,7 @@ export async function DELETE(
     return NextResponse.json({ success: true })
   } catch {
     // Deleting a missing file is fine — the record is being cleared anyway.
+    await db.uploadedFile.delete({ where: { id: fileId } }).catch(() => {})
     return NextResponse.json({ success: true })
   }
 }

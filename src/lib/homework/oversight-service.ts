@@ -6,6 +6,7 @@
 import 'server-only'
 import { db } from '@/lib/db'
 import type { AuthUser } from '@/lib/auth'
+import { AppError } from '@/lib/security/errors'
 
 // ─── DTOs ────────────────────────────────────────────────────────────
 
@@ -341,8 +342,18 @@ export async function listPolicies(schoolId: string): Promise<PolicyDTO[]> {
 }
 
 export async function updatePolicy(schoolId: string, id: string, data: { maxMinutesPerDay?: number; enabled?: boolean }): Promise<PolicyDTO> {
+  // 3-d audit (CRITICAL tenant IDOR): the row is re-verified against the
+  // caller's school BEFORE any write — a foreign-tenant policy id must
+  // "not exist" (404), never be updated in place.
+  const existing = await db.homeworkPolicy.findFirst({ where: { id, schoolId }, select: { id: true } })
+  if (!existing) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Policy not found',
+      internalDetail: `updatePolicy: policy ${id} missing or foreign tenant`,
+    })
+  }
   const p = await db.homeworkPolicy.update({
-    where: { id },
+    where: { id: existing.id },
     data: {
       ...(data.maxMinutesPerDay !== undefined ? { maxMinutesPerDay: data.maxMinutesPerDay } : {}),
       ...(data.enabled !== undefined ? { enabled: data.enabled } : {}),
@@ -371,7 +382,15 @@ export async function addNoHomeworkDate(schoolId: string, date: string, reason?:
 }
 
 export async function removeNoHomeworkDate(schoolId: string, id: string): Promise<void> {
-  await db.noHomeworkDate.delete({ where: { id } })
+  // 3-d audit (CRITICAL tenant IDOR): deleteMany scoped to the tenant — a
+  // foreign-tenant id deletes nothing and surfaces as 404.
+  const result = await db.noHomeworkDate.deleteMany({ where: { id, schoolId } })
+  if (result.count === 0) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Blocked date not found',
+      internalDetail: `removeNoHomeworkDate: date ${id} missing or foreign tenant`,
+    })
+  }
 }
 
 // ─── Grievances ──────────────────────────────────────────────────────
@@ -403,8 +422,17 @@ export async function listGrievances(schoolId: string, status?: string): Promise
 }
 
 export async function resolveGrievance(schoolId: string, id: string, user: AuthUser | null, response: string, status: 'resolved' | 'dismissed'): Promise<void> {
+  // 3-d audit (CRITICAL tenant IDOR): re-verify the grievance belongs to the
+  // caller's school before resolving — a foreign id is a 404, never a write.
+  const existing = await db.parentGrievance.findFirst({ where: { id, schoolId }, select: { id: true } })
+  if (!existing) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Grievance not found',
+      internalDetail: `resolveGrievance: grievance ${id} missing or foreign tenant`,
+    })
+  }
   await db.parentGrievance.update({
-    where: { id },
+    where: { id: existing.id },
     data: {
       response,
       status,

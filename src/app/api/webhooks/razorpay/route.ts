@@ -73,6 +73,30 @@ function verifySignature(rawBody: string, signature: string, secret: string): bo
   }
 }
 
+/**
+ * 3-c fix — settlement school attribution.
+ *
+ * Collect the gateway order ids referenced by a settlement entity's
+ * `transfers[]` array (each transfer references the order it pays out via
+ * `order_id` / `source` / `order`). Order ids minted by this system
+ * (/api/fees/orders, provider.createOrder) always start with `order_`.
+ */
+function extractTransferOrderIds(settlement: unknown): string[] {
+  const ids: string[] = []
+  const transfers = Array.isArray((settlement as { transfers?: unknown })?.transfers)
+    ? ((settlement as { transfers: unknown[] }).transfers as unknown[])
+    : []
+  for (const t of transfers) {
+    if (!t || typeof t !== 'object') continue
+    const rec = t as Record<string, unknown>
+    for (const key of ['order_id', 'source', 'order']) {
+      const v = rec[key]
+      if (typeof v === 'string' && v.startsWith('order_')) ids.push(v)
+    }
+  }
+  return [...new Set(ids)]
+}
+
 export async function POST(req: NextRequest) {
   // Phase 1 — per-IP rate limit on the webhook receiver (signature
   // verification is the real gate; this blunts DoS/replay floods).
@@ -270,59 +294,96 @@ export async function POST(req: NextRequest) {
       const settledAt = settlement?.settled_at ? new Date(settlement.settled_at) : new Date()
       const bankRef = settlement?.utr || null
 
-      const schoolId = notes?.schoolId || null
-      // Find the school if we don't have one from notes — pick the registered school as fallback.
-      let resolvedSchoolId = schoolId
-      if (!resolvedSchoolId) {
-        const demoSchool = await db.school.findFirst({ where: { slug: 'demo-school' } })
-        if (!demoSchool) throw new Error('Cannot resolve school for settlement (no schoolId in notes + no registered school)')
-        resolvedSchoolId = demoSchool.id
+      // ── 3-c fix: school attribution from the ORDERS in transfers[] ──
+      // The previous fallback (no notes.schoolId → the registered demo
+      // school) misattributed a VALID settlement to an arbitrary tenant
+      // and mass-linked that school's transactions. The school is now
+      // resolved ONLY from FeeTransaction rows matching the transfer
+      // order ids:
+      //   · exactly ONE distinct schoolId → attribute + link
+      //   · none → skip linking; the WebhookEvent stays unattributed
+      //     (schoolId null), nothing is mutated
+      //   · multiple distinct → the event is recorded UNATTRIBUTED and
+      //     updateMany is never run (cross-tenant ambiguity is an error,
+      //     not a guess)
+      const transferOrderIds = extractTransferOrderIds(settlement)
+      const transferTxns = transferOrderIds.length
+        ? await db.feeTransaction.findMany({
+            where: { gatewayOrderId: { in: transferOrderIds } },
+            select: { schoolId: true },
+          })
+        : []
+      const distinctSchoolIds = [...new Set(transferTxns.map((t) => t.schoolId))]
+
+      const notesSchoolId = notes?.schoolId || null
+      let resolvedSchoolId: string | null = null
+      if (distinctSchoolIds.length === 1) {
+        resolvedSchoolId = distinctSchoolIds[0]
+        // Notes (server-minted at order creation) must agree with the
+        // orders the gateway actually paid out — a mismatch is unattributed.
+        if (notesSchoolId && notesSchoolId !== resolvedSchoolId) resolvedSchoolId = null
+      } else if (distinctSchoolIds.length === 0 && notesSchoolId) {
+        // No orders we know of, but the payload's notes carry the school
+        // our own server stamped at order creation (signed by the HMAC).
+        resolvedSchoolId = notesSchoolId
       }
 
-      const upsertedSettlement = await db.settlement.upsert({
-        where: { payoutId },
-        create: {
-          schoolId: resolvedSchoolId,
-          payoutId,
-          gatewayName: 'razorpay',
-          periodStart,
-          periodEnd,
-          grossAmount: grossPaise / 100,
-          fees: feePaise / 100,
-          netAmount: (grossPaise - feePaise) / 100,
-          status: 'settled',
-          bankReference: bankRef,
-          paidOutAt: settledAt,
-        },
-        update: {
-          periodStart,
-          periodEnd,
-          grossAmount: grossPaise / 100,
-          fees: feePaise / 100,
-          netAmount: (grossPaise - feePaise) / 100,
-          status: 'settled',
-          bankReference: bankRef,
-          paidOutAt: settledAt,
-        },
-      })
+      if (!resolvedSchoolId) {
+        if (distinctSchoolIds.length > 1) {
+          // Recorded on the WebhookEvent row by the catch/finally below.
+          throw new Error(
+            `settlement ${payoutId} spans ${distinctSchoolIds.length} schools — recorded unattributed, no transactions linked`,
+          )
+        }
+        console.log(
+          `[webhooks/razorpay] settlement ${payoutId} has no attributable orders — recorded unattributed, linking skipped`,
+        )
+      } else {
+        const upsertedSettlement = await db.settlement.upsert({
+          where: { payoutId },
+          create: {
+            schoolId: resolvedSchoolId,
+            payoutId,
+            gatewayName: 'razorpay',
+            periodStart,
+            periodEnd,
+            grossAmount: grossPaise / 100,
+            fees: feePaise / 100,
+            netAmount: (grossPaise - feePaise) / 100,
+            status: 'settled',
+            bankReference: bankRef,
+            paidOutAt: settledAt,
+          },
+          update: {
+            periodStart,
+            periodEnd,
+            grossAmount: grossPaise / 100,
+            fees: feePaise / 100,
+            netAmount: (grossPaise - feePaise) / 100,
+            status: 'settled',
+            bankReference: bankRef,
+            paidOutAt: settledAt,
+          },
+        })
 
-      // Link every transaction created between periodStart and periodEnd
-      // for this school to this settlement (auto-reconciliation of payouts).
-      const linkedTxns = await db.feeTransaction.updateMany({
-        where: {
-          schoolId: resolvedSchoolId,
-          createdAt: { gte: periodStart, lte: periodEnd },
-          status: 'SUCCESS',
-          reconciliationStatus: { in: ['reconciled', 'unreconciled', 'pending'] },
-        },
-        data: {
-          settlementId: upsertedSettlement.id,
-          reconciliationStatus: 'reconciled',
-          reconciledAt: new Date(),
-          reconciledBy: 'razorpay-webhook-settlement',
-        },
-      })
-      console.log(`[webhooks/razorpay] settlement ${payoutId} linked ${linkedTxns.count} transactions`)
+        // Link every transaction created between periodStart and periodEnd
+        // for this school to this settlement (auto-reconciliation of payouts).
+        const linkedTxns = await db.feeTransaction.updateMany({
+          where: {
+            schoolId: resolvedSchoolId,
+            createdAt: { gte: periodStart, lte: periodEnd },
+            status: 'SUCCESS',
+            reconciliationStatus: { in: ['reconciled', 'unreconciled', 'pending'] },
+          },
+          data: {
+            settlementId: upsertedSettlement.id,
+            reconciliationStatus: 'reconciled',
+            reconciledAt: new Date(),
+            reconciledBy: 'razorpay-webhook-settlement',
+          },
+        })
+        console.log(`[webhooks/razorpay] settlement ${payoutId} linked ${linkedTxns.count} transactions`)
+      }
     } else {
       console.log(`[webhooks/razorpay] event type ${eventType} — no auto-reconciliation handler.`)
     }

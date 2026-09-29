@@ -6,6 +6,7 @@
 
 import 'server-only'
 import { db } from '@/lib/db'
+import { AppError } from '@/lib/security/errors'
 import {
   type AuthUserLike,
   type ScheduleItemDTO,
@@ -538,6 +539,36 @@ export async function markExamAttendance(
   if (!exam) throw new Error('Exam not found')
   if (!input.subjectId) throw new Error('subjectId is required for exam attendance')
 
+  // ── Tenant guards (audit 3-b HIGH): FK-in-tenant validation ─────────
+  // studentId and subjectId come from the client. Both must exist in
+  // the CALLER's school (the student additionally in the given class)
+  // before the ExamAttendance upsert links them — otherwise a foreign
+  // school's student/subject gets written into this school's rows.
+  const student = await db.student.findFirst({
+    where: {
+      id: input.studentId,
+      schoolId,
+      ...(input.classId ? { classId: input.classId } : {}),
+    },
+    select: { id: true },
+  })
+  if (!student) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Student not found',
+      internalDetail: `markExamAttendance: student ${input.studentId} missing or foreign tenant`,
+    })
+  }
+  const subject = await db.subject.findFirst({
+    where: { id: input.subjectId, schoolId },
+    select: { id: true },
+  })
+  if (!subject) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Subject not found in this school',
+      internalDetail: `markExamAttendance: subject ${input.subjectId} missing or foreign tenant`,
+    })
+  }
+
   await db.examAttendance.upsert({
     where: {
       examId_studentId_subjectId_date: {
@@ -849,9 +880,11 @@ export async function overrideOutcome(
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
 
-  // Look up the student's actual classId (for new outcome rows)
-  const student = await db.student.findUnique({
-    where: { id: studentId },
+  // Look up the student's actual classId (for new outcome rows).
+  // Tenant guard (audit 3-b HIGH): the student is resolved WITH schoolId —
+  // findUnique by bare id previously accepted any school's student.
+  const student = await db.student.findFirst({
+    where: { id: studentId, schoolId },
     select: { classId: true },
   })
   if (!student) throw new Error('Student not found')
@@ -1001,6 +1034,21 @@ export async function importMarksCsv(
   if (exam.resultStatus === 'Result Declared') {
     throw new Error('Cannot import marks after results are declared')
   }
+
+  // ── IQ3000 Phase 8 — CSA scope for TEACHER (audit 3-b HIGH) ─────────
+  // importMarksCsv is a bulk marks-entry channel: a TEACHER may only
+  // import for an EXACT (classId, subjectId) paper they are appointed
+  // to teach (teacherCanEnterMarks) — the same guard as setMark and
+  // /api/teacher/marks-entry/submit. PRINCIPAL/MANAGEMENT hold
+  // school-wide authority.
+  if (user && user.role === 'TEACHER') {
+    const { teacherCanEnterMarks } = await import('@/lib/teacher-scope')
+    const allowed = await teacherCanEnterMarks(user, schoolId, classId, subjectId)
+    if (!allowed) {
+      throw new Error('FORBIDDEN')
+    }
+  }
+
   const subjConfig = exam.examSubjects[0]
   if (!subjConfig) throw new Error('Subject not configured for this exam/class')
 
@@ -1120,28 +1168,50 @@ export async function publishResults(
 
   let notificationsSent = 0
   if (options.notifyStudents || options.notifyParents) {
-    // Send notifications to all students of all classes in this exam
+    // Notification is a school-wide broadcast model (audience-scoped, with
+    // per-user read acks) — N per-student rows were N duplicates of the
+    // SAME announcement spamming every student's bell N times. Verified no
+    // client depends on per-student rows (the publish toast only reads the
+    // count). ONE 'STUDENTS' row (+ optionally ONE 'PARENTS' row) carries
+    // the same reach; notificationsSent reports the distinct students
+    // covered so the "N students notified" copy stays truthful.
     const examClasses = await db.examClass.findMany({
       where: { examId },
-      include: { class: { include: { students: { include: { user: true } } } } },
+      include: {
+        // Student.userId is non-nullable — every roster student carries an
+        // account, so the reach is simply the distinct roster size.
+        class: { include: { students: { select: { id: true } } } },
+      },
     })
-    for (const ec of examClasses) {
-      for (const student of ec.class.students) {
-        if (student.userId) {
-          await db.notification.create({
-            data: {
-              schoolId,
-              title: `${exam.name} Results Published`,
-              message: `Your results for ${exam.name} are now available. Please check the portal.`,
-              audience: 'STUDENTS',
-              priority: 'HIGH',
-              senderId: user?.id ?? null,
-            },
-          })
-          notificationsSent++
-        }
-      }
+    const studentReach = new Set(
+      examClasses.flatMap((ec) => ec.class.students.map((s) => s.id)),
+    ).size
+
+    if (options.notifyStudents) {
+      await db.notification.create({
+        data: {
+          schoolId,
+          title: `${exam.name} Results Published`,
+          message: `Your results for ${exam.name} are now available. Please check the portal.`,
+          audience: 'STUDENTS',
+          priority: 'HIGH',
+          senderId: user?.id ?? null,
+        },
+      })
     }
+    if (options.notifyParents) {
+      await db.notification.create({
+        data: {
+          schoolId,
+          title: `${exam.name} Results Published`,
+          message: `Results for ${exam.name} are now available. Please check the parent portal.`,
+          audience: 'PARENTS',
+          priority: 'HIGH',
+          senderId: user?.id ?? null,
+        },
+      })
+    }
+    notificationsSent = studentReach
   }
   await audit(examId, user, 'RESULT_PUBLISHED', 'EXAM', examId, null, options)
   return { published: true, notificationsSent }

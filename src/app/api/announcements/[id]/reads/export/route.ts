@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { auditEvent } from '@/lib/security/audit'
+import { newRequestId } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -78,6 +80,18 @@ export async function GET(
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '')
         .slice(0, 40) || 'broadcast'
+
+      // Task 4-d (audit 3-a fix #17): user PII (names, emails, read
+      // timestamps) leaving the system as a file is an auditable security
+      // event — mirrors the payments-export STUDENT_DATA_EXPORT call.
+      await auditEvent({
+        schoolId,
+        userId: user.id,
+        action: 'STUDENT_DATA_EXPORT',
+        requestId: newRequestId(),
+        detail: `Broadcast acknowledgement CSV export served (${reads.length} rows)`,
+      }).catch(() => {})
+
       return new Response(lines.join('\n'), {
         status: 200,
         headers: {

@@ -6,6 +6,7 @@
 
 import 'server-only'
 import { db } from '@/lib/db'
+import { AppError } from '@/lib/security/errors'
 import {
   EXAM_TYPES as DEFAULT_EXAM_TYPES,
   DEFAULT_GRADE_BOUNDARIES as DEFAULT_GRADES,
@@ -51,8 +52,18 @@ export async function createExamType(schoolId: string, data: { name: string; cod
 }
 
 export async function updateExamType(schoolId: string, id: string, data: { name?: string; code?: string; enabled?: boolean }): Promise<ExamTypeConfigDTO> {
+  // Tenant guard (audit 3-b CRITICAL): the row must exist in the CALLER's
+  // school before any mutation — a foreign-tenant id "does not exist" (404,
+  // no existence oracle). schoolId was previously accepted but ignored.
+  const existing = await db.examTypeConfig.findFirst({ where: { id, schoolId } })
+  if (!existing) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Exam type not found',
+      internalDetail: `updateExamType: id ${id} missing or foreign tenant`,
+    })
+  }
   const t = await db.examTypeConfig.update({
-    where: { id },
+    where: { id: existing.id },
     data: {
       ...(data.name !== undefined ? { name: data.name } : {}),
       ...(data.code !== undefined ? { code: data.code } : {}),
@@ -63,7 +74,15 @@ export async function updateExamType(schoolId: string, id: string, data: { name?
 }
 
 export async function deleteExamType(schoolId: string, id: string): Promise<void> {
-  await db.examTypeConfig.delete({ where: { id } })
+  // Tenant guard (audit 3-b CRITICAL): delete scoped to the caller's school.
+  const existing = await db.examTypeConfig.findFirst({ where: { id, schoolId } })
+  if (!existing) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Exam type not found',
+      internalDetail: `deleteExamType: id ${id} missing or foreign tenant`,
+    })
+  }
+  await db.examTypeConfig.delete({ where: { id: existing.id } })
 }
 
 // ─── Grade Scales ────────────────────────────────────────────────────
@@ -100,8 +119,17 @@ export async function createGradeScale(schoolId: string, data: { grade: string; 
 }
 
 export async function updateGradeScale(schoolId: string, id: string, data: { grade?: string; minPct?: number; maxPct?: number; color?: string }): Promise<GradeScaleDTO> {
+  // Tenant guard (audit 3-b CRITICAL): the row must exist in the CALLER's
+  // school before any mutation — foreign ids 404 instead of updating.
+  const existing = await db.gradeScale.findFirst({ where: { id, schoolId } })
+  if (!existing) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Grade scale not found',
+      internalDetail: `updateGradeScale: id ${id} missing or foreign tenant`,
+    })
+  }
   const s = await db.gradeScale.update({
-    where: { id },
+    where: { id: existing.id },
     data: {
       ...(data.grade !== undefined ? { grade: data.grade } : {}),
       ...(data.minPct !== undefined ? { minPct: data.minPct } : {}),
@@ -113,7 +141,15 @@ export async function updateGradeScale(schoolId: string, id: string, data: { gra
 }
 
 export async function deleteGradeScale(schoolId: string, id: string): Promise<void> {
-  await db.gradeScale.delete({ where: { id } })
+  // Tenant guard (audit 3-b CRITICAL): delete scoped to the caller's school.
+  const existing = await db.gradeScale.findFirst({ where: { id, schoolId } })
+  if (!existing) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Grade scale not found',
+      internalDetail: `deleteGradeScale: id ${id} missing or foreign tenant`,
+    })
+  }
+  await db.gradeScale.delete({ where: { id: existing.id } })
 }
 
 // ─── Exam Rules (key-value) ─────────────────────────────────────────

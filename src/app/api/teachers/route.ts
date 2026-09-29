@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { withUser, schoolScoped } from '@/lib/api'
+import { resolveProvisionedPassword } from '@/lib/account-provisioning'
 
 export const runtime = 'nodejs'
 
@@ -32,7 +33,9 @@ export async function POST(req: NextRequest) {
       if (!name || !email) throw new Error('Name and email are required')
       const exists = await db.user.findUnique({ where: { email } })
       if (exists) throw new Error('Email already in use')
-      const password = String(body.password || 'password123')
+      // Task 4-d (audit 3-a fix #3): NO shared 'password123' default — see
+      // students POST and src/lib/account-provisioning.ts.
+      const { password, generated } = resolveProvisionedPassword(body.password)
       const empId = String(body.employeeId || `EMP-${Date.now()}`)
       const u = await db.user.create({
         data: {
@@ -56,7 +59,8 @@ export async function POST(req: NextRequest) {
         },
         include: { user: { select: { name: true, email: true } } },
       })
-      return t
+      // Additive one-time credential field (only when server-generated).
+      return { ...t, ...(generated ? { tempPassword: password } : {}) }
     },
     { roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )

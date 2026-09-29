@@ -13,8 +13,10 @@ export const runtime = 'nodejs'
  *     canonical derivations (attendance summary + 6-month trend, latest
  *     exam subject marks, fee standing, growth points, behavior count).
  *   · STUDENT — their OWN full record + classmates limited to public
- *     fields (name / roll / section / attendance pct) — guardian and fee
- *     data of other students is never sent to a student client.
+ *     fields (name / roll / section / attendance pct); guardian, fee,
+ *     exam-marks, growth and behavior data of other students is never
+ *     sent to a student client (audit 3-a fix #2 — now actually true:
+ *     classmates get latestExam=null, zeroed fees, null growth/behavior).
  *
  * All numbers derive from the canonical rows (Attendance, ExamMark +
  * ExamSubjectConfig, Fee + FeeTransaction, GrowthEvent, BehaviorRecord).
@@ -53,6 +55,15 @@ interface RosterStudent {
     subjects: { subjectId: string; subjectName: string; marks: number; maxMarks: number; pct: number }[]
     averagePct: number
   } | null
+  // STUDENT scope: classmates' latestExam/growthPoints/behaviorCount are
+  // null and fees is the ZEROED shape (Task 4-d, audit 3-a fix #2 — the
+  // old payload sent every classmate's exam marks, fee ledger, growth
+  // points and behavior counts to student clients, contradicting the
+  // docstring). The zeroed fee SHAPE (not null) is required by the client
+  // mapper (src/lib/store/students-store/server-sync.ts reads
+  // s.fees.status unguarded — null would crash the student roster sync);
+  // latestExam is optional-chained there, and growthPoints/behaviorCount
+  // are never rendered for classmates (grep-verified).
   fees: {
     totalBilled: number
     totalPaid: number
@@ -60,8 +71,8 @@ interface RosterStudent {
     status: 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE' | 'NONE'
     awaitingVerification: number
   }
-  growthPoints: number
-  behaviorCount: number
+  growthPoints: number | null
+  behaviorCount: number | null
 }
 
 export async function GET() {
@@ -290,6 +301,11 @@ export async function GET() {
           billed === 0 ? 'NONE' : outstanding <= 0 ? 'PAID' : hasDueBy.get(s.id) ? 'OVERDUE' : paidAmt > 0 ? 'PARTIAL' : 'UNPAID'
 
         const isSelf = s.id === selfStudentId
+        // Classmate projection (STUDENT scope): everything that is not a
+        // public class-list field is withheld — the self row keeps the
+        // full enrichment (fees/attendance/exams) the student panel's own
+        // profile derives from.
+        const hidden = isStudent && !isSelf
         return {
           id: s.id,
           userId: s.user.id,
@@ -316,16 +332,18 @@ export async function GET() {
             leave: summary.leave,
             monthly,
           },
-          latestExam,
-          fees: {
-            totalBilled: billed,
-            totalPaid: paidAmt,
-            outstanding,
-            status: feeStatus,
-            awaitingVerification: awaitingBy.get(s.id) ?? 0,
-          },
-          growthPoints: growthBy.get(s.id) ?? 0,
-          behaviorCount: behaviorBy.get(s.id) ?? 0,
+          latestExam: hidden ? null : latestExam,
+          fees: hidden
+            ? { totalBilled: 0, totalPaid: 0, outstanding: 0, status: 'NONE', awaitingVerification: 0 }
+            : {
+                totalBilled: billed,
+                totalPaid: paidAmt,
+                outstanding,
+                status: feeStatus,
+                awaitingVerification: awaitingBy.get(s.id) ?? 0,
+              },
+          growthPoints: hidden ? null : growthBy.get(s.id) ?? 0,
+          behaviorCount: hidden ? null : behaviorBy.get(s.id) ?? 0,
         }
       })
 

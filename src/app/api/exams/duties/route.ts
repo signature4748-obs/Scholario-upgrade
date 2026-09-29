@@ -1,4 +1,4 @@
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { listDutyRoster } from '@/lib/exams/service-extended'
 
 export const runtime = 'nodejs'
@@ -11,12 +11,8 @@ export const runtime = 'nodejs'
  * notification bell through the :3003 event stream).
  */
 export async function GET() {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
-      const roster = await listDutyRoster(schoolId)
-      return roster
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
-  )
+  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+    const roster = await listDutyRoster(ctx.schoolId)
+    return roster
+  })
 }

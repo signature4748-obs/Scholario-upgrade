@@ -37,9 +37,12 @@ export async function GET(request: Request) {
 
       const exam = await db.exam.findUnique({
         where: { id: examId },
-        select: { id: true, name: true, type: true, session: true, startDate: true, endDate: true, resultStatus: true },
+        select: { id: true, name: true, type: true, session: true, startDate: true, endDate: true, resultStatus: true, schoolId: true },
       })
-      if (!exam) throw new Error('NOT_FOUND')
+      // Tenant guard (audit 3-b MEDIUM): the exam must belong to the
+      // caller's school — the bare-id lookup previously served any
+      // school's exam metadata (name/type/dates) into another tenant.
+      if (!exam || exam.schoolId !== schoolId) throw new Error('NOT_FOUND')
 
       const students = await db.student.findMany({
         where: { classId, user: { status: 'ACTIVE' } },

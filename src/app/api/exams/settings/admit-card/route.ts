@@ -1,23 +1,20 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { getAdmitCardConfig, updateAdmitCardConfig } from '@/lib/exams/settings-service'
+import { parseJsonBody } from '@/lib/security/validation'
+import { admitCardConfigSchema } from '@/lib/exams/api-schemas'
 
 export const runtime = 'nodejs'
 
 export async function GET() {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
-    return await getAdmitCardConfig(schoolId)
+  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+    return await getAdmitCardConfig(ctx.schoolId)
   })
 }
 
 export async function PUT(req: NextRequest) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
-      const body = await req.json().catch(() => ({}))
-      return await updateAdmitCardConfig(schoolId, body)
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
-  )
+  return withAuthz({ permission: 'exams.settings.write' }, async (ctx) => {
+    const body = await parseJsonBody(req, admitCardConfigSchema)
+    return await updateAdmitCardConfig(ctx.schoolId, body)
+  })
 }

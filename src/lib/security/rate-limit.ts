@@ -55,6 +55,8 @@ export const RATE_LIMITS = {
   payment: { name: 'payment', limit: 20, windowMs: 60 * 60_000 },
   /** Webhook receiver (per-IP; Razorpay retries legitimately). */
   webhook: { name: 'webhook', limit: 120, windowMs: 60_000 },
+  /** Public school-profile reads (per-IP) — anonymous, cache-friendly page. */
+  publicSchool: { name: 'public-school-profile', limit: 60, windowMs: 60_000 },
 } satisfies Record<string, RateLimitProfile>
 
 export interface RateLimitResult {

@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { getCurrentUser } from '@/lib/auth'
-import { api } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
+import { AppError } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -17,6 +17,11 @@ export const runtime = 'nodejs'
  *        (fallback: first MANAGEMENT user) — a student can never pick an
  *        arbitrary recipient, and cross-school sends are impossible because
  *        schoolId is derived from the session.
+ *
+ * 3-c fix: the raw getCurrentUser checks are replaced with the central
+ * withAuthz pipeline (STUDENT role, school tenant, ACTIVE status
+ * enforced — a SUSPENDED account can no longer read the office contact
+ * card or spam the office mailbox).
  */
 
 const SUPPORT_CATEGORIES = ['account', 'technical', 'general', 'feedback'] as const
@@ -30,13 +35,9 @@ const CATEGORY_LABELS: Record<SupportCategory, string> = {
 }
 
 export async function GET() {
-  return api(async () => {
-    const user = await getCurrentUser()
-    if (!user) throw new Error('UNAUTHORIZED')
-    if (!user.schoolId) throw new Error('NO_SCHOOL')
-
+  return withAuthz({ roles: ['STUDENT'] }, async (ctx) => {
     const school = await db.school.findUnique({
-      where: { id: user.schoolId },
+      where: { id: ctx.schoolId },
       select: { name: true, phone: true, email: true, address: true, city: true },
     })
     return {
@@ -53,35 +54,32 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  return api(async () => {
-    const user = await getCurrentUser()
-    if (!user) throw new Error('UNAUTHORIZED')
-    if (user.role !== 'STUDENT') throw new Error('FORBIDDEN')
-    if (!user.schoolId) throw new Error('NO_SCHOOL')
+  return withAuthz({ roles: ['STUDENT'] }, async (ctx) => {
+    const user = ctx.user
 
     const body = await req.json().catch(() => ({}))
     const category = String(body?.category || 'general') as SupportCategory
-    if (!SUPPORT_CATEGORIES.includes(category)) throw new Error('Invalid support category')
+    if (!SUPPORT_CATEGORIES.includes(category)) throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid support category' })
 
     const subject = String(body?.subject || '').trim()
     const messageBody = String(body?.body || '').trim()
-    if (!subject || !messageBody) throw new Error('Subject and message are required')
-    if (subject.length > 120) throw new Error('Subject must be under 120 characters')
-    if (messageBody.length > 4000) throw new Error('Message must be under 4000 characters')
+    if (!subject || !messageBody) throw new AppError('INVALID_INPUT', { publicMessage: 'Subject and message are required' })
+    if (subject.length > 120) throw new AppError('INVALID_INPUT', { publicMessage: 'Subject must be under 120 characters' })
+    if (messageBody.length > 4000) throw new AppError('INVALID_INPUT', { publicMessage: 'Message must be under 4000 characters' })
 
     // Resolve the office recipient server-side (principal, then management).
     const office = await db.user.findFirst({
-      where: { schoolId: user.schoolId, role: 'PRINCIPAL', status: 'ACTIVE' },
+      where: { schoolId: ctx.schoolId, role: 'PRINCIPAL', status: 'ACTIVE' },
       select: { id: true, name: true },
     })
     const fallbackOffice = office
       ? null
       : await db.user.findFirst({
-          where: { schoolId: user.schoolId, role: 'MANAGEMENT', status: 'ACTIVE' },
+          where: { schoolId: ctx.schoolId, role: 'MANAGEMENT', status: 'ACTIVE' },
           select: { id: true, name: true },
         })
     const recipient = office ?? fallbackOffice
-    if (!recipient) throw new Error('No school office account is available to receive messages')
+    if (!recipient) throw new AppError('INVALID_INPUT', { publicMessage: 'No school office account is available to receive messages' })
 
     const label = CATEGORY_LABELS[category]
     const student = await db.student.findUnique({
@@ -91,7 +89,7 @@ export async function POST(req: NextRequest) {
 
     await db.message.create({
       data: {
-        schoolId: user.schoolId,
+        schoolId: ctx.schoolId,
         senderId: user.id,
         recipientId: recipient.id,
         subject: `[Student support · ${label}] ${subject}`,
@@ -103,7 +101,7 @@ export async function POST(req: NextRequest) {
 
     await db.activityLog.create({
       data: {
-        schoolId: user.schoolId,
+        schoolId: ctx.schoolId,
         userId: user.id,
         action: 'support_request_sent',
         detail: `Support request (${category}) delivered to the school office.`,

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
+import { auditEvent } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 
@@ -53,6 +54,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
 
       await db.class.update({ where: { id: cls.id }, data: { classTeacherId: target?.userId ?? null } })
+
+      // Task 4-d (audit 3-a fix #16): the appointment changes the teacher's
+      // authorization scope (Class Teacher Hub access) — audit it through
+      // the canonical PERMISSION_CHANGE action, mirroring the
+      // /api/principal/academic classTeacher.set detail format.
+      await auditEvent({
+        schoolId,
+        userId: user.id,
+        action: 'PERMISSION_CHANGE',
+        detail: teacherUserId
+          ? `Class teacher appointed for ${cls.name}${cls.section ? ` (${cls.section})` : ''} (user ${teacherUserId})`
+          : `Class teacher removed for ${cls.name}${cls.section ? ` (${cls.section})` : ''}`,
+      }).catch(() => {})
 
       const label = classLabelOf(cls)
 

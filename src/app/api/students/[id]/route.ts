@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
+import { AppError } from '@/lib/security/errors'
 import { deriveStudentFees, deriveAttendanceSummary } from '@/lib/teacher/student-ledger'
 import { growthScoresFor, toGrowthEventItem } from '@/lib/growth/service'
 
@@ -52,9 +53,16 @@ export async function GET(
           route: { select: { id: true, name: true } },
         },
       })
-      if (!student) throw new Error('Student not found')
+      if (!student) throw new AppError('NOT_FOUND', { publicMessage: 'Student not found', internalDetail: 'students/[id]: student missing or foreign tenant' })
+      // Task 4-d (fix #10 — defense in depth): the guardian USER is looked
+      // up within the caller's school (a spoofed guardianId pointing at a
+      // foreign-school user resolves to null instead of leaking that
+      // user's contact fields through this profile).
       const guardianUser = student.guardianId
-        ? await db.user.findUnique({ where: { id: student.guardianId }, select: { id: true, name: true, email: true, phone: true } })
+        ? await db.user.findFirst({
+            where: { id: student.guardianId, schoolId },
+            select: { id: true, name: true, email: true, phone: true },
+          })
         : null
 
       const endOfToday = new Date()

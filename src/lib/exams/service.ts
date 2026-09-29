@@ -6,6 +6,7 @@
 
 import 'server-only'
 import { db } from '@/lib/db'
+import { AppError } from '@/lib/security/errors'
 import {
   type ExamDTO,
   type ExamSubjectConfigDTO,
@@ -20,6 +21,7 @@ import {
   type WorkflowStatus,
   type ExamAnalyticsDTO,
   type AuthUserLike,
+  EXAM_STATUSES,
 } from './types'
 import { computeAnalytics, computeAllResults } from './result-engine'
 import type { StudentResult } from './types'
@@ -468,6 +470,15 @@ export async function updateExam(
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
 
+  // Whitelist status (audit 3-b LOW): status is a free string today —
+  // only the canonical ExamStatus lifecycle values are accepted.
+  if (updates.status !== undefined && !(EXAM_STATUSES as readonly string[]).includes(updates.status)) {
+    throw new AppError('INVALID_INPUT', {
+      publicMessage: `Invalid exam status "${updates.status}" — allowed: ${EXAM_STATUSES.join(', ')}`,
+      internalDetail: `updateExam: rejected status "${updates.status}"`,
+    })
+  }
+
   // Spec §37: server-side date validation on update too.
   // Merge pending updates onto existing exam dates so partial patches are validated correctly.
   const effectiveStart = updates.startDate !== undefined ? updates.startDate : (exam.startDate?.toISOString().split('T')[0] ?? null)
@@ -556,6 +567,43 @@ export async function addScheduleItem(
   if (timeToMinutes(data.endTime) <= timeToMinutes(data.startTime)) {
     throw new Error('End time must be after start time')
   }
+
+  // ── Tenant + membership guards (audit 3-b HIGH): mirror createExam ──
+  // classId/subjectId come from the client. Both must exist in the
+  // CALLER's school, the class must be part of THIS exam, and the
+  // subject must be configured for that class in THIS exam —
+  // otherwise a foreign school's class/subject gets linked into this
+  // school's schedule (and the schedule DTOs leak their names).
+  const cls = await db.class.findFirst({
+    where: { id: data.classId, schoolId },
+    select: { id: true },
+  })
+  if (!cls) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Class not found in this school',
+      internalDetail: `addScheduleItem: class ${data.classId} missing or foreign tenant`,
+    })
+  }
+  const subject = await db.subject.findFirst({
+    where: { id: data.subjectId, schoolId },
+    select: { id: true },
+  })
+  if (!subject) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Subject not found in this school',
+      internalDetail: `addScheduleItem: subject ${data.subjectId} missing or foreign tenant`,
+    })
+  }
+  const examClassLink = await db.examClass.findFirst({
+    where: { examId, classId: data.classId },
+    select: { id: true },
+  })
+  if (!examClassLink) throw new Error('Class is not part of this examination')
+  const subjectConfig = await db.examSubjectConfig.findFirst({
+    where: { examId, classId: data.classId, subjectId: data.subjectId },
+    select: { id: true },
+  })
+  if (!subjectConfig) throw new Error('Subject is not configured for this exam/class')
 
   // Overlap-aware conflict detection — fetch existing items on same date and check overlap.
   const sameDateItems = await db.examScheduleItem.findMany({
@@ -681,6 +729,27 @@ export async function setMark(
   })
   if (!subjectConfig) throw new Error('Subject not configured for this exam/class')
 
+  // ── Tenant guard (audit 3-b HIGH): FK-in-tenant validation ──────────
+  // The studentId comes from the client. Before ANY ExamMark row is
+  // written, the student must exist in the CALLER's school AND sit in
+  // the given class — otherwise a foreign school's student could be
+  // linked into this school's exam (and the mark DTOs would leak their
+  // name to every reader). Foreign ids 404: no existence oracle.
+  const student = await db.student.findFirst({
+    where: {
+      id: input.studentId,
+      schoolId,
+      ...(input.classId ? { classId: input.classId } : {}),
+    },
+    select: { id: true },
+  })
+  if (!student) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Student not found',
+      internalDetail: `setMark: student ${input.studentId} missing or foreign tenant`,
+    })
+  }
+
   const max = subjectConfig.maxMarks
   if (input.status === 'PRESENT' && input.marksObtained !== null) {
     if (input.marksObtained < 0) throw new Error('Marks cannot be negative')
@@ -767,23 +836,75 @@ export async function setMark(
   return toMarkDTO(updated)
 }
 
+export interface BatchRowError {
+  /** Index of the offending row inside the submitted marks[] array. */
+  index: number
+  /** Student id (when the row carried one) — for client-side row surfacing. */
+  studentId: string | null
+  /** Safe, human-readable reason the row was rejected. */
+  message: string
+}
+
 export async function setMarksBatch(
   examId: string,
   schoolId: string,
   user: AuthUserLike | null,
   marks: SetMarkInput[]
-): Promise<{ updated: number }> {
+): Promise<{ updated: number; errors: BatchRowError[] }> {
+  // ── Pre-validation (audit 3-b HIGH): the WHOLE batch is checked ONCE ──
+  // against the caller's school roster before any write. Rows whose
+  // studentId is not a student of this school (in the row's own class)
+  // are rejected with a per-row error — never silently skipped, never
+  // cross-tenant-linked into ExamMark.
+  const errors: BatchRowError[] = []
+  const classIds = [...new Set(marks.map((m) => m.classId).filter((id): id is string => Boolean(id)))]
+  const rosterByClass = new Map<string, Set<string>>()
+  if (classIds.length > 0) {
+    const roster = await db.student.findMany({
+      where: { schoolId, classId: { in: classIds } },
+      select: { id: true, classId: true },
+    })
+    for (const s of roster) {
+      // classId is nullable on the model but the query above filters
+      // `classId IN (…)` so it is guaranteed present here.
+      if (!s.classId) continue
+      const set = rosterByClass.get(s.classId) ?? new Set<string>()
+      set.add(s.id)
+      rosterByClass.set(s.classId, set)
+    }
+  }
+  const validRows: Array<{ index: number; m: SetMarkInput }> = []
+  marks.forEach((m, index) => {
+    const roster = rosterByClass.get(m.classId)
+    if (!roster || !m.studentId || !roster.has(m.studentId)) {
+      errors.push({
+        index,
+        studentId: m.studentId ?? null,
+        message: 'Student not found in this class',
+      })
+      return
+    }
+    validRows.push({ index, m })
+  })
+
   let updated = 0
-  for (const m of marks) {
+  for (const { index, m } of validRows) {
     try {
       await setMark(examId, schoolId, user, m)
       updated++
     } catch (err) {
-      // continue but skip invalid entries
-      console.warn('setMarksBatch skip', m, err)
+      // Keep the partial-success shape, but report EVERY rejected row
+      // (CSA FORBIDDEN, locked marks, validation, …) instead of
+      // swallowing it into a silent { updated: 0 } (audit 3-b MEDIUM).
+      const message = err instanceof Error ? err.message : 'Row rejected'
+      errors.push({
+        index,
+        studentId: m.studentId ?? null,
+        message: message.length > 200 ? message.slice(0, 200) : message,
+      })
     }
   }
-  return { updated }
+  return { updated, errors }
 }
 
 export async function submitMarks(
@@ -796,6 +917,21 @@ export async function submitMarks(
   if (!exam) throw new Error('Exam not found')
   if (exam.resultStatus === 'Result Declared') {
     throw new Error('Cannot modify marks after results are declared')
+  }
+  // ── IQ3000 Phase 8 — CSA scope for TEACHER (audit 3-b MEDIUM) ────────
+  // Mirrors /api/teacher/marks-entry/submit: a teacher may only submit
+  // marks for an EXACT (classId, subjectId) paper they are appointed to
+  // teach. A partial or empty filter would bulk-submit other teachers'
+  // papers school-wide — refused with FORBIDDEN.
+  if (user && user.role === 'TEACHER') {
+    const { teacherCanEnterMarks } = await import('@/lib/teacher-scope')
+    if (!filter.classId || !filter.subjectId) {
+      throw new Error('FORBIDDEN')
+    }
+    const allowed = await teacherCanEnterMarks(user, schoolId, filter.classId, filter.subjectId)
+    if (!allowed) {
+      throw new Error('FORBIDDEN')
+    }
   }
   const result = await db.examMark.updateMany({
     where: {

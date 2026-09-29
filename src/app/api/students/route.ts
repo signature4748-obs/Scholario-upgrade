@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { withUser, schoolScoped } from '@/lib/api'
+import { resolveProvisionedPassword } from '@/lib/account-provisioning'
+import { AppError } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -42,7 +44,30 @@ export async function POST(req: NextRequest) {
       if (!name || !email) throw new Error('Name and email are required')
       const exists = await db.user.findUnique({ where: { email } })
       if (exists) throw new Error('Email already in use')
-      const password = String(body.password || 'password123')
+      // Task 4-d (audit 3-a fix #3): NO shared 'password123' default. A
+      // supplied password must pass the Phase-1 policy; an absent one gets
+      // a random 12-char temp password (surfaced once below) — or the
+      // SCHOLARIO_DEFAULT_PASSWORD dev override (non-production only).
+      const { password, generated } = resolveProvisionedPassword(body.password)
+      // Phase 2 (audit 3-a fix #4): classId / routeId are client input —
+      // a foreign-school id here would attach this school's student to
+      // another tenant's Class/Route (cross-tenant FK injection). Both FKs
+      // are re-verified against the CALLER's school; unknown/foreign ids
+      // fail safe with 404 (no existence oracle).
+      const classId = typeof body.classId === 'string' && body.classId.trim() ? body.classId.trim() : null
+      const routeId = typeof body.routeId === 'string' && body.routeId.trim() ? body.routeId.trim() : null
+      if (classId) {
+        const cls = await db.class.findFirst({ where: { id: classId, schoolId }, select: { id: true } })
+        if (!cls) {
+          throw new AppError('NOT_FOUND', { publicMessage: 'Class not found', internalDetail: 'students POST: classId foreign tenant' })
+        }
+      }
+      if (routeId) {
+        const route = await db.route.findFirst({ where: { id: routeId, schoolId }, select: { id: true } })
+        if (!route) {
+          throw new AppError('NOT_FOUND', { publicMessage: 'Route not found', internalDetail: 'students POST: routeId foreign tenant' })
+        }
+      }
       const admNo = String(body.admissionNo || `ADM-${Date.now()}`)
       const u = await db.user.create({
         data: {
@@ -59,7 +84,7 @@ export async function POST(req: NextRequest) {
         data: {
           schoolId,
           userId: u.id,
-          classId: body.classId || null,
+          classId,
           rollNo: body.rollNo || null,
           admissionNo: admNo,
           guardianName: body.guardianName || null,
@@ -68,11 +93,15 @@ export async function POST(req: NextRequest) {
           gender: body.gender || null,
           bloodGroup: body.bloodGroup || null,
           address: body.address || null,
-          routeId: body.routeId || null,
+          routeId,
         },
         include: { class: true, user: { select: { name: true, email: true } } },
       })
-      return s
+      // Additive field: the ONE-TIME generated credential for the operator
+      // to hand over (only present when the server generated it). No client
+      // consumes this response today (grep-verified — the create flows are
+      // API-only), so the additive field breaks nothing.
+      return { ...s, ...(generated ? { tempPassword: password } : {}) }
     },
     { roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )

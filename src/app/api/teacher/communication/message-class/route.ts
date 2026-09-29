@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { requireTeacher, auditTeacherAction, parseString } from '@/lib/teacher-hub'
+import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
 
@@ -25,6 +26,8 @@ const CATEGORIES = ['general', 'academic', 'attendance', 'behavior', 'wellbeing'
 export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
+      // Bulk fan-out write (one row per recipient) — per-user throttle.
+      enforceRateLimit(`rl:msg:${user.id}`, RATE_LIMITS.message)
       const ctx = await requireTeacher(user)
       const body = await req.json().catch(() => null)
       if (!body || typeof body !== 'object') throw new Error('Invalid request body')

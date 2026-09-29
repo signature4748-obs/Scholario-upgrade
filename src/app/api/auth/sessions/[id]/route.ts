@@ -16,6 +16,8 @@ export async function DELETE(
   return api(async () => {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
+    // Task 4-d (fix #9) — mirror withUser semantics (ACTIVE accounts only).
+    if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
 
     const { id } = await params
     const current = await getCurrentSession()

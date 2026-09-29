@@ -1,19 +1,20 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
-import { generateSeatingPlan, getSeatingPlan } from '@/lib/exams/service-extended'
+import { withAuthz } from '@/lib/security/authz'
+import { getSeatingPlan } from '@/lib/exams/service-extended'
 
 export const runtime = 'nodejs'
 
+// Seating plan (student roster + room/seat assignment) — staff-only
+// (audit 3-b MEDIUM).
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
+  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
     const { id } = await params
     const url = new URL(req.url)
     const classId = url.searchParams.get('classId')
-    const seats = await getSeatingPlan(id, classId, schoolId)
+    const seats = await getSeatingPlan(id, classId, ctx.schoolId)
     return seats
   })
 }

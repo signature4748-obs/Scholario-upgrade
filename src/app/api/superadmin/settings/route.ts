@@ -1,15 +1,18 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { withUser, api } from '@/lib/api'
+import { withUser } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { auditEvent } from '@/lib/security/audit'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
 
-// GET platform settings
-export async function GET() {
-  return withUser(async (user) => {
+// GET platform settings (3-d audit fix: previously ANY authenticated user
+// could read the platform config; now gated to SUPER_ADMIN —
+// withAuthz role gate + tenant 'any', the platform admin has no school).
+export function GET() {
+  return withAuthz({ roles: ['SUPER_ADMIN'], tenant: 'any' }, async () => {
     let setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
     if (!setting) {
       setting = await db.platformSetting.create({
@@ -19,7 +22,7 @@ export async function GET() {
     return {
       showDemoSchool: setting.showDemoSchool,
     }
-  })
+  }) as Promise<Response>
 }
 
 // UPDATE platform settings (Super Admin only) — Phase 1: audited +

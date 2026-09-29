@@ -6,6 +6,7 @@
 import 'server-only'
 import { db } from '@/lib/db'
 import type { AuthUser } from '@/lib/auth'
+import { AppError } from '@/lib/security/errors'
 
 // ─── DTOs ────────────────────────────────────────────────────────────
 
@@ -129,6 +130,121 @@ export interface CreateHomeworkInput {
   latePenalty?: number
   allowResubmission?: boolean
   status?: string
+}
+
+// ─── Authorization + input guards (3-d audit: ownership & FK-in-tenant) ─
+
+/** Canonical Homework.status vocabulary (schema comment + deriveStatus). */
+const HOMEWORK_STATUSES = ['DRAFT', 'PUBLISHED', 'ACTIVE', 'CLOSED', 'ARCHIVED'] as const
+
+const MAX_MARKS_LIMIT = 1000
+const LATE_PENALTY_LIMIT = 100
+const MAX_ATTACHMENTS = 20
+const ATTACHMENT_FIELD_CAPS = { name: 200, url: 1000, type: 100 } as const
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+/** Whitelist a client-provided status; unknown values are rejected. */
+function assertStatusAllowed(status: string): string {
+  const upper = status.trim().toUpperCase()
+  if (!(HOMEWORK_STATUSES as readonly string[]).includes(upper)) {
+    throw new AppError('INVALID_INPUT', {
+      publicMessage: `Status must be one of ${HOMEWORK_STATUSES.join(', ')}`,
+      internalDetail: `homework status whitelist rejected: ${status.slice(0, 40)}`,
+    })
+  }
+  return upper
+}
+
+/** Bound the attachments JSON: ≤ 20 entries, each string field length-capped. */
+function sanitizeAttachments(
+  attachments: Array<{ name: string; url: string; type: string }> | null | undefined,
+): string | null {
+  if (!attachments || !Array.isArray(attachments)) return null
+  const capped = attachments.slice(0, MAX_ATTACHMENTS).map((a) => ({
+    name: String(a?.name ?? '').slice(0, ATTACHMENT_FIELD_CAPS.name),
+    url: String(a?.url ?? '').slice(0, ATTACHMENT_FIELD_CAPS.url),
+    type: String(a?.type ?? '').slice(0, ATTACHMENT_FIELD_CAPS.type),
+  }))
+  return JSON.stringify(capped)
+}
+
+/**
+ * FK-in-tenant validation: a subject id from the request body must exist in
+ * the CALLER's school before it is linked into a homework row (foreign ids
+ * "do not exist" — 404, no cross-tenant oracle).
+ */
+async function assertSubjectInTenant(schoolId: string, subjectId: string): Promise<void> {
+  const subject = await db.subject.findFirst({
+    where: { id: subjectId, schoolId },
+    select: { id: true },
+  })
+  if (!subject) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Subject not found',
+      internalDetail: `assertSubjectInTenant: subject ${subjectId} missing or foreign tenant`,
+    })
+  }
+}
+
+/**
+ * FK-in-tenant validation for the assigned teacher. Homework.teacherId
+ * carries the TEACHER'S USER id (the canonical identity the ownership
+ * helper compares against) — verify a Teacher row exists for that user id
+ * inside the caller's school.
+ */
+async function assertTeacherUserInTenant(schoolId: string, teacherId: string): Promise<void> {
+  const teacher = await db.teacher.findFirst({
+    where: { userId: teacherId, schoolId },
+    select: { id: true },
+  })
+  if (!teacher) {
+    throw new AppError('NOT_FOUND', {
+      publicMessage: 'Teacher not found',
+      internalDetail: `assertTeacherUserInTenant: teacher user ${teacherId} missing or foreign tenant`,
+    })
+  }
+}
+
+/**
+ * ONE ownership predicate for every homework mutation:
+ *   · PRINCIPAL / MANAGEMENT — school-wide authority (tenant-checked by the
+ *     route layer before this runs).
+ *   · TEACHER — creator, assigned teacher (teacherId = user id), or the
+ *     class teacher of the homework's class.
+ * Everyone else (students/parents/null) fails closed.
+ */
+export async function canManageHomework(
+  schoolId: string,
+  user: AuthUser | null,
+  homework: { classId: string; createdBy: string | null; teacherId: string | null },
+): Promise<boolean> {
+  if (!user) return false
+  if (user.role === 'PRINCIPAL' || user.role === 'MANAGEMENT') return true
+  if (user.role !== 'TEACHER') return false
+  if (homework.createdBy === user.id) return true
+  if (homework.teacherId && homework.teacherId === user.id) return true
+  const ownClass = await db.class.findFirst({
+    where: { id: homework.classId, schoolId, classTeacherId: user.id },
+    select: { id: true },
+  })
+  return !!ownClass
+}
+
+/** Fail-closed wrapper: 403 (safe copy) when the caller cannot manage the row. */
+async function assertCanManage(
+  schoolId: string,
+  user: AuthUser | null,
+  homework: { classId: string; createdBy: string | null; teacherId: string | null },
+): Promise<void> {
+  if (!(await canManageHomework(schoolId, user, homework))) {
+    throw new AppError('FORBIDDEN', {
+      publicMessage: 'You can only manage homework you created, are assigned to, or that belongs to your class',
+      internalDetail: `homework ownership: user ${user?.id ?? 'null'} (${user?.role ?? 'null'}) not authorized for homework in class ${homework.classId}`,
+    })
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -367,6 +483,19 @@ export async function createHomework(
   const validClass = await db.class.findFirst({ where: { id: input.classId, schoolId } })
   if (!validClass) throw new Error('Class not found')
 
+  // ── FK-in-tenant validation + input clamps (3-d audit) ──
+  if (input.subjectId) await assertSubjectInTenant(schoolId, input.subjectId)
+  if (input.teacherId) await assertTeacherUserInTenant(schoolId, input.teacherId)
+  const status = input.status ? assertStatusAllowed(input.status) : 'DRAFT'
+  const maxMarks =
+    input.maxMarks != null && Number.isFinite(input.maxMarks)
+      ? clampNumber(input.maxMarks, 0, MAX_MARKS_LIMIT)
+      : null
+  const latePenalty =
+    input.latePenalty != null && Number.isFinite(input.latePenalty)
+      ? clampNumber(input.latePenalty, 0, LATE_PENALTY_LIMIT)
+      : 0
+
   const h = await db.homework.create({
     data: {
       schoolId,
@@ -380,16 +509,16 @@ export async function createHomework(
       chapter: input.chapter || null,
       learningObjective: input.learningObjective || null,
       content: input.content || null,
-      attachments: input.attachments ? JSON.stringify(input.attachments) : null,
-      maxMarks: input.maxMarks ?? null,
+      attachments: sanitizeAttachments(input.attachments),
+      maxMarks,
       gradingType: input.gradingType || 'marks',
       assignedDate: new Date(input.assignedDate || Date.now()),
       dueDate: new Date(input.dueDate),
       dueTime: input.dueTime || '23:59',
-      status: input.status || 'DRAFT',
+      status,
       allowLateSubmission: input.allowLateSubmission ?? true,
       lateDeadline: input.lateDeadline ? new Date(input.lateDeadline) : null,
-      latePenalty: input.latePenalty ?? 0,
+      latePenalty,
       allowResubmission: input.allowResubmission ?? true,
       createdBy: user?.id ?? null,
       originalDueDate: new Date(input.dueDate),
@@ -423,6 +552,24 @@ export async function updateHomework(
 ): Promise<HomeworkDTO> {
   const existing = await db.homework.findFirst({ where: { id, schoolId } })
   if (!existing) throw new Error('Homework not found')
+
+  // ── Ownership (3-d audit): only the creator, the assigned teacher, the
+  //    class teacher, or PRINCIPAL/MANAGEMENT may edit a homework row. ──
+  await assertCanManage(schoolId, user, existing)
+
+  // ── FK-in-tenant validation + input clamps for every provided field. ──
+  if (updates.subjectId) await assertSubjectInTenant(schoolId, updates.subjectId)
+  if (updates.teacherId) await assertTeacherUserInTenant(schoolId, updates.teacherId)
+  if (updates.status !== undefined && updates.status) assertStatusAllowed(updates.status)
+  const maxMarks =
+    updates.maxMarks !== undefined && updates.maxMarks != null && Number.isFinite(updates.maxMarks)
+      ? clampNumber(updates.maxMarks, 0, MAX_MARKS_LIMIT)
+      : undefined
+  const latePenalty =
+    updates.latePenalty !== undefined && updates.latePenalty != null && Number.isFinite(updates.latePenalty)
+      ? clampNumber(updates.latePenalty, 0, LATE_PENALTY_LIMIT)
+      : undefined
+
   const updated = await db.homework.update({
     where: { id },
     data: {
@@ -435,15 +582,15 @@ export async function updateHomework(
       ...(updates.chapter !== undefined ? { chapter: updates.chapter } : {}),
       ...(updates.learningObjective !== undefined ? { learningObjective: updates.learningObjective } : {}),
       ...(updates.content !== undefined ? { content: updates.content } : {}),
-      ...(updates.attachments !== undefined ? { attachments: JSON.stringify(updates.attachments) } : {}),
-      ...(updates.maxMarks !== undefined ? { maxMarks: updates.maxMarks } : {}),
+      ...(updates.attachments !== undefined ? { attachments: sanitizeAttachments(updates.attachments) } : {}),
+      ...(maxMarks !== undefined ? { maxMarks } : {}),
       ...(updates.gradingType !== undefined ? { gradingType: updates.gradingType } : {}),
       ...(updates.assignedDate !== undefined ? { assignedDate: new Date(updates.assignedDate) } : {}),
       ...(updates.dueDate !== undefined ? { dueDate: new Date(updates.dueDate) } : {}),
       ...(updates.dueTime !== undefined ? { dueTime: updates.dueTime } : {}),
       ...(updates.allowLateSubmission !== undefined ? { allowLateSubmission: updates.allowLateSubmission } : {}),
       ...(updates.lateDeadline !== undefined ? { lateDeadline: updates.lateDeadline ? new Date(updates.lateDeadline) : null } : {}),
-      ...(updates.latePenalty !== undefined ? { latePenalty: updates.latePenalty } : {}),
+      ...(latePenalty !== undefined ? { latePenalty } : {}),
       ...(updates.allowResubmission !== undefined ? { allowResubmission: updates.allowResubmission } : {}),
     },
     include: HOMEWORK_INCLUDE,
@@ -452,15 +599,25 @@ export async function updateHomework(
   return toHomeworkDTO(updated)
 }
 
-export async function deleteHomework(id: string, schoolId: string, _user: AuthUser | null): Promise<void> {
+export async function deleteHomework(id: string, schoolId: string, user: AuthUser | null): Promise<void> {
   const h = await db.homework.findFirst({ where: { id, schoolId } })
   if (!h) throw new Error('Homework not found')
+  // Deleting cascades submissions + audit rows — PRINCIPAL/MANAGEMENT only
+  // (3-d audit: a peer teacher deleting homework orphans other teachers'
+  // submission/grading data; kept conservative).
+  if (!user || (user.role !== 'PRINCIPAL' && user.role !== 'MANAGEMENT')) {
+    throw new AppError('FORBIDDEN', {
+      publicMessage: 'Only the principal or management can delete homework',
+      internalDetail: `deleteHomework: role ${user?.role ?? 'null'} attempted delete`,
+    })
+  }
   await db.homework.delete({ where: { id } })
 }
 
 export async function publishHomework(id: string, schoolId: string, user: AuthUser | null): Promise<HomeworkDTO> {
   const h = await db.homework.findFirst({ where: { id, schoolId } })
   if (!h) throw new Error('Homework not found')
+  await assertCanManage(schoolId, user, h)
   const updated = await db.homework.update({
     where: { id },
     data: { status: 'PUBLISHED', publishedAt: new Date() },
@@ -473,6 +630,7 @@ export async function publishHomework(id: string, schoolId: string, user: AuthUs
 export async function closeHomework(id: string, schoolId: string, user: AuthUser | null): Promise<HomeworkDTO> {
   const h = await db.homework.findFirst({ where: { id, schoolId } })
   if (!h) throw new Error('Homework not found')
+  await assertCanManage(schoolId, user, h)
   const updated = await db.homework.update({
     where: { id },
     data: { status: 'CLOSED', closedAt: new Date() },
@@ -485,6 +643,7 @@ export async function closeHomework(id: string, schoolId: string, user: AuthUser
 export async function archiveHomework(id: string, schoolId: string, user: AuthUser | null): Promise<HomeworkDTO> {
   const h = await db.homework.findFirst({ where: { id, schoolId } })
   if (!h) throw new Error('Homework not found')
+  await assertCanManage(schoolId, user, h)
   const updated = await db.homework.update({
     where: { id },
     data: { status: 'ARCHIVED' },
@@ -497,6 +656,7 @@ export async function archiveHomework(id: string, schoolId: string, user: AuthUs
 export async function duplicateHomework(id: string, schoolId: string, user: AuthUser | null): Promise<HomeworkDTO> {
   const original = await db.homework.findFirst({ where: { id, schoolId }, include: HOMEWORK_INCLUDE })
   if (!original) throw new Error('Homework not found')
+  await assertCanManage(schoolId, user, original)
   const newHomework = await db.homework.create({
     data: {
       schoolId,
@@ -544,6 +704,7 @@ export async function extendDeadline(
 ): Promise<HomeworkDTO> {
   const h = await db.homework.findFirst({ where: { id, schoolId } })
   if (!h) throw new Error('Homework not found')
+  await assertCanManage(schoolId, user, h)
   const oldDue = h.dueDate
   const updated = await db.homework.update({
     where: { id },
@@ -585,6 +746,14 @@ export async function reviewSubmission(
   const sub = await db.homeworkSubmission.findUnique({ where: { id: submissionId } })
   if (!sub || sub.homeworkId !== homeworkId) throw new Error('Submission not found')
 
+  // ── Ownership (3-d audit): the reviewer must be able to manage the
+  //    homework (creator / assigned teacher / class teacher / P/M) — a
+  //    peer teacher may not grade another teacher's submissions. ──
+  await assertCanManage(schoolId, user, h)
+
+  if (data.marks !== undefined && data.marks != null && (data.marks < 0 || !Number.isFinite(data.marks))) {
+    throw new AppError('INVALID_INPUT', { publicMessage: 'Marks must be a non-negative number' })
+  }
   if (data.marks !== undefined && h.maxMarks && data.marks > h.maxMarks) {
     throw new Error(`Marks cannot exceed maximum (${h.maxMarks})`)
   }

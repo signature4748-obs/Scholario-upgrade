@@ -18,7 +18,8 @@
  *   ACCOUNT_STATUS_CHANGE, PERMISSION_CHANGE, STUDENT_DATA_EXPORT,
  *   FEE_OPERATION, MARKS_CHANGE, ADMISSION_APPROVED, ACCOUNT_ACTIVATED,
  *   PLATFORM_SETTING_CHANGE, PAYMENT_VERIFIED, FILE_UPLOADED,
- *   FILE_DELETED, FILE_ACCESS_GRANTED, CSRF_REJECTED, RATE_LIMIT_BLOCKED
+ *   FILE_DELETED, FILE_ACCESS_GRANTED, CSRF_REJECTED, RATE_LIMIT_BLOCKED,
+ *   EVENT_DELETED
  */
 import { db } from '@/lib/db'
 
@@ -46,6 +47,10 @@ export const AUDIT_ACTIONS = [
   'FILE_ACCESS_GRANTED',
   'CSRF_REJECTED',
   'RATE_LIMIT_BLOCKED',
+  // Task 4-d (fix #1) — school calendar event deletion is a destructive
+  // school-scoped mutation; join the canonical vocabulary so the events
+  // DELETE route can audit through auditEvent() instead of a bespoke row.
+  'EVENT_DELETED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

@@ -1,30 +1,30 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
+import { parseJsonBody } from '@/lib/security/validation'
+import { scheduleItemSchema } from '@/lib/exams/api-schemas'
 import { addScheduleItem } from '@/lib/exams/service'
 
 export const runtime = 'nodejs'
 
 // POST /api/exams/[id]/schedule  body: { classId, subjectId, date, startTime, endTime, room?, invigilatorName? }
+// classId/subjectId are tenant-verified (school + exam membership) inside
+// addScheduleItem before any ExamScheduleItem row is created.
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
-      const { id } = await params
-      const body = await req.json().catch(() => ({}))
-      const item = await addScheduleItem(id, schoolId, user, {
-        classId: body.classId,
-        subjectId: body.subjectId,
-        date: body.date,
-        startTime: body.startTime,
-        endTime: body.endTime,
-        room: body.room,
-        invigilatorName: body.invigilatorName,
-      })
-      return item
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
-  )
+  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+    const { id } = await params
+    const data = await parseJsonBody(req, scheduleItemSchema)
+    const item = await addScheduleItem(id, ctx.schoolId, ctx.user, {
+      classId: data.classId,
+      subjectId: data.subjectId,
+      date: data.date,
+      startTime: data.startTime,
+      endTime: data.endTime,
+      room: data.room,
+      invigilatorName: data.invigilatorName,
+    })
+    return item
+  })
 }

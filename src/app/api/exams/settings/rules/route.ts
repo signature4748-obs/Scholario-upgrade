@@ -1,24 +1,23 @@
 import { NextRequest } from 'next/server'
-import { withUser, schoolScoped } from '@/lib/api'
+import { withAuthz } from '@/lib/security/authz'
 import { listExamRules, updateManyExamRules } from '@/lib/exams/settings-service'
+import { parseJsonBody } from '@/lib/security/validation'
+import { examRulesPutSchema } from '@/lib/exams/api-schemas'
 
 export const runtime = 'nodejs'
 
+// Exam rules (key-value school config) — staff read; writes are
+// Principal/Management.
 export async function GET() {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
-    return await listExamRules(schoolId)
+  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+    return await listExamRules(ctx.schoolId)
   })
 }
 
 export async function PUT(req: NextRequest) {
-  return withUser(
-    async (user) => {
-      const schoolId = schoolScoped(user)
-      const body = await req.json().catch(() => ({}))
-      await updateManyExamRules(schoolId, body.rules || {})
-      return { saved: true }
-    },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
-  )
+  return withAuthz({ permission: 'exams.settings.write' }, async (ctx) => {
+    const body = await parseJsonBody(req, examRulesPutSchema)
+    await updateManyExamRules(ctx.schoolId, body.rules)
+    return { saved: true }
+  })
 }

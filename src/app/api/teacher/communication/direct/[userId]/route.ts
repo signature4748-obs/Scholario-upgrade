@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { requireTeacher, parseString, auditTeacherAction } from '@/lib/teacher-hub'
+import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 import type { DirectThreadPayload } from '@/components/teacher/modules/communication/types'
 
 export const runtime = 'nodejs'
@@ -155,6 +156,9 @@ export async function POST(
 ) {
   return withUser(
     async (user) => {
+      // Message send — per-user throttle (same profile as the messaging
+      // routes; see rate-limit.ts RATE_LIMITS.message).
+      enforceRateLimit(`rl:msg:${user.id}`, RATE_LIMITS.message)
       const ctx = await requireTeacher(user)
       const { userId } = await params
       const body = await req.json().catch(() => null)

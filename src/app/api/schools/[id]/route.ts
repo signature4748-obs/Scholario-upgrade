@@ -1,15 +1,21 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
+import { AppError } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
+
+// Task 4-d (audit 3-a fix #13): same plan/status vocabulary as
+// POST /api/schools (see that route for the grep evidence).
+const SCHOOL_PLANS = ['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'] as const
+const SCHOOL_STATUSES = ['ACTIVE', 'TRIAL', 'SUSPENDED'] as const
 
 // GET school details
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withUser(async (user) => {
     if (user.role !== 'SUPER_ADMIN' && user.schoolId !== id) {
-      throw new Error('Access denied')
+      throw new AppError('NOT_FOUND', { publicMessage: 'School not found', internalDetail: 'schools/[id]: cross-school read refused without existence oracle' })
     }
 
     const school = await db.school.findUnique({
@@ -42,8 +48,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (body.name !== undefined) dataToUpdate.name = String(body.name).trim()
       if (body.domain !== undefined) dataToUpdate.domain = String(body.domain).trim()
       if (body.code !== undefined) dataToUpdate.code = String(body.code).trim().toUpperCase()
-      if (body.plan !== undefined) dataToUpdate.plan = body.plan
-      if (body.status !== undefined) dataToUpdate.status = body.status
+      if (body.plan !== undefined) {
+        const plan = String(body.plan).trim().toUpperCase()
+        if (!SCHOOL_PLANS.includes(plan as (typeof SCHOOL_PLANS)[number])) {
+          throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid plan' })
+        }
+        dataToUpdate.plan = plan
+      }
+      if (body.status !== undefined) {
+        const status = String(body.status).trim().toUpperCase()
+        if (!SCHOOL_STATUSES.includes(status as (typeof SCHOOL_STATUSES)[number])) {
+          throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid status' })
+        }
+        dataToUpdate.status = status
+      }
       if (body.city !== undefined) dataToUpdate.city = body.city
       if (body.phone !== undefined) dataToUpdate.phone = body.phone
       if (body.email !== undefined) dataToUpdate.email = body.email
