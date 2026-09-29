@@ -186,7 +186,7 @@ export function ValueRow({
 
 /* RadioRowGroup — name + inline radio options (e.g. Required / Optional) */
 export function RadioRowGroup({
-  label, helper, name, options, value, onValueChange,
+  label, helper, name: _name, options, value, onValueChange,
 }: {
   label: string
   helper?: string

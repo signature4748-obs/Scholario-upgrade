@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
           select: { userId: true },
         })
         if (!teacher) {
-          throw new AppError('NOT_FOUND', { publicMessage: 'Teacher not found in this school' })
+          throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Teacher not found in this school' })
         }
       }
       const cls = await db.class.create({

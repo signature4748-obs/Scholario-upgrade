@@ -38,7 +38,7 @@ interface OverviewChartsProps {
 }
 
 export function OverviewCharts({
-  todaysRate, present, absent, late, leave, total,
+  todaysRate, present, absent, late, leave, total: _total,
   weeklyTrend, monthlyTrend,
 }: OverviewChartsProps) {
   const weeklyInsight = deriveTrendInsight(weeklyTrend.map((d) => d.rate))

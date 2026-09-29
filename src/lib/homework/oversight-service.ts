@@ -347,7 +347,7 @@ export async function updatePolicy(schoolId: string, id: string, data: { maxMinu
   // "not exist" (404), never be updated in place.
   const existing = await db.homeworkPolicy.findFirst({ where: { id, schoolId }, select: { id: true } })
   if (!existing) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Policy not found',
       internalDetail: `updatePolicy: policy ${id} missing or foreign tenant`,
     })
@@ -386,7 +386,7 @@ export async function removeNoHomeworkDate(schoolId: string, id: string): Promis
   // foreign-tenant id deletes nothing and surfaces as 404.
   const result = await db.noHomeworkDate.deleteMany({ where: { id, schoolId } })
   if (result.count === 0) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Blocked date not found',
       internalDetail: `removeNoHomeworkDate: date ${id} missing or foreign tenant`,
     })
@@ -426,7 +426,7 @@ export async function resolveGrievance(schoolId: string, id: string, user: AuthU
   // caller's school before resolving — a foreign id is a 404, never a write.
   const existing = await db.parentGrievance.findFirst({ where: { id, schoolId }, select: { id: true } })
   if (!existing) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Grievance not found',
       internalDetail: `resolveGrievance: grievance ${id} missing or foreign tenant`,
     })

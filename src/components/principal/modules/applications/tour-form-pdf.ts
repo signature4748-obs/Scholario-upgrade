@@ -30,15 +30,13 @@ import autoTable from 'jspdf-autotable'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store/store'
 import {
   deriveSubmissionPayment, docTemplateOf,
-  type SchoolApplication, type TourDocTemplate,
-  type ApplicationSubmission, type SubmissionPaymentInfo,
+  type SchoolApplication, type ApplicationSubmission, type SubmissionPaymentInfo,
 } from '@/lib/store/applications-store'
 import { formatINR, formatDate } from '@/lib/format'
 
 // ─── Geometry (A4 portrait, mm) — per-template skins ───────────────────
 
 const PAGE_W = 210
-const PAGE_H = 297
 
 const INK = { main: '#111', soft: '#333', mid: '#444', mute: '#555', faint: '#666', rule: '#b5b5b5', dotted: '#777', light: '#999' }
 

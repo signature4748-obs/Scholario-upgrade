@@ -23,7 +23,7 @@
 
 import { motion } from 'framer-motion'
 import {
-  CalendarDays, ArrowRight, FileText, IndianRupee, Wallet,
+  ArrowRight, FileText, IndianRupee, Wallet,
 } from 'lucide-react'
 import { Panel } from '../shared/panel'
 import { upcomingEvents } from '@/lib/mock/operations'

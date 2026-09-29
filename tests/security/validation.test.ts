@@ -41,7 +41,7 @@ describe('parseJsonBody — transport-level gates', () => {
       throw new Error('should have thrown')
     } catch (e) {
       expect(e).toBeInstanceOf(AppError)
-      expect((e as AppError).code).toBe('INVALID_INPUT')
+      expect((e as AppError).code).toBe('VALIDATION_FAILED')
     }
   })
 
@@ -71,7 +71,7 @@ describe('parseJsonBody — transport-level gates', () => {
       await parseJsonBody(post(JSON.stringify({ email: 'a@b.com', password: 'x', role: 'SUPER_ADMIN' })), schema)
       throw new Error('should have thrown')
     } catch (e) {
-      expect((e as AppError).code).toBe('INVALID_INPUT')
+      expect((e as AppError).code).toBe('VALIDATION_FAILED')
       expect((e as AppError).publicMessage).toContain('role')
     }
   })

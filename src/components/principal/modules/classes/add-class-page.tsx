@@ -12,7 +12,6 @@ import { cn } from '@/lib/utils'
 import { useTeachersStore } from '@/lib/store/teachers-store'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { toast } from 'sonner'
-import { StepHeader } from '../admission/components/StepShared'
 import { RoomSelect } from './room-select'
 
 interface SectionEntry {

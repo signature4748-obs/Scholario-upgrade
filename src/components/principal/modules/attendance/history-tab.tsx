@@ -17,7 +17,7 @@
 
 import { useMemo, useState, useEffect } from 'react'
 import { motion, useReducedMotion, AnimatePresence } from 'framer-motion'
-import { Search, ArrowLeft, Download, Eye, FileText, Users, CheckCircle2, Loader2, ChevronDown } from 'lucide-react'
+import { Search, ArrowLeft, Eye, FileText, Users, CheckCircle2, Loader2, ChevronDown } from 'lucide-react'
 import { PageTransition } from '@/components/shared/ui'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -103,7 +103,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
   // Brief PART 32: filter records for the selected month (VIEW filter —
   // separate from the monthly EXPORT, which is always the full month).
   const filtered = useMemo(() => {
-    const [year, month] = selectedMonth.split('-').map(Number)
+    const [_year, _month] = selectedMonth.split('-').map(Number)
     return attendanceHistory.filter((r) => {
       const rMonth = r.date.substring(0, 7)  // "2025-12"
       if (rMonth !== selectedMonth) return false
@@ -171,7 +171,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
   }
 
   // Brief PART 30: Find selected month option object
-  const selectedMonthOption = MONTH_OPTIONS.find((o) => o.value === selectedMonth)
+  const _selectedMonthOption = MONTH_OPTIONS.find((o) => o.value === selectedMonth)
 
   return (
     <PageTransition className="space-y-4">

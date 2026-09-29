@@ -21,7 +21,7 @@ export function AdmissionsDashboard({
   onOpenIssuanceWorkspace,
   onOpenSettingsModal,
   onOpenOcrModal,
-  onOpenBlankFormModal,
+  onOpenBlankFormModal: _onOpenBlankFormModal,
 }: AdmissionsDashboardProps) {
   const store = useAdmissionStore()
   const applications = store.applications || []

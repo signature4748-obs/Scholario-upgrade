@@ -18,7 +18,6 @@ import {
   type SchoolContextDTO,
   type AdmitCardConfigDTO,
   type ReportCardConfigDTO,
-  getGradeForPercentage,
 } from './types'
 
 // ─── Shared helpers ──────────────────────────────────────────────────

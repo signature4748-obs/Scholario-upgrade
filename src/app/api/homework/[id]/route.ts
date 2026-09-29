@@ -26,11 +26,11 @@ export function GET(
         getHomework(id, schoolId),
         getSubmissions(id, schoolId),
       ])
-      if (!homework) throw new AppError('NOT_FOUND', { publicMessage: 'Homework not found', internalDetail: 'homework GET: missing or foreign tenant' })
+      if (!homework) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Homework not found', internalDetail: 'homework GET: missing or foreign tenant' })
       return { homework, submissions }
     }
     const homework = await getHomework(id, schoolId)
-    if (!homework) throw new AppError('NOT_FOUND', { publicMessage: 'Homework not found', internalDetail: 'homework GET: missing or foreign tenant' })
+    if (!homework) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Homework not found', internalDetail: 'homework GET: missing or foreign tenant' })
     return homework
   }) as Promise<Response>
 }

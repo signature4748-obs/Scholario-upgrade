@@ -13,7 +13,7 @@ import { motion } from 'framer-motion'
 import { Check, Clock, X, Undo2, Lock, Ban } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatINR } from '@/lib/format'
-import type { PaymentStatus, ChangeRequestStatus, EditPermission } from '@/lib/store/salary-store'
+import type { PaymentStatus, ChangeRequestStatus } from '@/lib/store/salary-store'
 import { editPermissionLive, formatCountdown, useSalaryStore } from '@/lib/store/salary-store'
 import { Panel } from '../shared/panel'
 

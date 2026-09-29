@@ -16,8 +16,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  X, History, GitCompareArrows, Check, Calendar, User, FileText,
-  ArrowRight, RotateCcw, Archive,
+  X, History, GitCompareArrows, Check, Calendar, User, ArrowRight, RotateCcw, Archive,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -25,9 +24,7 @@ import {
   useFeeStore,
   type FeeStructureConfig,
   type FeeStructureVersion,
-  type FeeStructureStatus,
   type FeeChangeLog,
-  computeHeadsTotal,
 } from '@/lib/store/fee-store'
 import { formatINR, formatDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -204,7 +201,6 @@ function VersionRow({ version, selected, onToggle, onRevert, onArchive, changeLo
   const isCurrent = version.status === 'current'
   const isArchived = version.status === 'archived'
   const isScheduled = version.status === 'scheduled'
-  const isDraft = version.status === 'draft'
 
   const relatedLog = changeLog[0]
 

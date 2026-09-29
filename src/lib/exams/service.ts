@@ -5,7 +5,7 @@
 // ──────────────────────────────────────────────────────────────────────
 
 import 'server-only'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { AppError } from '@/lib/security/errors'
 import {
   type ExamDTO,
@@ -380,7 +380,7 @@ export async function createExam(
   // Mark seeding is now: ONE roster findMany + ONE examMark.createMany
   // (the exam is brand-new — no mark rows exist yet, so createMany is safe
   // and the composite unique backstops any duplicate).
-  const exam = await db.$transaction(async (tx) => {
+  const exam = await trackedTransaction('exam-create', async (tx) => {
     const created = await tx.exam.create({
       data: {
         schoolId,
@@ -536,7 +536,7 @@ export async function updateExam(
   return toExamDTO(updated)
 }
 
-export async function deleteExam(examId: string, schoolId: string, user: AuthUserLike | null): Promise<void> {
+export async function deleteExam(examId: string, schoolId: string, _user: AuthUserLike | null): Promise<void> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
   // Phase 3 — declared results are auditable history: the exam (and its
@@ -600,7 +600,7 @@ export async function addScheduleItem(
     select: { id: true },
   })
   if (!cls) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Class not found in this school',
       internalDetail: `addScheduleItem: class ${data.classId} missing or foreign tenant`,
     })
@@ -610,7 +610,7 @@ export async function addScheduleItem(
     select: { id: true },
   })
   if (!subject) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Subject not found in this school',
       internalDetail: `addScheduleItem: subject ${data.subjectId} missing or foreign tenant`,
     })
@@ -765,7 +765,7 @@ export async function setMark(
     select: { id: true },
   })
   if (!student) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Student not found',
       internalDetail: `setMark: student ${input.studentId} missing or foreign tenant`,
     })

@@ -65,7 +65,7 @@ import { formatINR, formatDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { FeesStructuresDetailDrawer } from './fees-structures-detail'
 import { FeesStructuresHistoryDialog } from './fees-structures-history'
-import { VersionStatusPill, StructureStatusBadge } from './fees-structures-shared'
+import { StructureStatusBadge } from './fees-structures-shared'
 // SaaS-STAGE-1 — the Catalogue is a FULL CONTENT-AREA VIEW (never a modal):
 // the Fee Structures header carries the only entry point, and opening it
 // swaps THIS tab's content area while the app shell stays untouched.

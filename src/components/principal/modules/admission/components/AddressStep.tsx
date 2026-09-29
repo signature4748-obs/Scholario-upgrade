@@ -17,7 +17,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import {
-  COUNTRIES, getStatesForCountry, getDistrictsForState, validateIndianPin,
+  getStatesForCountry, getDistrictsForState, validateIndianPin,
 } from '@/lib/indian-address'
 import type { FormData } from '../constants'
 import { StepHeader, Field } from './StepShared'

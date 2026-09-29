@@ -1,5 +1,6 @@
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { runJob } from '@/lib/observability/jobs'
 import {
   parseDateParam,
   resolveClassScope,
@@ -149,9 +150,25 @@ export async function POST(request: Request) {
       }
 
       const settings = await attendanceSettingsFor(schoolId)
-      const result = await finalizeDraftIfDue({ schoolId, classId, dayKey: date, settings })
+      // Phase 4 (item 8): the deferred finalization runs as a TRACKED job —
+      // JobRun row + structured logs (job id, start/finish, duration,
+      // success/failure, error). No idempotencyKey: this is a re-check job
+      // whose fn is state-idempotent (no draft / already-submitted are
+      // honest no-op outcomes — the Phase-3 test suite proves the
+      // double-submit case).
+      const outcome = await runJob({
+        name: 'attendance-draft-autofinalize',
+        schoolId,
+        trigger: 'request',
+        fn: () => finalizeDraftIfDue({ schoolId, classId, dayKey: date, settings }),
+      })
+      const result =
+        outcome.status === 'success'
+          ? outcome.result ?? { finalized: false, reason: 'no-draft' as const }
+          : { finalized: false, reason: 'no-draft' as const }
       return {
         ...result,
+        jobStatus: outcome.status,
         boundaryPassed:
           date !== istDayKey() || istMinutesNow() >= settings.endOfDayMinutes,
         endOfDayMinutes: settings.endOfDayMinutes,

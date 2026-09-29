@@ -23,7 +23,7 @@ import type { FormData } from '../constants'
 import { StepHeader, Field } from './StepShared'
 
 export function ClassStep({
-  data, set, flags, seatCapacity,
+  data, set, flags: _flags, seatCapacity,
 }: {
   data: FormData
   set: <K extends keyof FormData>(k: K, v: FormData[K]) => void

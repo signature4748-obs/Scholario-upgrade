@@ -86,14 +86,14 @@ export async function POST(req: NextRequest) {
     if (!user || !passwordOk) {
       await fail('invalid')
       // Generic message — never reveal whether the account exists.
-      throw new AppError('UNAUTHORIZED', {
+      throw new AppError('AUTH_REQUIRED', {
         publicMessage: 'Invalid email or password',
         internalDetail: 'credential mismatch',
       })
     }
     if (user.status !== 'ACTIVE') {
       await fail('inactive')
-      throw new AppError('UNAUTHORIZED', {
+      throw new AppError('AUTH_REQUIRED', {
         publicMessage: 'Invalid email or password',
         internalDetail: 'account inactive (generic response: no status disclosure)',
       })

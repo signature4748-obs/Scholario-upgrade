@@ -54,7 +54,7 @@ import type {
   PaymentMode, GatewayProvider, GatewayEnvironment, BankAccountType,
   UpiQrType,
 } from '@/lib/store/fee-store'
-import { formatINR, formatDate, formatRelativeTime } from '@/lib/format'
+import { formatDate, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { SettingsCard } from '../shared/settings-card'
 import { FeeStatusBadge, modeAccent } from '../fees/fees-shared'

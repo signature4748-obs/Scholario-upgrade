@@ -50,9 +50,9 @@ let studentB = { id: '' }
 let subjectA = { id: '' }
 let examA = { id: '', name: '', session: null as string | null }
 let markKey = { examId: '', classId: '', subjectId: '', studentId: '' }
-let markConfig = { maxMarks: 100 }
-let resultKey = { studentId: '', examId: '', subjectId: '' }
-let attendanceKey = { studentId: '', date: new Date() }
+let _markConfig = { maxMarks: 100 }
+let _resultKey = { studentId: '', examId: '', subjectId: '' }
+let _attendanceKey = { studentId: '', date: new Date() }
 let feeA = { id: '', amount: 0, paid: 0 }
 let bookA = { id: '' }
 
@@ -98,14 +98,14 @@ beforeAll(async () => {
   })
   expect(cfg).not.toBeNull()
   markKey = { examId: cfg!.examId, classId: cfg!.classId, subjectId: cfg!.subjectId, studentId: studentA.id }
-  markConfig = { maxMarks: cfg!.maxMarks }
+  _markConfig = { maxMarks: cfg!.maxMarks }
   examA = { id: cfg!.exam.id, name: cfg!.exam.name, session: cfg!.exam.session }
 
   const res = await db.result.findFirst({ where: { exam: { schoolId: schoolA.id } }, select: { studentId: true, examId: true, subjectId: true } })
-  if (res) resultKey = res
+  if (res) _resultKey = res
 
   const att = await db.attendance.findFirst({ where: { schoolId: schoolA.id }, select: { studentId: true, date: true } })
-  if (att) attendanceKey = att
+  if (att) _attendanceKey = att
 
   feeA = (await db.fee.findFirstOrThrow({ where: { schoolId: schoolA.id }, select: { id: true, amount: true, paid: true } }))!
   bookA = (await db.libraryBook.findFirstOrThrow({ where: { schoolId: schoolA.id }, select: { id: true } }))!

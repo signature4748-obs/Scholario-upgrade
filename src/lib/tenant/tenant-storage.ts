@@ -73,7 +73,7 @@ export function migrateLegacyScopedStore(baseName: string, defaultTenantId: stri
  */
 export function createTenantScopedStorage<T = unknown>(baseName: string) {
   return createJSONStorage((): StateStorage => ({
-    getItem: (name: string) => {
+    getItem: (_name: string) => {
       if (typeof window === 'undefined') return null
       try {
         return window.localStorage.getItem(tenantScopedKey(baseName))
@@ -89,7 +89,7 @@ export function createTenantScopedStorage<T = unknown>(baseName: string) {
         // Storage full / private mode — persist is best-effort in mock dev.
       }
     },
-    removeItem: (name: string) => {
+    removeItem: (_name: string) => {
       if (typeof window === 'undefined') return
       try {
         window.localStorage.removeItem(tenantScopedKey(baseName))

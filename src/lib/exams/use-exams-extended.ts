@@ -8,7 +8,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from './api-client'
 import {
   type ExamDTO,
-  type MarkStatus,
   type ScheduleItemDTO,
   type SeatAssignmentDTO,
   type ExamAttendanceDTO,

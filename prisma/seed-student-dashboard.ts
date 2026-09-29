@@ -41,7 +41,7 @@ function gradeFor(marks: number, total: number): string {
 }
 
 const DAY_MS = 86_400_000
-const iso = (d: Date) => d.toISOString()
+const _iso = (d: Date) => d.toISOString()
 const daysAgo = (n: number, h = 9) => new Date(new Date().getTime() - n * DAY_MS - (new Date().getHours() - h) * 3600_000)
 const daysAhead = (n: number) => new Date(new Date().getTime() + n * DAY_MS)
 

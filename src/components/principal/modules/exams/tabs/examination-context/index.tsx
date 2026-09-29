@@ -8,7 +8,7 @@
  */
 
 import { motion, AnimatePresence } from 'framer-motion'
-import { Clock, MapPin, User, Calendar, Radio, ArrowRight, ChevronRight } from 'lucide-react'
+import { MapPin, User, Calendar, Radio, ArrowRight, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { ExamDTO } from '@/lib/exams/types'
@@ -52,9 +52,9 @@ export function ExaminationContext({ exams, onSelectExam, onNavigate, classPerfo
 
 function LiveExamination({ ctx, onSelectExam }: { ctx: ExamContext; onSelectExam: (id: string) => void }) {
   const todayLabel = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })
-  const running = ctx.todaysSchedule.filter((s) => s.status === 'running')
-  const upcomingToday = ctx.todaysSchedule.filter((s) => s.status === 'upcoming_today')
-  const completedToday = ctx.todaysSchedule.filter((s) => s.status === 'completed_today')
+  const _running = ctx.todaysSchedule.filter((s) => s.status === 'running')
+  const _upcomingToday = ctx.todaysSchedule.filter((s) => s.status === 'upcoming_today')
+  const _completedToday = ctx.todaysSchedule.filter((s) => s.status === 'completed_today')
 
   return (
     <div className="rounded-xl border border-border bg-card p-5">

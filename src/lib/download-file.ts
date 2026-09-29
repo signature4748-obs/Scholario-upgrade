@@ -39,7 +39,7 @@ export function downloadCSVFile(csv: string, filename: string): void {
  * dialog. Used by Download drawers where the module's in-app print CSS
  * cannot isolate the preview (documents render inside portals/drawers).
  */
-export function openPrintWindow(html: string, title: string): Window | null {
+export function openPrintWindow(html: string, _title: string): Window | null {
   const w = window.open('', '_blank', 'width=860,height=1000')
   if (!w) return null
   w.document.write(html)

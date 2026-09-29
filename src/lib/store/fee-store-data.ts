@@ -36,7 +36,6 @@ import { SS } from './students-store/seed-data'
 // is seeded with its own exam pattern (Pattern A vs B) from the tenant
 // registry. No store cloning — one builder, per-tenant output.
 import { getActiveTenantSync } from '@/lib/tenant/active-tenant'
-import { getExamTemplate } from '@/lib/tenant/registry'
 
 /**
  * CURRENT_ACADEMIC_YEAR — single source of truth for the fee session label.

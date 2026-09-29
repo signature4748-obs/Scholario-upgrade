@@ -2,7 +2,7 @@
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { StudentPosition, StudentPositionKey, StudentsState, StudentStatus } from './types'
+import type { StudentPosition, StudentsState, StudentStatus } from './types'
 import { POSITION_DEFS, filterActivePositions } from '@/lib/student-positions'
 import { ACTIVE_SESSION_ID, getActiveAcademicSessionId } from '@/lib/academic-session'
 import { HOUSE_DEFS, SEED_SUBJECTS } from './constants'
@@ -168,12 +168,12 @@ export const useStudentsStore = create<StudentsState>()(
       transfers: [{ id: `tr-${Date.now()}`, studentId: id, studentName: s.name, type, fromClass: fc, toClass: tc, reason, status: 'Completed' as const, date: now }, ...state.transfers],
     }))
   },
-  assignHouse: (id, houseId, by) => {
+  assignHouse: (id, houseId, _by) => {
     const h = get().houses.find((x) => x.id === houseId)
     if (!h) return
     set((state) => ({ students: state.students.map((x) => x.id === id ? { ...x, houseId, houseName: h.name } : x) }))
   },
-  updateRollNumber: (id, roll, by) => {
+  updateRollNumber: (id, roll, _by) => {
     set((state) => ({ students: state.students.map((x) => x.id === id ? { ...x, rollNo: roll } : x) }))
   },
   createPromotion: (ids, from, to, year, by) => {
@@ -181,7 +181,7 @@ export const useStudentsStore = create<StudentsState>()(
       promotions: [...ids.map((sid) => { const st = state.students.find((x) => x.id === sid); return { id: `pr-${Date.now()}-${sid}`, studentId: sid, studentName: st?.name ?? '', fromClass: from, toClass: to, academicYear: year, feeCleared: st?.feeStatus === 'Paid', resultCleared: true, attendanceCleared: (st?.attendance ?? 0) >= 75, status: 'Pending' as const, date: new Date().toISOString(), requestedBy: by } }), ...state.promotions],
     }))
   },
-  approvePromotion: (id, by) => {
+  approvePromotion: (id, _by) => {
     set((state) => ({ promotions: state.promotions.map((p) => p.id === id ? { ...p, status: 'Approved' as const } : p) }))
   },
   executePromotion: (id, by) => {

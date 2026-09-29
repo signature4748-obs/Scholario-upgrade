@@ -43,7 +43,6 @@ import {
   type ExamSession,
   type ExamAttendanceRecord,
 } from '@/lib/exams/mock-attendance-data'
-import { useMockInvigilatorStore } from '@/lib/exams/mock-invigilator-data'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { formatDateLong, parseLocalDate } from '@/lib/exams/format-helpers'
 import { CollapsibleSection } from './collapsible-section'

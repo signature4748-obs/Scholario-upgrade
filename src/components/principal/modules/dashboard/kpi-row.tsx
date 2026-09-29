@@ -45,7 +45,6 @@ import { useStudentsStore } from '@/lib/store/students-store'
 import { SummaryCard, SummaryCardGrid } from '../shared/summary-card'
 import { LiveChip } from '../shared/live-chip'
 import { useAttendanceOverview } from '../attendance/use-attendance-overview'
-import { useSchoolStats } from './use-school-stats'
 import { useUpcomingExams } from './use-upcoming-exams'
 
 export interface KpiRowProps {

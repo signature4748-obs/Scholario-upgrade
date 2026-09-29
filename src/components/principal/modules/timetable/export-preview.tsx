@@ -16,7 +16,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { ArrowLeft, Download, Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { ExportResult } from './timetable-pdf'
 
 export interface ExportPreviewProps {
   preview: { html: string; title: string; subtitle: string; orientation: 'portrait' | 'landscape' } | null

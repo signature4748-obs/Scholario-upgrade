@@ -246,7 +246,7 @@ export function CategoryValueDistribution() {
   const data = useInventoryData()
   const cats = data.analytics.valueByCategory
   const total = cats.reduce((s, c) => s + c.value, 0)
-  const max = Math.max(1, ...cats.map((c) => c.value))
+  const _max = Math.max(1, ...cats.map((c) => c.value))
   const sorted = [...cats].sort((a, b) => b.value - a.value)
 
   return (

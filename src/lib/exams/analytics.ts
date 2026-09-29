@@ -56,7 +56,7 @@ export function computeStudentResults(
       const pct = obtained !== null && subj.maxMarks > 0 ? Math.round((obtained / subj.maxMarks) * 100 * 100) / 100 : 0
       const passed = obtained !== null && pct >= 33
       if (!passed) subjectsFailed++
-      const { grade } = getGradeForPercentage(pct, [])
+      const { grade: _grade } = getGradeForPercentage(pct, [])
       return {
         subjectId: subj.subjectId,
         subjectName: subj.subjectName,

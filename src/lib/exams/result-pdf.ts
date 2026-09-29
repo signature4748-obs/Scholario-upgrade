@@ -5,7 +5,6 @@
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import type { ExamDTO } from '@/lib/exams/types'
-import { formatDateLong } from '@/lib/exams/format-helpers'
 import { getSchoolProfile } from '@/lib/school-profile'
 
 interface StudentResult {

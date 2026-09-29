@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { applyPaymentToLedger, resolveFeeIdForTxn } from '@/lib/fee-workflow'
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
 
       // ── 1. Locate the transaction (RLS: same school as the session) ──
       const txn = await db.feeTransaction.findUnique({ where: { gatewayOrderId: orderId } })
-      if (!txn) throw new AppError('NOT_FOUND')
+      if (!txn) throw new AppError('RESOURCE_NOT_FOUND')
       if (txn.schoolId !== schoolId) throw new AppError('FORBIDDEN')
 
       // ── 1b. 3-c fix: OWNERSHIP — only the CALLER's own orders ──────
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
           })
           const txnStudentId = txn.studentId
           if (!appliedAlready && txnStudentId) {
-            await db.$transaction(async (tx) => {
+            await trackedTransaction('payment-verify-reconcile', async (tx) => {
               // Same fee targeting as the primary path — the txn's own
               // feeId, else feeHeadName title, else the oldest unsettled
               // fee, else a minimal Fee row.
@@ -156,7 +156,7 @@ export async function POST(req: NextRequest) {
       const paymentMethod = paymentMethodFor(txn.method) // 'UPI' | 'CARD' | 'NETBANKING'
       const paidAt = new Date()
 
-      const updatedTxn = await db.$transaction(async (tx) => {
+      const updatedTxn = await trackedTransaction('payment-verify-transition', async (tx) => {
         // ── 4a. CONDITIONAL transition — only a PENDING row can become ─
         // SUCCESS. If count === 0 the webhook (or a concurrent verify)
         // already transitioned it — and, since Phase 3, applied the ledger

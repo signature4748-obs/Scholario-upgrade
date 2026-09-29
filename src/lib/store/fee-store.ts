@@ -35,7 +35,7 @@ import { useCommunicationStore } from '@/lib/store/communication-store'
 // category from the picked catalogue entry). No circular dep —
 // school-settings-store doesn't import from fee-store.
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo,  } from 'react'
 import { formatINR } from '@/lib/format'
 // PHASE 5 — class catalogue lookup. Static import (no circular dep:
 // the classes catalogue has no imports from any store). Used by
@@ -51,20 +51,12 @@ import {
   computeHeadsTotal,
   computeExamFeeTotal,
   FEE_STRUCTURES,
-  SEED_VERSIONS,
   DEFAULT_PAYMENT_MODES,
   DEFAULT_LATE_FEE_RULE,
   SEED_GATEWAY_CONFIG,
   SEED_TRANSACTIONS,
   SEED_CASH_REQUESTS,
-  SEED_AUDIT,
-  SEED_ADDITIONAL_CHARGES,
-  SEED_SETTLEMENTS,
-  SEED_RECONCILIATION_RECORDS,
-  SEED_WEBHOOK_EVENTS,
   SEED_CONCESSIONS,
-  SEED_BANK_ACCOUNTS,
-  SEED_UPI_QR_CONFIGS,
   SEED_OPTIONAL_HEAD_OPTINS_SNAPSHOT,
   SEED_FINANCIAL_ROW_IDS,
   SEED_OPTIONAL_HEAD_OPTINS,
@@ -1096,7 +1088,7 @@ export function deriveStudentClassId(className: string): string | undefined {
 // `countStudentsForClassLevel`. Internal callers have been migrated to
 // `countStudentsForStructure` (which considers className first). The
 // legacy signature accepts a classLevel string and ignores className.
-function countStudentsForClassLevel(classLevel: string): number {
+function _countStudentsForClassLevel(classLevel: string): number {
   return countStudentsForStructure({ className: '', classLevel })
 }
 

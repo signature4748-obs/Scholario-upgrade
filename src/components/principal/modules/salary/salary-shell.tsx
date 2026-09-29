@@ -30,9 +30,6 @@ import { SalarySettingsSection } from './salary-settings'
 import { SalaryEmployeeDrawer } from './salary-employee-drawer'
 import { RecordPaymentDialog } from './record-payment-dialog'
 
-const TAB_VALUES: SalaryTab[] = [
-  'overview', 'payments', 'accounts', 'payslips', 'reports', 'history', 'structures', 'settings',
-]
 
 function SalaryShellInner() {
   const [tab, setTab] = useState<SalaryTab>('overview')

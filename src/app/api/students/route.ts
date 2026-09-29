@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { withUser, schoolScoped } from '@/lib/api'
 import { resolveProvisionedPassword } from '@/lib/account-provisioning'
@@ -59,20 +59,20 @@ export async function POST(req: NextRequest) {
       if (classId) {
         const cls = await db.class.findFirst({ where: { id: classId, schoolId }, select: { id: true } })
         if (!cls) {
-          throw new AppError('NOT_FOUND', { publicMessage: 'Class not found', internalDetail: 'students POST: classId foreign tenant' })
+          throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Class not found', internalDetail: 'students POST: classId foreign tenant' })
         }
       }
       if (routeId) {
         const route = await db.route.findFirst({ where: { id: routeId, schoolId }, select: { id: true } })
         if (!route) {
-          throw new AppError('NOT_FOUND', { publicMessage: 'Route not found', internalDetail: 'students POST: routeId foreign tenant' })
+          throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Route not found', internalDetail: 'students POST: routeId foreign tenant' })
         }
       }
       const admNo = String(body.admissionNo || `ADM-${Date.now()}`)
       // Phase 3 — the user + student rows are created in ONE transaction
       // (copies the schools POST pattern): a failure between the two
       // previously orphaned the User row (a login with no student record).
-      const s = await db.$transaction(async (tx) => {
+      const s = await trackedTransaction('student-create-with-user', async (tx) => {
         const u = await tx.user.create({
           data: {
             schoolId,

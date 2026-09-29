@@ -17,7 +17,7 @@ import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@
 import { InlineLoading } from './inline-loading'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { MARK_STATUSES, type MarkStatus } from '@/lib/exams/types'
+import { type MarkStatus } from '@/lib/exams/types'
 import {
   useSeatingPlan,
   useGenerateSeating,
@@ -87,7 +87,7 @@ export function SeatingSection({ examId, exam, onReload }: SectionProps) {
 
   const handleExport = () => {
     if (seats.length === 0) { toast.error('No seating plan to export'); return }
-    const className = exam?.classes.find((c: any) => c.classId === classId)?.className ?? 'Class'
+    const _className = exam?.classes.find((c: any) => c.classId === classId)?.className ?? 'Class'
     const school = schoolCtx ?? defaultSchool(exam)
     try {
       const { filename } = generateSeatingPlanPDF(exam, seats, school)

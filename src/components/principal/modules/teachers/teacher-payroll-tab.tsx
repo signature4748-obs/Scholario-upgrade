@@ -52,7 +52,7 @@ export function TeacherPayrollTab({ teacherId }: { teacherId: string }) {
   const [detail, setDetail] = useState<SalaryPayment | null>(null)
   const [receiptNo, setReceiptNo] = useState<string | null>(null)
 
-  const { allowed, label } = useEditingWindow()
+  const { allowed, label: _label } = useEditingWindow()
 
   const employee = employees.find((e) => e.id === teacherId)
   const state = salaries[teacherId]

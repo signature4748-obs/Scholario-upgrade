@@ -15,7 +15,7 @@ export async function GET(
   return withAuthz({ permission: 'exams.audit.read' }, async (ctx) => {
     const { id } = await params
     const exam = await db.exam.findFirst({ where: { id, schoolId: ctx.schoolId }, select: { id: true } })
-    if (!exam) throw new AppError('NOT_FOUND', { publicMessage: 'Exam not found', internalDetail: 'audit GET: exam missing or foreign tenant' })
+    if (!exam) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Exam not found', internalDetail: 'audit GET: exam missing or foreign tenant' })
     const logs = await getAuditLogs(id, ctx.schoolId)
     return logs
   })

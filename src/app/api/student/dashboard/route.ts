@@ -464,7 +464,7 @@ interface FeeItem {
   dueDate: string | null
 }
 
-interface FeeReminder {
+interface _FeeReminder {
   subject: string
   excerpt: string
   createdAt: string

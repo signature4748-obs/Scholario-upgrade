@@ -9,7 +9,7 @@ export const runtime = 'nodejs'
 // Teacher directory for invigilator assignment — staff-only (audit 3-b MEDIUM).
 export async function GET(
   _req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params: _params }: { params: Promise<{ id: string }> }
 ) {
   return withAuthz({ permission: 'exams.read' }, async (ctx) => {
     const teachers = await listTeachers(ctx.schoolId)

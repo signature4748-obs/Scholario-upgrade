@@ -28,7 +28,7 @@ async function main() {
   })
   console.log(`classes: ${classes.length}`)
 
-  let normalized = 0
+  let _normalized = 0
   const homeroomById = new Map<string, string>()
   for (const c of classes) {
     const grade = c.name.match(/\d+/)?.[0] ?? ''
@@ -38,7 +38,7 @@ async function main() {
     homeroomById.set(c.id, canonical ?? '')
     if (canonical && canonical !== c.room) {
       await db.class.update({ where: { id: c.id }, data: { room: canonical } })
-      normalized += 1
+      _normalized += 1
       console.log(`  homeroom normalised: ${c.name} "${c.room}" → "${canonical}"`)
     }
   }

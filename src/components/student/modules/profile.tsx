@@ -386,7 +386,7 @@ function InfoRow({ icon, label, value, accent }: {
 }
 
 /** ── Personal: only the genuinely useful personal information ────────── */
-function PersonalTab({ student: s, identity }: { student: StudentRecord; identity: EnrollmentIdentity }) {
+function PersonalTab({ student: _s, identity }: { student: StudentRecord; identity: EnrollmentIdentity }) {
   const rows = [
     { label: 'Date of Birth', value: identity.dob ? formatDate(identity.dob) : '—', icon: <Calendar className="h-4 w-4" />, accent: 'bg-violet-500/10 text-violet-600 dark:text-violet-400' },
     { label: 'Gender', value: identity.gender ?? '—', icon: <User className="h-4 w-4" />, accent: 'bg-sky-500/10 text-sky-600 dark:text-sky-400' },

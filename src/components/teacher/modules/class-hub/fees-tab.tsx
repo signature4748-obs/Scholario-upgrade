@@ -14,7 +14,7 @@
 
 import { useMemo, useState } from 'react'
 import {
-  AlertTriangle, ArrowLeftRight, BadgeCheck, Banknote, CalendarDays, ChevronLeft,
+  ArrowLeftRight, BadgeCheck, Banknote, CalendarDays, ChevronLeft,
   ChevronRight, Clock3, Receipt, Search, Wallet,
 } from 'lucide-react'
 import { GradientAvatar } from '@/components/shared/ui'
@@ -44,7 +44,7 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
 ]
 
 export function FeesTab({ classId }: { classId: string }) {
-  const { data, loading, error, reload, month, changeMonth, collect } = useFeeCollection()
+  const { data, loading, error, reload, month: _month, changeMonth, collect } = useFeeCollection()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [methodFilter, setMethodFilter] = useState<string>('ALL')
   const [search, setSearch] = useState('')

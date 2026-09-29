@@ -53,7 +53,7 @@ export function PaymentDialog({ open, onOpenChange, studentId, student, balanceD
   const [amountInput, setAmountInput] = useState('')
   const [method, setMethod] = useState(paymentMethods[0]?.id ?? 'upi')
   const [error, setError] = useState<string | null>(null)
-  const [order, setOrder] = useState<PaymentOrderResponse | null>(null)
+  const [_order, setOrder] = useState<PaymentOrderResponse | null>(null)
   const [verified, setVerified] = useState<PaymentVerifyResponse | null>(null)
   const [mirroredTxn, setMirroredTxn] = useState<FeeTransaction | null>(null)
   const recordPayment = useFeeStore((s) => s.recordPayment)

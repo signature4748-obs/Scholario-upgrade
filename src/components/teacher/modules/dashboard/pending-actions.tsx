@@ -23,7 +23,7 @@ import {
 import { cn } from '@/lib/utils'
 import { GlassCard, GradientAvatar } from '@/components/shared/ui'
 import { useFocusStore } from '@/lib/store/focus-store'
-import type { AttendanceSnapshot, ClassTeacherClass, TeacherDashboardData } from './types'
+import type { ClassTeacherClass, TeacherDashboardData } from './types'
 
 interface PendingActionsProps {
   data: TeacherDashboardData

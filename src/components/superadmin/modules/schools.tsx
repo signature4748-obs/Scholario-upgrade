@@ -18,7 +18,7 @@ import { ArrowLeft, ChevronRight, Search } from 'lucide-react'
 import { useTenantStore } from '@/lib/tenant/store'
 import { TENANTS } from '@/lib/tenant/schools'
 import { MODULE_CATALOG } from '@/lib/tenant/registry'
-import type { TenantId, TenantStatus } from '@/lib/tenant/types'
+import type { TenantStatus } from '@/lib/tenant/types'
 import { Panel } from '@/components/principal/modules/shared/panel'
 import { cn } from '@/lib/utils'
 import {

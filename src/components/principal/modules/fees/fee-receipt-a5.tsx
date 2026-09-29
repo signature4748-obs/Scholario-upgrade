@@ -50,7 +50,7 @@ import { Printer, Download, X, Receipt as ReceiptIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { school } from '@/lib/mock/school'
-import { formatINR, formatDate, amountInWordsINR } from '@/lib/format'
+import { formatINR, amountInWordsINR } from '@/lib/format'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { useFeeStore, getStudentBalanceDue, type FeeTransaction, type ReceiptSettings } from '@/lib/store/fee-store'
 import { cn } from '@/lib/utils'
@@ -552,7 +552,7 @@ function receiptCopyHTML(
       </div>`
 }
 
-function sheetHTML(t: FeeTransaction, settings: ReceiptSettings, ctx: ReceiptContext, student: ReturnType<typeof resolveStudent>): string {
+function sheetHTML(t: FeeTransaction, settings: ReceiptSettings, ctx: ReceiptContext, _student: ReturnType<typeof resolveStudent>): string {
   const bd = ctx.balanceDue
   const sharedCtx: ReceiptContext = { ...ctx, balanceDue: bd }
   return `

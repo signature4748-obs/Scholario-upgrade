@@ -20,7 +20,6 @@ export function searchFees(q: string, role: Role = 'principal'): SearchResultIte
   // 8. FEES & FINANCE SEARCH
   // Overdue and pending student fee records
   students.filter((s) => s.feeStatus !== 'Paid').forEach((s) => {
-    const title = `${s.name} — ${s.feeStatus} Fee`
     const pendingAmount = s.feeTotal - s.feePaid
     const subtitle = `${s.className}-${s.section} · Due: ₹${pendingAmount.toLocaleString('en-IN')} (Paid ₹${s.feePaid.toLocaleString('en-IN')})`
     if (matches(s.name) || matches('fee') || matches('dues') || matches('pending')) {

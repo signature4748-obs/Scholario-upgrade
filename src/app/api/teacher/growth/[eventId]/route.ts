@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { requireTeacher, assertStudentInScope, auditTeacherAction, parseString } from '@/lib/teacher-hub'
 import { growthSettingsFor } from '@/lib/growth/service'
@@ -64,12 +64,15 @@ export async function PATCH(
       // re-validate the student is still inside the teacher's scope
       await assertStudentInScope(ctx, original.studentId)
 
-      const [updated, correction] = await db.$transaction([
-        db.growthEvent.update({
+      // Phase 4: array-form $transaction migrated to the interactive form
+      // (same two sequential operations, same order) so the correction is
+      // label-tracked as a unit.
+      const [updated, correction] = await trackedTransaction('growth-point-correction', async (tx) => {
+        const updated = await tx.growthEvent.update({
           where: { id: original.id },
           data: { status: 'SUPERSEDED', correctionNote },
-        }),
-        db.growthEvent.create({
+        })
+        const correction = await tx.growthEvent.create({
           data: {
             schoolId: ctx.schoolId,
             studentId: original.studentId,
@@ -97,8 +100,9 @@ export async function PATCH(
               },
             },
           },
-        }),
-      ])
+        })
+        return [updated, correction] as const
+      })
 
       await auditTeacherAction(
         user,

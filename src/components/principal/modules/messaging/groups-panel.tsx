@@ -14,7 +14,6 @@
  */
 
 import { useState, useMemo, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, Users, Search, Settings2, MessageSquare, Trash2, UserPlus,
   X, GraduationCap, UserCog, Users2, Briefcase, PenSquare,

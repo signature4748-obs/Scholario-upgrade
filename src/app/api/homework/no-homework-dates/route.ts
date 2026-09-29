@@ -1,5 +1,5 @@
 import { withAuthz } from '@/lib/security/authz'
-import { listNoHomeworkDates, addNoHomeworkDate, removeNoHomeworkDate } from '@/lib/homework/oversight-service'
+import { listNoHomeworkDates, addNoHomeworkDate } from '@/lib/homework/oversight-service'
 
 export const runtime = 'nodejs'
 

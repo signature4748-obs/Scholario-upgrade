@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
             select: { id: true, name: true, section: true },
           })
           if (!cls) {
-            throw new AppError('NOT_FOUND', {
+            throw new AppError('RESOURCE_NOT_FOUND', {
               publicMessage: 'Class not found',
               internalDetail: `announcement POST: class ${classId} missing or foreign tenant`,
             })

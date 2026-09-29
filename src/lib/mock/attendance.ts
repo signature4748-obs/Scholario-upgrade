@@ -165,10 +165,10 @@ function deterministicSplit(total: number, rate: number): {
 }
 
 /** Build a small deterministic roster for a section. */
-function buildRoster(sectionId: string, total: number, rate: number, teacher: string): {
+function buildRoster(sectionId: string, total: number, rate: number, _teacher: string): {
   rollNo: string; name: string; status: AttendanceStatus
 }[] {
-  const { present, late, absent, leave } = deterministicSplit(total, rate)
+  const { present: _present, late, absent, leave } = deterministicSplit(total, rate)
   // Seeded pseudo-random status sequence — stable across renders
   let seed = 0
   for (let i = 0; i < sectionId.length; i++) seed = (seed * 31 + sectionId.charCodeAt(i)) >>> 0
@@ -249,7 +249,7 @@ export function getClassSection(id: string): ClassSection | null {
 
 /** Aggregate today's attendance across all class sections (school-wide fallback). */
 export function getAllSectionsToday() {
-  const totals = classSections.reduce(
+  const _totals = classSections.reduce(
     (acc, s) => {
       acc.total += s.total
       acc.present += s.present

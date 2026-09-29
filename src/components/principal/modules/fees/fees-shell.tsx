@@ -28,7 +28,6 @@ import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs, type SegmentedTab } from '../shared/segmented-tabs'
 import { useFeeData } from '@/lib/store/fee-store'
 import { useFocusStore } from '@/lib/store/focus-store'
-import { toast } from 'sonner'
 import { school } from '@/lib/mock/school'
 // SaaS-STAGE-2A (Task 7-b) — tenant-aware feature gating: the tab list is
 // FILTERED by the ACTIVE school's sub-feature configuration. Overview /

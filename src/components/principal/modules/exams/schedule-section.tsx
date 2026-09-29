@@ -33,8 +33,8 @@ export function ScheduleSection({ exam }: { exam: ExamDTO; onReload?: () => void
   const consolidated = useMemo(() => buildConsolidatedTimetableFromExam(exam), [exam])
 
   // Edit-mode state (drag/drop override).
-  const [editTimetable, setEditTimetable] = useState<ScheduleTimetable | null>(null)
-  const editState = useScheduleState({
+  const [_editTimetable, _setEditTimetable] = useState<ScheduleTimetable | null>(null)
+  const _editState = useScheduleState({
     classes: timetable.classes,
     options: null,
   })

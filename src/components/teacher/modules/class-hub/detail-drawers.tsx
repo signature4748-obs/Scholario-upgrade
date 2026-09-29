@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils'
 import { formatINR } from '@/lib/format'
 import { GradientAvatar } from '@/components/shared/ui'
 import { useClassMarksheet } from './hooks'
-import type { ClassHubClass, HubDetailPayload, MarksheetPayload } from './types'
+import type { ClassHubClass, HubDetailPayload } from './types'
 
 export type ReportKind = 'attendance' | 'academics' | 'fees' | 'growth'
 

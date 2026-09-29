@@ -1,7 +1,7 @@
 'use client'
 
 import {
-  Archive, Award, Bus, Clock, Crown, Home, IndianRupee, RotateCcw, TrendingUp, User,
+  Archive, Bus, Clock, Crown, Home, IndianRupee, RotateCcw, TrendingUp, User,
 } from 'lucide-react'
 import { formatDate } from '@/lib/format'
 import type { StudentRecord } from '@/lib/store/students-store'

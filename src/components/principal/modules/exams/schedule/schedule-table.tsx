@@ -23,7 +23,7 @@
  */
 
 import { useMemo, useState } from 'react'
-import { Calendar, Clock, AlertTriangle, GripVertical } from 'lucide-react'
+import { Clock, AlertTriangle, GripVertical } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ScheduleTimetable, ScheduleRow, ScheduleCell } from '@/lib/exams/schedule/schedule-types'
 import type { CellLocation } from '@/lib/exams/schedule/schedule-reorder'
@@ -78,7 +78,7 @@ export function ScheduleTable({ timetable, onMoveSubject }: Props) {
     setDragSrc(null)
     setHoverDst(null)
   }
-  const handleDragEnd = () => { setDragSrc(null); setHoverDst(null) }
+  const _handleDragEnd = () => { setDragSrc(null); setHoverDst(null) }
 
   return (
     <div className="space-y-2">
@@ -172,7 +172,7 @@ export function ScheduleTable({ timetable, onMoveSubject }: Props) {
 function ScheduleCellView({
   cell,
   slotLabel,
-  time,
+  time: _time,
   isDragSource,
   onDragStart,
   onDragOver,

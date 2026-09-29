@@ -1,6 +1,6 @@
 'use client'
 
-import { KeyRound, Copy, Printer, ShieldCheck } from 'lucide-react'
+import { Copy, Printer, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { IssuanceArtifacts } from './letter-data'
 

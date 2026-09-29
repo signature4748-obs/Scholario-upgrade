@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
           select: { id: true },
         })
         if (!cls) {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'Class not found',
             internalDetail: `assignments POST: class ${body.classId} missing or foreign tenant`,
           })
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
           select: { id: true },
         })
         if (!subject) {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'Subject not found',
             internalDetail: `assignments POST: subject ${body.subjectId} missing or foreign tenant`,
           })

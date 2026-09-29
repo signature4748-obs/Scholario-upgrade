@@ -41,7 +41,7 @@ async function main() {
   })
 
   // ---------------- SUPER ADMIN ----------------
-  const superAdmin = await db.user.create({
+  const _superAdmin = await db.user.create({
     data: {
       email: 'admin@erpsuite.io',
       passwordHash: hashPassword('admin123'),
@@ -89,7 +89,7 @@ async function main() {
 
   // ---------------- DEMO SCHOOL USERS ----------------
   const demoPrincipal = await mkUser(demoSchool.id, 'principal@demoschool.edu', 'Dr. Sarah Jenkins', 'PRINCIPAL', '+91 124 1111 2222')
-  const demoMgmt = await mkUser(demoSchool.id, 'management@demoschool.edu', 'Mr. Rajesh Mehta', 'MANAGEMENT', '+91 124 3333 4444')
+  const _demoMgmt = await mkUser(demoSchool.id, 'management@demoschool.edu', 'Mr. Rajesh Mehta', 'MANAGEMENT', '+91 124 3333 4444')
   const demoTeacher1 = await mkUser(demoSchool.id, 'teacher1@demoschool.edu', 'Mrs. Kavita Sharma', 'TEACHER', '+91 124 5555 6666')
   const demoTeacher2 = await mkUser(demoSchool.id, 'teacher2@demoschool.edu', 'Mr. Arjun Nair', 'TEACHER', '+91 124 7777 8888')
   const demoTeacher3 = await mkUser(demoSchool.id, 'teacher3@demoschool.edu', 'Ms. Priya Iyer', 'TEACHER', '+91 124 9999 0000')
@@ -118,7 +118,7 @@ async function main() {
   const subjMath = await db.subject.create({ data: { schoolId: demoSchool.id, classId: demoClass9.id, name: 'Mathematics', code: 'MATH', fullMarks: 100, passMarks: 33 } })
   const subjPhy = await db.subject.create({ data: { schoolId: demoSchool.id, classId: demoClass9.id, name: 'Physics', code: 'PHY', fullMarks: 100, passMarks: 33 } })
   const subjEng = await db.subject.create({ data: { schoolId: demoSchool.id, classId: demoClass9.id, name: 'English', code: 'ENG', fullMarks: 100, passMarks: 33 } })
-  const subjChem = await db.subject.create({ data: { schoolId: demoSchool.id, classId: demoClass10.id, name: 'Chemistry', code: 'CHEM', fullMarks: 100, passMarks: 33 } })
+  const _subjChem = await db.subject.create({ data: { schoolId: demoSchool.id, classId: demoClass10.id, name: 'Chemistry', code: 'CHEM', fullMarks: 100, passMarks: 33 } })
   await db.subject.create({ data: { schoolId: demoSchool.id, classId: demoClass10.id, name: 'Biology', code: 'BIO', fullMarks: 100, passMarks: 33 } })
 
   // Students
@@ -171,7 +171,7 @@ async function main() {
 
   // Exams
   const exam1 = await db.exam.create({ data: { schoolId: demoSchool.id, name: 'Mid-Term Examination', term: 'TERM1', classId: demoClass9.id, startDate: new Date('2026-09-14'), endDate: new Date('2026-09-24'), status: 'COMPLETED' } })
-  const exam2 = await db.exam.create({ data: { schoolId: demoSchool.id, name: 'Unit Test 2', term: 'UNIT', classId: demoClass10.id, startDate: new Date('2026-10-12'), status: 'ONGOING' } })
+  const _exam2 = await db.exam.create({ data: { schoolId: demoSchool.id, name: 'Unit Test 2', term: 'UNIT', classId: demoClass10.id, startDate: new Date('2026-10-12'), status: 'ONGOING' } })
   await db.exam.create({ data: { schoolId: demoSchool.id, name: 'Final Examination', term: 'FINAL', classId: demoClass9.id, startDate: new Date('2026-02-10'), endDate: new Date('2026-02-20'), status: 'SCHEDULED' } })
 
   // Results

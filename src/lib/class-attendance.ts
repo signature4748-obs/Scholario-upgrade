@@ -3,7 +3,7 @@
  * module (baseline + subject-session model).
  */
 
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { schoolScoped } from '@/lib/api'
 
 export const VALID_ATTENDANCE_STATUS = ['PRESENT', 'ABSENT', 'LATE', 'LEAVE'] as const
@@ -178,7 +178,7 @@ export async function writeCanonicalAttendance(input: {
     return prev != null && prev !== e.status
   })
 
-  await db.$transaction(async (tx) => {
+  await trackedTransaction('attendance-canonical-write', async (tx) => {
     // The authoritative day-window replace (legacy rows may carry times —
     // a range delete avoids unique-constraint collisions).
     await tx.attendance.deleteMany({

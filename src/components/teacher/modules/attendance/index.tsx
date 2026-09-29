@@ -100,7 +100,6 @@ import {
   type AttendanceStatus,
   type AttendanceStudent,
   type AuditRow,
-  type SaveCounts,
 } from './shared'
 
 /** House <input type="date"> — matches the h-9 controls around it. */
@@ -957,7 +956,7 @@ function MobileSaveRow({
   justSaved,
   dirty,
   marked,
-  draftSavedAt,
+  draftSavedAt: _draftSavedAt,
   autosaveBoundary,
 }: {
   save: () => void

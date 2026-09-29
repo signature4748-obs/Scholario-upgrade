@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       select: { id: true },
     })
     if (!cls) {
-      throw new AppError('NOT_FOUND', {
+      throw new AppError('RESOURCE_NOT_FOUND', {
         publicMessage: 'Class not found',
         internalDetail: `structures POST: class ${classId} missing or foreign tenant`,
       })
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
         select: { id: true },
       })
       if (found.length !== catalogueIds.length) {
-        throw new AppError('NOT_FOUND', {
+        throw new AppError('RESOURCE_NOT_FOUND', {
           publicMessage: 'Fee head catalogue entry not found',
           internalDetail: `structures POST: ${catalogueIds.length - found.length} catalogue id(s) missing or foreign tenant`,
         })

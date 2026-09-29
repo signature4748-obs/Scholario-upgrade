@@ -2,8 +2,7 @@
 
 import {
   LayoutDashboard, CalendarCheck, BookMarked,
-  FileText, Users, BarChart3, Megaphone,
-  TrendingUp, Wallet, ClipboardList, Settings,
+  FileText, Users, BarChart3, TrendingUp, Wallet, ClipboardList, Settings,
   CalendarDays, MessagesSquare, School,
 } from 'lucide-react'
 import type { NavGroup } from '@/components/shell/app-shell'

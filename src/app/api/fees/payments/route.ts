@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       const txn = await db.feeTransaction.findFirst({
         where: { gatewayOrderId: orderId, schoolId },
       })
-      if (!txn) throw new AppError('NOT_FOUND', { publicMessage: 'Order not found for this school.' })
+      if (!txn) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Order not found for this school.' })
 
       // ── §25 student authorisation: only your OWN orders ───────────
       if (user.role === 'STUDENT') {

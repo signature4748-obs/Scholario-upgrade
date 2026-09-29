@@ -23,7 +23,6 @@ import {
 import {
   isHoliday as isSchoolHoliday,
   isWeekend,
-  isFutureDate,
 } from '@/lib/mock/school-calendar'
 
 function formatMonthLabel(monthValue: string): string {

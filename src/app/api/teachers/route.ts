@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { withUser, schoolScoped } from '@/lib/api'
 import { resolveProvisionedPassword } from '@/lib/account-provisioning'
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       // Phase 3 — the user + teacher rows are created in ONE transaction
       // (copies the schools POST pattern): a failure between the two
       // previously orphaned the User row (a login with no teacher record).
-      const t = await db.$transaction(async (tx) => {
+      const t = await trackedTransaction('teacher-create-with-user', async (tx) => {
         const u = await tx.user.create({
           data: {
             schoolId,

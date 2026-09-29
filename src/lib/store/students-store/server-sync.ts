@@ -125,7 +125,7 @@ const initials = (name: string): string => {
 }
 
 const monthLabel = (key: string): string => {
-  const [y, m] = key.split('-')
+  const [_y, m] = key.split('-')
   const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   return names[Number(m) - 1] ?? key
 }

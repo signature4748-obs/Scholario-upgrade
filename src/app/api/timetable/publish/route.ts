@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
 import { slotsToServerRows, type PublishableSlot } from '@/lib/timetable/server-mapping'
@@ -140,7 +140,7 @@ export async function POST(req: NextRequest) {
       let csaCreated = 0
       let subjectCount = 0
       try {
-        const txResult = await db.$transaction(async (tx) => {
+        const txResult = await trackedTransaction('timetable-publish', async (tx) => {
           // 3 — resolve subjects (name → row; create when missing). A
           //     (schoolId, code) collision (two subjects mapping to the
           //     same 4-letter code) retries ONCE with a deterministic

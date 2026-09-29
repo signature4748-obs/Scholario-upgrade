@@ -14,7 +14,7 @@ import {
 import type { FormData } from '../constants'
 import { StepHeader, Field } from './StepShared'
 
-export function ParentsStep({ data, set, flags }: { data: FormData; set: <K extends keyof FormData>(k: K, v: FormData[K]) => void; flags: ReturnType<typeof useAdmissionFeatureFlags> }) {
+export function ParentsStep({ data, set, flags: _flags }: { data: FormData; set: <K extends keyof FormData>(k: K, v: FormData[K]) => void; flags: ReturnType<typeof useAdmissionFeatureFlags> }) {
   return (
     <div>
       <StepHeader title="Parents & Emergency Contacts" icon={<Users className="h-5 w-5" />} />

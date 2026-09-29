@@ -55,7 +55,6 @@ export function computeStudentResult(input: ComputeInput, studentId: string): St
 
     const maxMarks = subject.maxMarks
     const passMarks = subject.passMarks
-    const marksObtained = mark?.marksObtained ?? null
     const effectiveMarks = isAbsent ? 0 : (mark?.marksObtained ?? 0)
     totalObtained += effectiveMarks
     totalMax += maxMarks

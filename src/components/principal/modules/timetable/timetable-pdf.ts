@@ -296,7 +296,7 @@ function buildTeacherHTML(opts: BuildTeacherOpts): string {
   })
 }
 
-function buildTeacherRowHTML(row: TimetableRow, daySlots: TimetableSlot[], day: string): string {
+function buildTeacherRowHTML(row: TimetableRow, daySlots: TimetableSlot[], _day: string): string {
   if (row.isBreak) {
     return `
       <tr class="break-row">

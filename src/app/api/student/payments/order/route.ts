@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
 
       const method = normalizeMethod(body?.method) // 'UPI' | 'CARD' | 'NET_BANKING'
       const feeHeadName = body?.feeHead ? String(body.feeHead).slice(0, 120) : null
-      const purpose = body?.purpose ? String(body.purpose).slice(0, 200) : null
+      const _purpose = body?.purpose ? String(body.purpose).slice(0, 200) : null
 
       // ── Resolve the payment provider ──────────────────────────────
       const provider = getPaymentProvider()

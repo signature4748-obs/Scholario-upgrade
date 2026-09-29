@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { z } from 'zod'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { parseJsonBody, idSchema, safeText } from '@/lib/security/validation'
@@ -74,9 +74,9 @@ export async function POST(req: NextRequest) {
       // a clamped `{ increment }`, and the Payment mirror row carries
       // schoolId — a concurrent double-POST can no longer overpay the fee
       // (the Fee.paid DB bound-guard backstops whatever still races).
-      const result = await db.$transaction(async (tx) => {
+      const result = await trackedTransaction('payment-record-manual', async (tx) => {
         const fee = await tx.fee.findUnique({ where: { id: body.feeId! } })
-        if (!fee || fee.schoolId !== schoolId) throw new AppError('NOT_FOUND')
+        if (!fee || fee.schoolId !== schoolId) throw new AppError('RESOURCE_NOT_FOUND')
         const remaining = fee.amount - fee.paid
         if (remaining <= 0) {
           throw new AppError('INVALID_INPUT', {
@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
       select: { id: true },
     })
     if (!student) {
-      throw new AppError('NOT_FOUND', {
+      throw new AppError('RESOURCE_NOT_FOUND', {
         publicMessage: 'Student not found',
         internalDetail: `fees POST create: student ${studentId} missing or foreign tenant`,
       })

@@ -13,7 +13,7 @@
  */
 
 import { useState } from 'react'
-import { ShieldCheck, KeyRound, LogOut, MonitorSmartphone } from 'lucide-react'
+import { ShieldCheck, LogOut, MonitorSmartphone } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { PasswordField } from '@/components/shared/password-field'

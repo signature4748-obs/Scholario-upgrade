@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import {
   parseDateParam,
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
         select: { id: true },
       })
       if (!cls) {
-        throw new AppError('NOT_FOUND', {
+        throw new AppError('RESOURCE_NOT_FOUND', {
           publicMessage: 'Class not found',
           internalDetail: `attendance POST: class ${classId} missing or foreign tenant`,
         })
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
       const valid: { studentId: string; status: AttendanceStatusValue }[] = []
       for (const e of entries) {
         if (!e || typeof e.studentId !== 'string') {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'Student not found',
             internalDetail: 'attendance POST: malformed entry (studentId missing)',
           })
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
         // Fail-safe: a studentId outside this class's roster (foreign
         // school, wrong class, or invented) is a 404, never a silent write.
         if (!rosterIds.has(e.studentId)) {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'Student not found',
             internalDetail: `attendance POST: student ${e.studentId} not in roster of class ${classId}`,
           })
@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
       }
 
       // ── Tenant-safe upsert (never overwrite another school's row) ──
-      await db.$transaction(async (tx) => {
+      await trackedTransaction('attendance-batch-mark', async (tx) => {
         for (const e of valid) {
           const existing = await tx.attendance.findFirst({
             where: { studentId: e.studentId, date },
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
           if (existing && existing.schoolId !== schoolId) {
             // Cross-tenant collision on the (studentId, date) unique key:
             // the row "does not exist" for this caller — never overwrite.
-            throw new AppError('NOT_FOUND', {
+            throw new AppError('RESOURCE_NOT_FOUND', {
               publicMessage: 'Student not found',
               internalDetail: `attendance POST: (student, date) row belongs to school ${existing.schoolId}`,
             })

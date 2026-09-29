@@ -187,7 +187,7 @@ export async function GET() {
       }
       let parentInitiated = 0
       let teacherReplied = 0
-      for (const [conversationId, msgs] of messagesByConversation) {
+      for (const [_conversationId, msgs] of messagesByConversation) {
         const sorted = [...msgs].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
         const first = sorted[0]
         if (!first || first.senderId === ctx.userId) continue // teacher-initiated
@@ -281,7 +281,7 @@ export async function POST(req: NextRequest) {
           user: { select: { name: true } },
         },
       })
-      if (!student) throw new AppError('NOT_FOUND', { publicMessage: 'Student not found in your scope', internalDetail: 'parent-connect: student missing or outside teacher scope' })
+      if (!student) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Student not found in your scope', internalDetail: 'parent-connect: student missing or outside teacher scope' })
       if (!student.guardianId) throw new Error('This student has no linked guardian account')
 
       const guardian = await db.user.findFirst({

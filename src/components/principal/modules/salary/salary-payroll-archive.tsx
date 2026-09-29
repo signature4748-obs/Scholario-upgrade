@@ -252,7 +252,7 @@ type DataSource =
   | { kind: 'archived'; records: ArchivedEmployeeRecord[]; payments: SalaryPayment[]; archivedAt: string; archivedBy: string }
   | { kind: 'live'; records: ArchivedEmployeeRecord[]; payments: SalaryPayment[] }
 
-function SessionArchiveView({ session, onBack, onClose }: {
+function SessionArchiveView({ session, onBack, onClose: _onClose }: {
   session: PayrollSessionInfo
   onBack: () => void
   onClose: () => void

@@ -53,7 +53,6 @@ import { GradientAvatar } from '@/components/shared/ui'
 import { SearchableSelect } from '@/components/principal/modules/shared/searchable-select'
 import { initials } from '@/lib/format'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
 import {
   TptPanel,
   TptEmptyState,

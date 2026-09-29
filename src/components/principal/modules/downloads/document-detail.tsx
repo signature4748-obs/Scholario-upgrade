@@ -28,7 +28,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription,
+  Drawer, DrawerContent, DrawerTitle, DrawerDescription,
 } from '@/components/ui/drawer'
 import { toast } from 'sonner'
 import { formatDate, formatRelativeTime } from '@/lib/format'

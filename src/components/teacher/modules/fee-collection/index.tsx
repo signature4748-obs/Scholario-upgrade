@@ -60,7 +60,7 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
 ]
 
 export function FeeCollectionModule() {
-  const { data, loading, error, reload, month, changeMonth, collect } = useFeeCollection()
+  const { data, loading, error, reload, month: _month, changeMonth, collect } = useFeeCollection()
   const [classIdx, setClassIdx] = useState(0)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [methodFilter, setMethodFilter] = useState<string>('ALL')

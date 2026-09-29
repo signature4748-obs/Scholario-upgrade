@@ -41,7 +41,7 @@ function buildSeedExam(seedIndex: number, examId: string, name: string, type: st
   classes.forEach((c) => { c.examId = examId })
   subjects.forEach((s) => { s.examId = examId; s.maxMarks = maxMarks; s.passMarks = Math.round(maxMarks * 0.33); s.theoryMarks = maxMarks })
   const schedule = buildSeedSchedule(examId, startDate, endDate, classes, subjects, papersPerDay)
-  const totalStudents = classes.reduce((sum, c) => sum + c.studentCount, 0)
+  const _totalStudents = classes.reduce((sum, c) => sum + c.studentCount, 0)
   return {
     id: examId,
     schoolId: getActiveTenantSync().id,

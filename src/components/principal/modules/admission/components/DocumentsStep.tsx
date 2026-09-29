@@ -15,8 +15,7 @@
  * the verification workspace can View / Download the actual document.
  */
 import { useMemo, useRef, useState } from 'react'
-import { FileText, ShieldCheck, CheckCircle2, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { FileText, ShieldCheck, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { DocStatus } from '../types'
 import { useAdmissionFeatureFlags, useAdmissionDocumentPolicy } from '../lib/admission-utils'

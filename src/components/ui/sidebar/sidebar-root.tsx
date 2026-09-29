@@ -10,7 +10,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import {
-  SIDEBAR_WIDTH,
   SIDEBAR_WIDTH_MOBILE,
   useSidebar,
 } from "./context"

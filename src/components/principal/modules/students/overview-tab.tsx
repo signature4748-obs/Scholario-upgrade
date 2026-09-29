@@ -4,10 +4,9 @@ import { useMemo } from 'react'
 import { motion } from 'framer-motion'
 import {
   Users, TrendingUp, AlertTriangle, UserX, GraduationCap,
-  Lightbulb, Layers, School, ChevronRight, PieChart,
+  Lightbulb, Layers, School, PieChart,
 } from 'lucide-react'
 import { GlassCard } from '@/components/shared/ui'
-import { Button } from '@/components/ui/button'
 import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { StudentRecord, StudentsState } from '@/lib/store/students-store'
@@ -19,7 +18,7 @@ interface OverviewTabProps {
   onNavigateToClasses?: () => void
 }
 
-export function OverviewTab({ store, onNavigateToClasses }: OverviewTabProps) {
+export function OverviewTab({ store, onNavigateToClasses: _onNavigateToClasses }: OverviewTabProps) {
   const { students, classes } = store
 
   const activeStudents = useMemo(() => students.filter((s) => s.status === 'Active'), [students])

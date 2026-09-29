@@ -34,7 +34,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { cn } from '@/lib/utils'
 import { useTeacherRosterStore } from '@/lib/store/teacher-roster-store'
 import { type DayType, type TimetableConflictInfo } from './data'
 

@@ -116,7 +116,7 @@ export function buildSeedSchedule(
     if (dayIdx >= workingDays.length) break
     const date = workingDays[dayIdx]
     const dateStr = toLocalISO(date)
-    const dayLabel = DAY_LABELS[date.getDay()] ?? ''
+    const _dayLabel = DAY_LABELS[date.getDay()] ?? ''
     const st = slotIdx === 0 ? startTime : addMinutes(startTime, paperDurationMin + gapMin)
     const et = addMinutes(st, paperDurationMin)
     schedule.push({

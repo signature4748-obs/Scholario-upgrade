@@ -7,7 +7,7 @@
  * divide-y rows, quiet labels) — the documented Scholario system.
  */
 import { motion } from 'framer-motion'
-import { Check, Loader2, School } from 'lucide-react'
+import { Loader2, School } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { GlassCard } from '@/components/shared/ui'
 import { Switch } from '@/components/ui/switch'

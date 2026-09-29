@@ -11,7 +11,7 @@ import type { TimetableSlot } from './data'
 import type { PublishedVersion } from './timetable-store'
 import { ChangeIndicator } from './change-indicator'
 
-export function SlotCard({ slot, teacherName, editMode, publications, isConflicted, onEdit, onDuplicate, onRemove }: {
+export function SlotCard({ slot, teacherName, editMode, publications, isConflicted, onEdit, onDuplicate: _onDuplicate, onRemove }: {
   slot: TimetableSlot
   teacherName: string
   editMode: boolean

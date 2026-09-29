@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
       const download = body?.download === true || body?.download === '1'
 
       if (!fileIdRaw || !isValidStoredFileId(fileIdRaw, ADMISSION_UPLOAD_POLICY.allowedExts)) {
-        throw new AppError('NOT_FOUND')
+        throw new AppError('RESOURCE_NOT_FOUND')
       }
       const fileId = fileIdRaw
 
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
       // legacy unregistered document cannot be ownership-verified → refuse.
       const row = await db.uploadedFile.findUnique({ where: { id: fileId } })
       if (!row || row.scope !== 'admissions' || !user.schoolId || row.schoolId !== user.schoolId) {
-        throw new AppError('NOT_FOUND', {
+        throw new AppError('RESOURCE_NOT_FOUND', {
           internalDetail: `admissions upload access: file ${fileId} unregistered or foreign tenant`,
         })
       }

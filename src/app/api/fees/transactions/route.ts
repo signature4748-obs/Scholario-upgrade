@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { applyPaymentToLedger, mintReceiptNo } from '@/lib/fee-workflow'
@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
           select: { id: true },
         })
         if (!student) {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'Student not found',
             internalDetail: `transactions POST: student ${body.studentId} missing or foreign tenant`,
           })
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
           select: { id: true },
         })
         if (!fee) {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'Fee record not found',
             internalDetail: `transactions POST: fee ${body.feeId} missing or foreign tenant`,
           })
@@ -115,8 +115,7 @@ export async function POST(req: NextRequest) {
       const referenceNumber = body.referenceNumber ? String(body.referenceNumber).trim().slice(0, 80) : ''
       const method = String(body.method || 'Cash').toUpperCase().replace(' ', '_')
 
-      const txn = await db
-        .$transaction(async (tx) => {
+      const txn = await trackedTransaction('fee-transaction-create', async (tx) => {
           // Phase 3: receipt numbers are ALWAYS server-minted inside the tx —
           // client-supplied receiptNo is ignored (it can neither collide with
           // another school's series nor spoof an existing receipt).

@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { AdmissionDocumentPolicy, SchoolSettingsState } from '../types'
+import type { SchoolSettingsState } from '../types'
 
 export const createAdmissionSlice: StateCreator<
   SchoolSettingsState,

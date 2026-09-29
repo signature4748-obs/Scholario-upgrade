@@ -47,7 +47,7 @@ export interface SelectionPanelProps {
 export function SelectionPanel(props: SelectionPanelProps) {
   const {
     feeState, onChangeFeeState, flags, schoolSettings,
-    classBooks, uniforms, examConfig, examTotal,
+    classBooks, uniforms, examConfig, examTotal: _examTotal,
     booksTotal, booksCount, uniformTotal, uniformCount,
     activityKitTotal, activityKitCount, transportCost, hostelCost,
     registrationFee, admissionFee, tuitionFee, otherHeadsTotal,

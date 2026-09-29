@@ -91,7 +91,7 @@ export function ClassDetailsPage({ cls, onBack, store, onStudentClick }: {
    design as the teacher roster / principal directory). Inside a single
    class the class name is redundant, so the identity line reads
    "Roll 12 · Sec A". List view + section filter stay as they were. */
-function ClassStudentsTab({ students, cls, onStudentClick }: { students: StudentRecord[]; cls: ClassRecord; onStudentClick?: (s: StudentRecord) => void }) {
+function ClassStudentsTab({ students, cls: _cls, onStudentClick }: { students: StudentRecord[]; cls: ClassRecord; onStudentClick?: (s: StudentRecord) => void }) {
   const [view, setView] = useState<'grid' | 'list'>('grid')
   const [sectionFilter, setSectionFilter] = useState('all')
   const sections = useMemo(() => Array.from(new Set(students.map((s) => s.section))).sort(), [students])

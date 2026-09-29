@@ -21,7 +21,6 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
   DropdownMenuItem, DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import { toast } from 'sonner'
 import { formatDate, formatRelativeTime } from '@/lib/format'
 import {
   useDownloadsStore,

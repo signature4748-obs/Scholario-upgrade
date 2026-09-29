@@ -32,12 +32,11 @@ import { useState, useMemo, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Pencil, Plus, History, Copy, Trash2, X, Check,
-  Layers, Calendar, User, RotateCcw, Archive, FileText, AlertCircle,
+  Layers, Calendar, User, Archive, FileText, AlertCircle,
   CheckCircle2, Save, Sparkles, ShieldAlert, Award, Lock,
   CalendarCheck2, Eye,
   // PHASE 7 — Re-link from catalogue row action icons.
-  Link2, Link2Off, Search, ChevronDown,
-} from 'lucide-react'
+  Link2, Link2Off, Search, } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -48,7 +47,6 @@ import {
   type FeeStructureConfig,
   type FeeHead,
   type FeeHeadCategory,
-  type FeeStructureVersion,
   type FeeChangeLog,
   type ExamFeeEntry,
   type ExamFeeSchedule,
@@ -95,7 +93,6 @@ import {
   GstBadge,
   CatalogueBoundPill,
   CustomHeadPill,
-  normalizeCatalogueFrequency,
   // PHASE 7 — shared catalogue helpers used by the new Re-link popover.
   CATEGORY_ICONS,
   CATEGORY_CHIPS,
@@ -326,7 +323,7 @@ function DetailDrawerInner({
   const currentVersion = structureVersions.find((v) => v.status === 'current')
   const scheduledVersions = structureVersions.filter((v) => v.status === 'scheduled')
   const draftVersions = structureVersions.filter((v) => v.status === 'draft')
-  const archivedVersions = structureVersions.filter((v) => v.status === 'archived')
+  const _archivedVersions = structureVersions.filter((v) => v.status === 'archived')
 
   // ─── STRUCT-REV — locked-state derivation (PART 7/8/9) ─────────────
   // A published CURRENT-session structure is locked: edits require a

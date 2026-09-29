@@ -26,7 +26,6 @@ import {
   countAllConflicts,
   getConflictedSlotIds,
   type DayType,
-  type TimetableSlot,
   type TimetableChange,
 } from './timetable-store'
 import { useTeacherRosterStore, type TeacherPick } from '@/lib/store/teacher-roster-store'
@@ -381,7 +380,7 @@ export function TimetableModule() {
         const teacherObj = roster.find((t: TeacherPick) => t.id === draftSlot.teacherId)
         const newTeacherName = teacherObj?.name || draftSlot.teacherName
         if (original.teacherId !== draftSlot.teacherId) {
-          const oldTeacher = roster.find((t: TeacherPick) => t.id === original.teacherId)
+          const _oldTeacher = roster.find((t: TeacherPick) => t.id === original.teacherId)
           changes.push({
             slotId: draftSlot.id, type: 'teacher_changed', summary: 'Teacher changed',
             context: `${draftSlot.className} · Period ${draftSlot.period}`,

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
 import {
@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
         const txnId = String(body.txnId || '')
         if (!txnId) throw new Error('txnId is required')
 
-        const result = await db.$transaction(async (tx) => {
+        const result = await trackedTransaction('fee-verification', async (tx) => {
           const txn = await tx.feeTransaction.findUnique({ where: { id: txnId } })
           if (!txn || txn.schoolId !== schoolId) throw new Error('NOT_FOUND')
           if (txn.status !== TXN_STATUS.PENDING_VERIFICATION) {
@@ -307,7 +307,7 @@ export async function POST(req: NextRequest) {
         // this call) can no longer slip a second ₹amount past the pre-check
         // window. The Fee.paid DB bound-guard + the (schoolId, referenceNumber)
         // unique constraint backstop anything still racing inside the tx.
-        const result = await db.$transaction(async (tx) => {
+        const result = await trackedTransaction('fee-direct-record', async (tx) => {
           const fee = await tx.fee.findFirst({ where: { id: feeId, studentId, schoolId } })
           if (!fee) throw new Error('Fee record not found for this student')
           const outstanding = Math.max(0, fee.amount - fee.paid)

@@ -136,13 +136,6 @@ function paperStatusOf(marks: ExamMarkDTO[]): 'LOCKED' | 'VERIFIED' | 'SUBMITTED
   return 'DRAFT'
 }
 
-const PAPER_STATUS_LABEL: Record<string, string> = {
-  LOCKED: 'Locked',
-  VERIFIED: 'Verified',
-  SUBMITTED: 'Submitted',
-  IN_PROGRESS: 'In Progress',
-  DRAFT: 'Not Started',
-}
 
 /** Status chip shared by the paper table and the entry drawer (same visual as before). */
 function PaperStatusChip({ status }: { status: string }) {

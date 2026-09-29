@@ -124,7 +124,7 @@ export function CommunicationModule({ onNavigate }: { onNavigate?: (key: string)
   const parentThread = useParentThread(selectedParentId)
   const directThread = useDirectThread(selectedDirectId)
   const selectedConversation = conversations.find((c) => c.id === selectedParentId) ?? null
-  const selectedDirect = directs.find((c) => c.counterpartId === selectedDirectId) ?? null
+  const _selectedDirect = directs.find((c) => c.counterpartId === selectedDirectId) ?? null
 
   // Publish the live unread count for the sidebar badge (Communication Hub
   // now carries the badge Parent Connect used to have).

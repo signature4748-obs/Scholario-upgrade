@@ -3,10 +3,9 @@
 import { useState, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  ChevronLeft, ChevronRight, UserPlus, CheckCircle2,
+  UserPlus, CheckCircle2,
   User, GraduationCap, Wallet, Shield, Camera, Pencil, ChevronDown,
-  MapPin, Mail, FileText,
-} from 'lucide-react'
+  MapPin, Mail, } from 'lucide-react'
 import { GlassCard } from '@/components/shared/ui'
 import { Button } from '@/components/ui/button'
 import { useTeachersStore } from '@/lib/store/teachers-store'

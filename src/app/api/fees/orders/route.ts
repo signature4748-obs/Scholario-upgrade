@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
           include: { class: { select: { name: true } }, user: { select: { name: true } } },
         })
         if (!me) {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'No student record is linked to this account',
             internalDetail: 'fees/orders: STUDENT caller has no Student row in tenant',
           })
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
         const requested = String(body.studentId || body.notes?.studentId || '')
         const child = requested ? children.find((c) => c.id === requested) : null
         if (!child) {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'Student not found',
             internalDetail: 'fees/orders: PARENT body.studentId is not one of the caller children',
           })

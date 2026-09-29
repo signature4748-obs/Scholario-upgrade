@@ -41,7 +41,7 @@ interface Props {
 export function DirectoryTab({
   filteredTeachers, search, setSearch, dept, setDept, statusFilter, setStatusFilter,
   totalTeachers, activeTeachersCount, onLeaveCount, avgAttendance, totalSalary,
-  relievedCount, onOpenProfile,
+  relievedCount: _relievedCount, onOpenProfile,
 }: Props) {
   const reduce = useReducedMotion()
   return (

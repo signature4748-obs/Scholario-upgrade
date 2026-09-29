@@ -3,7 +3,6 @@ import { getCurrentUser, getCurrentSession, parseUserAgent } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
-import { auditEvent } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 

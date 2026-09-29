@@ -8,8 +8,6 @@ import {
   formatMobileDisplay,
   formatBankAccountDisplay,
   formatIFSCDisplay,
-  formatEmployeeIdDisplay,
-  formatAdmissionNoDisplay,
   cleanDigits,
   cleanAlphanumeric,
 } from '@/lib/format'
@@ -32,7 +30,6 @@ export function AadhaarInput({
 }: AadhaarInputProps) {
   const digitsOnly = useMemo(() => cleanDigits(value).slice(0, 12), [value])
   const displayValue = useMemo(() => formatAadhaarDisplay(digitsOnly), [digitsOnly])
-  const isComplete = digitsOnly.length === 12
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = cleanDigits(e.target.value).slice(0, 12)
@@ -74,7 +71,6 @@ export function PhoneInput({
 }: PhoneInputProps) {
   const rawDigits = useMemo(() => cleanDigits(value).slice(0, 10), [value])
   const displayValue = useMemo(() => formatMobileDisplay(rawDigits), [rawDigits])
-  const isComplete = rawDigits.length === 10
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = cleanDigits(e.target.value).slice(0, 10)

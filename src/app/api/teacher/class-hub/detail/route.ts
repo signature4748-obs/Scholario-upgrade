@@ -291,7 +291,7 @@ export async function GET(request: Request) {
           st.total += r.marksObtained ?? 0
           byStudent.set(r.studentId, st)
         }
-        for (const [sid, st] of byStudent) {
+        for (const [_sid, st] of byStudent) {
           st.pct = st.maxTotal > 0 ? (st.total / st.maxTotal) * 100 : 0
         }
         statsByExam.set(exam.id, byStudent)

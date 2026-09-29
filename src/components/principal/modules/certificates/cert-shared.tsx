@@ -149,7 +149,7 @@ interface KpiProps {
   delay?: number
 }
 
-export function CertKpiCard({ icon, label, value, sub, accent, onClick, delay = 0 }: KpiProps) {
+export function CertKpiCard({ icon, label, value, sub, accent: _accent, onClick, delay = 0 }: KpiProps) {
   const a = ACCENT_MAP.emerald
   return (
     <motion.button

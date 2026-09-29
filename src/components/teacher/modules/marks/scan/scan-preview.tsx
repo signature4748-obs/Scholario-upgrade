@@ -35,7 +35,7 @@ export function ScanPreview({ pages, activePage, onPageChange, highlightRow, cla
     const update = () => {
       const img = el.querySelector('img')
       if (img) {
-        const r = img.getBoundingClientRect()
+        const _r = img.getBoundingClientRect()
         const wrap = el.getBoundingClientRect()
         // displayed image size (object-contain letterbox math)
         const scale = Math.min(wrap.width / (page?.width ?? 1), wrap.height / (page?.height ?? 1))

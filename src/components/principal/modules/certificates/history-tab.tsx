@@ -29,7 +29,6 @@ import {
   DropdownMenuItem, DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
 import { formatDate } from '@/lib/format'
 import {
   useCertificatesStore,
@@ -72,7 +71,7 @@ export function HistoryTab({ onGoGenerate }: { onGoGenerate?: () => void }) {
   const generateDocument = useCertificatesStore((s) => s.generateDocument)
   const templates = useCertificatesStore((s) => s.templates)
   const students = useStudentsStore((s) => s.students)
-  const transactions = useFeeStore((s) => s.transactions)
+  const _transactions = useFeeStore((s) => s.transactions)
 
   const filtered = useMemo(
     () => getDocumentHistory({ search, docType, status }),

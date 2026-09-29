@@ -14,7 +14,7 @@
  *     resolvable timetable teachers, appoint the majority teacher on the
  *     CSA row — the canonical subject-teacher assignment going forward.
  */
-import { db } from '../src/lib/db'
+import { db as _db } from '../src/lib/db'
 import { PrismaClient } from '@prisma/client'
 
 // direct client (script runs outside the Next module graph)

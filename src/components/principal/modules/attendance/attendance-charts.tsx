@@ -17,8 +17,7 @@
 import { useId } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import {
-  Area, AreaChart, CartesianGrid, Line, LineChart,
-  ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { formatNumber } from '@/lib/format'
 

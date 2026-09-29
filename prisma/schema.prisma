@@ -100,6 +100,10 @@ model School {
   // Phase 2 (3-c V5/V10) — cross-tenant file ownership registry for the
   // local-disk upload store (db/uploads/{teachers,admissions}/…).
   uploadedFiles UploadedFile[]
+
+  // Phase 4 — background-job run tracking (JobRun rows; system jobs carry
+  // a null schoolId).
+  jobRuns JobRun[]
 }
 
 /// Per-user conversation state for DIRECT (Message-row) threads. The
@@ -1577,6 +1581,7 @@ model WebhookEvent {
   signature            String?
   rawPayload           String // full JSON body
   status               String    @default("received") // received, processing, processed, error, duplicate
+  attempts             Int       @default(1) // Phase 4 — deliveries seen for this event id (retries + replays)
   matchedTransactionId String?
   error                String?
   receivedAt           DateTime  @default(now())
@@ -1584,6 +1589,43 @@ model WebhookEvent {
 
   @@index([schoolId, status])
   @@index([eventType])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 4 — Observability: background-job run tracking
+// ─────────────────────────────────────────────────────────────────────────
+// Every background/scheduled/deferred unit of work runs through
+// src/lib/observability/jobs.ts and records ONE row per execution attempt
+// chain: job id, start, finish, duration, success/failure, retry state,
+// error and the idempotency key. (jobName, idempotencyKey) is UNIQUE —
+// a second delivery of the same key is skipped when a prior run succeeded.
+// Tenant guard: schoolId, when present, must reference a real School
+// (DB-level guard trigger in 20260202000000_observability).
+model JobRun {
+  id             String    @id @default(cuid())
+  /// Stable job identity, e.g. "attendance-draft-autofinalize:...:2026-02-02"
+  jobId          String    @unique
+  jobName        String
+  schoolId       String?
+  school         School?   @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  /// request | scheduled | manual | system
+  trigger        String    @default("request")
+  /// When set: a prior SUCCESS for (jobName, idempotencyKey) short-circuits.
+  idempotencyKey String?
+  /// running | success | failed | skipped
+  status         String    @default("running")
+  attempt        Int       @default(1)
+  maxAttempts    Int       @default(1)
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  durationMs     Int?
+  error          String?
+  resultSummary  String?
+  requestId      String?
+
+  @@unique([jobName, idempotencyKey])
+  @@index([jobName, status, startedAt])
+  @@index([schoolId, jobName, startedAt])
 }
 
 /// RB-1 — Study Materials: the school's server-authorized repository of

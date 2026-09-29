@@ -18,7 +18,7 @@ function parseLocalDate(s: string): Date {
   return new Date(y, (m ?? 1) - 1, d ?? 1)
 }
 
-function toLocalISO(d: Date): string {
+function _toLocalISO(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')

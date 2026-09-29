@@ -135,7 +135,7 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
     // filter depends on it (connecting early would briefly accept events
     // from every school). me === null while resolving → no socket yet.
     if (!user || !me) return
-    let cancelled = false
+    let _cancelled = false
     let socket: ReturnType<typeof io> | null = null
 
     streamUserIdRef.current = me.id
@@ -231,7 +231,7 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
         })
 
     return () => {
-      cancelled = true
+      _cancelled = true
       socket?.close()
       socket = null
     }

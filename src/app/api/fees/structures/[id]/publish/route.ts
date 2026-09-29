@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
 
@@ -41,7 +41,7 @@ export async function POST(
       const now = new Date()
 
       try {
-        const promoted = await db.$transaction(async (tx) => {
+        const promoted = await trackedTransaction('fee-structure-publish', async (tx) => {
           // Archive any existing 'current' for the same classId.
           const existing = await tx.feeStructure
             .findUnique({

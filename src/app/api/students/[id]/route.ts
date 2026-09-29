@@ -53,7 +53,7 @@ export async function GET(
           route: { select: { id: true, name: true } },
         },
       })
-      if (!student) throw new AppError('NOT_FOUND', { publicMessage: 'Student not found', internalDetail: 'students/[id]: student missing or foreign tenant' })
+      if (!student) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Student not found', internalDetail: 'students/[id]: student missing or foreign tenant' })
       // Task 4-d (fix #10 — defense in depth): the guardian USER is looked
       // up within the caller's school (a spoofed guardianId pointing at a
       // foreign-school user resolves to null instead of leaking that

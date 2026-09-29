@@ -20,7 +20,7 @@
  */
 
 import {
-  Award, GraduationCap, ShieldCheck, ScrollText, FileText, CreditCard,
+  GraduationCap, CreditCard,
   QrCode, Stamp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -72,7 +72,7 @@ function SchoolCrest({ accent, label }: { accent: string; label?: string }) {
 }
 
 function SchoolHeader({
-  accent, style, docType,
+  accent, style, docType: _docType,
 }: {
   accent: string
   style: 'Classic' | 'Modern' | 'Formal' | 'Minimal'
@@ -112,7 +112,7 @@ function SchoolHeader({
 // ─── Border/frame per style ──────────────────────────────────────────
 
 function Frame({
-  style, accent, children, className,
+  style, accent, children, className: _className,
 }: {
   style: 'Classic' | 'Modern' | 'Formal' | 'Minimal'
   accent: string
@@ -376,7 +376,6 @@ export function MarksheetPreview({
   const style = template.style
   const isCompact = style === 'Compact'
   const isModern = style === 'Modern'
-  const isSerif = style === 'Standard'
 
   return (
     <div className={cn('print-area w-full bg-slate-100 dark:bg-slate-800/70 p-3 sm:p-5')}>

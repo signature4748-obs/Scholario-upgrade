@@ -30,7 +30,7 @@
  *   (Class Teacher, Assistant, Section Teacher, Section Assistant).
  */
 import { useState, useMemo } from 'react'
-import { Archive, UserX, ChevronDown, Search, Check, Pencil } from 'lucide-react'
+import { Archive, UserX, Search, Check, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'

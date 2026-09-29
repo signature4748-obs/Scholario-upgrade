@@ -27,9 +27,11 @@ if (process.env.NODE_ENV !== "production") {
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // Phase 4 (item 12): production builds MUST fail on TypeScript errors.
+  // The Phase-0 baseline kept `ignoreBuildErrors: true` while the codebase
+  // was being hardened; `bunx tsc --noEmit` has been a hard gate since
+  // Phase 1 (0 errors at every phase close), so the bypass now only hides
+  // real defects. Removed.
   reactStrictMode: false,
   allowedDevOrigins: ["*.space-z.ai", "*.chatglm.cn", "*.z.ai", "127.0.0.1", "localhost", "*.localhost"],
   // NOTE (dev stability): dev.log / tmp-scripts / .zscripts are in

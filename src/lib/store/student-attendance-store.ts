@@ -114,7 +114,7 @@ const SEED = buildSeed()
 
 export const useStudentAttendanceStore = create<StudentAttendanceStoreState>()(
   persist(
-    (set, get) => ({
+    (set, _get) => ({
       records: SEED,
 
       markClassAttendance: ({ date, entries, markedBy }) => {

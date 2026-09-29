@@ -20,7 +20,6 @@ import { Check, Loader2, PencilLine, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { GlassCard } from '@/components/shared/ui'
 import { cn } from '@/lib/utils'
 import type { GrowthEventItem } from '@/lib/teacher-hub-types'
 import {

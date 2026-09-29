@@ -3,7 +3,6 @@
  */
 
 import type { ExamRoom, Seat, SeatingPlan, SeatingStudent } from './types'
-import { computeCapacity } from './types'
 
 function positionsForType(type: string): string[] {
   if (type === 'double') return ['L', 'R']

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { withUser } from '@/lib/api'
 import { resolveProvisionedPassword } from '@/lib/account-provisioning'
@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
         throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid status' })
       }
 
-      const school = await db.$transaction(async (tx) => {
+      const school = await trackedTransaction('school-create-with-principal', async (tx) => {
         const s = await tx.school.create({
           data: {
             name,

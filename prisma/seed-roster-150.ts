@@ -53,7 +53,6 @@ const LAST = ['Sharma','Patel','Reddy','Singh','Kumar','Verma','Nair','Gupta','M
 const FATHER_FIRST = ['Rahul','Nikhil','Karthik','Arvind','Sandeep','Manish','Vinod','Rajesh','Tarun','Sriram','Amit','Suresh','Pradeep','Mukesh','Harish','Ganesh','Nilesh','Prakash','Vikram','Mohan']
 const MOTHER_FIRST = ['Pooja','Sneha','Lakshmi','Meera','Ritu','Kavita','Deepa','Anjali','Shweta','Geeta','Nisha','Rekha','Sunita','Hetal','Priti','Sumathi','Renu','Aarti','Radha','Neha']
 const STREETS = ['A-12, Sector 14','B-45, DLF Phase 3','C-23, Sushant Lok','D-67, Palam Vihar','E-89, Sector 56','F-34, Sector 40','G-56, Sector 23','H-78, Sector 15','I-90, DLF Phase 5','J-12, Sector 31','K-34, Sector 42','L-56, Sector 49','M-78, Sector 28','N-90, Sector 12','O-23, Sector 22','P-45, Sector 9','Q-67, Sector 17','R-89, Sector 14']
-const MEDICAL = ['No known allergies','Asthma — carries inhaler','Peanut allergy','Lactose intolerant','Dust allergy','No known allergies','Egg allergy']
 const BLOOD = ['A+', 'B+', 'O+', 'AB+', 'O-', 'A-']
 
 // ---------------------------------------------------------------------------
@@ -243,7 +242,7 @@ async function main() {
       usedNames.add(name)
 
       const fatherFirst = pick(rnd, FATHER_FIRST)
-      const motherFirst = pick(rnd, MOTHER_FIRST)
+      const _motherFirst = pick(rnd, MOTHER_FIRST)
       const father = `${fatherFirst} ${last}`
       const mkUniqueEmail = (base: string, domain: string) => {
         let email = `${base}${num}@${domain}`.toLowerCase()

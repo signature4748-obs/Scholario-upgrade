@@ -14,7 +14,7 @@ import {
 import type { FormData } from '../constants'
 import { StepHeader, Field } from './StepShared'
 
-export function TransportStep({ data, set, flags }: { data: FormData; set: <K extends keyof FormData>(k: K, v: FormData[K]) => void; flags: ReturnType<typeof useAdmissionFeatureFlags> }) {
+export function TransportStep({ data, set, flags: _flags }: { data: FormData; set: <K extends keyof FormData>(k: K, v: FormData[K]) => void; flags: ReturnType<typeof useAdmissionFeatureFlags> }) {
   const schoolSettings = getSchoolSettings()
   const allowHostel = schoolSettings.allowHostel
 

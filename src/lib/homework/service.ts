@@ -182,7 +182,7 @@ async function assertSubjectInTenant(schoolId: string, subjectId: string): Promi
     select: { id: true },
   })
   if (!subject) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Subject not found',
       internalDetail: `assertSubjectInTenant: subject ${subjectId} missing or foreign tenant`,
     })
@@ -201,7 +201,7 @@ async function assertTeacherUserInTenant(schoolId: string, teacherId: string): P
     select: { id: true },
   })
   if (!teacher) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Teacher not found',
       internalDetail: `assertTeacherUserInTenant: teacher user ${teacherId} missing or foreign tenant`,
     })

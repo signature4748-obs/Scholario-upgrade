@@ -116,7 +116,7 @@ export function getStreamAlternative(subjectName: string): string | null {
  * Whether both sides of an alternative pair are present in `subjects`.
  * If true, the scheduler must place the pair on the same date+time slot.
  */
-function isAlternativeActive(subjects: SubjectInfo[], primary: string, alt: string): boolean {
+function _isAlternativeActive(subjects: SubjectInfo[], primary: string, alt: string): boolean {
   return subjects.some((s) => s.name === primary) && subjects.some((s) => s.name === alt)
 }
 

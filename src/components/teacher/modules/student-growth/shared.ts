@@ -15,7 +15,6 @@
  *     "system" verdict.
  */
 
-import { motion, useReducedMotion } from 'framer-motion'
 import type { GrowthEventItem } from '@/lib/teacher-hub-types'
 
 export type {

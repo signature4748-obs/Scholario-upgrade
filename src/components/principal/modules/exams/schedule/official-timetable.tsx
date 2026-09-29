@@ -61,8 +61,8 @@ export function OfficialTimetable({
   examType,
   academicSession,
   dateRangeLabel,
-  startTime,
-  papersPerDay,
+  startTime: _startTime,
+  papersPerDay: _papersPerDay,
 }: OfficialTimetableProps) {
   const dateGroups = useMemo(() => groupRowsByDate(timetable.rows), [timetable.rows])
 

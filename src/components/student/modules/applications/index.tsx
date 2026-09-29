@@ -21,7 +21,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Eye, FileText, Paperclip, ClipboardList, Undo2,
 } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
 import { CATEGORY_ICON as SHARED_CATEGORY_ICON } from '@/components/shared/application-category'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'

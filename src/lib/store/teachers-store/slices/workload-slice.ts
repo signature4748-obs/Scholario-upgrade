@@ -1,6 +1,5 @@
 import type { StateCreator } from 'zustand'
 import type {
-  TeacherMediaRecord,
   TeachersStoreState,
 } from '../types'
 import { createAppointmentLetterSnapshot } from '../letter-factory'

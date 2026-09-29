@@ -21,7 +21,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, CheckCircle2, ChevronDown, Loader2, Minus, Plus, Search, Sparkles, X } from 'lucide-react'
+import { Check, CheckCircle2, Loader2, Minus, Plus, Search, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {

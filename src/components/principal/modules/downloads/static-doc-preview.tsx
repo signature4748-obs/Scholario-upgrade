@@ -14,7 +14,6 @@
  */
 
 import { GraduationCap } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { useSchoolProfile } from '@/lib/school-profile'
 import type { SchoolProfile } from '@/lib/school-profile'
 import type { StaticDocContent } from '@/lib/store/downloads-content'

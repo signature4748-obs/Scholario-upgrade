@@ -22,7 +22,6 @@ import type {
   ScheduleTimetable,
   ScheduleRow,
   ScheduleCell,
-  ScheduleClass,
 } from './schedule-types'
 
 /** A consolidated cell — may hold one subject or a combined "A / B". */
@@ -171,7 +170,7 @@ export function flattenConsolidatedTimetable(
   invigilatorName?: string
 }> {
   const out: Array<{ classId: string; subjectId: string; date: string; startTime: string; endTime: string; room?: string; invigilatorName?: string }> = []
-  timetable.rows.forEach((row, rowIdx) => {
+  timetable.rows.forEach((row, _rowIdx) => {
     timetable.columns.forEach((col, colIdx) => {
       const cell = row.cells[colIdx]
       if (!cell || cell.subjects.length === 0) return

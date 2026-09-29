@@ -65,7 +65,7 @@ export function CalendarLegend() {
  * recorded on that day — shown honestly instead of fabricated numbers.
  */
 export function SelectedDayPanel({
-  selectedDay,
+  selectedDay: _selectedDay,
   dateStr,
   holiday,
   stats,

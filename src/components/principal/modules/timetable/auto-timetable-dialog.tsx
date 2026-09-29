@@ -191,7 +191,7 @@ export function AutoTimetableDialog({ open, onOpenChange, onGenerate, existingSl
     const getTeacherKey = (teacherId: string, day: string, period: number) => `${teacherId}-${day}-${period}`
 
     // Track class-subject distribution to avoid repetition (Brief section 17)
-    const classSubjectCount = new Map<string, Map<string, number>>()
+    const _classSubjectCount = new Map<string, Map<string, number>>()
 
     for (const className of targetClasses) {
       // SINGLE SOURCE OF TRUTH — only subjects the Principal configured for
@@ -237,7 +237,7 @@ export function AutoTimetableDialog({ open, onOpenChange, onGenerate, existingSl
             const pool = subjectTeachers.length > 0 ? subjectTeachers : activeTeachers
             const availableTeachers = pool.filter((t) => {
               // Brief section 15: NEVER assign same teacher to two classes at same day+period
-              const key = getTeacherKey(t.id, day, period)
+              const _key = getTeacherKey(t.id, day, period)
               if (!teacherOccupancy.has(t.id)) teacherOccupancy.set(t.id, new Set())
               return !teacherOccupancy.get(t.id)!.has(`${day}-${period}`)
             })

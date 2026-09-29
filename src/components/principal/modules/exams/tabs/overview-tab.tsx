@@ -39,7 +39,7 @@ interface Props {
   onNavigate?: (section: string) => void
 }
 
-export function ExamsOverviewTab({ exams, classes, loading, error, session, onSelectExam, onNavigate }: Props) {
+export function ExamsOverviewTab({ exams, classes: _classes, loading, error, session, onSelectExam, onNavigate }: Props) {
   const data = useMemo(() => computeOverview(exams), [exams])
 
   if (loading) return <OverviewSkeleton />

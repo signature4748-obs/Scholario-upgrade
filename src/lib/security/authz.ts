@@ -40,6 +40,40 @@ import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { AppError } from './errors'
 import { can } from './permissions'
+import { auditEvent } from './audit'
+import { log } from '@/lib/observability/logger'
+
+/**
+ * Phase 4 — cross-tenant attempt signal.
+ *
+ * TENANT_MISMATCH is an INTERNAL classification: it names the violation in
+ * the audit trail and server logs (errorCode field) while the CLIENT
+ * envelope keeps the fail-safe 404 RESOURCE_NOT_FOUND — the Phase-2
+ * no-existence-oracle rule is unchanged (covered by the tenant-isolation
+ * suite). Fired only when the referenced row EXISTS in a foreign tenant
+ * (a true violation — a null row is just a wrong id, not an attack).
+ */
+function signalTenantMismatch(opts: {
+  label: string
+  ctxSchoolId: string
+  resourceSchoolId: string
+  userId?: string
+  requestId?: string
+}): void {
+  const detail = `${opts.label} belongs to school ${opts.resourceSchoolId.slice(0, 8)}… (caller ${opts.ctxSchoolId.slice(0, 8)}…)`
+  log('warn', 'tenant_mismatch', {
+    channel: 'security',
+    errorCode: 'TENANT_MISMATCH',
+    label: opts.label,
+  })
+  void auditEvent({
+    schoolId: opts.ctxSchoolId,
+    userId: opts.userId ?? null,
+    action: 'TENANT_MISMATCH',
+    detail,
+    requestId: opts.requestId,
+  }).catch(() => undefined)
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Tenant / request context
@@ -90,9 +124,8 @@ export async function authorize(user: AuthUser | null, policy: AuthzPolicy = {})
   // 1 — Authenticated identity (withUser already rejects missing/inactive,
   //     this guard covers direct authorize() callers).
   if (!user || user.status !== 'ACTIVE') {
-    throw new AppError('UNAUTHORIZED', { internalDetail: 'authorize: no active identity' })
+    throw new AppError('AUTH_REQUIRED', { internalDetail: 'authorize: no active identity' })
   }
-
   const role = user.role
   const isPlatform = role === 'SUPER_ADMIN'
 
@@ -176,7 +209,15 @@ export function assertTenantRow<T extends { schoolId: string | null }>(
   label = 'Resource',
 ): T {
   if (!row || row.schoolId !== ctx.schoolId) {
-    throw new AppError('NOT_FOUND', {
+    if (row && row.schoolId && row.schoolId !== ctx.schoolId) {
+      signalTenantMismatch({
+        label,
+        ctxSchoolId: ctx.schoolId,
+        resourceSchoolId: row.schoolId,
+        userId: ctx.user.id,
+      })
+    }
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: `${label} not found`,
       internalDetail: `assertTenantRow: ${label} missing or foreign tenant`,
     })
@@ -195,7 +236,15 @@ export function assertSameTenant(
   label = 'Resource',
 ): void {
   if (resourceSchoolId !== ctx.schoolId) {
-    throw new AppError('NOT_FOUND', {
+    if (resourceSchoolId) {
+      signalTenantMismatch({
+        label,
+        ctxSchoolId: ctx.schoolId,
+        resourceSchoolId,
+        userId: ctx.user.id,
+      })
+    }
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: `${label} not found`,
       internalDetail: `assertSameTenant: ${label} school ${resourceSchoolId ?? 'null'} ≠ caller ${ctx.schoolId}`,
     })
@@ -220,7 +269,15 @@ export async function assertFkInTenant(
   if (!id) return
   const row = await fetch(id)
   if (!row || row.schoolId !== ctx.schoolId) {
-    throw new AppError('NOT_FOUND', {
+    if (row && row.schoolId && row.schoolId !== ctx.schoolId) {
+      signalTenantMismatch({
+        label,
+        ctxSchoolId: ctx.schoolId,
+        resourceSchoolId: row.schoolId,
+        userId: ctx.user.id,
+      })
+    }
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: `${label} not found`,
       internalDetail: `assertFkInTenant: ${label} ${id} missing or foreign tenant`,
     })
@@ -247,7 +304,7 @@ export async function assertStudentInTenant(
     select: { id: true, schoolId: true, classId: true },
   })
   if (!student) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Student not found',
       internalDetail: `assertStudentInTenant: student ${studentId} missing or foreign tenant`,
     })

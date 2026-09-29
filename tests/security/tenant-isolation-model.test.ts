@@ -69,7 +69,9 @@ describe('permissions matrix (server-side source of truth)', () => {
 describe('authorize(): Request → identity → tenant → role → permission', () => {
   test('rejects unauthenticated identities', async () => {
     await expect(authorize(null)).rejects.toThrow(AppError)
-    await expect(authorize(null)).rejects.toThrow('UNAUTHORIZED')
+    // Phase 4 canonical taxonomy: 401s are AUTH_REQUIRED (UNAUTHORIZED is
+    // the deprecated alias kept in the union).
+    await expect(authorize(null)).rejects.toThrow('AUTH_REQUIRED')
   })
 
   test('rejects non-ACTIVE identities (suspended accounts)', async () => {

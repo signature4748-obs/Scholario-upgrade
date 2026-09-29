@@ -27,9 +27,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  BadgeCheck, Ban, Banknote, CheckCircle2, ChevronRight, Clock3, Hash,
-  Landmark, Loader2, Plus, Receipt, RefreshCw, ShieldCheck, Wallet, X,
-} from 'lucide-react'
+  BadgeCheck, Ban, Banknote, CheckCircle2, Clock3, Hash,
+  Landmark, Loader2, Plus, Receipt, RefreshCw, ShieldCheck, } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
@@ -43,7 +42,7 @@ import { formatINR } from '@/lib/format'
 import { api, type ApiError } from '@/lib/exams/api-client'
 import { cn } from '@/lib/utils'
 import { FeeReceiptViewer } from '@/components/shared/fee-collection/receipt-viewer'
-import { methodLabel, sourceStory, txnDate, txnDateTime, txnStatusMeta } from '@/components/shared/fee-collection/txn-meta'
+import { methodLabel, sourceStory, txnDate, txnStatusMeta } from '@/components/shared/fee-collection/txn-meta'
 
 interface VerificationTxn {
   id: string

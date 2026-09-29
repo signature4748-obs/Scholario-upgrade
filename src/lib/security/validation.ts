@@ -13,7 +13,7 @@
  *     `passwordSchema`, `phoneSchema`, `safeText`, `dateStringSchema`,
  *     `enumSchema`.
  *
- * Validation failures throw AppError('INVALID_INPUT') → HTTP 422 with a
+ * Validation failures throw AppError('VALIDATION_FAILED') → HTTP 422 with a
  * SAFE message (field-level issues, never internals).
  */
 import { z } from 'zod'
@@ -38,14 +38,14 @@ function zodIssueMessage(issues: z.ZodIssue[]): string {
 function toAppError(e: unknown): AppError {
   if (e instanceof AppError) return e
   if (e instanceof z.ZodError) {
-    return new AppError('INVALID_INPUT', {
+    return new AppError('VALIDATION_FAILED', {
       publicMessage: zodIssueMessage(e.issues),
       internalDetail: `zod: ${JSON.stringify(
         e.issues.map((i) => ({ path: i.path, code: i.code })),
       ).slice(0, 500)}`,
     })
   }
-  return new AppError('INVALID_INPUT', {
+  return new AppError('VALIDATION_FAILED', {
     publicMessage: 'Malformed request body',
     internalDetail: String(e).slice(0, 300),
   })
@@ -67,7 +67,7 @@ export async function parseJsonBody<T>(
   try {
     raw = await req.text()
   } catch {
-    throw new AppError('INVALID_INPUT', { publicMessage: 'Request body could not be read' })
+    throw new AppError('VALIDATION_FAILED', { publicMessage: 'Request body could not be read' })
   }
 
   if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
@@ -80,7 +80,7 @@ export async function parseJsonBody<T>(
   try {
     parsed = JSON.parse(raw)
   } catch {
-    throw new AppError('INVALID_INPUT', { publicMessage: 'Request body must be valid JSON' })
+    throw new AppError('VALIDATION_FAILED', { publicMessage: 'Request body must be valid JSON' })
   }
 
   if (opts.strict !== false && parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -89,7 +89,7 @@ export async function parseJsonBody<T>(
       const keys = Object.keys(parsed as Record<string, unknown>)
       const unknownKeys = keys.filter((k) => !(k in shape))
       if (unknownKeys.length > 0) {
-        throw new AppError('INVALID_INPUT', {
+        throw new AppError('VALIDATION_FAILED', {
           publicMessage: `Unexpected field(s): ${unknownKeys.slice(0, 5).join(', ')}`,
         })
       }
@@ -109,7 +109,7 @@ export function parseQuery<T>(req: Request, schema: z.ZodType<T>): T {
   try {
     params = new URL(req.url).searchParams
   } catch {
-    throw new AppError('INVALID_INPUT', { publicMessage: 'Malformed query string' })
+    throw new AppError('VALIDATION_FAILED', { publicMessage: 'Malformed query string' })
   }
   const obj: Record<string, string> = {}
   params.forEach((v, k) => {
@@ -128,7 +128,7 @@ export function parseValue<T>(value: unknown, schema: z.ZodType<T>, label = 'val
     return schema.parse(value)
   } catch (e) {
     if (e instanceof z.ZodError) {
-      const mapped = new AppError('INVALID_INPUT', {
+      const mapped = new AppError('VALIDATION_FAILED', {
         publicMessage: zodIssueMessage(e.issues.map((i) => ({ ...i, path: [label, ...i.path] }))),
         internalDetail: 'parseValue',
       })

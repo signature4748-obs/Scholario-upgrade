@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { applyPaymentToLedger, resolveFeeIdForTxn } from '@/lib/fee-workflow'
@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
       const txn = await db.feeTransaction.findFirst({
         where: { gatewayOrderId: orderId, schoolId },
       })
-      if (!txn) throw new AppError('NOT_FOUND', { publicMessage: 'Order not found for this school.' })
+      if (!txn) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Order not found for this school.' })
 
       // ── §25 student authorisation: only your OWN orders ───────────
       if (user.role === 'STUDENT') {
@@ -188,7 +188,7 @@ export async function POST(req: NextRequest) {
       // targeting (txn feeId → feeHeadName title → oldest unsettled fee →
       // minimal fee row).
       const gatewayPaymentId = `pay_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
-      const updated = await db.$transaction(async (tx) => {
+      const updated = await trackedTransaction('payment-confirm-capture', async (tx) => {
         const u = await tx.feeTransaction.update({
           where: { id: txn.id },
           data: {

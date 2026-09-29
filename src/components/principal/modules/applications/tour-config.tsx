@@ -57,7 +57,6 @@ import { TourFormDocument, useFitA4Zoom, printTourDocument } from './tour-form-d
 import { downloadTourFormPDF } from './tour-form-pdf'
 import { DocTemplateThumb } from './new-application-dialog'
 
-const PRINCIPAL = 'Dr. Ananya Iyer'
 
 type FieldGroup = 'basics' | 'schedule' | 'circular' | 'eligibility' | 'fee'
 

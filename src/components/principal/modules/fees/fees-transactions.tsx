@@ -427,7 +427,7 @@ interface DrawerProps {
   onDownload: (t: FeeTransaction) => void
 }
 
-function TransactionDetailDrawer({ txn, accounts, receiptSettings, applicationTitle, onClose, onViewReceipt, onPrint, onDownload }: DrawerProps) {
+function TransactionDetailDrawer({ txn, accounts, receiptSettings: _receiptSettings, applicationTitle, onClose, onViewReceipt, onPrint, onDownload }: DrawerProps) {
   if (!txn) return null
 
   // Look up the student account + ledger to compute balance before/after.

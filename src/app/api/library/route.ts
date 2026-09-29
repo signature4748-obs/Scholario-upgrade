@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
 
     if (action === 'issue') {
       const book = await db.libraryBook.findUnique({ where: { id: body.bookId } })
-      if (!book || book.schoolId !== schoolId) throw new AppError('NOT_FOUND')
+      if (!book || book.schoolId !== schoolId) throw new AppError('RESOURCE_NOT_FOUND')
       if (book.available <= 0) throw new AppError('INVALID_INPUT', { publicMessage: 'No copies available' })
 
       // 3-c fix: the borrower must exist in THIS school before the
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
         select: { id: true },
       })
       if (!student) {
-        throw new AppError('NOT_FOUND', {
+        throw new AppError('RESOURCE_NOT_FOUND', {
           publicMessage: 'Student not found',
           internalDetail: `library issue: student ${body.studentId} missing or foreign tenant`,
         })
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
       // transaction with the availability RE-CHECKED inside it — two
       // concurrent issues of the last copy can no longer both decrement
       // (the available 0..copies DB bound-guard backstops).
-      const issue = await db.$transaction(async (tx) => {
+      const issue = await trackedTransaction('library-issue', async (tx) => {
         const fresh = await tx.libraryBook.findUnique({
           where: { id: book.id },
           select: { available: true },
@@ -87,14 +87,14 @@ export async function POST(req: NextRequest) {
 
     if (action === 'return') {
       const issue = await db.bookIssue.findUnique({ where: { id: body.issueId }, include: { book: true } })
-      if (!issue) throw new AppError('NOT_FOUND')
+      if (!issue) throw new AppError('RESOURCE_NOT_FOUND')
       if (issue.book.schoolId !== schoolId) throw new AppError('FORBIDDEN')
       const returnedAt = new Date()
       // Phase 3: CONDITIONAL transition — only an ISSUED row can be
       // returned. count === 0 → the book was already returned (a replayed
       // request lost the race) → 409 CONFLICT, and the stock counter is
       // NOT incremented again (closes the double-increment bug).
-      const transitioned = await db.$transaction(async (tx) => {
+      const transitioned = await trackedTransaction('library-return', async (tx) => {
         const transition = await tx.bookIssue.updateMany({
           where: { id: issue.id, status: 'ISSUED' },
           data: { returnDate: returnedAt, status: 'RETURNED' },

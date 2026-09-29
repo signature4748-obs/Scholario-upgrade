@@ -93,7 +93,7 @@ interface MiniLineProps {
   height?: number
 }
 
-export function MiniLine({ data, xKey, yKey, color = 'oklch(0.55 0.14 162)', height = 60 }: MiniLineProps) {
+export function MiniLine({ data, xKey: _xKey, yKey, color = 'oklch(0.55 0.14 162)', height = 60 }: MiniLineProps) {
   const uid = useId().replace(/:/g, '')
   const gid = `mini-${uid}`
   const lastIdx = data.length - 1

@@ -103,7 +103,7 @@ export function RecentPayments({
   }
 
   const toggleAll = () => {
-    setSelected((prev) => (allSelected ? new Set() : new Set(selectable.map((t) => t.id))))
+    setSelected((_prev) => (allSelected ? new Set() : new Set(selectable.map((t) => t.id))))
   }
 
   const clearSelection = () => setSelected(new Set())

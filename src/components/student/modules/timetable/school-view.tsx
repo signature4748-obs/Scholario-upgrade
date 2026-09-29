@@ -109,7 +109,7 @@ export function SchoolView({
     )
   }
 
-  const cellEmpty = (day: DayType, period: number) => grid.get(`${day}|${period}`)?.length ?? 0
+  const _cellEmpty = (day: DayType, period: number) => grid.get(`${day}|${period}`)?.length ?? 0
 
   return (
     <div className="space-y-4 sm:space-y-5">

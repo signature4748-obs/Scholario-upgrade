@@ -372,7 +372,7 @@ function pad5(n: number): string {
   return n.toString().padStart(5, '0')
 }
 
-function nextDocNumber(prefix: string, counters: Record<string, number>): string {
+function _nextDocNumber(prefix: string, counters: Record<string, number>): string {
   const seq = (counters[prefix] ?? 0) + 1
   return `${prefix}/${CERT_YEAR}/${pad5(seq)}`
 }

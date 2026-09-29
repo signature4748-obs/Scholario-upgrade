@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { applyPaymentToLedger } from '@/lib/fee-workflow'
 import { RATE_LIMITS, checkRateLimit, clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { auditRateLimit } from '@/lib/security/audit'
+import { log } from '@/lib/observability/logger'
+import { runWithContext } from '@/lib/observability/context'
+import { sanitizeRequestId, newRequestId } from '@/lib/observability/http'
 
 /**
  * Razorpay webhook receiver — real signature verification + DB-persisted
@@ -99,6 +102,33 @@ function extractTransferOrderIds(settlement: unknown): string[] {
 }
 
 export async function POST(req: NextRequest) {
+  // Phase 4 — this receiver is a RAW handler (no api() envelope: the
+  // gateway contract requires its own ack shapes). It still gets full
+  // correlation: middleware already stamped x-request-id; we open the
+  // request context here so every structured line below carries it.
+  const requestId = sanitizeRequestId(req.headers.get('x-request-id')) ?? newRequestId()
+  const startedAt = Date.now()
+  return runWithContext(
+    {
+      requestId,
+      route: '/api/webhooks/razorpay',
+      operation: 'POST /api/webhooks/razorpay',
+      startedAt,
+    },
+    async () => {
+      const res = await handleWebhook(req)
+      res.headers.set('X-Request-Id', requestId)
+      log(res.status >= 400 ? 'warn' : 'info', 'http_request', {
+        channel: 'http',
+        status: res.status,
+        durationMs: Date.now() - startedAt,
+      })
+      return res
+    },
+  )
+}
+
+async function handleWebhook(req: NextRequest): Promise<NextResponse> {
   // Phase 1 — per-IP rate limit on the webhook receiver (signature
   // verification is the real gate; this blunts DoS/replay floods).
   const ip = clientIpFromHeaders(req.headers)
@@ -173,7 +203,16 @@ export async function POST(req: NextRequest) {
     `evt_${createHmac('sha256', secret).update(rawBody).digest('hex').slice(0, 32)}`
 
   if (seenEventIds.has(eventId)) {
-    console.log(`[webhooks/razorpay] in-mem duplicate ${eventId} — acking.`)
+    // Phase 4 (item 9): count the re-delivery on the durable event row
+    // (fire-and-forget — the ack path must never fail on tracking).
+    void db.webhookEvent
+      .updateMany({ where: { eventId }, data: { attempts: { increment: 1 } } })
+      .catch(() => undefined)
+    log('info', 'webhook_duplicate', {
+      channel: 'webhook',
+      eventId,
+      layer: 'in-mem',
+    })
     return NextResponse.json({ received: true, duplicate: true, event_id: eventId, layer: 'in-mem' })
   }
 
@@ -184,20 +223,19 @@ export async function POST(req: NextRequest) {
   const orderId = payment?.order_id
   const amountPaise: number | undefined = payment?.amount
   const status: string | undefined = payment?.status
-  const method: string | undefined = payment?.method
   const notes: Record<string, string> | undefined = payment?.notes
-  const feeAt = payload?.payload?.payment?.entity?.fee_at
-  const createdAt = payload?.created_at
 
-  console.log('[webhooks/razorpay] event received', {
-    event_id: eventId,
-    type: eventType,
-    gateway_payment_id: gatewayPaymentId,
-    order_id: orderId,
-    amount_paise: amountPaise,
-    status,
-    method,
-    notes,
+  log('info', 'webhook_received', {
+    channel: 'webhook',
+    eventId,
+    eventType,
+    gatewayPaymentId: gatewayPaymentId ?? null,
+    orderId: orderId ?? null,
+    amountPaise: amountPaise ?? null,
+    paymentStatus: status ?? null,
+    // NOTE: `notes` is deliberately NOT logged — it can carry student
+    // names (PII). schoolId alone identifies the tenant.
+    schoolId: notes?.schoolId ?? null,
   })
 
   // ─── Persist the WebhookEvent row (idempotency gate) ────────────────
@@ -219,7 +257,19 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     // Prisma unique-constraint violation → duplicate event id.
     if (e?.code === 'P2002' || String(e?.message || '').includes('Unique constraint')) {
-      console.log(`[webhooks/razorpay] DB duplicate ${eventId} — acking.`)
+      // Phase 4 (item 9): durable attempt counting + duplicate status on
+      // the ORIGINAL row (never re-processed — idempotency gate intact).
+      await db.webhookEvent
+        .updateMany({
+          where: { eventId },
+          data: { attempts: { increment: 1 } },
+        })
+        .catch(() => undefined)
+      log('info', 'webhook_duplicate', {
+        channel: 'webhook',
+        eventId,
+        layer: 'db',
+      })
       return NextResponse.json({ received: true, duplicate: true, event_id: eventId, layer: 'db' })
     }
     // Other errors — log + ack 200 so the gateway stops retrying. We don't
@@ -254,7 +304,7 @@ export async function POST(req: NextRequest) {
       // racing /api/student/payments/verify — applies the ledger exactly
       // once (the DB @unique on Payment.transactionId backstops this).
       const ledgerKey = gatewayPaymentId || txn.gatewayPaymentId || orderId
-      const updated = await db.$transaction(async (tx) => {
+      const updated = await trackedTransaction('webhook-payment-captured', async (tx) => {
         const u = await tx.feeTransaction.update({
           where: { id: txn.id },
           data: {
@@ -390,7 +440,7 @@ export async function POST(req: NextRequest) {
         // transfers array is EMPTY do we fall back to the documented
         // window-wide catch-all (a settlement summary without itemised
         // transfers).
-        const linkedCount = await db.$transaction(async (tx) => {
+        const linkedCount = await trackedTransaction('webhook-settlement-processed', async (tx) => {
           const upsertedSettlement = await tx.settlement.upsert({
             where: { payoutId },
             create: {
@@ -437,14 +487,28 @@ export async function POST(req: NextRequest) {
           })
           return linkedTxns.count
         })
-        console.log(`[webhooks/razorpay] settlement ${payoutId} linked ${linkedCount} transactions`)
+        log('info', 'webhook_settlement_linked', {
+          channel: 'webhook',
+          eventId,
+          payoutId,
+          linkedCount,
+        })
       }
     } else {
-      console.log(`[webhooks/razorpay] event type ${eventType} — no auto-reconciliation handler.`)
+      log('debug', 'webhook_no_handler', {
+        channel: 'webhook',
+        eventId,
+        eventType,
+      })
     }
   } catch (e: any) {
     processingError = e instanceof Error ? e.message : String(e)
-    console.error('[webhooks/razorpay] processing error:', processingError)
+    log('error', 'webhook_processing_failed', {
+      channel: 'webhook',
+      eventId,
+      eventType,
+      detail: processingError.slice(0, 300),
+    })
   } finally {
     // Update the WebhookEvent row with the outcome (always — even on error,
     // so the operator can see what happened in the audit log).
@@ -457,6 +521,12 @@ export async function POST(req: NextRequest) {
         processedAt: new Date(),
       },
     }).catch(() => {/* best-effort — don't mask the original error */})
+    log(processingError ? 'error' : 'info', processingError ? 'webhook_failed' : 'webhook_processed', {
+      channel: 'webhook',
+      eventId,
+      eventType,
+      matchedTransactionId,
+    })
   }
 
   // Ack 200 so Razorpay stops retrying. The reconciliation is done (or

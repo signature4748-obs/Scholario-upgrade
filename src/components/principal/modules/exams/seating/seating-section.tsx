@@ -12,17 +12,15 @@ import { useState, useMemo, useEffect } from 'react'
 import { Plus, Trash2, RefreshCw, Download, Users, Layers, X, Ticket } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { ExamDTO, AdmitCardStudent } from '@/lib/exams/types'
 import type { ExamRoom, SeatingPlan, SeatingStudent, SeatingType, InvigilationAssignment, ExamSlot } from '@/lib/exams/seating/types'
 import { computeCapacity } from '@/lib/exams/seating/types'
-import { generateSeatingPlan, seatsForRoom, roomOccupancy, buildExamSlots } from '@/lib/exams/seating/generator'
+import { generateSeatingPlan, roomOccupancy, buildExamSlots } from '@/lib/exams/seating/generator'
 import { SeatingMap } from './seating-map'
 import { generateSeatingPlanPDF, generateBatchAdmitCardPDF } from '@/lib/exams/pdf'
-import { fetchAdmitCardsBatch } from '@/lib/exams/use-exams-extended'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { useTeachersMockStore } from '@/lib/store/teachers-mock-store'
 import { useSchoolContext } from '@/lib/exams/use-pdf-context'
@@ -289,7 +287,7 @@ export function SeatingSection({ exam }: Props) {
 
       {/* Room cards */}
       {rooms.map((room) => {
-        const roomStudents = room.eligibleClassIds.flatMap((cId) => studentsByClass.get(cId) ?? [])
+        const _roomStudents = room.eligibleClassIds.flatMap((cId) => studentsByClass.get(cId) ?? [])
         return (
           <div key={room.id} className="rounded-lg border border-border/60 overflow-hidden">
             {/* Room header */}
@@ -428,7 +426,7 @@ function Stat({ icon, label, value, valueClassName }: { icon: React.ReactNode; l
 }
 
 /** Slot-specific invigilator panel — date/shift/room, max 3 teachers, conflict detection. */
-function InvigilatorPanel({ roomId, roomName, examSlots, invigilators, setInvigilators, teachers }: {
+function InvigilatorPanel({ roomId, roomName: _roomName, examSlots, invigilators, setInvigilators, teachers }: {
   roomId: string
   roomName: string
   examSlots: ExamSlot[]
@@ -444,7 +442,6 @@ function InvigilatorPanel({ roomId, roomName, examSlots, invigilators, setInvigi
     // Conflict check: same teacher in another room for same slot.
     const conflict = invigilators.find((a) => a.examSlotId === slotId && a.teacherId === teacherId && a.roomId !== roomId)
     if (conflict) {
-      const conflictRoom = conflict.roomId
       toast.error(`${teacher.name} is already assigned to another room for this slot`)
       return
     }

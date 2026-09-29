@@ -7,11 +7,9 @@ import {
 } from 'lucide-react'
 import { PageTransition } from '@/components/shared/ui'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { departments, school } from '@/lib/mock/school'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
 
 import { ModuleHeader } from '../shared/module-header'
 import { SegmentedTabs } from '../shared/segmented-tabs'

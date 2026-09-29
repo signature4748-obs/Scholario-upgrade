@@ -1378,7 +1378,7 @@ export const useApplicationsStore = create<ApplicationsState>()(
         return { success: true }
       },
 
-      closeApplication: (id, actor, reason) => {
+      closeApplication: (id, actor, _reason) => {
         const state = get()
         const app = state.applications.find((a) => a.id === id)
         if (!app) return
@@ -1962,7 +1962,7 @@ export function ensureApplicationSeedData(): void {
     if (!tour) return
 
     const c11 = students.filter((s) => s.classId === 'C11').slice(0, 4)
-    const mkIdentity = (stu: typeof students[number]): StudentSubmissionIdentity => ({
+    const _mkIdentity = (stu: typeof students[number]): StudentSubmissionIdentity => ({
       id: stu.id,
       name: stu.name,
       admissionNo: stu.admissionNo,

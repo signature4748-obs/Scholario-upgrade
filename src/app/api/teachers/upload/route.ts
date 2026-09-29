@@ -67,7 +67,6 @@ export async function POST(req: NextRequest) {
   try {
     enforceRateLimit(`rl:upload:${user.id}`, RATE_LIMITS.upload)
   } catch (e) {
-    const retry = e instanceof Error ? e.message : ''
     return NextResponse.json(
       { success: false, error: 'Too many uploads. Please try again later.' },
       { status: 429, headers: { 'Retry-After': '60' } },

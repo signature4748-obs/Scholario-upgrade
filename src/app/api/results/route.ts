@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 
 export const runtime = 'nodejs'
@@ -135,34 +135,41 @@ export async function POST(req: NextRequest) {
       // (studentId, examId, subjectId) unique. A retried POST (or two staff
       // publishing the same sheet) can no longer mint duplicate Result rows
       // for one student's subject — the row is updated in place.
-      const written = await db.$transaction(
-        entries.map((e) =>
-          db.result.upsert({
-            where: {
-              studentId_examId_subjectId: {
+      // Phase 4: array-form $transaction migrated to the interactive form
+      // (same upserts, same order, now sequential inside the tx) so the
+      // publish batch is label-tracked as a unit.
+      const written = await trackedTransaction('results-publish-batch', async (tx) => {
+        const rows: Array<Awaited<ReturnType<typeof tx.result.upsert>>> = []
+        for (const e of entries) {
+          rows.push(
+            await tx.result.upsert({
+              where: {
+                studentId_examId_subjectId: {
+                  studentId: e.studentId,
+                  examId: body.examId || null,
+                  subjectId: e.subjectId,
+                },
+              },
+              create: {
                 studentId: e.studentId,
                 examId: body.examId || null,
                 subjectId: e.subjectId,
+                marks: Number(e.marks),
+                totalMarks: Number(e.totalMarks) || 100,
+                grade: gradeFor(Number(e.marks), Number(e.totalMarks) || 100),
+                remarks: body.remarks || null,
               },
-            },
-            create: {
-              studentId: e.studentId,
-              examId: body.examId || null,
-              subjectId: e.subjectId,
-              marks: Number(e.marks),
-              totalMarks: Number(e.totalMarks) || 100,
-              grade: gradeFor(Number(e.marks), Number(e.totalMarks) || 100),
-              remarks: body.remarks || null,
-            },
-            update: {
-              marks: Number(e.marks),
-              totalMarks: Number(e.totalMarks) || 100,
-              grade: gradeFor(Number(e.marks), Number(e.totalMarks) || 100),
-              remarks: body.remarks || null,
-            },
-          }),
-        ),
-      )
+              update: {
+                marks: Number(e.marks),
+                totalMarks: Number(e.totalMarks) || 100,
+                grade: gradeFor(Number(e.marks), Number(e.totalMarks) || 100),
+                remarks: body.remarks || null,
+              },
+            }),
+          )
+        }
+        return rows
+      })
       await db.activityLog.create({
         data: { schoolId, userId: user.id, action: 'RESULTS_PUBLISHED', detail: `${written.length} result(s) published` },
       })

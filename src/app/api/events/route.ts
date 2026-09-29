@@ -127,7 +127,7 @@ export async function DELETE(req: NextRequest) {
     // a foreign school's event id "does not exist" (404, no oracle).
     const res = await db.schoolEvent.deleteMany({ where: { id, schoolId: ctx.schoolId } })
     if (res.count === 0) {
-      throw new AppError('NOT_FOUND', { publicMessage: 'Event not found' })
+      throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Event not found' })
     }
 
     await auditEvent({

@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { IndianRupee } from 'lucide-react'
 import { computeAccount, findStructureForStudent } from '@/lib/store/fee-store'
 import { useFeeStore } from '@/lib/store/fee-store'
 import { useMyStudentRecord } from '@/lib/store/students-store'

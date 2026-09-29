@@ -19,7 +19,7 @@ export async function GET(
   return withAuthz({ permission: 'exams.marks.read' }, async (ctx) => {
     const { id } = await params
     const exam = await db.exam.findFirst({ where: { id, schoolId: ctx.schoolId }, select: { id: true } })
-    if (!exam) throw new AppError('NOT_FOUND', { publicMessage: 'Exam not found', internalDetail: 'marks GET: exam missing or foreign tenant' })
+    if (!exam) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Exam not found', internalDetail: 'marks GET: exam missing or foreign tenant' })
     const url = new URL(req.url)
     const classId = url.searchParams.get('classId')
     const subjectId = url.searchParams.get('subjectId')

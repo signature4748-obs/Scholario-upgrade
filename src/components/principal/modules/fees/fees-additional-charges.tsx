@@ -494,7 +494,7 @@ export function FeesAdditionalCharges({ data, onCollect }: {
 // ─── One collection row + state-aware action menu ──────────────────────
 
 function CollectionRow({
-  charge, facts, app, hasLinkedForm, onOpen, onEdit, onPublish, onClose, onArchive, onDelete, onCollect,
+  charge, facts, app, hasLinkedForm: _hasLinkedForm, onOpen, onEdit, onPublish, onClose, onArchive, onDelete, onCollect,
 }: {
   charge: AdditionalCharge
   facts: ChargeFacts
@@ -669,13 +669,12 @@ function CollectionWizardDialog({
   const [w, setW] = useState<WizardState>(() => editing ? wizardFromCharge(editing) : freshWizard())
   const patch = (p: Partial<WizardState>) => setW((f) => ({ ...f, ...p }))
 
-  const isDraft = editing?.status === 'Draft' || !editing
   const isEditActive = editing?.status === 'Active'
   // Money lock: amount frozen once payments exist (the store enforces too).
   const boundPayments = useFeeStore((s) => (editing ? s.transactions.filter((t) => t.additionalChargeId === editing.id).length : 0))
   const amountLocked = isEditActive && boundPayments > 0
 
-  const toggleClass = (id: string) => {
+  const _toggleClass = (id: string) => {
     const next = w.applicableClassIds.includes(id)
       ? w.applicableClassIds.filter((c) => c !== id)
       : [...w.applicableClassIds, id]
@@ -888,7 +887,7 @@ function CollectionWizardDialog({
               <Label className="text-xs">Applicable classes</Label>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {UNIQUE_CLASSES.map((c) => {
-                  const selected = w.applicableClassIds.includes(c.id)
+                  const _selected = w.applicableClassIds.includes(c.id)
                   // Classes share ids across sections — toggling one toggles all sections of the class name.
                   const idsOfName = ACADEMIC_CLASSES.filter((ac) => ac.name === c.name).map((ac) => ac.id)
                   const isOn = idsOfName.every((id) => w.applicableClassIds.includes(id))

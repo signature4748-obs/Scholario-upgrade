@@ -20,7 +20,7 @@
 import { useState } from 'react'
 import {
   Lock, Unlock, ShieldAlert, ArrowLeft, FileCheck2, FileSignature,
-  KeyRound, ChevronDown, Camera, Pencil, BadgeCheck, UserRoundPen,
+  KeyRound, ChevronDown, Camera, Pencil, UserRoundPen,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'

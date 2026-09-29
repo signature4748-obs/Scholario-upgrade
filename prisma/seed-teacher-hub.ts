@@ -61,7 +61,7 @@ async function main() {
   for (const [email, name] of Object.entries(parentNames)) {
     await db.user.updateMany({ where: { email, schoolId: school.id, role: 'PARENT' }, data: { name } })
   }
-  const guardianUser = async (roll: string) => {
+  const _guardianUser = async (roll: string) => {
     const student = byRoll.get(roll)
     if (!student?.guardianId) throw new Error(`No guardian user for roll ${roll}`)
     const guardian = await db.user.findUnique({ where: { id: student.guardianId } })

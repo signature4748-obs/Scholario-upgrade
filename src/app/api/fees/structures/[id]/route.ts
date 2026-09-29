@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 
@@ -20,7 +20,7 @@ export async function GET(
         versions: { orderBy: { version: 'desc' } },
       },
     })
-    if (!structure) throw new AppError('NOT_FOUND')
+    if (!structure) throw new AppError('RESOURCE_NOT_FOUND')
     return structure
   })
 }
@@ -44,7 +44,7 @@ export async function PATCH(
     const { id } = await params
     const body = await req.json().catch(() => ({}))
     const structure = await db.feeStructure.findFirst({ where: { id, schoolId } })
-    if (!structure) throw new AppError('NOT_FOUND')
+    if (!structure) throw new AppError('RESOURCE_NOT_FOUND')
     if (structure.status === 'current') {
       throw new AppError('INVALID_INPUT', {
         publicMessage: 'Cannot edit a published structure. Archive it first or publish a new version.',
@@ -71,7 +71,7 @@ export async function PATCH(
           select: { id: true },
         })
         if (found.length !== catalogueIds.length) {
-          throw new AppError('NOT_FOUND', {
+          throw new AppError('RESOURCE_NOT_FOUND', {
             publicMessage: 'Fee head catalogue entry not found',
             internalDetail: `structures PATCH: ${catalogueIds.length - found.length} catalogue id(s) missing or foreign tenant`,
           })
@@ -80,7 +80,7 @@ export async function PATCH(
 
       // ── 3-c fix: atomic head replacement + structure update ─────────
       const heads = body.heads as any[]
-      const updated = await db.$transaction(async (tx) => {
+      const updated = await trackedTransaction('fee-structure-update', async (tx) => {
         await tx.feeHead.deleteMany({ where: { structureId: id } })
         for (let i = 0; i < heads.length; i++) {
           const h = heads[i]
@@ -136,7 +136,7 @@ export async function DELETE(
     const { searchParams } = new URL(req.url)
     const reason = searchParams.get('reason') || 'No reason provided'
     const structure = await db.feeStructure.findFirst({ where: { id, schoolId } })
-    if (!structure) throw new AppError('NOT_FOUND')
+    if (!structure) throw new AppError('RESOURCE_NOT_FOUND')
 
     if (structure.status === 'draft') {
       await db.feeStructure.delete({ where: { id } })

@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
         select: { id: true, name: true },
       })
       if (!recipient) {
-        throw new AppError('NOT_FOUND', { publicMessage: 'Recipient not found' })
+        throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Recipient not found' })
       }
 
       const msg = await db.message.create({

@@ -67,7 +67,7 @@ export function useCountUp(value: number, duration = 700): number {
 
 export function GrowthScoreRing({
   score,
-  monthDelta,
+  monthDelta: _monthDelta,
   size = 120,
   label = 'Growth Score',
 }: {

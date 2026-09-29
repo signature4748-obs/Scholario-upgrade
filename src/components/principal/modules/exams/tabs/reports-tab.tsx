@@ -15,24 +15,20 @@
 
 import { useState, useMemo, useEffect } from 'react'
 import {
-  FileText, Download, User, GraduationCap, Ticket, ClipboardList,
-  TrendingUp, BarChart3, Calendar, Users, ShieldCheck, Award,
-  ChevronRight, Printer, Eye, Layers, BookOpen, CheckCircle2,
-  AlertTriangle, Clock,
+  FileText, Download, User, GraduationCap, Ticket, TrendingUp, Calendar, ShieldCheck, Award,
+  Eye, BookOpen, AlertTriangle, Clock,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
-import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table'
-import { InlineLoading } from '../inline-loading'
 import { CollapsibleSection } from '../collapsible-section'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { getSchoolProfile } from '@/lib/school-profile'
 import {
-  type ExamDTO, type AdmitCardStudent, type SchoolContextDTO,
-  type StudentResult, type StudentDTO, type AdmitCardConfigDTO, type ReportCardConfigDTO,
-  getGradeForPercentage, DEFAULT_GRADE_BOUNDARIES,
+  type ExamDTO, type SchoolContextDTO,
+  type StudentResult, type ReportCardConfigDTO,
+  DEFAULT_GRADE_BOUNDARIES,
 } from '@/lib/exams/types'
 import { useMockMarksStore } from '@/lib/exams/mock-marks-data'
 import { useMockAttendanceStore } from '@/lib/exams/mock-attendance-data'
@@ -43,11 +39,10 @@ import {
   computeClassPerformance,
 } from '@/lib/exams/analytics'
 import {
-  generateClassGradeSheetPDF, generateStudentReportCardPDF, generateBatchAdmitCardPDF,
-} from '@/lib/exams/pdf'
+  generateClassGradeSheetPDF, generateStudentReportCardPDF, } from '@/lib/exams/pdf'
 import { useSchoolContext } from '@/lib/exams/use-pdf-context'
 import { useAdmitCardConfig, useReportCardConfig } from '@/lib/exams/use-exam-settings'
-import { generateClassResultPDF, generateStudentResultPDF } from '@/lib/exams/result-pdf'
+import { generateClassResultPDF } from '@/lib/exams/result-pdf'
 
 interface Props {
   exams: ExamDTO[]
@@ -68,7 +63,7 @@ export function ReportsTab({ exams }: Props) {
   const initAttendance = useMockAttendanceStore((s) => s.initAttendance)
   const invigilatorStore = useMockInvigilatorStore()
   const { data: schoolCtx } = useSchoolContext()
-  const { config: admitCfg } = useAdmitCardConfig()
+  const { config: _admitCfg } = useAdmitCardConfig()
   const { config: reportCfg } = useReportCardConfig()
 
   // Initialize mock marks + attendance for the selected exam (if not already done).
@@ -135,7 +130,6 @@ export function ReportsTab({ exams }: Props) {
   }, [allStudents, exam, classId])
 
   // Default configs.
-  const DEFAULT_ADMIT: AdmitCardConfigDTO = { showPhoto: false, showRollNumber: true, showRoom: true, showSeatNumber: true, showTimetable: true, showInstructions: true, showQrCode: false }
   const DEFAULT_REPORT: ReportCardConfigDTO = { showAttendance: true, showRank: true, showPercentage: true, showGrade: true, showCoScholastic: false, showRemarks: true, showClassTeacherSign: true, showPrincipalSign: true }
 
   if (exams.length === 0) {

@@ -23,14 +23,6 @@ import { CommPanel, CommEmptyState } from './comm-shared'
 import { toast } from 'sonner'
 import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
 
-const CATEGORY_COLORS: Record<string, string> = {
-  'Examination': 'oklch(0.62 0.2 25)',
-  'General': 'oklch(0.7 0.15 200)',
-  'Transport': 'oklch(0.55 0.14 162)',
-  'Event': 'oklch(0.65 0.16 75)',
-  'Holiday': 'oklch(0.6 0.18 300)',
-  'Parents': 'oklch(0.55 0.16 250)',
-}
 
 // ─── QA-FIX-A: REAL Download / Share actions ────────────────────────
 

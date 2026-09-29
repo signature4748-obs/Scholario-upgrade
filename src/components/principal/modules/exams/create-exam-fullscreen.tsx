@@ -61,7 +61,7 @@ import {
   type SubjectInfo,
 } from '@/lib/exams/template-engine'
 import { useScheduleState } from '@/lib/exams/schedule/use-schedule-state'
-import { consolidateByGrade, flattenConsolidatedTimetable, type GradeMapping } from '@/lib/exams/schedule/consolidate'
+import { consolidateByGrade, type GradeMapping } from '@/lib/exams/schedule/consolidate'
 import type { ScheduleClass, ScheduleOptions } from '@/lib/exams/schedule/schedule-types'
 import { formatDateLong } from '@/lib/exams/format-helpers'
 import { ScheduleTable } from './schedule/schedule-table'

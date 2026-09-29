@@ -1,7 +1,8 @@
 /**
  * Central error classification for every API route.
  *
- * Phase 1 — Production Security Hardening.
+ * Phase 1 — Production Security Hardening (envelope, sanitization).
+ * Phase 4 — Observability: canonical diagnostic taxonomy.
  *
  * Problem being fixed (Phase-0 baseline B-10 / F-2):
  * the old `api()` wrapper surfaced raw `Error.message` strings to clients
@@ -12,14 +13,54 @@
  * This module owns the classification; `src/lib/api.ts` owns the response
  * envelope. Routes keep throwing `Error('human message')` for deliberate
  * user-facing messages — the classifier decides what is safe to surface.
+ *
+ * ── Canonical error-code taxonomy (Phase 4) ────────────────────────────
+ *
+ *   AUTH_REQUIRED            401  no active session / inactive account
+ *   FORBIDDEN                403  authenticated, role/permission denied
+ *   TENANT_MISMATCH          403  INTERNAL classification for cross-tenant
+ *                                 attempts. NOTE (Phase-2 invariant): by-id
+ *                                 lookups of foreign-tenant rows return
+ *                                 RESOURCE_NOT_FOUND — never a 403 with
+ *                                 distinction — so TENANT_MISMATCH appears
+ *                                 in audit events and server logs, NOT in
+ *                                 client envelopes (no existence oracle).
+ *   VALIDATION_FAILED        422  schema/shape validation (parseJsonBody,
+ *                                 parseQuery — zod paths)
+ *   INVALID_INPUT            422  domain input validation (route/business
+ *                                 rules) — synonym of VALIDATION_FAILED
+ *   RESOURCE_NOT_FOUND       404  requested resource does not exist (or
+ *                                 exists in another tenant — fail-safe)
+ *   RATE_LIMITED             429  rate limiter
+ *   ACCOUNT_LOCKED           429  auth lockout
+ *   PAYLOAD_TOO_LARGE        413
+ *   UNSUPPORTED_MEDIA_TYPE   415
+ *   CONFLICT                 409  uniqueness / state conflicts (P2002 …)
+ *   CSRF_REJECTED            403  origin check
+ *   DATABASE_FAILURE         500  Prisma/DB engine failures (internal)
+ *   EXTERNAL_SERVICE_FAILURE 503  upstream dependency failure (AI gateway,
+ *                                 payment gateway fetches …)
+ *   INTERNAL_ERROR           500  everything unclassified
+ *
+ * `UNAUTHORIZED` and `NOT_FOUND` remain in the union as DEPRECATED
+ * aliases (legacy typed throws still compile); new code uses the canonical
+ * names. Legacy sentinels classify to the canonical codes.
  */
-import { randomUUID } from 'crypto'
+import { newRequestId } from '@/lib/observability/http'
+
+export { newRequestId }
 
 /** Well-known error codes → HTTP status + safe public message. */
 export type AppErrorCode =
-  | 'UNAUTHORIZED'
+  // canonical (Phase 4)
+  | 'AUTH_REQUIRED'
+  | 'TENANT_MISMATCH'
+  | 'VALIDATION_FAILED'
+  | 'RESOURCE_NOT_FOUND'
+  | 'DATABASE_FAILURE'
+  | 'EXTERNAL_SERVICE_FAILURE'
+  // working set (Phase 1 — still canonical for their semantics)
   | 'FORBIDDEN'
-  | 'NOT_FOUND'
   | 'RATE_LIMITED'
   | 'INVALID_INPUT'
   | 'PAYLOAD_TOO_LARGE'
@@ -28,6 +69,9 @@ export type AppErrorCode =
   | 'CSRF_REJECTED'
   | 'ACCOUNT_LOCKED'
   | 'INTERNAL_ERROR'
+  // deprecated aliases (legacy typed throws; classify to themselves)
+  | 'UNAUTHORIZED'
+  | 'NOT_FOUND'
 
 export class AppError extends Error {
   readonly code: AppErrorCode
@@ -58,31 +102,43 @@ export class AppError extends Error {
 }
 
 export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
-  UNAUTHORIZED: 401,
+  AUTH_REQUIRED: 401,
+  UNAUTHORIZED: 401, // deprecated alias
   FORBIDDEN: 403,
-  NOT_FOUND: 404,
+  TENANT_MISMATCH: 403,
+  CSRF_REJECTED: 403,
+  RESOURCE_NOT_FOUND: 404,
+  NOT_FOUND: 404, // deprecated alias
   RATE_LIMITED: 429,
+  ACCOUNT_LOCKED: 429,
+  VALIDATION_FAILED: 422,
   INVALID_INPUT: 422,
   PAYLOAD_TOO_LARGE: 413,
   UNSUPPORTED_MEDIA_TYPE: 415,
   CONFLICT: 409,
-  CSRF_REJECTED: 403,
-  ACCOUNT_LOCKED: 429,
+  DATABASE_FAILURE: 500,
   INTERNAL_ERROR: 500,
+  EXTERNAL_SERVICE_FAILURE: 503,
 }
 
 const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
+  AUTH_REQUIRED: 'Authentication required',
   UNAUTHORIZED: 'Authentication required',
   FORBIDDEN: 'You do not have access to this resource',
+  TENANT_MISMATCH: 'You do not have access to this resource',
+  CSRF_REJECTED: 'Cross-origin request rejected',
+  RESOURCE_NOT_FOUND: 'Resource not found',
   NOT_FOUND: 'Resource not found',
   RATE_LIMITED: 'Too many requests. Please try again later.',
+  ACCOUNT_LOCKED: 'Account temporarily locked. Try again later.',
+  VALIDATION_FAILED: 'Invalid input',
   INVALID_INPUT: 'Invalid input',
   PAYLOAD_TOO_LARGE: 'Request payload is too large',
   UNSUPPORTED_MEDIA_TYPE: 'Unsupported file type',
   CONFLICT: 'The request conflicts with existing data',
-  CSRF_REJECTED: 'Cross-origin request rejected',
-  ACCOUNT_LOCKED: 'Account temporarily locked. Try again later.',
+  DATABASE_FAILURE: 'Internal server error',
   INTERNAL_ERROR: 'Internal server error',
+  EXTERNAL_SERVICE_FAILURE: 'An external service is temporarily unavailable',
 }
 
 /** Heuristics that mark an error message as UNSAFE for client exposure. */
@@ -121,14 +177,18 @@ function classifyPrisma(e: unknown): AppError | null {
         internalDetail: `P2002: ${err.message}`,
       })
     case 'P2025':
-      return new AppError('NOT_FOUND', { internalDetail: `P2025: ${err.message}` })
+      return new AppError('RESOURCE_NOT_FOUND', { internalDetail: `P2025: ${err.message}` })
     case 'P2003':
       return new AppError('INVALID_INPUT', {
         publicMessage: 'Related record not found',
         internalDetail: `P2003: ${err.message}`,
       })
     default:
-      return new AppError('INTERNAL_ERROR', { internalDetail: `Prisma ${err.code}: ${err.message}` })
+      // Phase 4: DB engine failures carry the diagnostic DATABASE_FAILURE
+      // code (envelope stays generic — internals never reach the client).
+      return new AppError('DATABASE_FAILURE', {
+        internalDetail: `Prisma ${err.code}: ${err.message}`,
+      })
   }
 }
 
@@ -139,11 +199,6 @@ export interface ClassifiedError {
   headers?: Record<string, string>
   internalDetail: string
   requestId: string
-}
-
-/** New correlation id for a request (also returned as X-Request-Id). */
-export function newRequestId(): string {
-  return randomUUID()
 }
 
 /**
@@ -172,15 +227,16 @@ export function classifyError(e: unknown, requestId: string): ClassifiedError {
 
   const message = e instanceof Error ? e.message : String(e)
 
-  // 2. Legacy sentinels (thrown all over the route layer)
+  // 2. Legacy sentinels (thrown all over the route layer) — classify to the
+  //    canonical Phase-4 codes.
   if (message === 'UNAUTHORIZED') {
-    return { status: 401, code: 'UNAUTHORIZED', publicMessage: DEFAULT_MESSAGE.UNAUTHORIZED, headers, internalDetail: 'legacy sentinel', requestId }
+    return { status: 401, code: 'AUTH_REQUIRED', publicMessage: DEFAULT_MESSAGE.AUTH_REQUIRED, headers, internalDetail: 'legacy sentinel', requestId }
   }
   if (message === 'FORBIDDEN' || message === 'NO_SCHOOL' || message === 'SUPER_ADMIN has no school scope') {
     return { status: 403, code: 'FORBIDDEN', publicMessage: DEFAULT_MESSAGE.FORBIDDEN, headers, internalDetail: `legacy sentinel: ${message}`, requestId }
   }
   if (message === 'NOT_FOUND') {
-    return { status: 404, code: 'NOT_FOUND', publicMessage: DEFAULT_MESSAGE.NOT_FOUND, headers, internalDetail: 'legacy sentinel', requestId }
+    return { status: 404, code: 'RESOURCE_NOT_FOUND', publicMessage: DEFAULT_MESSAGE.RESOURCE_NOT_FOUND, headers, internalDetail: 'legacy sentinel', requestId }
   }
 
   // 3. Prisma engine errors — never surface raw

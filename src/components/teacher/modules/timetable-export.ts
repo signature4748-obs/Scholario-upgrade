@@ -19,7 +19,7 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import {
-  AlignmentType, BorderStyle, Document, HeadingLevel, Packer, Paragraph,
+  AlignmentType, BorderStyle, Document, Packer, Paragraph,
   ShadingType, Table, TableCell, TableRow, TextRun, WidthType,
 } from 'docx'
 import { schoolPrintIdentity } from '@/lib/school-print-identity'

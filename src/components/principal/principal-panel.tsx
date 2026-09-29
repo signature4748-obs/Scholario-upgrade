@@ -5,7 +5,7 @@ import {
   LayoutDashboard, UserPlus, GraduationCap, School, CalendarCheck, IndianRupee,
   Wallet, FileText, Megaphone, CalendarDays, ClipboardList,
   BookMarked, Bus, Package, Award, Settings, MessageSquare,
-  PieChart, Download, LayoutGrid, Users, Layers, Clock
+  PieChart, Download, Clock
 } from 'lucide-react'
 import { AppShell, type NavGroup } from '@/components/shell/app-shell'
 import { lazyModule } from '@/components/shared/lazy-module'

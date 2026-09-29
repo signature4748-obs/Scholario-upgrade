@@ -694,7 +694,7 @@ export function AreaTrendChart({
   labelKey = 'label',
   primaryKey = 'primary',
   secondaryKey = 'secondary',
-  className,
+  className: _className,
   showArea = false,
   strokeWidth = 2,
   secondaryStrokeWidth = 2,
@@ -921,7 +921,7 @@ export function GroupedBarChart({
   className,
 }: GroupedBarChartProps) {
   const [hover, setHover] = useState<number | null>(null)
-  const uid = useId().replace(/[:]/g, '')
+  const _uid = useId().replace(/[:]/g, '')
   const max = Math.max(...data.flatMap((d) => [d[primaryKey] ?? 0, d[secondaryKey] ?? 0]), 1)
 
   return (
@@ -1040,7 +1040,7 @@ export function HorizontalBarChart({
 
 export function ProgressBar({ value, max = 100, color, className }: { value: number; max?: number; color?: string; className?: string }) {
   const pct = Math.min(100, (value / max) * 100)
-  const uid = useId().replace(/[:]/g, '')
+  const _uid = useId().replace(/[:]/g, '')
   const autoColor = pct > 90 ? 'oklch(0.62 0.2 25)' : pct > 75 ? 'oklch(0.65 0.16 75)' : 'oklch(0.55 0.14 162)'
   const c = color ?? autoColor
   return (
@@ -1078,7 +1078,7 @@ export function BarTrend({
   className,
 }: BarTrendProps) {
   const [hover, setHover] = useState<number | null>(null)
-  const uid = useId().replace(/[:]/g, '')
+  const _uid = useId().replace(/[:]/g, '')
   const max = Math.max(...data.map((d) => d[valueKey] ?? 0), 1)
 
   return (

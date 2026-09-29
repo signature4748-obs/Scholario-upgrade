@@ -15,7 +15,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params
   return withUser(async (user) => {
     if (user.role !== 'SUPER_ADMIN' && user.schoolId !== id) {
-      throw new AppError('NOT_FOUND', { publicMessage: 'School not found', internalDetail: 'schools/[id]: cross-school read refused without existence oracle' })
+      throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found', internalDetail: 'schools/[id]: cross-school read refused without existence oracle' })
     }
 
     const school = await db.school.findUnique({

@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
           select: { id: true },
         })
         if (!cls) {
-          throw new AppError('NOT_FOUND', { publicMessage: 'Class not found' })
+          throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Class not found' })
         }
       }
 

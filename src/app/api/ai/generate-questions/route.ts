@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { parseJsonBody, idSchema, safeText } from '@/lib/security/validation'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { log } from '@/lib/observability/logger'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -126,18 +127,51 @@ Requirements:
         if (arrMatch) cleaned = arrMatch[0]
 
         try {
-          parsed = JSON.parse(cleaned)
+          const parsedJson: unknown = JSON.parse(cleaned)
+          if (Array.isArray(parsedJson)) {
+            parsed = parsedJson as GeneratedQuestion[]
+          } else {
+            usedFallback = true
+            log('warn', 'external_service_degraded', {
+              channel: 'external',
+              errorCode: 'EXTERNAL_SERVICE_FAILURE',
+              service: 'ai-gateway',
+              reason: 'response-was-not-a-json-array',
+            })
+            parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
+          }
         } catch {
           usedFallback = true
+          log('warn', 'external_service_degraded', {
+            channel: 'external',
+            errorCode: 'EXTERNAL_SERVICE_FAILURE',
+            service: 'ai-gateway',
+            reason: 'unparseable-response',
+          })
           parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
         }
       } else {
         usedFallback = true
+        log('warn', 'external_service_degraded', {
+          channel: 'external',
+          errorCode: 'EXTERNAL_SERVICE_FAILURE',
+          service: 'ai-gateway',
+          reason: 'sdk-client-unavailable',
+        })
         parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
       }
-    } catch {
-      // SDK request failed — use template fallback
+    } catch (e) {
+      // SDK request failed — use template fallback, but NEVER silently:
+      // Phase 4 item 3/7 — the upstream failure is a structured
+      // EXTERNAL_SERVICE_FAILURE diagnostic line (errorCode taxonomy),
+      // while the user experience degrades gracefully to templates.
       usedFallback = true
+      log('warn', 'external_service_failure', {
+        channel: 'external',
+        errorCode: 'EXTERNAL_SERVICE_FAILURE',
+        service: 'ai-gateway',
+        detail: e instanceof Error ? e.message : String(e),
+      })
       parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
     }
 

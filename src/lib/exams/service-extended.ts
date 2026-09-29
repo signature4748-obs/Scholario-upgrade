@@ -5,7 +5,7 @@
 // ──────────────────────────────────────────────────────────────────────
 
 import 'server-only'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { AppError } from '@/lib/security/errors'
 import {
   type AuthUserLike,
@@ -14,10 +14,8 @@ import {
   type ExamMarkDTO,
   type MarkStatus,
   type WorkflowStatus,
-  type AuditLogDTO,
 } from './types'
 import { toScheduleDTO, toMarkDTO, audit, deleteScheduleItem } from './service'
-import { getGradeForPercentage } from './types'
 import { computeAllResults } from './result-engine'
 import { getTeacherPreferences } from '@/lib/user-preferences'
 import { classLabelOf } from '@/lib/teacher-hub'
@@ -442,7 +440,7 @@ export async function generateSeatingPlan(
   // deleteMany + the per-seat creates commit atomically (a crash mid-way
   // previously left the class with a partial seating plan).
   let seatCounter = 0
-  const generated = await db.$transaction(async (tx) => {
+  const generated = await trackedTransaction('exam-seating-generate', async (tx) => {
     // Clear any existing assignments for this exam+class
     await tx.examSeatAssignment.deleteMany({ where: { examId, classId } })
 
@@ -559,7 +557,7 @@ export async function markExamAttendance(
     select: { id: true },
   })
   if (!student) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Student not found',
       internalDetail: `markExamAttendance: student ${input.studentId} missing or foreign tenant`,
     })
@@ -569,7 +567,7 @@ export async function markExamAttendance(
     select: { id: true },
   })
   if (!subject) {
-    throw new AppError('NOT_FOUND', {
+    throw new AppError('RESOURCE_NOT_FOUND', {
       publicMessage: 'Subject not found in this school',
       internalDetail: `markExamAttendance: subject ${input.subjectId} missing or foreign tenant`,
     })
@@ -851,7 +849,7 @@ export async function computeAutoOutcomes(
   // Phase 3 — outcome recomputation is ONE $transaction: the deleteMany
   // + the per-student outcome creates commit atomically (a crash mid-way
   // previously erased the class's outcomes without recomputing them).
-  const count = await db.$transaction(async (tx) => {
+  const count = await trackedTransaction('exam-outcomes-compute', async (tx) => {
     // Clear existing auto outcomes for this class
     await tx.examResultOutcome.deleteMany({ where: { examId, classId } })
 

@@ -38,7 +38,7 @@
  * confirmed them, so they are recorded Paid automatically.
  */
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Check, X, AlertCircle, MessageSquare, Loader2, History, ChevronDown, ArrowRight, Banknote,
@@ -97,7 +97,7 @@ function QueueStatusChip({ status }: { status: CashRequest['status'] }) {
 /** Who recorded the payment awaiting verification — SaaS-STAGE-1 keeps ONE
  *  source vocabulary everywhere (shared SourceChip); this helper is kept
  *  for confirmation-modal copy. */
-function collectorLabel(role: FeeTransaction['collectorRole'], collectedBy: string): string {
+function _collectorLabel(role: FeeTransaction['collectorRole'], collectedBy: string): string {
   if (role === 'teacher') return `Teacher · ${collectedBy}`
   if (role === 'class_teacher') return `Class Teacher · ${collectedBy}`
   if (role === 'self') return 'Student self-service'

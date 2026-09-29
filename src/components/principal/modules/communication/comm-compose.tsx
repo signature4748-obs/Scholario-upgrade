@@ -21,8 +21,8 @@
 import { useState, useMemo, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Smartphone, MessageSquare, Mail, Send, Clock, FileText, X, Check,
-  Calendar, AlertCircle, ChevronDown, Users, Loader2, RadioTower, Globe,
+  Smartphone, MessageSquare, Mail, Send, FileText, Check,
+  AlertCircle, ChevronDown, Loader2, RadioTower, Globe,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -583,7 +583,7 @@ function PushPreview({ title, message, audience }: { title: string; message: str
 
 // ─── SMS Preview ─────────────────────────────────────────────────────
 
-function SmsPreview({ title, message, segments, audience, recipientCount }: { title: string; message: string; segments: number; audience: string; recipientCount: number }) {
+function SmsPreview({ title, message, segments, audience: _audience, recipientCount }: { title: string; message: string; segments: number; audience: string; recipientCount: number }) {
   const smsText = `${title ? title + ': ' : ''}${message} — ${school.name}`
   return (
     <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-border bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/20 dark:to-card p-3">

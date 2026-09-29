@@ -408,9 +408,9 @@ const METHODS: PaymentMethod[] = ['Bank Transfer', 'UPI', 'Cash', 'Cheque']
 // DETAILED structure later (the UI supports it); nothing detailed is
 // seeded.
 
-const ded = (id: string, name: string, basis: 'Fixed' | 'Percentage', value: number): StructureComponent =>
+const _ded = (id: string, name: string, basis: 'Fixed' | 'Percentage', value: number): StructureComponent =>
   ({ id, name, type: 'Deduction', basis, value })
-const earn = (id: string, name: string, basis: 'Fixed' | 'Percentage', value: number): StructureComponent =>
+const _earn = (id: string, name: string, basis: 'Fixed' | 'Percentage', value: number): StructureComponent =>
   ({ id, name, type: 'Earning', basis, value })
 
 const SEED_STRUCTURES: SalaryStructureTemplate[] = [

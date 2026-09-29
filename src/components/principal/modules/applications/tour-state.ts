@@ -14,7 +14,6 @@ import {
   deriveSubmissionPayment,
   type SchoolApplication, type ApplicationSubmission,
 } from '@/lib/store/applications-store'
-import { cn } from '@/lib/utils'
 
 export type TourSubmissionState =
   | 'Submitted — Unpaid' | 'Submitted — Payment Pending' | 'Submitted — Paid'

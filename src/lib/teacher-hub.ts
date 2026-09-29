@@ -157,7 +157,7 @@ export async function assertStudentInScope(
       user: { select: { id: true, name: true } },
     },
   })
-  if (!student) throw new AppError('NOT_FOUND', { publicMessage: 'Student not found in your scope', internalDetail: 'assertStudentInScope: student missing or outside teacher scope' })
+  if (!student) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Student not found in your scope', internalDetail: 'assertStudentInScope: student missing or outside teacher scope' })
   return student as ScopedStudent
 }
 

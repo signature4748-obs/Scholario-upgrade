@@ -20,7 +20,7 @@ import { useState, useEffect } from 'react'
 import {
   Settings as SettingsIcon, GraduationCap, Award, ClipboardCheck,
   Ticket, FileText, Send, Plus, Trash2, Save, Check, Archive as ArchiveIcon,
-  ShieldCheck, Clock, AlertTriangle, ChevronRight, ChevronDown,
+  ShieldCheck, AlertTriangle, ChevronRight, ChevronDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -29,7 +29,6 @@ import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table'
 import { InlineLoading } from '../inline-loading'
-import { CollapsibleSection } from '../collapsible-section'
 import { useRoleGate } from '@/lib/exams/use-role-gate'
 import {
   useExamTypes, useGradeScales, useExamRules,

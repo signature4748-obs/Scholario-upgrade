@@ -12,7 +12,7 @@
  */
 
 import { useMemo } from 'react'
-import { ArrowDownRight, ArrowUpRight, Minus, TrendingUp } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, TrendingUp } from 'lucide-react'
 import { GradientAvatar } from '@/components/shared/ui'
 import { cn } from '@/lib/utils'
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from '@/components/ui/drawer'

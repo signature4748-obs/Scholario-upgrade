@@ -51,7 +51,6 @@ import { type StaffAttendanceRecord, type AttendanceStatus, STAFF_DEFS, getStaff
 import {
   isHoliday as isSchoolHoliday,
   getHoliday as getSchoolHoliday,
-  isWorkingDay,
   getPreviousWorkingDay,
   findPendingWorkingDays,
   type Holiday,
@@ -62,7 +61,6 @@ import { STATUS_META, STATUS_ORDER, StatusBadge } from './attendance-status'
 import {
   useStaffAttendanceStore,
   STAFF_TODAY_DATE,
-  type DateState,
   type StaffDateState,
 } from '@/lib/store/staff-attendance-store'
 
@@ -140,7 +138,6 @@ export function StaffAttendanceTab() {
   // Brief PART 14-22 + PART 46: Authoritative state matrix.
   // Since we only navigate to past working days + today, isFuture should
   // never be true. But we keep the guard as a safety net.
-  const isFuture = false // Brief PART 4: impossible to navigate to future
   const isHoliday = useMemo(() => isSchoolHoliday(selectedDate), [selectedDate])
   const holidayInfo: Holiday | null = useMemo(() => getSchoolHoliday(selectedDate), [selectedDate])
 
@@ -148,11 +145,6 @@ export function StaffAttendanceTab() {
   const isReadOnly = dateState.submitted
   const isEditable = !isHoliday && !dateState.submitted
 
-  const currentState: DateState = dateState.submitted
-    ? 'submitted'
-    : dateState.draft
-    ? 'draft'
-    : 'empty'
 
   // Brief §27 + §5: detect unsaved changes for the selected date.
   // Computed reactively from the store subscription (re-renders when draft changes).

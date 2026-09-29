@@ -3,8 +3,8 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  ShieldCheck, Cloud, Server, Database, Lock, Building2,
-  Cpu, Users, ArrowRight, ArrowLeft, CheckCircle2, ShieldAlert
+  ShieldCheck, Cloud, Database, Lock, Building2,
+  Cpu, ArrowRight, ArrowLeft, 
 } from 'lucide-react'
 import { useAuth } from '@/lib/store/auth-store'
 

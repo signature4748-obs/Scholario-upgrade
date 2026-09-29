@@ -50,7 +50,7 @@ function isImportant(n: ServerNotice): boolean {
 
 export function AnnouncementsModule() {
   const notices = useServerNotices((s) => s.notices)
-  const loading = useServerNotices((s) => s.loading)
+  const _loading = useServerNotices((s) => s.loading)
   const error = useServerNotices((s) => s.error)
   const refresh = useServerNotices((s) => s.refresh)
 

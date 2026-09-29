@@ -1,57 +1,103 @@
 import { NextResponse } from 'next/server'
+import { headers } from 'next/headers'
 import { getCurrentUser, type AuthUser } from './auth'
 import { AppError, classifyError, newRequestId } from './security/errors'
+import { runWithContext, patchRequestContext } from './observability/context'
+import { log } from './observability/logger'
+import { sanitizeRequestId } from './observability/http'
 
 export type Ctx = { user: AuthUser }
 
 /**
- * The central API envelope (Phase 1 hardening).
+ * The central API envelope (Phase 1 hardening; Phase 4 observability).
  *
  * Success → `{ ok: true, data }` (or raw Response passthrough for file
  * streams — those handlers already control their own headers).
  *
- * Failure → `{ ok: false, error }` where `error` is GUARANTEED safe:
- * typed security codes, legacy sentinels, or route-authored human copy
- * that passed the unsafe-message heuristics. Prisma internals, stack
- * traces, and filesystem paths stay in the server log. Every failure
- * carries an `X-Request-Id` correlation header; 429s carry `Retry-After`.
+ * Failure → `{ ok: false, error, code, requestId }` where `error` is a
+ * GUARANTEED-safe message, `code` is the canonical AppErrorCode taxonomy
+ * and `requestId` is the correlation id (also the X-Request-Id response
+ * header — quote it in bug reports; it finds the request's log lines).
+ * Prisma internals, stack traces, and filesystem paths stay in the server
+ * log. 429s carry `Retry-After`.
+ *
+ * Phase 4: every call opens a request scope (AsyncLocalStorage) carrying
+ * requestId/userId/schoolId/route/operation, and emits ONE structured
+ * completion line (`http_request`) with duration + status (+ errorCode on
+ * failure). Route/operation are injected by middleware; when middleware
+ * did not run (direct handler invocation in tests) they fall back to
+ * 'unknown' and a fresh request id is minted.
  */
-export async function api(handler: () => Promise<unknown>) {
-  const requestId = newRequestId()
+
+interface RequestMeta {
+  requestId: string
+  route: string
+  operation: string
+}
+
+async function requestMeta(): Promise<RequestMeta> {
   try {
-    const data = await handler()
-    // Raw Response passthrough — lets handlers stream files/CSVs with
-    // custom headers instead of the standard { ok, data } JSON envelope.
-    if (data instanceof Response) {
-      data.headers.set('X-Request-Id', requestId)
-      return data
+    const h = await headers()
+    return {
+      requestId: sanitizeRequestId(h.get('x-request-id')) ?? newRequestId(),
+      route: h.get('x-scholario-route') ?? 'unknown',
+      operation: h.get('x-scholario-op') ?? 'unknown',
     }
-    const res = NextResponse.json({ ok: true, data })
-    res.headers.set('X-Request-Id', requestId)
-    return res
-  } catch (e: unknown) {
-    const classified = classifyError(e, requestId)
-    if (classified.status >= 500) {
-      // Internal failures: full detail to the server log only.
-      console.error(
-        JSON.stringify({
-          channel: 'api',
-          level: 'error',
-          requestId,
-          code: classified.code,
-          detail: classified.internalDetail,
-        }),
-      )
-    }
-    const res = NextResponse.json(
-      { ok: false, error: classified.publicMessage, code: classified.code },
-      { status: classified.status },
-    )
-    for (const [k, v] of Object.entries(classified.headers ?? {})) {
-      res.headers.set(k, v)
-    }
-    return res
+  } catch {
+    // Outside a Next request scope (unit tests, scripts) — degrade safely.
+    return { requestId: newRequestId(), route: 'unknown', operation: 'unknown' }
   }
+}
+
+export async function api(handler: () => Promise<unknown>): Promise<Response> {
+  const meta = await requestMeta()
+  const startedAt = Date.now()
+  return runWithContext({ ...meta, startedAt }, async () => {
+    try {
+      const data = await handler()
+      const durationMs = Date.now() - startedAt
+      const status = data instanceof Response ? data.status : 200
+      log(status >= 500 ? 'error' : status >= 400 ? 'warn' : 'info', 'http_request', {
+        channel: 'http',
+        durationMs,
+        status,
+      })
+      // Raw Response passthrough — lets handlers stream files/CSVs with
+      // custom headers instead of the standard { ok, data } JSON envelope.
+      if (data instanceof Response) {
+        data.headers.set('X-Request-Id', meta.requestId)
+        return data
+      }
+      const res = NextResponse.json({ ok: true, data })
+      res.headers.set('X-Request-Id', meta.requestId)
+      return res
+    } catch (e: unknown) {
+      const classified = classifyError(e, meta.requestId)
+      const durationMs = Date.now() - startedAt
+      // One structured failure line — correlation fields come from the
+      // request scope; internalDetail NEVER reaches the client.
+      log(classified.status >= 500 ? 'error' : 'warn', 'http_request', {
+        channel: 'http',
+        durationMs,
+        status: classified.status,
+        errorCode: classified.code,
+        detail: classified.internalDetail,
+      })
+      const res = NextResponse.json(
+        {
+          ok: false,
+          error: classified.publicMessage,
+          code: classified.code,
+          requestId: meta.requestId,
+        },
+        { status: classified.status },
+      )
+      for (const [k, v] of Object.entries(classified.headers ?? {})) {
+        res.headers.set(k, v)
+      }
+      return res
+    }
+  })
 }
 
 export async function withUser(
@@ -60,9 +106,22 @@ export async function withUser(
 ) {
   return api(async () => {
     const user = await getCurrentUser()
-    if (!user) throw new Error('UNAUTHORIZED')
-    if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
-    if (opts?.roles && !opts.roles.includes(user.role)) throw new Error('FORBIDDEN')
+    if (!user) {
+      throw new AppError('AUTH_REQUIRED', { internalDetail: 'withUser: no session' })
+    }
+    if (user.status !== 'ACTIVE') {
+      throw new AppError('AUTH_REQUIRED', {
+        internalDetail: `withUser: account status ${user.status}`,
+      })
+    }
+    if (opts?.roles && !opts.roles.includes(user.role)) {
+      throw new AppError('FORBIDDEN', {
+        internalDetail: `withUser: role ${user.role} not in ${opts.roles.join('|')}`,
+      })
+    }
+    // Correlate the request with the authenticated identity (ids only —
+    // never email/phone/PII).
+    patchRequestContext({ userId: user.id, schoolId: user.schoolId ?? undefined })
     return handler(user)
   })
 }
@@ -74,7 +133,11 @@ export function schoolScoped(user: AuthUser): string {
       internalDetail: 'schoolScoped(SUPER_ADMIN)',
     })
   }
-  if (!user.schoolId) throw new Error('NO_SCHOOL')
+  if (!user.schoolId) {
+    throw new AppError('FORBIDDEN', {
+      internalDetail: 'schoolScoped: identity has no school scope',
+    })
+  }
   return user.schoolId
 }
 

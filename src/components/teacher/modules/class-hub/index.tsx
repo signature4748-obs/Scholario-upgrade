@@ -167,7 +167,7 @@ export function ClassHubModule({ onNavigate }: { onNavigate: (key: string) => vo
 }
 
 function ClassHubLoaded({
-  classes, reload, detailTick, classId, setClassId, tab, setTab, search, setSearch,
+  classes, reload: _reload, detailTick, classId, setClassId, tab, setTab, search, setSearch,
   profileStudentId, setProfileStudentId, growthOpen, setGrowthOpen,
   reportKind, setReportKind, marksheetExam, setMarksheetExam, onNavigate,
 }: {

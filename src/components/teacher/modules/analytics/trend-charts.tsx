@@ -19,7 +19,6 @@
 import type { LucideIcon } from 'lucide-react'
 import { CalendarCheck, LineChart as LineChartIcon } from 'lucide-react'
 import { ChartCard, AreaTrend } from '@/components/shared/charts'
-import { cn } from '@/lib/utils'
 import type { ClassAnalytics } from './types'
 
 const GREEN = 'oklch(0.55 0.14 162)'

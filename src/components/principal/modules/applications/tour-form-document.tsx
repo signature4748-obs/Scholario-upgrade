@@ -540,7 +540,7 @@ function TitleBlock({ app, sub, m, k }: { app: SchoolApplication; sub?: Applicat
 }
 
 /** G. Parental undertaking & declaration — classic: the single boxed block; modern: open list. */
-function Declaration({ app, sub, m, k }: { app: SchoolApplication; sub?: ApplicationSubmission; m: DocModel; k: DocSkin }) {
+function Declaration({ app: _app, sub, m, k }: { app: SchoolApplication; sub?: ApplicationSubmission; m: DocModel; k: DocSkin }) {
   const body = (
     <>
       <p style={{ fontSize: k.declSize, lineHeight: k.declLeading, color: '#111' }}>

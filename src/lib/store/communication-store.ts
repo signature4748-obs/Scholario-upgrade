@@ -66,7 +66,7 @@ export interface CommunicationAudit {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-function getAudienceCount(audience: Audience): number {
+function _getAudienceCount(audience: Audience): number {
   const students = useStudentsStore.getState().students
   const activeStudents = students.filter((s) => s.status === 'Active')
 

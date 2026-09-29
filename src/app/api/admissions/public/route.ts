@@ -8,7 +8,7 @@ import {
 } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, emailSchema, phoneSchema, safeText } from '@/lib/security/validation'
 import { z } from 'zod'
-import { auditEvent, auditRateLimit } from '@/lib/security/audit'
+import { auditRateLimit } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 

@@ -1,0 +1,136 @@
+# PHASE 4 (item 11) — CI: the quality gates that ran manually at every
+# phase close are now enforced on every push/PR.
+#
+# CI FAILS on:
+#   · type errors            (bunx tsc --noEmit)
+#   · lint errors            (eslint — error-level defect rules)
+#   · build errors           (next build; ignoreBuildErrors was REMOVED in
+#                             Phase 4 — the build type-checks for real)
+#   · test failures          (unit / integration / API / regression)
+#   · security test failures (incl. the cross-tenant isolation suite)
+#   · e2e failures           (live-server journeys: auth → dashboards → data)
+#   · migration failures     (prisma migrate deploy on a FRESH database +
+#                             zero-drift diff against the schema)
+#
+# Notes:
+#   · The security/tenant/API/e2e suites run against a REAL server
+#     (next dev on :3000) with a REAL SQLite DB — same runtime the
+#     suites were written against.
+#   · Seeds: canonical demo data + tenant-isolation fixtures (idempotent).
+#   · ESLint runs with error-level rules; `react-hooks/exhaustive-deps`
+#     is warn-level (documented burn-down in docs/OBSERVABILITY.md) —
+#     warnings do not fail CI, errors do.
+#   · LOG_LEVEL=warn keeps the CI log volume sane while still surfacing
+#     slow queries, job failures and security events.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-verify:
+    name: Typecheck · Lint · Migrations · Build · Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      DATABASE_URL: file:/home/runner/work/${{ github.event.repository.name }}/ci.db
+      LOG_LEVEL: warn
+      NODE_ENV: development
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      # ── Gate 1: TypeScript ────────────────────────────────────────────
+      - name: Typecheck (tsc --noEmit)
+        run: bunx tsc --noEmit
+
+      # ── Gate 2: Lint (error-level defect rules) ──────────────────────
+      - name: Lint
+        run: bunx eslint .
+
+      # ── Gate 3: Migrations apply cleanly on a fresh database ─────────
+      # `migrate deploy` on an empty SQLite file proves the migration
+      # lineage is applicable end-to-end (fail → migration failure).
+      - name: Migrations — deploy to fresh database
+        run: bunx prisma migrate deploy
+
+      # ── Gate 3b: zero drift between migrations and schema ────────────
+      - name: Migrations — schema drift check
+        run: |
+          DIFF=$(bunx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            2>/dev/null || true)
+          if [ -n "$DIFF" ] && [ "$DIFF" != "No difference detected." ]; then
+            echo "Schema drift detected — migrations do not match schema.prisma:"
+            echo "$DIFF"
+            exit 1
+          fi
+          echo "No difference detected."
+
+      # ── Gate 4: Production build (TypeScript errors fail the build) ──
+      - name: Build (next build — type-checked, no bypass)
+        run: bun run build
+        env:
+          NODE_ENV: production
+
+      # ── Test runtime: fresh dev database + seeds ──────────────────────
+      - name: Reset CI database and seed
+        run: |
+          rm -f ci.db
+          bunx prisma migrate deploy
+          bun run db:seed
+          bun run db:seed-tenant-isolation
+        env:
+          DATABASE_URL: file:/home/runner/work/${{ github.event.repository.name }}/ci.db
+          NODE_ENV: development
+
+      # ── Gate 5-8: the test hierarchy ─────────────────────────────────
+      - name: Start dev server for live suites
+        run: |
+          nohup bun run dev > dev-server.log 2>&1 &
+          echo "waiting for readiness…"
+          for i in $(seq 1 120); do
+            if curl -sf http://localhost:3000/health/ready > /dev/null 2>&1; then
+              echo "server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server failed to become ready — log tail:"
+          tail -50 dev-server.log
+          exit 1
+
+      - name: Unit + integration + API + regression tests
+        run: bun test tests/unit/ tests/integration/ tests/api/ tests/regression/
+
+      - name: Security + tenant isolation tests
+        run: bun test tests/security/
+
+      - name: E2E journeys
+        run: bun test tests/e2e/
+        env:
+          E2E_BASE_URL: http://localhost:3000
+
+      # ── Always show the server tail on failure ────────────────────────
+      - name: Dev server log tail (on failure)
+        if: failure()
+        run: tail -80 dev-server.log || true

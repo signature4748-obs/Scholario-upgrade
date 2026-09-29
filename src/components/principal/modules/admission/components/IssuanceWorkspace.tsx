@@ -45,7 +45,7 @@ export function IssuanceWorkspace({
   const artifacts = buildIssuanceArtifacts(app)
 
   const handleCompleteAndEnroll = () => {
-    const newStudent = store.completeAdmission(app.id, {
+    const _newStudent = store.completeAdmission(app.id, {
       admissionNo: artifacts.admissionNo,
       studentId: artifacts.studentId,
       rollNo: artifacts.rollNo,

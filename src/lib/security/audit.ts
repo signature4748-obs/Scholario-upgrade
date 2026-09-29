@@ -51,6 +51,10 @@ export const AUDIT_ACTIONS = [
   // school-scoped mutation; join the canonical vocabulary so the events
   // DELETE route can audit through auditEvent() instead of a bespoke row.
   'EVENT_DELETED',
+  // Phase 4 (item 3) — cross-tenant attempt detected at an authorization
+  // boundary (row exists in a foreign school). Fired by authz guards;
+  // the client envelope stays a fail-safe 404.
+  'TENANT_MISMATCH',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
