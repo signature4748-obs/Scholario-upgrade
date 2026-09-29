@@ -2871,3 +2871,29 @@ Work Log:
 
 Stage Summary:
 - The Principal's marks workflow is now REAL end-to-end: any Examination → Class → Subject → marks entry (drawer) → submit → verify → lock → declare → publish, all against canonical ExamMark rows, with real audit timeline and server-computed results. tsc 0 errors, lint clean.
+
+---
+Task ID: PHASE-0
+Agent: Z.ai Code (main orchestrator)
+Task: PHASE 0 — Architecture + Repository Freeze: import github.com/signature4748-obs/Scholario-OS, inspect the ENTIRE repository (no fixes), produce docs/PRODUCTION_READINESS_BASELINE.md + docs/PRODUCTION_READINESS_CHECKLIST.md, run validation, commit documentation only, then STOP.
+
+Work Log:
+- Imported Scholario-OS @ 125763b into the sandbox workspace: replaced scaffold content, preserved sandbox infra (.zscripts, gateway, node_modules), restored .git from the repo, `bun install` (71 pkgs), `prisma generate` (client was stale from scaffold — regenerated for the 68-model schema).
+- Started dev stack: `bun run dev` on :3000 (lazyCompilation active, Ready in ~1.3s), event-stream mini-service on :3003 (socket.io handshake verified; installed its missing socket.io dep).
+- Inspected and verified against actual code (not comments): package.json (all scripts incl. db:push --accept-data-loss + 7 seed scripts), next.config.ts (ignoreBuildErrors: true, reactStrictMode false, custom lazyCompilation backend, watch ignores), tsconfig.json (strict-but-noImplicitAny), eslint.config.mjs (~30 rules off), .gitignore vs force-tracked files (.env, db/custom.db, keepalive.mjs), Caddyfile, full prisma schema (2073 lines / 68 models / 0 enums / no migrations dir), all 14 prisma scripts.
+- Queried the committed runtime DB (Prisma): 1 school (Greenwood, isDemo), 350 users (2 SUPER_ADMIN null-school), 519 session rows with IP/UA PII, 152 students, 686 exam marks, 4268 attendance, 131 payments, 1 webhook event.
+- Auth/session audit: scrypt+timingSafeEqual, 32-byte tokens, HttpOnly cookie WITHOUT secure flag, login returns sessionToken in body + localStorage bearer fallback (iframe workaround, ungated), no rate limit/CSRF/MFA/middleware; login quick-access demo credentials committed (4 roles incl. super admin).
+- Authorization audit: withUser/requireRole string roles; schoolScoped() throws for SUPER_ADMIN; teacher-scope.ts CSA model with legacy teacherName name-match fallback; permissions.ts capability matrix is CLIENT-side only.
+- Tenant audit: schoolId on every model + schoolScoped in routes (server boundary solid); event-stream broadcasts cross-tenant with cors:'*' and client-side filtering; client mock tenant registry with 1 hardcoded tenant (Greenwood stats 1842 vs 152 real).
+- API audit: 188 route handlers; grep sweep for auth → 12 unauthenticated (6 legit + webhook + 4 UPLOAD routes anonymous incl. DELETE + admissions/public); error envelope leaks Error.message with blanket 400 (demonstrated live during smoke before dev-server restart: Prisma error reached the client).
+- Infra audit: payments = RazorpayProvider (env-gated, unset) + SandboxProvider + legacy /api/fees/orders STUB (duplicate path); webhook route is production-grade (HMAC + WebhookEvent idempotency, fail-closed 503); email = mock localStorage outbox only (no Resend/SMTP); uploads = local disk db/uploads with magic-byte validation but anonymous; AI route depends on z-ai-web-dev-sdk (sandbox-only).
+- Mock/data audit: 99 files import @/lib/mock; 36 zustand stores (24 localStorage-persisted, tenant-namespaced); fee-store.ts 4918 lines client-side business engine; platform-subscription.ts fake licensing w/ hardcoded UPI; 57 hardcoded Greenwood references across 14 files.
+- Observability/testing/CI audit: ActivityLog + superadmin activity feed only; zero tests; zero CI (.github absent); QA = 156 committed qa-shots (17MB); public/tesseract 19MB committed.
+- Wrote docs/PRODUCTION_READINESS_BASELINE.md (sections A–N: architecture inventory, security/tenancy/db/auth/api/testing/observability/performance/UI/mock/super-admin findings, production blockers, recommended execution order) and docs/PRODUCTION_READINESS_CHECKLIST.md (60+ items, each with status/evidence/affected files/severity/verification method).
+- Validation (exact): `bunx tsc --noEmit` → 0 errors exit 0; `bunx eslint .` → 0 errors exit 0; `bun run db:generate` → success; `bun run build` → SUCCESS exit 0 (standalone + static/public copy, all 188 routes); dev server GET / → 200, GET /api → 200 v2.14.0; login smoke → all 4 roles HTTP 200 (PRINCIPAL/TEACHER/STUDENT/SUPER_ADMIN); event-stream :3003 handshake 200 with sid.
+- Committed ONLY documentation: docs/PRODUCTION_READINESS_BASELINE.md, docs/PRODUCTION_READINESS_CHECKLIST.md, this worklog entry. No source/config/schema/data changes. No Supabase, no Vercel, no Resend connected. No fixes applied (per freeze instructions).
+
+Stage Summary:
+- Repository frozen and fully inventoried; baseline + checklist committed as the single source of truth for Phase 1+ planning.
+- Top blockers on record: committed .env + committed runtime DB w/ session PII; SQLite + no migrations + destructive db:push; 4 anonymous upload routes (incl. anonymous DELETE); auth transport hardening (secure cookie, ungated token-in-body/localStorage bearer, no rate-limit/CSRF/MFA); realtime cross-tenant broadcast; client-mock business engines (fees/salary/applications); demo credentials in bundle; ignoreBuildErrors; zero tests/CI; error-envelope leakage; sandbox SDK in AI route; ephemeral local-disk uploads; no email provider.
+- Validation state at freeze: tsc clean, lint clean, build clean, all 4 role logins verified, dev stack healthy.
