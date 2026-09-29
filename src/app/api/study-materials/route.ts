@@ -12,6 +12,7 @@ import {
   toStudyMaterialMeta,
 } from '@/lib/study-materials'
 import { requireStudent, authorizedMaterials, type StudentContext } from '@/lib/learning'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import type { StudyMaterial } from '@prisma/client'
 
 export const runtime = 'nodejs'
@@ -114,6 +115,9 @@ export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
       const schoolId = schoolScoped(user)
+
+      // Phase 1 — uploads are rate-limited (30/hour per account).
+      enforceRateLimit(`rl:upload:${user.id}`, RATE_LIMITS.upload)
 
       const form = await req.formData().catch(() => null)
       if (!form) throw new Error('Expected multipart/form-data')

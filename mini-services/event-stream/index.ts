@@ -2,12 +2,31 @@
  * SCHOLARIO-OS — Real-time Event Stream Service
  * ----------------------------------------------
  * Broadcasts genuine database events (fee payments, announcements,
- * admissions) to connected dashboards over socket.io.
+ * messages, timetable publications) to connected dashboards over
+ * socket.io.
  *
  * Strategy: lightweight poller over the shared SQLite file (bun:sqlite).
- * Every POLL_MS it looks for rows created since the last tick and emits
- * `school-event` frames to all clients (clients filter by their own
- * schoolId on the frontend, keeping the service auth-agnostic).
+ *
+ * ── Phase 1 security model (hostile-internet hardening) ──────────────
+ * PREVIOUSLY: unauthenticated sockets + `io.emit` to everyone with
+ * client-side filtering (baseline B-9 / C-2 — any socket received every
+ * school's events: payments, student names, message subjects).
+ *
+ * NOW:
+ *   1. AUTHENTICATED HANDSHAKE — every socket must present a valid
+ *      session (cookie `erp_session` from the first-party flow, or a
+ *      Bearer token in `auth.token` for the cross-site preview iframe).
+ *      The token is verified against the Session table (expiry + user
+ *      status checked). Unauthenticated connections are refused.
+ *   2. SERVER-SIDE TENANT SCOPING — each socket joins rooms derived from
+ *      its session identity:
+ *        user:<userId>       every authenticated socket
+ *        school:<schoolId>   school members (announcement/timetable feeds)
+ *        staff:<schoolId>    principal/management only (payment feeds)
+ *        platform            super admins (cross-tenant oversight by design)
+ *   3. SCOPED EMISSION — payments go to staff + the paying student's user
+ *      room (+ platform); messages only to the recipient (+ platform);
+ *      announcements/timetables to the school room (+ platform).
  *
  * Port: 3003 (reached via gateway as /?XTransformPort=3003)
  */
@@ -19,19 +38,104 @@ const PORT = 3003
 const POLL_MS = 4000
 const DB_PATH = new URL('../../db/custom.db', import.meta.url).pathname
 
+const SESSION_COOKIE = 'erp_session'
+
+interface AuthedIdentity {
+  userId: string
+  role: string
+  schoolId: string | null
+  status: string
+}
+
+/** Extract the session token from the handshake (cookie or auth payload). */
+function extractToken(handshake: {
+  headers: { cookie?: string }
+  auth?: { token?: string } | undefined
+}): string | null {
+  const bearer = handshake.auth?.token
+  if (typeof bearer === 'string' && bearer.length > 0) return bearer
+  const cookie = handshake.headers.cookie
+  if (!cookie) return null
+  for (const part of cookie.split(';')) {
+    const [k, ...rest] = part.trim().split('=')
+    if (k === SESSION_COOKIE) return rest.join('=')
+  }
+  return null
+}
+
+/** Verify the session token against the Session table (readonly). */
+function authenticate(token: string): AuthedIdentity | null {
+  if (!sqlite) return null
+  try {
+    // Prisma stores DateTime as epoch-millis INTEGER.
+    const row = sqlite
+      .query(
+        `SELECT u.id AS userId, u.role, u.schoolId, u.status, s.expiresAt
+         FROM Session s JOIN User u ON u.id = s.userId
+         WHERE s.token = ? LIMIT 1`
+      )
+      .get(token) as
+      | { userId: string; role: string; schoolId: string | null; status: string; expiresAt: number }
+      | null
+    if (!row) return null
+    if (typeof row.expiresAt === 'number' && row.expiresAt <= Date.now()) return null
+    if (row.status !== 'ACTIVE') return null
+    return { userId: row.userId, role: row.role, schoolId: row.schoolId, status: row.status }
+  } catch {
+    return null
+  }
+}
+
 // ─── socket.io bootstrap (path '/' is required by the Caddy gateway) ───
 // NOTE: engine.io owns every URL path (path '/'), so plain HTTP probes are
 // answered by engine.io itself. A 200 socket.io handshake —
 //   curl "http://localhost:3003/?EIO=4&transport=polling"
-// — is the service health check.
+// — is the service health check. CORS is permissive because clients
+// connect same-origin through the gateway; the real gate is the
+// authenticated handshake (no valid session → connection refused).
 const httpServer = createServer()
 
 const io = new Server(httpServer, {
   // DO NOT change the path — Caddy forwards /?XTransformPort=3003 here
   path: '/',
-  cors: { origin: '*', methods: ['GET', 'POST'] },
+  cors: { origin: true, credentials: true, methods: ['GET', 'POST'] },
   pingTimeout: 60_000,
   pingInterval: 25_000,
+})
+
+// ─── Authentication middleware (every connection) ───────────────────────
+io.use((socket, next) => {
+  const token = extractToken(socket.handshake)
+  const identity = token ? authenticate(token) : null
+  if (!identity) {
+    // Fail the handshake — the client's connect_error path degrades the
+    // live indicators instead of silently receiving no data.
+    next(new Error('unauthorized'))
+    return
+  }
+  // Identity travels on the socket; rooms join on connection.
+  ;(socket.data as { identity: AuthedIdentity }).identity = identity
+  next()
+})
+
+io.on('connection', (socket) => {
+  const identity = (socket.data as { identity: AuthedIdentity }).identity
+  const rooms: string[] = [`user:${identity.userId}`]
+  if (identity.schoolId) {
+    rooms.push(`school:${identity.schoolId}`)
+    if (identity.role === 'PRINCIPAL' || identity.role === 'MANAGEMENT') {
+      rooms.push(`staff:${identity.schoolId}`)
+    }
+  }
+  if (identity.role === 'SUPER_ADMIN') rooms.push('platform')
+  for (const room of rooms) socket.join(room)
+
+  console.log(
+    `[event-stream] authenticated client: ${socket.id} role=${identity.role} school=${identity.schoolId ?? 'platform'}`
+  )
+  socket.emit('hello', { ok: true, serverTime: new Date().toISOString() })
+  socket.on('disconnect', () => console.log(`[event-stream] client gone: ${socket.id}`))
+  socket.on('error', (e: unknown) => console.error(`[event-stream] socket error (${socket.id})`, e))
 })
 
 // ─── SQLite (read-only) ───
@@ -71,21 +175,22 @@ interface StreamEvent {
   detail: string
   amount?: number
   method?: string
-  /** For message events: the User.id of the recipient so clients can
-  // badge only their own inbox (service stays auth-agnostic). */
+  /** For message events: the User.id of the recipient so only the
+      addressee's socket badges their inbox. */
   recipientId?: string | null
   at: string
 }
 
-// ─── Poller ───
+// ─── Poller ─────────────────────────────────────────────────────────────
 async function poll() {
   if (!sqlite) return
   try {
-    // 1) Successful fee payments
+    // 1) Successful fee payments — STAFF feed + the paying student.
     const payments = sqlite
       .query(
         `SELECT p.id, p.amount, p.method, p.createdAt AS ts,
-                u.name AS student, f.title AS feeTitle, f.schoolId AS schoolId
+                u.name AS student, f.title AS feeTitle, f.schoolId AS schoolId,
+                st.userId AS payerUserId
          FROM Payment p
          JOIN Fee f ON f.id = p.feeId
          JOIN Student st ON st.id = f.studentId
@@ -94,8 +199,8 @@ async function poll() {
          ORDER BY p.createdAt ASC LIMIT 20`
       )
       .all(lastMs) as Array<{
-        id: string; amount: number; method: number | string; ts: number;
-        student: string; feeTitle: string; schoolId: string
+        id: string; amount: number; method: number | string; ts: number
+        student: string; feeTitle: string; schoolId: string; payerUserId: string | null
       }>
 
     for (const p of payments) {
@@ -109,11 +214,13 @@ async function poll() {
         method: String(p.method),
         at: msToIso(p.ts),
       }
-      io.emit('school-event', evt)
-      console.log(`[event-stream] payment → ${p.student} ₹${p.amount} (${p.method})`)
+      // Staff-only (+ the payer + platform) — payment streams carry
+      // financial PII; students must not see each other's payments.
+      io.to(`staff:${p.schoolId}`).to(`user:${p.payerUserId ?? ''}`).to('platform').emit('school-event', evt)
+      console.log(`[event-stream] payment ${p.id} → staff room (₹${p.amount})`)
     }
 
-    // 2) New school announcements
+    // 2) New school announcements — whole school.
     const notices = sqlite
       .query(
         `SELECT n.id, n.title, n.message, n.schoolId, n.createdAt AS ts
@@ -132,12 +239,11 @@ async function poll() {
         detail: n.message.slice(0, 120),
         at: msToIso(n.ts),
       }
-      io.emit('school-event', evt)
-      console.log(`[event-stream] announcement → ${n.title}`)
+      io.to(`school:${n.schoolId}`).to('platform').emit('school-event', evt)
+      console.log(`[event-stream] announcement ${n.id} → school room`)
     }
 
-    // 3) New direct messages — subject + sender; recipientId carried on the
-    // frame so the client can mark "new message" only for the addressee.
+    // 3) New direct messages — RECIPIENT ONLY (+ platform).
     const messages = sqlite
       .query(
         `SELECT m.id, m.subject, m.body, m.schoolId, m.recipientId, m.createdAt AS ts,
@@ -159,8 +265,10 @@ async function poll() {
         recipientId: m.recipientId,
         at: msToIso(m.ts),
       }
-      io.emit('school-event', evt)
-      console.log(`[event-stream] message → ${m.subject} (to ${m.recipientId ?? 'unknown'})`)
+      // Message subjects/bodies are private: only the addressee (and the
+      // platform audit stream) ever receives the frame.
+      io.to(`user:${m.recipientId ?? ''}`).to('platform').emit('school-event', evt)
+      console.log(`[event-stream] message ${m.id} → recipient room`)
     }
 
     // 4) Timetable publications — TIMETABLE_PUBLISHED rows in ActivityLog.
@@ -189,8 +297,8 @@ async function poll() {
           : (a.detail ?? 'New schedule published'),
         at: msToIso(a.ts),
       }
-      io.emit('school-event', evt)
-      console.log(`[event-stream] timetable → ${a.detail} (${a.actor ?? 'unknown'})`)
+      io.to(`school:${a.schoolId}`).to('platform').emit('school-event', evt)
+      console.log(`[event-stream] timetable ${a.id} → school room`)
     }
 
     // 5) Admissions: no Admission table exists (admissions module is client-mock)
@@ -213,15 +321,8 @@ async function poll() {
   }
 }
 
-io.on('connection', (socket) => {
-  console.log(`[event-stream] client connected: ${socket.id}`)
-  socket.emit('hello', { ok: true, serverTime: new Date().toISOString(), since: new Date(lastMs).toISOString() })
-  socket.on('disconnect', () => console.log(`[event-stream] client gone: ${socket.id}`))
-  socket.on('error', (e) => console.error(`[event-stream] socket error (${socket.id})`, e))
-})
-
 httpServer.listen(PORT, () => {
-  console.log(`[event-stream] listening on :${PORT} (streaming events since ${new Date(lastMs).toISOString()})`)
+  console.log(`[event-stream] listening on :${PORT} (authenticated, tenant-scoped; streaming since ${new Date(lastMs).toISOString()})`)
   setInterval(poll, POLL_MS)
   // one quick pass shortly after boot to pick up anything racing the start
   setTimeout(poll, 1500)

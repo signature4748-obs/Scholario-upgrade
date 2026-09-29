@@ -347,7 +347,9 @@ function RightPane({
           Sign in to access your dashboard.
         </motion.p>
 
-        {/* One-tap demo accounts */}
+        {/* One-tap demo accounts (dev/preview only — gated out of
+            production builds via login-page/data.tsx) */}
+        {credentials.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -384,6 +386,7 @@ function RightPane({
             })}
           </div>
         </motion.div>
+        )}
 
         {/* Error message — rendered ABOVE the fields so it is always
             visible without scrolling, on every viewport. */}
@@ -515,9 +518,11 @@ function RightPane({
           </motion.div>
         </form>
 
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          Tap a role chip above to auto-fill credentials · Demo platform
-        </p>
+        {credentials.length > 0 && (
+          <p className="text-center text-xs text-muted-foreground mt-6">
+            Tap a role chip above to auto-fill credentials · Demo platform
+          </p>
+        )}
       </div>
 
       <style jsx>{`

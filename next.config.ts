@@ -1,5 +1,14 @@
 import type { NextConfig } from "next";
 
+// ── Phase 1 — production security headers (central) ────────────────────
+// One source of truth (src/lib/security/headers.ts) drives both the
+// Next.js headers() table and the security tests. Profiles:
+//   · dev  — CSP allows the sandbox preview frame origins + dev eval,
+//            no HSTS (http preview).
+//   · prod — strict CSP (no unsafe-eval), HSTS, frame-ancestors 'self' +
+//            SCHOOL_EMBED_ORIGINS (legitimate school-website embedding).
+import { nextSecurityHeaderRules } from "./src/lib/security/headers";
+
 // ── dev-stability: gateway-aware webpack lazyCompilation ────────────────
 // The `/` god-entry dynamically imports every role panel; a FULL compile
 // peaks ~3.1–3.4GB and OOM-kills the dev server (4GB cgroup). lazyCompilation
@@ -53,6 +62,12 @@ const nextConfig: NextConfig = {
         pathname: '/**',
       },
     ],
+  },
+  // Phase 1 — security headers on EVERY route (CSP, X-Content-Type-Options,
+  // Referrer-Policy, Permissions-Policy, COOP, frame-ancestors; HSTS in
+  // production). See src/lib/security/headers.ts for the profiles.
+  async headers() {
+    return nextSecurityHeaderRules();
   },
 };
 

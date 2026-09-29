@@ -23,6 +23,7 @@ import {
   toMediaRecord,
   SIGNATURE_RULES,
 } from './teacher-media'
+import { SecureTeacherImg } from './secure-teacher-media'
 
 interface Props {
   value: TeacherMediaRecord | null
@@ -80,8 +81,8 @@ export function SignatureUpload({ value, onChange }: Props) {
         {/* Preview — white background so transparent PNGs read correctly */}
         {value ? (
           <div className="shrink-0 rounded-xl border border-border bg-white p-2 shadow-xs">
-            <img
-              src={value.dataUrl || `/api/teachers/upload/${encodeURIComponent(value.fileId)}`}
+            <SecureTeacherImg
+              record={value}
               alt="Teacher signature"
               className="h-16 w-40 object-contain"
             />

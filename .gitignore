@@ -70,3 +70,11 @@ tmp-scripts/
 agent-ctx/
 keepalive.mjs
 keepalive.pid
+
+# Phase 1 secrets hygiene — runtime env and the runtime DB (contains PII)
+# must never be committed. History rewrite is a coordinated later step.
+.env
+.env.*
+!.env.example
+db/*.db
+db/*.db-journal

@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/store/auth-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
 import { useLiveAlerts } from '@/lib/store/live-alerts-store'
 import { useLiveFeedStore } from '@/lib/store/live-feed-store'
+import { readSessionToken } from '@/lib/auth-session-token'
 import { signOut } from '@/lib/signout'
 import { school } from '@/lib/mock/school'
 // SaaS-STAGE-2A — the shell footer reflects the ACTIVE TENANT's school
@@ -145,6 +146,11 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
       reconnectionAttempts: 8,
       reconnectionDelay: 1500,
       timeout: 10000,
+      // Phase 1 — the stream service AUTHENTICATES the handshake: present
+      // the dev-preview bearer token (the first-party cookie flows
+      // automatically on same-origin requests). No valid session → the
+      // server refuses the connection.
+      auth: { token: readSessionToken() ?? undefined },
     })
     socket.on('connect', () => { setStreamLive(true); useLiveFeedStore.getState().setConnected(true) })
     socket.on('disconnect', () => { setStreamLive(false); useLiveFeedStore.getState().setConnected(false) })

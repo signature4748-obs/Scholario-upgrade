@@ -7,6 +7,7 @@
  * Aadhaar numbers are masked (XXXX XXXX 3847) per the privacy policy.
  */
 import { ExternalLink, Download } from 'lucide-react'
+import { useSignedFileUrl } from '@/lib/secure-media'
 import type { AdmissionApplication } from '@/lib/store/admission-store'
 import type { SectionKey } from '@/lib/store/admission-store'
 import type { AdmissionDocumentPolicy } from '@/lib/store/school-settings-store'
@@ -16,6 +17,39 @@ interface SectionDataContentProps {
   sectionKey: SectionKey
   app: AdmissionApplication
   documentPolicy?: AdmissionDocumentPolicy
+}
+
+/**
+ * Phase 1 — View/Download links for a stored admission document resolve
+ * through a short-lived signed URL (no anonymous file reads). The links
+ * appear once the grant resolves; the fileId is unguessable otherwise.
+ */
+function SignedDocLinks({ fileId }: { fileId: string }) {
+  const viewUrl = useSignedFileUrl(fileId, 'admissions', false)
+  const downloadUrl = useSignedFileUrl(fileId, 'admissions', true)
+  if (!viewUrl && !downloadUrl) return null
+  return (
+    <span className="flex items-center gap-1 shrink-0">
+      {viewUrl && (
+        <a
+          href={viewUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground font-medium"
+        >
+          <ExternalLink className="h-3 w-3" /> View
+        </a>
+      )}
+      {downloadUrl && (
+        <a
+          href={downloadUrl}
+          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground font-medium"
+        >
+          <Download className="h-3 w-3" /> Download
+        </a>
+      )}
+    </span>
+  )
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -187,24 +221,7 @@ export function SectionDataContent({ sectionKey, app, documentPolicy }: SectionD
             >
               {d.verified ? '✓ Verified' : d.uploaded ? 'Uploaded' : d.required ? '✕ Missing' : 'Not uploaded'}
             </span>
-            {d.fileId && (
-              <span className="flex items-center gap-1 shrink-0">
-                <a
-                  href={`/api/admissions/upload/${encodeURIComponent(d.fileId)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground font-medium"
-                >
-                  <ExternalLink className="h-3 w-3" /> View
-                </a>
-                <a
-                  href={`/api/admissions/upload/${encodeURIComponent(d.fileId)}?download=1`}
-                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground font-medium"
-                >
-                  <Download className="h-3 w-3" /> Download
-                </a>
-              </span>
-            )}
+            {d.fileId && <SignedDocLinks fileId={d.fileId} />}
           </div>
         ))}
         <p className="text-[10px] text-muted-foreground pt-1">

@@ -1,6 +1,9 @@
 import { db } from '@/lib/db'
 import { getCurrentUser, getCurrentSession, parseUserAgent } from '@/lib/auth'
 import { api } from '@/lib/api'
+import { newRequestId } from '@/lib/security/errors'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { auditEvent } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 
@@ -51,6 +54,9 @@ export async function DELETE() {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
 
+    // Sensitive authentication operation — throttled (Phase 1).
+    enforceRateLimit(`rl:sessrevoke:${user.id}`, RATE_LIMITS.sessionRevoke)
+
     const current = await getCurrentSession()
     const revoked = await db.session.deleteMany({
       where: { userId: user.id, ...(current ? { token: { not: current.token } } : {}) },
@@ -60,10 +66,19 @@ export async function DELETE() {
       data: {
         schoolId: user.schoolId ?? null,
         userId: user.id,
-        action: 'sessions_revoked',
+        action: 'SESSIONS_REVOKED',
         detail: `Signed out ${revoked.count} other session(s).`,
       },
     }).catch(() => {})
+    console.log(
+      JSON.stringify({
+        channel: 'audit',
+        action: 'SESSIONS_REVOKED',
+        userId: user.id,
+        requestId: newRequestId(),
+        count: revoked.count,
+      }),
+    )
 
     return { ok: true, signedOut: revoked.count }
   })

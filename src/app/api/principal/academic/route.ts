@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { auditEvent } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 
@@ -330,6 +331,16 @@ export async function POST(req: NextRequest) {
                 : `Class teacher removed for ${cls.name}${cls.section ? ` (${cls.section})` : ''}`,
             },
           })
+          // Phase 1 — class-teacher appointment changes teacher-side
+          // authorization scope: auditable as a permission change.
+          await auditEvent({
+            schoolId,
+            userId: user.id,
+            action: 'PERMISSION_CHANGE',
+            detail: teacherUserId
+              ? `Class teacher appointed for ${cls.name}${cls.section ? ` (${cls.section})` : ''} (user ${teacherUserId})`
+              : `Class teacher removed for ${cls.name}${cls.section ? ` (${cls.section})` : ''}`,
+          }).catch(() => {})
           return { ok: true, classId, classTeacherId: teacherUserId }
         }
 

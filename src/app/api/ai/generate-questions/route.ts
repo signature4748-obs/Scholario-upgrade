@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -30,6 +31,11 @@ export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
       const schoolId = schoolScoped(user)
+
+      // Phase 1 — AI generation is expensive: strict per-user rate limit
+      // (12/hour) blunts abuse and runaway cost.
+      enforceRateLimit(`rl:ai:${user.id}`, RATE_LIMITS.ai)
+
       const body = await req.json().catch(() => ({}))
 
       const subject = String(body.subject || 'General Knowledge')

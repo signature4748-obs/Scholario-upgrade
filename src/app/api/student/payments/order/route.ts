@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { getPaymentProvider } from '@/lib/payments/provider'
 import { normalizeMethod } from '@/lib/payments/methods'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
 
@@ -39,6 +40,9 @@ export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
       const schoolId = schoolScoped(user)
+
+      // Phase 1 — payment endpoints are rate-limited (20/hour per user).
+      enforceRateLimit(`rl:pay:${user.id}`, RATE_LIMITS.payment)
 
       // ── Resolve the student from the session (never the body) ──────
       const dbUser = await db.user.findUnique({

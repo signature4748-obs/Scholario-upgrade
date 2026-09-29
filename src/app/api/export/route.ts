@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser, schoolScoped } from '@/lib/api'
+import { auditEvent } from '@/lib/security/audit'
+import { newRequestId } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -29,6 +31,10 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url)
   const type = searchParams.get('type') || 'students'
+  const EXPORT_TYPES = ['students', 'fees', 'attendance', 'teachers'] as const
+  if (!EXPORT_TYPES.includes(type as (typeof EXPORT_TYPES)[number])) {
+    return new Response(JSON.stringify({ error: 'Invalid export type' }), { status: 400 })
+  }
 
   let schoolId: string
   try {
@@ -162,10 +168,21 @@ export async function GET(req: NextRequest) {
     return new Response(JSON.stringify({ error: 'Invalid export type' }), { status: 400 })
   }
 
+  // Phase 1 — student/teacher PII leaving the system as a file is an
+  // auditable security event (login-adjacent sensitivity).
+  await auditEvent({
+    schoolId,
+    userId: user.id,
+    action: type === 'teachers' ? 'STUDENT_DATA_EXPORT' : 'STUDENT_DATA_EXPORT',
+    requestId: newRequestId(),
+    detail: `CSV export (${type}) served`,
+  }).catch(() => {})
+
   return new Response(csv, {
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="${filename}"`,
+      'X-Content-Type-Options': 'nosniff',
     },
   })
 }

@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { useSignedFileUrl } from '@/lib/secure-media'
 import type { DocStatus } from '../types'
 import type { AdmissionDocumentDef } from '../lib/documents'
 
@@ -53,9 +54,13 @@ export function DocumentCard({
   const isRejected = verificationEnabled && isUploaded && vStatus === 'rejected'
   const isPendingReview =
     verificationEnabled && isUploaded && (!vStatus || vStatus === 'pending')
-  const fileUrl = st.fileId
-    ? `/api/admissions/upload/${encodeURIComponent(st.fileId)}`
-    : null
+  // Phase 1 — stored admission documents serve only via a short-lived
+  // signed URL (no anonymous file reads). URLs are null until the grant
+  // resolves; View/Download buttons render only with a valid link.
+  const signedViewUrl = useSignedFileUrl(st.fileId ?? null, 'admissions', false)
+  const signedDownloadUrl = useSignedFileUrl(st.fileId ?? null, 'admissions', true)
+  const fileUrl = st.fileId && signedViewUrl ? signedViewUrl : null
+  const fileDownloadUrl = st.fileId ? (signedDownloadUrl ?? signedViewUrl) : null
 
   // Status badge — the single most important signal on the card.
   let vBadge: { label: string; className: string; Icon: typeof CheckCircle2 }
@@ -180,7 +185,7 @@ export function DocumentCard({
                   asChild
                   className="h-7 text-[11px] px-2.5 gap-1 text-muted-foreground hover:text-foreground font-medium"
                 >
-                  <a href={`${fileUrl}?download=1`}>
+                  <a href={fileDownloadUrl ?? '#'} target="_blank" rel="noopener noreferrer">
                     <Download className="h-3.5 w-3.5" />
                     Download
                   </a>

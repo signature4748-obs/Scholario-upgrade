@@ -13,7 +13,20 @@ export interface CredentialCard {
   description: string
 }
 
-export const credentials: CredentialCard[] = [
+/**
+ * Phase 1 — demo quick-access credentials (baseline B-11/E-6 remediation).
+ *
+ * `process.env.NODE_ENV` is inlined at BUILD time, so production bundles
+ * compile this to `[]` — the plaintext demo passwords and the one-click
+ * role chips (including the super-admin account) can never ship in a
+ * production build. Development/preview keeps them for the demo flow.
+ * `NEXT_PUBLIC_DISABLE_DEMO_LOGIN=1` additionally turns them off in dev.
+ */
+const DEMO_LOGIN_ENABLED =
+  process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_DISABLE_DEMO_LOGIN !== '1'
+
+export const credentials: CredentialCard[] = DEMO_LOGIN_ENABLED
+  ? [
   {
     role: 'principal',
     title: 'Principal',
@@ -63,4 +76,5 @@ export const credentials: CredentialCard[] = [
     accent: 'indigo',
     description: 'Platform console',
   },
-]
+      ]
+  : []

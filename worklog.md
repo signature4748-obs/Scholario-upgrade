@@ -2897,3 +2897,30 @@ Stage Summary:
 - Repository frozen and fully inventoried; baseline + checklist committed as the single source of truth for Phase 1+ planning.
 - Top blockers on record: committed .env + committed runtime DB w/ session PII; SQLite + no migrations + destructive db:push; 4 anonymous upload routes (incl. anonymous DELETE); auth transport hardening (secure cookie, ungated token-in-body/localStorage bearer, no rate-limit/CSRF/MFA); realtime cross-tenant broadcast; client-mock business engines (fees/salary/applications); demo credentials in bundle; ignoreBuildErrors; zero tests/CI; error-envelope leakage; sandbox SDK in AI route; ephemeral local-disk uploads; no email provider.
 - Validation state at freeze: tsc clean, lint clean, build clean, all 4 role logins verified, dev stack healthy.
+
+---
+Task ID: 2
+Agent: Z.ai Code (main orchestrator)
+Task: PHASE 1 — Production Security Hardening (hostile-internet posture; central implementation; no Supabase/Vercel/Resend migration; no mock-data removal)
+
+Work Log:
+- Read Phase-0 baseline docs as source of truth; audited the target surfaces in code (auth.ts/api.ts, auth routes, 6 upload route files, payments/order/verify, fees/orders, webhook, AI, messages, admissions/public, superadmin settings, exports, marks submit, event-stream service, login demo data, app-shell socket wiring).
+- Built the central security layer under src/lib/security/: errors.ts (AppError + classifyError: Prisma mapping, unsafe-message heuristics, request ids), rate-limit.ts (in-memory fixed-window, account+IP buckets, progressive backoff, Retry-After), validation.ts (zod parseJsonBody with strict objects + size caps + shared id/enum/number/date/password primitives), audit.ts (single funnel → JSON log line + ActivityLog row + detail sanitizer), upload.ts (magic bytes, allowlists, traversal-proof ids, filename sanitizer), file-signing.ts (HMAC-SHA256 1h signed file URLs, scope+file+exp bound, timing-safe), headers.ts (CSP/HSTS/XCTO/Referrer/Permissions/COOP/frame-ancestors, dev+prod profiles).
+- Rewrote src/lib/api.ts envelope (safe errors only, X-Request-Id, Retry-After, 4xx/5xx semantics) and hardened src/lib/auth.ts (Secure cookie in prod, sessionCookieOptions, rotateSession, burnPasswordTiming anti-enumeration, isCrossOriginRequest CSRF guard on cookie path, production-hard-disabled Bearer fallback).
+- Hardened auth routes: login (strict schema, IP+account rate limits, lockout, audit, generic errors, dev-gated sessionToken), logout (audit), change-password (throttle, policy ≥8 chars, session ROTATION, audit), sessions DELETE (throttle + audit).
+- Upload security: all teachers/admissions upload POSTs, GETs, DELETEs now require PRINCIPAL/MANAGEMENT (were anonymous — baseline B-5/B-6); new POST /api/{teachers,admissions}/upload/access mint signed URLs; central upload policy applied; client side: src/lib/secure-media.ts + secure-teacher-media.tsx + DocumentCard/SectionDataContent/signature-upload/directory/appointment/profile components migrated to signed URLs.
+- Rate limits + targeted validation on: admissions/public (strict schema + 10/h IP), AI generate (12/h), messages (40/h, recipient id + role enum), payments order/verify (20/h, amount bounds), fees/orders (20/h, bounds), webhook (120/min IP), study-materials (30/h), superadmin settings (strict body + throttle).
+- Audit wiring: PERMISSION_CHANGE (classTeacher.set), STUDENT_DATA_EXPORT (export + payments-export), MARKS_CHANGE (marks submit), PAYMENT_VERIFIED, PLATFORM_SETTING_CHANGE, FILE_UPLOADED/DELETED/ACCESS_GRANTED, admission inquiry.
+- Sensitive data: realtime event-stream service now authenticates the handshake (cookie or Bearer token vs Session table) and emits via tenant-scoped rooms (user:/school:/staff:/platform); payments to staff+payer, messages to recipient only; app-shell passes auth.token; anonymous sockets refused.
+- Demo credentials gated out of production bundles (login data.tsx NODE_ENV build-time gate + UI block + footer copy gate).
+- Secrets: git rm --cached .env db/custom.db; .gitignore extended (env*, db/*.db, !.env.example); .env.example committed documenting every env var.
+- Security headers wired into next.config.ts headers() via src/lib/security/headers.ts; verified live on /.
+- Tests: bun test suite tests/security/ (9 files, 85 tests) + package.json scripts test:security/typecheck; installed zod.
+- Fixed during browser verification: dev CSP had blocked the custom lazy-compilation EventSource on localhost:3777 → dev connect-src now allows localhost ports (prod CSP strict; regression test added). Also fixed access-route fileId validation (extension-bearing ids) caught by live testing.
+
+Stage Summary:
+- Verification (exact): tsc --noEmit → 0 errors; eslint . → clean; bun run build → succeeded (first attempt OOM-killed with dev server running; re-ran with dev stopped → pass; dev restarted); bun run test:security → 85 pass / 0 fail.
+- Live API verification: login brute-force lockout (429 + Retry-After), generic 401s (no enumeration), strict-body 422, anonymous upload/GET/DELETE 401 (baseline B-5/B-6 fixed), signed-URL mint/fetch/tamper/replay all correct, admission spam 429 at 11th, webhook fail-closed 503, password change rotates session (old token dead, new token valid; demo password restored), socket.io anonymous refused / authenticated accepted, audit rows verified in ActivityLog.
+- Browser verification: public site (desktop+mobile 390px, no horizontal scroll), login page, principal login → live dashboard, logout, wrong-password generic error, no page errors.
+- Deliverables: docs/SECURITY_BASELINE.md (this phase's baseline), 85-test security suite, central src/lib/security/ layer, hardened routes, untracked .env/db + .env.example.
+- Known residuals (documented in SECURITY_BASELINE.md §12): local-disk uploads without ownership registry, git history rewrite pending, MFA absent, mock flows remain by instruction, SameSite+Origin CSRF posture, script 'unsafe-inline' CSP (nonce deferred), dev bearer fallback isolated to dev.

@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { idSchema } from '@/lib/security/validation'
+import { AppError } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -33,9 +36,21 @@ export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
       const schoolId = schoolScoped(user)
+
+      // Phase 1 — message sending is rate-limited (40/hour per account):
+      // bulk role sends count once, but a hostile/hijacked account cannot
+      // spray the school with notifications.
+      enforceRateLimit(`rl:msg:${user.id}`, RATE_LIMITS.message)
+
       const body = await req.json().catch(() => ({}))
-      const subject = String(body.subject || '').trim()
-      const messageBody = String(body.body || '').trim()
+      const subject = String(body.subject || '').trim().slice(0, 200)
+      const messageBody = String(body.body || '').trim().slice(0, 4000)
+      const recipientRaw = String(body.recipientId || '').trim()
+      // Malformed ids (path/traversal junk, wrong shape) are rejected
+      // before any DB lookup.
+      if (recipientRaw && !idSchema.safeParse(recipientRaw).success) {
+        throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid recipient' })
+      }
 
       if (!subject || !messageBody) {
         throw new Error('Subject and message are required')
@@ -43,6 +58,10 @@ export async function POST(req: NextRequest) {
 
       // Bulk mode: send to all users with a specific role in the school
       if (body.bulk && body.role) {
+        const ROLE_ENUM: readonly string[] = ['PRINCIPAL', 'MANAGEMENT', 'TEACHER', 'STUDENT', 'PARENT', 'DRIVER']
+        if (!ROLE_ENUM.includes(String(body.role))) {
+          throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid role for bulk message' })
+        }
         const recipients = await db.user.findMany({
           where: { schoolId, role: body.role, status: 'ACTIVE', id: { not: user.id } },
           select: { id: true },

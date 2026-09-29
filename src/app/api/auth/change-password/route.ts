@@ -1,68 +1,130 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { getCurrentUser, getCurrentSession, verifyPassword, hashPassword } from '@/lib/auth'
+import {
+  getCurrentUser,
+  getCurrentSession,
+  verifyPassword,
+  hashPassword,
+  rotateSession,
+  setSessionCookie,
+  isDevSessionBearerEnabled,
+  burnPasswordTiming,
+} from '@/lib/auth'
 import { api } from '@/lib/api'
+import { AppError, newRequestId } from '@/lib/security/errors'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { parseJsonBody, strictBody, passwordInputSchema, newPasswordSchema } from '@/lib/security/validation'
+import { auditEvent } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 
 /**
  * POST /api/auth/change-password
  *
- * Reads the session cookie the same way /api/auth/me does (getCurrentUser),
- * verifies the current password against the DB user's passwordHash with the
- * SAME scrypt hash/verify helpers prisma/seed.ts uses to write password
- * hashes, validates the new password, and updates the record.
- *
- * SS-1 hardening: a successful change also revokes every OTHER session for
- * the account (standard practice — other signed-in devices must re-enter
- * the new password) and writes an ActivityLog audit row.
+ * Phase 1 hardening on top of the SS-1 flow:
+ *   - strict schema validation (unknown fields rejected, new password
+ *     policy: ≥ 8 chars, letter + digit)
+ *   - rate limiting (5 attempts/hour per account — brute-force on the
+ *     current-password field is throttled)
+ *   - anti-enumeration timing equalization
+ *   - SESSION ROTATION: the current session token is replaced (a token
+ *     stolen before the change dies immediately), every OTHER session is
+ *     revoked, and the new token is delivered via the same transports as
+ *     login (Set-Cookie always; response body only in the dev preview
+ *     bearer mode).
+ *   - audit row (PASSWORD_CHANGED + SESSION_ROTATED)
  */
+const changePasswordBodySchema = strictBody({
+  currentPassword: passwordInputSchema,
+  newPassword: newPasswordSchema,
+  confirmPassword: passwordInputSchema,
+})
+
 export async function POST(req: NextRequest) {
+  const requestId = newRequestId()
   return api(async () => {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
 
-    const body = await req.json().catch(() => ({}))
-    const currentPassword = String(body.currentPassword || '')
-    const newPassword = String(body.newPassword || '')
-    const confirmPassword = String(body.confirmPassword || '')
+    // Per-account throttle — wrong current-password attempts are limited.
+    enforceRateLimit(`rl:pwchange:${user.id}`, RATE_LIMITS.passwordChange)
 
-    if (!currentPassword || !newPassword || !confirmPassword) {
-      throw new Error('All three password fields are required')
-    }
-    if (newPassword.length < 6) {
-      throw new Error('New password must be at least 6 characters')
-    }
-    if (newPassword !== confirmPassword) {
-      throw new Error('New passwords do not match')
+    const body = await parseJsonBody(req, changePasswordBodySchema)
+
+    if (body.newPassword !== body.confirmPassword) {
+      throw new AppError('INVALID_INPUT', { publicMessage: 'New passwords do not match' })
     }
 
     const dbUser = await db.user.findUnique({ where: { id: user.id } })
-    if (!dbUser) throw new Error('Account not found')
-    if (!dbUser.passwordHash || !verifyPassword(currentPassword, dbUser.passwordHash)) {
-      throw new Error('Current password is incorrect')
+    if (!dbUser) throw new Error('NOT_FOUND')
+
+    const currentOk = dbUser.passwordHash
+      ? verifyPassword(body.currentPassword, dbUser.passwordHash)
+      : (burnPasswordTiming(), false)
+
+    if (!currentOk) {
+      await auditEvent({
+        schoolId: user.schoolId ?? null,
+        userId: user.id,
+        action: 'PASSWORD_CHANGE_FAILED',
+        requestId,
+        detail: 'Change-password attempt failed (current password incorrect)',
+      }).catch(() => {})
+      throw new AppError('INVALID_INPUT', {
+        publicMessage: 'Current password is incorrect',
+        internalDetail: 'change-password: current password mismatch',
+      })
+    }
+
+    if (body.currentPassword === body.newPassword) {
+      throw new AppError('INVALID_INPUT', {
+        publicMessage: 'The new password must be different from the current one',
+      })
     }
 
     await db.user.update({
       where: { id: user.id },
-      data: { passwordHash: hashPassword(newPassword) },
+      data: { passwordHash: hashPassword(body.newPassword) },
     })
 
-    // Revoke every OTHER session (keep this one signed in).
+    // Revoke every OTHER session (standard practice).
     const current = await getCurrentSession()
-    const revoked = await db.session.deleteMany({
-      where: { userId: user.id, ...(current ? { token: { not: current.token } } : {}) },
-    })
+    const revoked = current
+      ? await db.session.deleteMany({
+          where: { userId: user.id, token: { not: current.token } },
+        })
+      : await db.session.deleteMany({ where: { userId: user.id } })
 
-    await db.activityLog.create({
-      data: {
+    // SESSION ROTATION — mint a fresh token for THIS device so the old
+    // (possibly stolen) token stops working immediately.
+    let rotatedToken: string | null = null
+    if (current) {
+      rotatedToken = await rotateSession(current.token)
+      await setSessionCookie(rotatedToken)
+    }
+
+    await auditEvent({
+      schoolId: user.schoolId ?? null,
+      userId: user.id,
+      action: 'PASSWORD_CHANGED',
+      requestId,
+      detail: `Password changed; ${revoked.count} other session(s) revoked; current session rotated`,
+    }).catch(() => {})
+    if (rotatedToken) {
+      await auditEvent({
         schoolId: user.schoolId ?? null,
         userId: user.id,
-        action: 'password_changed',
-        detail: `Password updated from ${revoked.count + 1} active session(s); ${revoked.count} other session(s) signed out.`,
-      },
-    }).catch(() => {})
+        action: 'SESSION_ROTATED',
+        requestId,
+        detail: 'Session token rotated after password change',
+      }).catch(() => {})
+    }
 
-    return { ok: true, otherSessionsSignedOut: revoked.count }
+    return {
+      ok: true,
+      otherSessionsSignedOut: revoked.count,
+      // DEV PREVIEW ONLY — same gating as login (never in production).
+      ...(rotatedToken && isDevSessionBearerEnabled() ? { sessionToken: rotatedToken } : {}),
+    }
   })
 }

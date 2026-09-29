@@ -3,6 +3,9 @@ import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { getPaymentProvider } from '@/lib/payments/provider'
 import { paymentMethodFor, prettyMethod } from '@/lib/payments/methods'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { auditEvent } from '@/lib/security/audit'
+import { newRequestId } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -38,9 +41,13 @@ export const runtime = 'nodejs'
 ///   { receiptNo, amount, method, status: 'SUCCESS',
 ///     gatewayPaymentId, txnId, paidAt }
 export async function POST(req: NextRequest) {
+  const requestId = newRequestId()
   return withUser(
     async (user) => {
       const schoolId = schoolScoped(user)
+
+      // Phase 1 — verification attempts are rate-limited (20/hour).
+      enforceRateLimit(`rl:payverify:${user.id}`, RATE_LIMITS.payment)
 
       const body = await req.json().catch(() => ({}))
       const orderId = typeof body?.orderId === 'string' ? body.orderId.trim() : ''
@@ -203,6 +210,14 @@ export async function POST(req: NextRequest) {
         // Duplicate eventId (idempotent retry) — the audit trail already
         // exists; this must never fail the verified payment.
       }
+
+      await auditEvent({
+        schoolId: txn.schoolId,
+        userId: user.id,
+        action: 'PAYMENT_VERIFIED',
+        requestId,
+        detail: `FeeTransaction ${txn.id} verified · receipt ${txn.receiptNo} · ₹${txn.amount}`,
+      }).catch(() => {})
 
       return {
         receiptNo: txn.receiptNo,

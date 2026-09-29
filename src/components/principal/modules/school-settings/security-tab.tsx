@@ -19,6 +19,7 @@ import { toast } from 'sonner'
 import { PasswordField } from '@/components/shared/password-field'
 import { useCurrentUser } from '@/lib/store/current-user-store'
 import { signOut } from '@/lib/signout'
+import { saveSessionToken } from '@/lib/auth-session-token'
 import { formatDate } from '@/lib/format'
 import { SettingsTab, FieldGroup, SettingsInfoRow } from './shared'
 
@@ -101,8 +102,8 @@ function ChangePasswordForm() {
       setError('Fill in all three password fields.')
       return
     }
-    if (newPassword.length < 6) {
-      setError('New password must be at least 6 characters.')
+    if (newPassword.length < 8) {
+      setError('New password must be at least 8 characters (letter + number).')
       return
     }
     if (newPassword !== confirmPassword) {
@@ -118,6 +119,9 @@ function ChangePasswordForm() {
       })
       const j = await r.json().catch(() => null)
       if (r.ok && j?.ok) {
+        // Phase 1 — the server ROTATED this session's token; persist the
+        // replacement so the dev-preview bearer transport stays valid.
+        if (j?.data?.sessionToken) saveSessionToken(j.data.sessionToken)
         const others = j?.data?.otherSessionsSignedOut ?? 0
         toast.success('Password updated', {
           description:

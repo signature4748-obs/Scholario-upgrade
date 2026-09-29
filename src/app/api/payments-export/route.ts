@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
+import { auditEvent } from '@/lib/security/audit'
+import { newRequestId } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -81,12 +83,24 @@ export async function GET(req: NextRequest) {
     }
 
     const stamp = new Date().toISOString().slice(0, 10)
+
+    // Phase 1 — the transaction ledger leaving the system as a file is an
+    // auditable security event.
+    await auditEvent({
+      schoolId: user.schoolId ?? null,
+      userId: user.id,
+      action: 'STUDENT_DATA_EXPORT',
+      requestId: newRequestId(),
+      detail: `Payments ledger CSV export served (${rows.length} rows)`,
+    }).catch(() => {})
+
     return new Response(lines.join('\n'), {
       status: 200,
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="scholario-transactions-${stamp}.csv"`,
         'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
       },
     })
   })

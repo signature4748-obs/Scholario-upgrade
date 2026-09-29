@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { auditEvent } from '@/lib/security/audit'
+import { newRequestId } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -23,12 +26,18 @@ export const runtime = 'nodejs'
 /// returns a deterministic-looking order id `order_<random>` so the
 /// frontend can pass it to the Razorpay checkout JS.
 export async function POST(req: NextRequest) {
+  const requestId = newRequestId()
   return withUser(
     async (user) => {
       const schoolId = schoolScoped(user)
+
+      // Phase 1 — payment endpoint rate limit + amount bounds.
+      enforceRateLimit(`rl:pay:${user.id}`, RATE_LIMITS.payment)
       const body = await req.json().catch(() => ({}))
       const amount = Number(body.amount)
-      if (!amount || amount <= 0) throw new Error('amount must be > 0')
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 500000) {
+        throw new Error('amount must be a number between 1 and 500000')
+      }
 
       // Carry forward notes — used by the webhook for auto-reconciliation.
       const notes: Record<string, string> = {

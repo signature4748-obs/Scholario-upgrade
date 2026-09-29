@@ -17,7 +17,9 @@
     "db:seed-learning": "bun prisma/seed-learning.ts",
     "db:seed-dashboard": "bun prisma/seed-student-dashboard.ts",
     "db:seed-teacher-hub": "bun prisma/seed-teacher-hub.ts",
-    "db:seed-teacher-academics": "bun prisma/seed-teacher-academics.ts"
+    "db:seed-teacher-academics": "bun prisma/seed-teacher-academics.ts",
+    "test:security": "bun test tests/security/",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@prisma/client": "^6.11.1",
@@ -76,6 +78,7 @@
     "tesseract.js": "6.0.1",
     "vaul": "^1.1.2",
     "z-ai-web-dev-sdk": "^0.0.18",
+    "zod": "^4.6.5",
     "zustand": "^5.0.6"
   },
   "devDependencies": {

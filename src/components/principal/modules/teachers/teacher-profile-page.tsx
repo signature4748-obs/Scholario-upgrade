@@ -38,7 +38,7 @@ import {
 import { gradientFor } from './shared'
 import { TeacherPayrollTab } from './teacher-payroll-tab'
 import { PositionsAllocationTab } from './positions-allocation-tab'
-import { teacherMediaSrc } from './teacher-media'
+import { SecureTeacherImg } from './secure-teacher-media'
 import {
   PersonalEditDialog, PhotoEditDialog, SignatureEditDialog,
 } from './profile-edit-dialogs'
@@ -72,8 +72,8 @@ export function TeacherProfilePage({
         </Button>
         <div className="flex items-center gap-3 flex-1 min-w-0">
           {teacher.photo ? (
-            <img
-              src={teacherMediaSrc(teacher.photo)}
+            <SecureTeacherImg
+              record={teacher.photo}
               alt={teacher.name}
               className="h-12 w-12 shrink-0 rounded-xl object-cover border border-border"
             />
@@ -174,8 +174,8 @@ function ProfileTab({ teacher }: { teacher: TeacherRecord }) {
         <div className="flex items-end gap-3">
           <div className="group relative shrink-0">
             {teacher.photo ? (
-              <img
-                src={teacherMediaSrc(teacher.photo)}
+              <SecureTeacherImg
+                record={teacher.photo}
                 alt={`${teacher.name} — staff photograph`}
                 className="h-32 w-28 rounded-xl object-cover border border-border shadow-sm"
               />
@@ -219,8 +219,8 @@ function ProfileTab({ teacher }: { teacher: TeacherRecord }) {
           {teacher.signature ? (
             <div className="flex items-start gap-3 flex-wrap">
               <div className="rounded-lg border border-border bg-white p-1.5 shadow-xs">
-                <img
-                  src={teacherMediaSrc(teacher.signature)}
+                <SecureTeacherImg
+                  record={teacher.signature}
                   alt={`${teacher.name}'s signature`}
                   className="h-14 w-36 object-contain"
                 />

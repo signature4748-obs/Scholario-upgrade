@@ -33,8 +33,9 @@ import { PhotoStep } from '../admission/components/PhotoStep'
 import { SignatureUpload } from './signature-upload'
 import {
   validateTeacherMedia, uploadTeacherMedia, deleteTeacherMediaFile,
-  toMediaRecord, dataUrlToBlob, teacherMediaSrc,
+  toMediaRecord, dataUrlToBlob,
 } from './teacher-media'
+import { useTeacherMediaSrc } from './secure-teacher-media'
 
 /* ------------------------------------------------------------------ */
 /*  Shared dialog shell — consistent compact sizing                    */
@@ -367,6 +368,31 @@ export function RemoveResponsibilityDialog({
 }
 
 /* ------------------------------------------------------------------ */
+/**
+ * Phase 1 — persisted staff photos resolve through a short-lived signed
+ * URL (no anonymous media reads); fresh uploads keep their dataUrl
+ * preview. Hosts PhotoStep with the resolved render source.
+ */
+function SecurePhotoStepHost({
+  record,
+  onChange,
+}: {
+  record: import('@/lib/store/teachers-store').TeacherMediaRecord | null | undefined
+  onChange: (dataUrl: string | null) => void
+}) {
+  const src = useTeacherMediaSrc(record ?? null)
+  return (
+    <PhotoStep
+      photoDataUrl={src}
+      onChange={onChange}
+      title="Photograph"
+      recordLabel="staff record"
+      suppressToasts
+      startInPreview
+    />
+  )
+}
+
 /*  4 — Photo (hosts the existing capture/crop pipeline in a dialog)   */
 /* ------------------------------------------------------------------ */
 
@@ -411,13 +437,9 @@ export function PhotoEditDialog({ teacher, open, onClose }: { teacher: TeacherRe
           <DialogDescription>Upload, capture or re-crop the staff photograph.</DialogDescription>
         </DialogHeader>
         <div className="p-4 sm:p-5">
-          <PhotoStep
-            photoDataUrl={teacher.photo ? teacherMediaSrc(teacher.photo) : null}
+          <SecurePhotoStepHost
+            record={teacher.photo}
             onChange={handleChange}
-            title="Photograph"
-            recordLabel="staff record"
-            suppressToasts
-            startInPreview
           />
           {busy && <p className="text-[11px] text-muted-foreground mt-2">Storing photo on the staff record…</p>}
           <div className="flex justify-end mt-3">

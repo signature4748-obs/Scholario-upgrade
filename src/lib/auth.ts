@@ -4,6 +4,7 @@ import { cookies, headers } from 'next/headers'
 
 // Lightweight password hashing using Node's scrypt (no external deps)
 import { scryptSync, timingSafeEqual } from 'crypto'
+import { AppError } from './security/errors'
 
 export function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex')
@@ -20,12 +21,52 @@ export function verifyPassword(password: string, stored: string): boolean {
   return timingSafeEqual(hashBuf, testBuf)
 }
 
+/**
+ * Timing-equalizer for failed lookups: when an account does not exist we
+ * still burn one scrypt round against a fixed hash, so response latency
+ * cannot distinguish "no such user" from "wrong password" (anti user
+ * enumeration).
+ */
+const DUMMY_HASH = hashPassword('scholario-timing-equalizer')
+export function burnPasswordTiming(): void {
+  scryptSync('invalid', DUMMY_HASH.split(':')[0], 64)
+}
+
 export function generateToken(): string {
   return randomBytes(32).toString('hex')
 }
 
 export const SESSION_COOKIE = 'erp_session'
 export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7 // 7 days
+
+/**
+ * Cookie attributes — the single source of truth (tested).
+ * `secure` is enforced in production so the session cookie is only ever
+ * transported over HTTPS; dev/http preview keeps it functional.
+ */
+export function sessionCookieOptions(isProd: boolean) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    path: '/',
+    secure: isProd,
+    maxAge: Math.floor(SESSION_TTL_MS / 1000),
+  }
+}
+
+/**
+ * Is the cross-site-iframe BEARER fallback (login response carries the
+ * session token for localStorage) enabled?
+ *
+ * Production: NEVER — session credentials must not reach browser
+ * JavaScript (Phase-0 baseline B-4). Dev/preview: enabled unless
+ * SCHOLARIO_DEV_BEARER=0, because the sandbox preview renders the app in
+ * a cross-site iframe where browsers refuse the SameSite=Lax cookie.
+ */
+export function isDevSessionBearerEnabled(): boolean {
+  if (process.env.NODE_ENV === 'production') return false
+  return process.env.SCHOLARIO_DEV_BEARER !== '0'
+}
 
 export async function createSession(
   userId: string,
@@ -55,14 +96,31 @@ export async function destroySession(token: string): Promise<void> {
   await db.session.deleteMany({ where: { token } }).catch(() => {})
 }
 
+/**
+ * Session ROTATION (Phase 1): replace the caller's session token with a
+ * fresh random token (new expiry), keeping device metadata. Used after
+ * password change so a stolen pre-rotation token dies immediately.
+ */
+export async function rotateSession(currentToken: string): Promise<string> {
+  const old = await db.session.findUnique({ where: { token: currentToken } })
+  if (!old) throw new Error('UNAUTHORIZED')
+  const newToken = generateToken()
+  await db.session.create({
+    data: {
+      userId: old.userId,
+      token: newToken,
+      expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+      userAgent: old.userAgent,
+      ipAddress: old.ipAddress,
+    },
+  })
+  await db.session.delete({ where: { id: old.id } }).catch(() => {})
+  return newToken
+}
+
 export async function setSessionCookie(token: string) {
   const store = await cookies()
-  store.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: Math.floor(SESSION_TTL_MS / 1000),
-  })
+  store.set(SESSION_COOKIE, token, sessionCookieOptions(process.env.NODE_ENV === 'production'))
 }
 
 export async function clearSessionCookie() {
@@ -70,31 +128,72 @@ export async function clearSessionCookie() {
   store.delete(SESSION_COOKIE)
 }
 
+/**
+ * CSRF defense-in-depth for cookie-authenticated requests (Phase 1).
+ *
+ * SameSite=Lax already blocks cross-site POST cookies in modern browsers.
+ * This guard closes the residual gap: when authentication rides the
+ * cookie (an ambient credential) and the request carries an Origin whose
+ * host does not match the request Host, reject as cross-site. Bearer-
+ * authenticated requests skip the check — an explicit header cannot be
+ * smuggled by a cross-site page.
+ *
+ * Pure host comparison (exported for tests).
+ */
+export function isCrossOriginRequest(origin: string | null, host: string | null): boolean {
+  if (!origin || !host) return false
+  try {
+    const originHost = new URL(origin).host
+    if (!originHost) return false
+    return originHost.toLowerCase() !== host.toLowerCase()
+  } catch {
+    // Unparseable Origin (not a URL) — treat as hostile.
+    return true
+  }
+}
+
 export async function getSessionToken(): Promise<string | undefined> {
   // Primary: the HttpOnly cookie (first-party tabs).
   const store = await cookies()
   const cookieToken = store.get(SESSION_COOKIE)?.value
-  if (cookieToken) return cookieToken
-
-  // Fallback: `Authorization: Bearer <token>` for embedded contexts.
-  // The sandbox preview panel renders this app inside a CROSS-SITE iframe;
-  // browsers refuse to store AND send SameSite=Lax cookies in third-party
-  // frames, so a login that succeeds server-side (200 + Set-Cookie) was
-  // followed by cookie-less 401s on every subsequent call, and the client's
-  // dead-session policy signed the user straight back out (the "kicked
-  // back to the login screen" bug). The login response now also returns the
-  // session token; the client persists it per-origin and attaches it as a
-  // Bearer header (src/lib/auth-session-token.ts). Wherever the cookie
-  // works it still takes precedence — first-party behavior is unchanged.
-  try {
-    const h = await headers()
-    const auth = h.get('authorization')
-    if (auth?.startsWith('Bearer ')) {
-      const bearer = auth.slice(7).trim()
-      if (bearer) return bearer
+  if (cookieToken) {
+    // Ambient-credential (cookie) use → enforce same-origin for it.
+    try {
+      const h = await headers()
+      const origin = h.get('origin')
+      const host = h.get('host')
+      if (isCrossOriginRequest(origin, host)) {
+        throw new AppError('CSRF_REJECTED', {
+          publicMessage: 'Cross-origin request rejected',
+          internalDetail: `origin=${origin} host=${host}`,
+        })
+      }
+    } catch (e) {
+      if (e instanceof AppError) throw e
+      // headers() unavailable outside request scope — cookie-only mode.
     }
-  } catch {
-    // headers() unavailable outside request scope — cookie-only mode.
+    return cookieToken
+  }
+
+  // Fallback: `Authorization: Bearer <token>` — DEV ONLY (see
+  // isDevSessionBearerEnabled): the sandbox preview panel renders this
+  // app inside a CROSS-SITE iframe; browsers refuse to store AND send
+  // SameSite=Lax cookies in third-party frames, so a login that succeeds
+  // server-side (200 + Set-Cookie) was followed by cookie-less 401s on
+  // every subsequent call. In production this header path is hard-disabled
+  // (no env override — the HttpOnly cookie is the ONLY session transport
+  // in production).
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const h = await headers()
+      const auth = h.get('authorization')
+      if (auth?.startsWith('Bearer ')) {
+        const bearer = auth.slice(7).trim()
+        if (bearer) return bearer
+      }
+    } catch {
+      // headers() unavailable outside request scope — cookie-only mode.
+    }
   }
   return undefined
 }

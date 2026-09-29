@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { db } from '@/lib/db'
+import { RATE_LIMITS, checkRateLimit, clientIpFromHeaders } from '@/lib/security/rate-limit'
+import { auditRateLimit } from '@/lib/security/audit'
 
 /**
  * Razorpay webhook receiver — real signature verification + DB-persisted
@@ -72,6 +74,18 @@ function verifySignature(rawBody: string, signature: string, secret: string): bo
 }
 
 export async function POST(req: NextRequest) {
+  // Phase 1 — per-IP rate limit on the webhook receiver (signature
+  // verification is the real gate; this blunts DoS/replay floods).
+  const ip = clientIpFromHeaders(req.headers)
+  const rl = checkRateLimit(`rl:webhook:${ip}`, RATE_LIMITS.webhook)
+  if (!rl.allowed) {
+    auditRateLimit('webhook', ip)
+    return NextResponse.json(
+      { received: false, error: 'rate_limited' },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+    )
+  }
+
   const secret = process.env.RAZORPAY_WEBHOOK_SECRET
   if (!secret) {
     // Misconfiguration — surface it loudly so the operator sets the secret.

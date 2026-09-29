@@ -1,24 +1,106 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { verifyPassword, createSession, setSessionCookie } from '@/lib/auth'
+import { verifyPassword, createSession, setSessionCookie, burnPasswordTiming, isDevSessionBearerEnabled } from '@/lib/auth'
 import { api } from '@/lib/api'
+import { AppError, newRequestId } from '@/lib/security/errors'
+import {
+  RATE_LIMITS,
+  checkRateLimit,
+  resetRateLimit,
+  clientIpFromHeaders,
+  loginIpKey,
+  loginAccountKey,
+} from '@/lib/security/rate-limit'
+import { parseJsonBody, strictBody, emailSchema, passwordInputSchema } from '@/lib/security/validation'
+import { auditEvent, auditRateLimit } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 
-export async function POST(req: NextRequest) {
-  return api(async () => {
-    const body = await req.json().catch(() => ({}))
-    const email = String(body.email || '').trim().toLowerCase()
-    const password = String(body.password || '')
-    if (!email || !password) throw new Error('Email and password are required')
+const loginBodySchema = strictBody({
+  email: emailSchema,
+  password: passwordInputSchema,
+})
 
+export async function POST(req: NextRequest) {
+  const requestId = newRequestId()
+  return api(async () => {
+    // ── Input validation (strict: unknown fields rejected) ──────────────
+    const body = await parseJsonBody(req, loginBodySchema)
+
+    const ip = clientIpFromHeaders(req.headers)
+
+    // ── Brute-force protection: IP bucket + account bucket ──────────────
+    const ipVerdict = checkRateLimit(loginIpKey(ip), RATE_LIMITS.login)
+    if (!ipVerdict.allowed) {
+      auditRateLimit('login-ip', ip, requestId)
+      throw new AppError('RATE_LIMITED', {
+        publicMessage: `Too many sign-in attempts. Please try again in ${ipVerdict.retryAfterSec}s.`,
+        headers: { 'Retry-After': String(ipVerdict.retryAfterSec) },
+        internalDetail: `login ip bucket exhausted (${ip})`,
+      })
+    }
+
+    const accountKey = loginAccountKey(body.email)
+    const accountVerdict = checkRateLimit(accountKey, RATE_LIMITS.loginAccount)
+    if (!accountVerdict.allowed) {
+      auditRateLimit('login-account', body.email, requestId)
+      // Audit-persist account lockouts (lower frequency than blocks).
+      await auditEvent({
+        action: 'LOGIN_LOCKED',
+        actorLabel: body.email,
+        ip,
+        requestId,
+        detail: `Account bucket exhausted — ${accountVerdict.retryAfterSec}s lockout.`,
+      }).catch(() => {})
+      throw new AppError('ACCOUNT_LOCKED', {
+        publicMessage: `Too many failed sign-ins for this account. Try again in ${accountVerdict.retryAfterSec}s.`,
+        headers: { 'Retry-After': String(accountVerdict.retryAfterSec) },
+        internalDetail: 'login account bucket exhausted',
+      })
+    }
+
+    // ── Credential verification ─────────────────────────────────────────
     const user = await db.user.findUnique({
-      where: { email },
+      where: { email: body.email },
       include: { school: true },
     })
-    if (!user) throw new Error('Invalid email or password')
-    if (user.status !== 'ACTIVE') throw new Error('Account is not active')
-    if (!user.passwordHash || !verifyPassword(password, user.passwordHash)) throw new Error('Invalid email or password')
+
+    // Anti-enumeration: burn one scrypt round when the user doesn't exist
+    // so failure latency is indistinguishable from a wrong password.
+    const passwordOk =
+      user && user.passwordHash ? verifyPassword(body.password, user.passwordHash) : (burnPasswordTiming(), false)
+
+    const fail = (reason: 'invalid' | 'inactive') => {
+      // Audit the failure (with actor label; no password material).
+      return auditEvent({
+        schoolId: user?.schoolId ?? null,
+        userId: user?.id ?? null,
+        action: 'LOGIN_FAILED',
+        actorLabel: body.email,
+        ip,
+        requestId,
+        detail: reason === 'inactive' ? 'Account is not active' : 'Invalid credentials',
+      })
+    }
+
+    if (!user || !passwordOk) {
+      await fail('invalid')
+      // Generic message — never reveal whether the account exists.
+      throw new AppError('UNAUTHORIZED', {
+        publicMessage: 'Invalid email or password',
+        internalDetail: 'credential mismatch',
+      })
+    }
+    if (user.status !== 'ACTIVE') {
+      await fail('inactive')
+      throw new AppError('UNAUTHORIZED', {
+        publicMessage: 'Invalid email or password',
+        internalDetail: 'account inactive (generic response: no status disclosure)',
+      })
+    }
+
+    // ── Success: reset the per-account failure bucket ───────────────────
+    resetRateLimit(accountKey)
 
     // SS-1 — capture the sign-in device context for Settings → Devices.
     const forwarded = req.headers.get('x-forwarded-for')
@@ -28,6 +110,15 @@ export async function POST(req: NextRequest) {
     })
     await setSessionCookie(token)
 
+    await auditEvent({
+      schoolId: user.schoolId ?? null,
+      userId: user.id,
+      action: 'LOGIN_SUCCESS',
+      ip,
+      requestId,
+      detail: `Signed in as ${user.role}`,
+    }).catch(() => {})
+
     return {
       id: user.id,
       email: user.email,
@@ -35,11 +126,13 @@ export async function POST(req: NextRequest) {
       role: user.role,
       schoolId: user.schoolId,
       avatarUrl: user.avatarUrl,
-      // Same secret the HttpOnly cookie carries. Needed for embedded
-      // contexts (cross-site preview iframes) where the browser drops the
-      // SameSite=Lax cookie — see lib/auth.ts getSessionToken. Where the
-      // cookie works it remains the primary mechanism.
-      sessionToken: token,
+      // DEV PREVIEW ONLY (isDevSessionBearerEnabled): the sandbox preview
+      // renders this app inside a cross-site iframe where the browser
+      // refuses the SameSite=Lax cookie — the client persists this token
+      // per-origin and attaches it as a Bearer header. In production this
+      // field is NEVER returned: the HttpOnly cookie is the only session
+      // transport (Phase-0 baseline B-4 remediation).
+      ...(isDevSessionBearerEnabled() ? { sessionToken: token } : {}),
       school: user.school
         ? {
             id: user.school.id,
