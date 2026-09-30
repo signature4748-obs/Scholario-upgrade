@@ -1,3 +1,10 @@
+# NOTE (repo push, 2026-09-30): this file was moved out of .github/workflows/ because the
+# push token lacked the GitHub "workflow" scope, which is required to create
+# workflow files via API/push. The workflow itself is unchanged. TO RESTORE CI:
+# rename this file back to .github/workflows/ci.yml via the GitHub web UI
+# (or with a PAT that has the workflow scope) — GitHub will pick it up and run
+# the gates on the next push/PR.
+
 # PHASE 4 (item 11) — CI: the quality gates that ran manually at every
 # phase close are now enforced on every push/PR.
 #
