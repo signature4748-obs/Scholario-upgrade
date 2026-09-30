@@ -271,6 +271,8 @@ export type AuthUser = {
     logoUrl: string | null
     academicYear: string
     plan: string
+    /** Tenant lifecycle status — the access-policy input (PHASE 7.5). */
+    status: string
   } | null
 }
 
@@ -309,6 +311,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
           logoUrl: u.school.logoUrl,
           academicYear: u.school.academicYear ?? '',
           plan: u.school.plan,
+          status: u.school.status,
         }
       : null,
   }

@@ -59,6 +59,13 @@ export const AUDIT_ACTIONS = [
   // ActivityLog so principals see platform oversight of their tenant).
   'PLATFORM_SUPPORT_SESSION',
   'PLATFORM_LOGIN_BLOCKED',
+  // PHASE 7.5 — school configuration / website CMS / announcement
+  // lifecycle mutations (all school-scoped, principal-authored).
+  'SCHOOL_SETTINGS_UPDATED',
+  'ANNOUNCEMENT_UPDATED',
+  'ANNOUNCEMENT_DELETED',
+  'WEBSITE_CONTENT_UPDATED',
+  'GALLERY_UPDATED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useState, type ComponentType } from 'react'
+import { useEffect, useState, type ComponentType, type CSSProperties } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import Image from 'next/image'
 import { Eye, EyeOff, Info, AlertTriangle } from 'lucide-react'
 import { useAuth, type Role } from '@/lib/store/auth-store'
 import { saveSessionToken } from '@/lib/auth-session-token'
+import { isValidHexColor } from '@/lib/branding-contrast'
 import { LoadingPhase } from './loading-phase'
 import { credentials, type CredentialCard } from './data'
 
@@ -30,29 +31,94 @@ interface LoginBranding {
   name: string
   shortName: string
   tagline: string
+  affiliation: string | null
   academicYear: string | null
+  logoUrl: string | null
+  primaryColor: string | null
 }
 
 const NEUTRAL_BRANDING: LoginBranding = {
   name: 'Scholario School',
   shortName: 'SCHOLARIO',
   tagline: 'Your school workspace, secured by Scholario',
+  affiliation: null,
   academicYear: null,
+  logoUrl: null,
+  primaryColor: null,
+}
+
+/* PHASE 7.5 — the branding fetch carries the school's own identity
+ * fields (shortName / tagline / affiliation / logoUrl / themeColor).
+ * NO slug is sent: the server resolves the tenant (Host domain →
+ * ?slug → single-school → demo) exactly as for the public website. */
+interface PublicSchoolBrandingBody {
+  success?: boolean
+  data?: {
+    name?: string
+    shortName?: string
+    tagline?: string
+    affiliation?: string
+    academicYear?: string
+    logoUrl?: string | null
+    themeColor?: string
+  }
+}
+
+/** CSS custom properties for the brand-token classes (globals.css):
+ *  `--school-primary` drives the sign-in button, chip selected state and
+ *  input underline accents; `--ring` tints the keyboard focus ring.
+ *  Both are set ONLY when the school configured a valid color, so the
+ *  un-branded fallback stays the Scholario emerald identity. */
+function loginBrandStyle(primaryColor: string | null): CSSProperties {
+  if (typeof primaryColor !== 'string' || !isValidHexColor(primaryColor)) {
+    return {}
+  }
+  return {
+    '--school-primary': primaryColor,
+    '--ring': primaryColor,
+  } as React.CSSProperties
 }
 
 function useLoginSchoolBranding(): LoginBranding {
   const [branding, setBranding] = useState<LoginBranding>(NEUTRAL_BRANDING)
   useEffect(() => {
     let alive = true
-    void fetch('/api/schools/public?slug=demo-school', { cache: 'no-store' })
+    // Forward the URL's ?slug= when present (sandbox per-tenant links /
+    // explicit school deep-links): the login must brand itself as the
+    // school whose site the visitor came from — NOT the demo fallback.
+    // Production domains carry no slug; the Host header resolves there.
+    const slug = new URLSearchParams(window.location.search).get('slug')
+    const url = slug
+      ? `/api/schools/public?slug=${encodeURIComponent(slug)}`
+      : '/api/schools/public'
+    void fetch(url, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((body: { success?: boolean; data?: { name?: string; academicYear?: string } } | null) => {
-        if (!alive || !body?.success || !body.data?.name) return
+      .then((body: PublicSchoolBrandingBody | null) => {
+        const d = body?.success ? body.data : undefined
+        if (!alive || !d?.name) return
+        const name = d.name
         setBranding({
-          name: body.data.name,
-          shortName: body.data.name.split(' ').slice(0, 2).join(' '),
-          tagline: NEUTRAL_BRANDING.tagline,
-          academicYear: body.data.academicYear ?? null,
+          name,
+          // Server identity.shortName with a neutral name-split fallback.
+          shortName:
+            (typeof d.shortName === 'string' && d.shortName.trim()) ||
+            name.split(' ').slice(0, 2).join(' '),
+          tagline:
+            typeof d.tagline === 'string' && d.tagline.trim()
+              ? d.tagline.trim()
+              : NEUTRAL_BRANDING.tagline,
+          affiliation:
+            typeof d.affiliation === 'string' && d.affiliation.trim()
+              ? d.affiliation.trim()
+              : null,
+          academicYear: d.academicYear ?? null,
+          logoUrl: d.logoUrl ?? null,
+          // Hex-validated client-side; the server also enforces WCAG
+          // contrast before storing a color, but never trust the wire.
+          primaryColor:
+            typeof d.themeColor === 'string' && isValidHexColor(d.themeColor)
+              ? d.themeColor.trim()
+              : null,
         })
       })
       .catch(() => undefined)
@@ -159,7 +225,10 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
   }
 
   return (
-    <div className="relative h-[100dvh] w-full overflow-hidden bg-white font-sans">
+    <div
+      style={loginBrandStyle(school.primaryColor)}
+      className="relative h-[100dvh] w-full overflow-hidden bg-white font-sans"
+    >
       <AnimatePresence mode="wait">
         {phase === 'form' ? (
           <motion.main
@@ -173,10 +242,11 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
                 consumed ~36% of the viewport and pushed the Sign In button
                 below the fold, which read as "login does nothing". The
                 RightPane carries its own compact mobile logo. */}
-            <LeftPane onBackToWebsite={onBackToWebsite} />
+            <LeftPane school={school} onBackToWebsite={onBackToWebsite} />
 
             {/* RIGHT PANE: form */}
             <RightPane
+              school={school}
               email={email}
               password={password}
               selectedRole={selectedRole}
@@ -288,14 +358,22 @@ function PlatformAnnouncementBanner() {
 /*  Left pane — animated gradient + logo + cloud divider               */
 /* ------------------------------------------------------------------ */
 
-function LeftPane({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
-  const school = useLoginSchoolBranding()
+function LeftPane({
+  school,
+  onBackToWebsite,
+}: {
+  school: LoginBranding
+  onBackToWebsite?: () => void
+}) {
   return (
     <section
       className="left-pane relative hidden md:flex md:w-[45%] p-8 md:p-12 flex-col items-center justify-center text-center text-white overflow-hidden"
       style={{
+        // PHASE 7.5 — the brand pane gradient derives from the school's
+        // primary color (server contrast-validated). Un-branded fallback
+        // = the classic emerald→teal Scholario login look.
         background:
-          'linear-gradient(180deg, #064e3b 0%, #0d9488 50%, #065f46 100%)',
+          'linear-gradient(180deg, color-mix(in srgb, var(--school-primary, #0d9488) 55%, #041f1c) 0%, var(--school-primary, #0d9488) 50%, color-mix(in srgb, var(--school-primary, #0d9488) 72%, #041f1c) 100%)',
         backgroundSize: '200% 200%',
         animation: 'bgShift 15s ease infinite',
       }}
@@ -333,14 +411,25 @@ function LeftPane({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
           className="bg-white rounded-3xl p-5 mb-5 w-28 h-28 flex items-center justify-center shadow-2xl shadow-emerald-900/30"
           style={{ animation: 'float 6s ease-in-out infinite' }}
         >
-          <Image
-            src="/logo.svg"
-            alt={`${school.name} logo`}
-            width={72}
-            height={72}
-            className="w-16 h-16"
-            priority
-          />
+          {school.logoUrl ? (
+            <Image
+              src={school.logoUrl}
+              alt={`${school.name} logo`}
+              width={72}
+              height={72}
+              className="w-16 h-16 object-contain"
+              priority
+            />
+          ) : (
+            <Image
+              src="/logo.svg"
+              alt="Scholario logo"
+              width={72}
+              height={72}
+              className="w-16 h-16"
+              priority
+            />
+          )}
         </div>
         <h1 className="font-display text-3xl lg:text-4xl font-bold tracking-tight text-white">
           {school.shortName}
@@ -348,6 +437,11 @@ function LeftPane({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
         <p className="text-[11px] font-semibold text-emerald-100 tracking-[0.25em] uppercase mt-2">
           Powered by Scholario
         </p>
+        {school.affiliation ? (
+          <p className="text-xs text-emerald-100/85 mt-2 tracking-wide">
+            {school.affiliation}
+          </p>
+        ) : null}
       </motion.div>
 
       {/* Description */}
@@ -418,6 +512,7 @@ function LeftPane({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
 /* ------------------------------------------------------------------ */
 
 interface RightPaneProps {
+  school: LoginBranding
   email: string
   password: string
   selectedRole: Role | null
@@ -431,6 +526,7 @@ interface RightPaneProps {
 }
 
 function RightPane({
+  school,
   email,
   password,
   selectedRole,
@@ -443,25 +539,37 @@ function RightPane({
   onForgotPassword,
 }: RightPaneProps) {
   const [passwordVisible, setPasswordVisible] = useState(false)
-  const school = useLoginSchoolBranding()
   return (
     <section className="relative z-20 flex w-full flex-1 flex-col justify-center overflow-y-auto bg-white p-6 sm:p-8 md:w-[55%] md:p-12 lg:p-16">
       <div className="w-full max-w-md mx-auto">
-        {/* Mobile-only logo */}
+        {/* Mobile-only logo (school logo when configured) */}
         <div className="md:hidden flex flex-col items-center mb-8">
           <div className="bg-white rounded-2xl p-3 mb-3 w-16 h-16 flex items-center justify-center shadow-lg shadow-emerald-500/20 border border-emerald-500/20">
-            <Image
-              src="/logo.svg"
-              alt="School logo"
-              width={40}
-              height={40}
-              className="w-10 h-10"
-            />
+            {school.logoUrl ? (
+              <Image
+                src={school.logoUrl}
+                alt={`${school.name} logo`}
+                width={40}
+                height={40}
+                className="h-10 w-10 rounded-lg object-contain"
+              />
+            ) : (
+              <Image
+                src="/logo.svg"
+                alt="Scholario logo"
+                width={40}
+                height={40}
+                className="w-10 h-10"
+              />
+            )}
           </div>
           <h1 className="font-display text-xl font-bold text-foreground">{school.shortName}</h1>
           <p className="text-[11px] font-semibold text-emerald-600 tracking-[0.25em] uppercase mt-1">
             Powered by Scholario
           </p>
+          {school.affiliation ? (
+            <p className="text-xs text-muted-foreground mt-1.5">{school.affiliation}</p>
+          ) : null}
         </div>
 
         {/* Heading */}
@@ -532,7 +640,7 @@ function RightPane({
                 placeholder="Enter your email or ID"
                 className="custom-input block w-full text-foreground placeholder:text-gray-400 py-2.5 focus:ring-0 peer"
               />
-              <span className="absolute right-0 input-check-icon peer-focus:scale-110 text-emerald-600">
+              <span className="absolute right-0 input-check-icon peer-focus:scale-110 school-brand-text">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                 </svg>
@@ -590,7 +698,7 @@ function RightPane({
             <button
               type="button"
               onClick={onForgotPassword}
-              className="rounded-md px-1 -mx-1 py-0.5 text-sm font-medium text-emerald-700 hover:text-emerald-800 hover:underline transition-colors focus-ring"
+              className="rounded-md px-1 -mx-1 py-0.5 text-sm font-medium school-brand-text hover:underline transition-colors focus-ring"
             >
               Forgot password?
             </button>
@@ -607,7 +715,7 @@ function RightPane({
               disabled={submitting}
               whileHover={{ scale: 1.01, y: -1 }}
               whileTap={{ scale: 0.98 }}
-              className="group w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white text-base font-semibold rounded-full shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:shadow-emerald-500/40 transition-all disabled:opacity-60 disabled:cursor-not-allowed focus-ring"
+              className="group w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 school-brand-cta text-base font-semibold rounded-full transition-all disabled:opacity-60 disabled:cursor-not-allowed focus-ring"
             >
               {submitting ? 'Signing in…' : 'Sign In'}
               {!submitting && (
@@ -653,8 +761,8 @@ function RightPane({
                     whileTap={{ scale: 0.97 }}
                     className={`group relative flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border p-3 text-center transition-all focus-ring ${
                       active
-                        ? 'border-emerald-500 bg-emerald-50 shadow-md shadow-emerald-500/10'
-                        : 'border-border bg-card hover:border-emerald-500/40 hover:bg-emerald-50/30'
+                        ? 'school-brand-chip shadow-md'
+                        : 'border-border bg-card demo-chip-hover'
                     }`}
                   >
                     <div
@@ -685,7 +793,13 @@ function RightPane({
           left: 0;
           width: 0%;
           height: 2px;
-          background: linear-gradient(90deg, #10b981, #0d9488);
+          /* PHASE 7.5 — school primary (inert fallback = the classic
+             emerald→teal underline) */
+          background: linear-gradient(
+            90deg,
+            var(--school-primary, #10b981),
+            color-mix(in srgb, var(--school-primary, #10b981) 72%, #000)
+          );
           transition: width 0.3s ease;
         }
         .custom-input-wrapper:focus-within::after {
@@ -710,7 +824,8 @@ function RightPane({
         }
         /* Keyboard-only focus indicator matching the app-wide .focus-ring
            pattern: mouse/touch focus keeps just the animated underline;
-           keyboard focus additionally draws the high-contrast ring. */
+           keyboard focus additionally draws the high-contrast ring
+           (--ring is the school primary when branded). */
         .custom-input:focus-visible {
           box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
         }
@@ -725,6 +840,11 @@ function RightPane({
         }
         .peer:focus ~ .input-check-icon {
           opacity: 1;
+        }
+        /* Un-selected demo chip hover — brand-tinted (fallback emerald). */
+        .demo-chip-hover:hover {
+          border-color: color-mix(in srgb, var(--school-primary, #10b981) 40%, transparent);
+          background-color: color-mix(in srgb, var(--school-primary, #10b981) 6%, white);
         }
       `}</style>
     </section>

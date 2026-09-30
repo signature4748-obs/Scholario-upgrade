@@ -4,16 +4,16 @@
  * school-print-identity — the ACTIVE TENANT's school identity for
  * teacher-side print/PDF surfaces (timetable exports, payslip PDFs).
  *
- * Multi-tenant honesty: these documents must never print the hardcoded
- * demo-school profile ("Demo School of Scholario", a fake CBSE
- * affiliation number) for a different tenant. The tenant registry is the
- * same source the app shell footer uses — one identity everywhere.
+ * PHASE 7.5: reads the SAME identity cascade as every other document
+ * surface — server identity (school-settings `server` slice) → local
+ * settings slice → neutral 'Our School'. The hardcoded tenant-registry
+ * snapshot is no longer consulted, so a second tenant's payslips can
+ * never print the demo school's letterhead.
  *
  * Read via getState() so plain (non-hook) export functions can use it.
  */
 
-import { useTenantStore } from '@/lib/tenant/store'
-import { TENANTS } from '@/lib/tenant/schools'
+import { getSchoolProfile } from '@/lib/school-profile'
 
 export interface SchoolPrintIdentity {
   /** School display name (tenant identity). */
@@ -23,11 +23,10 @@ export interface SchoolPrintIdentity {
 }
 
 export function schoolPrintIdentity(): SchoolPrintIdentity {
-  const state = useTenantStore.getState()
-  const tenant = TENANTS.find((t) => t.id === state.activeTenantId) ?? TENANTS[0]
-  const session = (tenant.session || '').replace('-', '–')
+  const p = getSchoolProfile()
+  const session = p.academicYear.replace('-', '–')
   return {
-    name: tenant.name,
-    line2: [tenant.city, session ? `Session ${session}` : ''].filter(Boolean).join(' · '),
+    name: p.name,
+    line2: [p.city, session ? `Session ${session}` : ''].filter(Boolean).join(' · '),
   }
 }

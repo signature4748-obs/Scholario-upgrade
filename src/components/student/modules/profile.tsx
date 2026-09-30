@@ -37,7 +37,7 @@ import { useStudentAttendanceStore, computeStats, studentRecords } from '@/lib/s
 import { useFeeStore } from '@/lib/store/fee-store'
 import { useCertificatesStore } from '@/lib/store/certificates-store'
 import { POSITION_DEFS, filterActivePositions } from '@/lib/student-positions'
-import { useAcademicSession, ACTIVE_SESSION_ID, formatSessionLabel } from '@/lib/academic-session'
+import { useAcademicSession, SESSION_NOT_SET_LABEL } from '@/lib/academic-session'
 import { useMyResults, fmtPct } from '@/lib/store/student-results-store'
 import { useEnrollmentIdentity, type EnrollmentIdentity } from './shared/enrollment'
 import { formatDate } from '@/lib/format'
@@ -98,8 +98,9 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
 
   // Positions held by THIS student — only ACTIVE ones in the live session
   // surface (RB-1 canonical resolver; raw array + useMemo keeps zustand v5
-  // selectors on stable refs).
-  const sessionId = useAcademicSession().id
+  // selectors on stable refs). PHASE 7.5-D — the session id is server-first
+  // and nullable; a null session resolves to no positions (honest).
+  const { id: sessionId, label: sessionLabel } = useAcademicSession()
   const positions = useMemo(
     () => filterActivePositions(allPositions, studentId ?? '', sessionId),
     [allPositions, studentId, sessionId],
@@ -177,7 +178,7 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
               {identity.classLabel} · Roll #{identity.rollNo} · {s.houseName} House
             </p>
             <p className="text-[11px] text-muted-foreground/80 mt-0.5">
-              Admission No {identity.admissionNo} · {formatSessionLabel(ACTIVE_SESSION_ID)}
+              Admission No {identity.admissionNo} · {sessionLabel ?? SESSION_NOT_SET_LABEL}
             </p>
           </div>
 
@@ -200,7 +201,7 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
           <h3 className="font-semibold text-sm flex items-center gap-2">
             <GraduationCap className="h-4 w-4 text-violet-500" /> Academic Snapshot
           </h3>
-          <span className="text-[11px] text-muted-foreground">{formatSessionLabel(ACTIVE_SESSION_ID)}</span>
+          <span className="text-[11px] text-muted-foreground">{sessionLabel ?? SESSION_NOT_SET_LABEL}</span>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-0 sm:divide-x sm:divide-border">
           <SnapshotStat

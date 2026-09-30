@@ -51,14 +51,16 @@ import { ReportCard } from './report-card'
 
 /* ── Scope chips — the page's ONE context line (LR-1: no big title) ── */
 
-function ScopeChips({ sessionLabel, classLabel }: { sessionLabel: string; classLabel: string }) {
+/** sessionLabel is nullable (PHASE 7.5-D server-first resolution) — the
+ *  chip honestly reads "Session not set" instead of a guessed year. */
+function ScopeChips({ sessionLabel, classLabel }: { sessionLabel: string | null; classLabel: string }) {
   return (
     <div className="flex flex-wrap items-center gap-2" aria-label="Result scope">
       <span
         className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/[0.07] px-2.5 py-1 text-[11px] font-medium text-primary"
         title="Active academic session"
       >
-        <CalendarRange className="h-3 w-3 shrink-0" aria-hidden /> {sessionLabel}
+        <CalendarRange className="h-3 w-3 shrink-0" aria-hidden /> {sessionLabel ?? 'Session not set'}
       </span>
       <span
         className="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground"

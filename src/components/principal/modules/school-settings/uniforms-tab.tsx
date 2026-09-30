@@ -1,11 +1,15 @@
 'use client'
 
-// Uniforms tab — uniform apparel inventory cards plus the "Add Uniform Item"
+// Uniforms tab — uniform apparel items plus the "Add Uniform Item"
 // dialog. Owns its local newUniform state and wires the create handler to
 // store.addUniformItem.
+//
+// PHASE 7.5: edits still work through the client store; an explicit
+// "Save to School Record" persists the catalogue to the server settings
+// JSON (PATCH { settings: { uniforms: [...] } }) so it survives browsers.
 
-import { useState } from 'react'
-import { Shirt, Plus } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Shirt, Plus, Save } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
@@ -16,9 +20,14 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
-import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+import {
+  useSchoolSettingsStore,
+  applySchoolConfig,
+} from '@/lib/store/school-settings-store'
 import { toast } from 'sonner'
-import { SettingsTab } from './shared'
+import { cn } from '@/lib/utils'
+import { patchSettingsSlice } from './server-api'
+import { SettingsTab, SyncChip } from './shared'
 
 const DEFAULT_UNIFORM = {
   name: '',
@@ -32,6 +41,30 @@ export function UniformsTab() {
   const store = useSchoolSettingsStore()
   const [addUniformOpen, setAddUniformOpen] = useState(false)
   const [newUniform, setNewUniform] = useState({ ...DEFAULT_UNIFORM })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Dirty = local catalogue differs from the server-persisted slice.
+  const serverUniforms = useSchoolSettingsStore((s) => s.server.settings.uniforms)
+  useEffect(() => { setError(null) }, [serverUniforms])
+  const dirty = useMemo(
+    () => JSON.stringify(store.uniforms) !== JSON.stringify(serverUniforms ?? store.uniforms),
+    [store.uniforms, serverUniforms],
+  )
+
+  const handleSaveToServer = async () => {
+    setSaving(true)
+    setError(null)
+    const result = await patchSettingsSlice('uniforms', store.uniforms)
+    setSaving(false)
+    if (result.ok && result.config) {
+      applySchoolConfig(result.config)
+      toast.success('Uniform catalogue saved to the school record')
+    } else {
+      setError(result.error)
+      toast.error(result.error ?? 'The uniform catalogue could not be saved.')
+    }
+  }
 
   const handleCreateUniform = () => {
     if (!newUniform.name.trim()) {
@@ -74,6 +107,28 @@ export function UniformsTab() {
               <p className="text-[10px] text-muted-foreground">Stock: <strong>{un.stock} pcs</strong></p>
             </div>
           ))}
+        </div>
+
+        {error && (
+          <div
+            role="alert"
+            className="rounded-xl border border-rose-500/30 bg-rose-500/[0.06] px-3 py-2.5 text-[11px] text-rose-700 dark:text-rose-300"
+          >
+            {error}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <SyncChip dirty={dirty} saving={saving} />
+          <Button
+            size="sm"
+            disabled={saving || !dirty}
+            onClick={handleSaveToServer}
+            className={cn('gap-1.5 text-xs font-bold', 'bg-emerald-600 hover:bg-emerald-700 text-white')}
+          >
+            <Save className="h-3.5 w-3.5" />
+            {saving ? 'Saving…' : 'Save to School Record'}
+          </Button>
         </div>
       </SettingsTab>
 

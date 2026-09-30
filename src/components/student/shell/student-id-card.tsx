@@ -30,7 +30,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/compone
 import { cn } from '@/lib/utils'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
 import type { StudentRecord } from '@/lib/store/students-store'
-import { ACTIVE_SESSION_ID, normalizeSessionId, formatSessionLabel } from '@/lib/academic-session'
+import { useAcademicSession, SESSION_NOT_SET_LABEL } from '@/lib/academic-session'
 import type { EnrollmentIdentity } from '@/components/student/modules/shared/enrollment'
 
 /* ── School-configured themes (the card's institutional accent) ───────── */
@@ -70,13 +70,17 @@ export interface StudentIdCardProps {
 export function StudentIdCard({ student, className, enrollment }: StudentIdCardProps) {
   const school = useSchoolSettingsStore((s) => s.general)
   const idCard = useSchoolSettingsStore((s) => s.idCard)
-  const rawSession = useSchoolSettingsStore((s) => s.academics?.currentSession)
+  // PHASE 7.5-D — server-first session resolution (settings server slice →
+  // auth session → local settings; NO hardcoded year — a second tenant
+  // never prints the wrong session on its ID cards).
+  const session = useAcademicSession()
 
   const theme = CARD_THEMES[idCard?.theme] ?? CARD_THEMES.violet
-  const sessionId = normalizeSessionId(rawSession) ?? ACTIVE_SESSION_ID
-  const sessionLabel = formatSessionLabel(sessionId)
+  const sessionLabel = session.label ?? SESSION_NOT_SET_LABEL
   // Session "2026-2027" → card valid through 31 Mar of the END year.
-  const validTill = `31 Mar ${sessionId.slice(5)}`
+  // Unknown session → the validity line is HIDDEN (a wrong date is never
+  // printed; the "Enrolled student" line says "Session not set").
+  const validTill = session.id ? `31 Mar ${session.id.slice(5)}` : null
   const isActive = student.status === 'Active'
 
   // Configured particulars — each prints ONLY when the school enabled it
@@ -177,7 +181,7 @@ export function StudentIdCard({ student, className, enrollment }: StudentIdCardP
             Principal
           </p>
         </div>
-        {idCard?.showValidUntil && (
+        {idCard?.showValidUntil && validTill && (
           <p className="shrink-0 text-[10px] text-muted-foreground">
             Valid till <span className="font-bold tabular-nums text-foreground">{validTill}</span>
           </p>

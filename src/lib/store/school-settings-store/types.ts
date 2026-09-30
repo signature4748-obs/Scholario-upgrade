@@ -243,7 +243,59 @@ export interface WaiverAuditEntry {
   timestamp: string
 }
 
+/* ──────────────────────────────────────────────────────────────────── */
+/*  SERVER CONFIG SLICE (PHASE 7.5)                                     */
+/*  The canonical school configuration fetched from                      */
+/*  GET /api/school-settings (School columns + settings JSON + module    */
+/*  flags). The Identity/Branding tabs draft against it and PATCH back;  */
+/*  document consumers (school-profile) read it FIRST so a second        */
+/*  tenant never renders Greenwood letterheads. Persisted as a cached    */
+/*  snapshot — the once-per-session server-sync refreshes it.            */
+/* ──────────────────────────────────────────────────────────────────── */
+
+export interface ServerSchoolIdentity {
+  name: string
+  shortName: string | null
+  tagline: string | null
+  affiliation: string | null
+  address: string | null
+  city: string | null
+  phone: string | null
+  email: string | null
+  website: string | null
+  principalName: string | null
+  established: string | null
+  /** Read-only on the client — set by provisioning. */
+  code: string
+  board: string
+  academicYear: string | null
+}
+
+export interface ServerSchoolBranding {
+  primaryColor: string
+  accentColor: string
+  logoUrl: string | null
+  faviconUrl: string | null
+}
+
+export type ServerSettingsSyncStatus = 'idle' | 'syncing' | 'synced' | 'error'
+
+export interface ServerSchoolConfigState {
+  identity: ServerSchoolIdentity | null
+  branding: ServerSchoolBranding | null
+  /** Effective module availability (server flags ?? platform defaults). */
+  moduleFlags: Record<string, boolean>
+  /** Raw settings-JSON slices (timetable, attendance, uniforms, …). */
+  settings: Record<string, unknown>
+  syncStatus: ServerSettingsSyncStatus
+  /** ISO timestamp of the last successful sync (null = never). */
+  syncedAt: string | null
+}
+
 export interface SchoolSettingsState {
+  /** Server-backed configuration snapshot (see server-sync.ts). */
+  server: ServerSchoolConfigState
+
   // General Profile
   general: {
     schoolName: string
@@ -251,6 +303,7 @@ export interface SchoolSettingsState {
     tagline: string
     affiliation: string
     address: string
+    city: string
     phone: string
     email: string
     website: string

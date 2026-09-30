@@ -1,4 +1,10 @@
 export { useSchoolSettingsStore } from './store'
+export {
+  syncSchoolSettingsFromServer,
+  resetSchoolSettingsSyncGuard,
+  applySchoolConfig,
+  type SchoolSettingsConfig,
+} from './server-sync'
 export { deriveFeeHeadKind } from './types'
 export type {
   ClassConfig,
@@ -19,4 +25,8 @@ export type {
   DuplicateDetectionConfig,
   WaiverAuditEntry,
   SchoolSettingsState,
+  ServerSchoolIdentity,
+  ServerSchoolBranding,
+  ServerSchoolConfigState,
+  ServerSettingsSyncStatus,
 } from './types'

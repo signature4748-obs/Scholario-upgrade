@@ -3,6 +3,10 @@
 import { GlassCard } from '@/components/shared/ui'
 import type { LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { AlertTriangle, RefreshCw, Loader2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+import { syncSchoolSettingsFromServer, resetSchoolSettingsSyncGuard } from '@/lib/store/school-settings-store/server-sync'
 
 // Header block used by each settings tab — icon + title + description.
 // Mirrors the original markup in the monolithic `school-settings.tsx`.
@@ -22,6 +26,97 @@ export function TabHeader({
       </h3>
       {description && <p className="text-xs text-muted-foreground">{description}</p>}
     </div>
+  )
+}
+
+/**
+ * Sync status gate for server-backed tabs: skeleton while the config is
+ * syncing, an honest retry banner when the sync failed (existing data
+ * stays usable via the fallback children), content otherwise.
+ */
+export function SyncGate({ children }: { children: ReactNode }) {
+  const syncStatus = useSchoolSettingsStore((s) => s.server.syncStatus)
+  const syncedAt = useSchoolSettingsStore((s) => s.server.syncedAt)
+
+  if (syncStatus === 'syncing' && !syncedAt) {
+    return (
+      <GlassCard className="p-6 space-y-4" aria-busy="true" aria-live="polite">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading school configuration…
+        </div>
+        <div className="space-y-3" aria-hidden>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-9 rounded-lg bg-muted/60 animate-pulse" />
+          ))}
+        </div>
+      </GlassCard>
+    )
+  }
+
+  if (syncStatus === 'error') {
+    return (
+      <GlassCard className="p-5 space-y-3">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-foreground">School configuration could not be loaded</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              The saved settings are temporarily unavailable — nothing was lost. Retry below or keep
+              editing local values (they save once the server responds).
+            </p>
+          </div>
+        </div>
+        <div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs gap-1.5"
+            onClick={() => {
+              resetSchoolSettingsSyncGuard()
+              void syncSchoolSettingsFromServer()
+            }}
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Retry
+          </Button>
+        </div>
+        {children}
+      </GlassCard>
+    )
+  }
+
+  return <>{children}</>
+}
+
+/**
+ * "Synced with school record" / "Unsaved changes" state chip. Announced
+ * politely to screen readers (aria-live) because it carries save-state.
+ */
+export function SyncChip({ dirty, saving }: { dirty: boolean; saving?: boolean }) {
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      className={
+        dirty
+          ? 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25'
+          : 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25'
+      }
+    >
+      {saving ? (
+        <>
+          <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+        </>
+      ) : dirty ? (
+        <>
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Unsaved changes
+        </>
+      ) : (
+        <>
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Synced with school record
+        </>
+      )}
+    </span>
   )
 }
 

@@ -7,8 +7,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { CheckCheck, Clock, MoreHorizontal, RotateCcw, Zap, Radio } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { CheckCheck, Clock, MoreHorizontal, RotateCcw } from 'lucide-react'
 import { snoozeOptions } from './data'
 
 /**
@@ -28,22 +27,18 @@ export interface LiveAlertsToolbarProps {
   alertsLength: number
   dismissedCount: number
   snoozedCount: number
-  autoAlertsEnabled?: boolean
-  countdown?: number
   snoozeAllMenuOpen: boolean
   setSnoozeAllMenuOpen: (open: boolean | ((prev: boolean) => boolean)) => void
   onResolveAll: () => void
   onSnoozeAll: (minutes: number) => void
-  onSimulateNewAlert?: () => void
-  onToggleAutoAlerts?: () => void
   onResetAll: () => void
   onRestore: () => void
 }
 
 export function LiveAlertsToolbar({
-  alertsLength, dismissedCount, snoozedCount, autoAlertsEnabled, countdown,
+  alertsLength, dismissedCount, snoozedCount,
   snoozeAllMenuOpen, setSnoozeAllMenuOpen, onResolveAll, onSnoozeAll,
-  onSimulateNewAlert, onToggleAutoAlerts, onResetAll, onRestore,
+  onResetAll, onRestore,
 }: LiveAlertsToolbarProps) {
   return (
     <div className="flex items-center gap-1.5">

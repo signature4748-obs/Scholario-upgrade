@@ -23,7 +23,6 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '../shared/segmented-tabs'
-import { useCommunicationStore } from '@/lib/store/communication-store'
 import { useFocusStore } from '@/lib/store/focus-store'
 import type { CommTab } from './comm-shared'
 import { COMM_GLOBAL_STYLES } from './comm-shared'
@@ -41,7 +40,6 @@ const TABS = [
 
 export function CommShell() {
   const [tab, setTab] = useState<CommTab>('announcements')
-  const announcements = useCommunicationStore((s) => s.announcements)
 
   // Notice deep-link from the command palette: jump straight to History and
   // hand the notice title down so the search pre-fills and the matching
@@ -53,14 +51,6 @@ export function CommShell() {
     setNoticeFocus({ id: focus.id, title: focus.title, ts: focus.ts })
     setTab('history')
   }, [focus?.ts, focus?.type])
-
-  const scheduledCount = announcements.filter((a) => a.status === 'Scheduled').length
-  const draftCount = announcements.filter((a) => a.status === 'Draft' && !a.archived).length
-
-  // The Announcements tab badge surfaces scheduled + draft counts — the
-  // summary pills that used to live in the header are now collapsed into
-  // this single tab badge (one home per metric, no duplicate display).
-  const announcementsBadge = scheduledCount + draftCount
 
   // Keyboard shortcuts: 1-4 switch tabs.
   useEffect(() => {
@@ -80,10 +70,7 @@ export function CommShell() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const tabs = TABS.map((t) => ({
-    ...t,
-    badge: t.value === 'announcements' && announcementsBadge > 0 ? announcementsBadge : undefined,
-  }))
+  const tabs = TABS.map((t) => ({ ...t }))
 
   return (
     <PageTransition className="space-y-4 comm-shell">

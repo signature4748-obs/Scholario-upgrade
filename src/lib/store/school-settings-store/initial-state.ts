@@ -13,6 +13,7 @@ const tenantGeneral = {
   tagline: 'Excellence in Education & Innovation',
   affiliation: 'CBSE — Affiliation No. 1730456',
   address: '100 Knowledge Parkway, Sector 47, Gurugram, Haryana 122003',
+  city: 'Gurugram',
   phone: '9876543210',
   email: 'info@greenwood.edu.in',
   website: 'www.greenwood.edu.in',
@@ -65,6 +66,18 @@ interface SchoolSettingsActions {
 // Initial non-action state for the School Settings store. Splitting this out
 // keeps the store creation file small while preserving every seeded value.
 export const initialState: StateShape = {
+  // PHASE 7.5 — server-config snapshot. EMPTY until the once-per-session
+  // hydration (server-sync.ts) fills it; consumers fall back to the local
+  // slices and NEVER fabricate a server value.
+  server: {
+    identity: null,
+    branding: null,
+    moduleFlags: {},
+    settings: {},
+    syncStatus: 'idle',
+    syncedAt: null,
+  },
+
   general: tenantGeneral,
 
   academics: {

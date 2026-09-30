@@ -54,19 +54,24 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
   // Attendance table (GET /api/attendance/overview, session-cached): latest
   // recorded day's rate + present count + the real 6-day sparkline. While
   // the fetch is in flight the card shows an honest "—" placeholder (same
-  // pattern as the dues card's pre-live fallback).
-  const { data: attendance } = useAttendanceOverview()
+  // pattern as the dues card's pre-live fallback). PHASE 7.5-D: a failure
+  // now flips the card to an honest "tap to retry" state whose click
+  // actually retries (hook `refresh`) instead of navigating away.
+  const { data: attendance, error: attendanceError, refresh: refreshAttendance } = useAttendanceOverview()
 
   // REAL upcoming exams — canonical /api/exams rows (was the mock
-  // "Pre-Board in 12 days" constant).
-  const upcoming = useUpcomingExams()
+  // "Pre-Board in 12 days" constant). Same retry wiring as attendance.
+  const { kpi: upcoming, error: examsError, refresh: refreshExams } = useUpcomingExams()
 
   // Round-7 + PHASE 7 — server-truth dues for the Pending Fees card.
   // NO mock fallback: pre-sync the card shows an honest "—"; a failed
-  // sync shows an honest retry affordance — never fabricated rupees.
+  // sync shows an honest retry affordance (clicking the card RETRIES —
+  // PHASE 7.5-D, it previously just navigated to the fees module) —
+  // never fabricated rupees.
   const dues = useDuesSummaryStore(selectLiveDues)
   const duesStatus = useDuesSummaryStore((s) => s.status)
   const ensureDues = useDuesSummaryStore((s) => s.ensure)
+  const refreshDues = useDuesSummaryStore((s) => s.refresh)
   useEffect(() => { void ensureDues() }, [ensureDues])
 
   // REAL admissions intelligence — every figure on the New Admissions card
@@ -126,13 +131,19 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
         suffix={attendance ? '%' : undefined}
         sub={attendance
           ? `${attendance.today.present.toLocaleString('en-IN')} present`
-          : 'Loading…'}
+          : attendanceError
+            ? 'Could not load — tap to retry'
+            : 'Loading…'}
         tone="emerald"
         icon={<CalendarCheck className="h-4 w-4" />}
         delay={0}
         sparkline={attendance ? attendance.weekTrend.map((d) => d.rate) : undefined}
         trend="up"
-        onClick={onNavigate ? () => onNavigate('attendance') : undefined}
+        onClick={onNavigate
+          ? attendanceError
+            ? () => void refreshAttendance()
+            : () => onNavigate('attendance')
+          : undefined}
       />
       <SummaryCard
         label="Pending Fees"
@@ -144,7 +155,13 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
         delay={0.04}
         sparkline={undefined}
         trend="neutral"
-        onClick={onNavigate ? (dues && dues.defaulterCount > 0 ? openOutreach : () => onNavigate('fees')) : undefined}
+        onClick={onNavigate
+          ? duesStatus === 'error' && !dues
+            ? () => void refreshDues()
+            : dues && dues.defaulterCount > 0
+              ? openOutreach
+              : () => onNavigate('fees')
+          : undefined}
       />
       <SummaryCard
         label="New Admissions"
@@ -160,12 +177,20 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
       <SummaryCard
         label="Upcoming Exams"
         value={upcoming ? upcoming.count : <Skeleton className="h-7 w-16" />}
-        sub={upcoming ? upcoming.sub : 'Checking schedule…'}
+        sub={upcoming
+          ? upcoming.sub
+          : examsError
+            ? 'Could not load — tap to retry'
+            : 'Checking schedule…'}
         tone="amber"
         icon={<FileText className="h-4 w-4" />}
         delay={0.12}
         trend="neutral"
-        onClick={onNavigate ? () => onNavigate('exams') : undefined}
+        onClick={onNavigate
+          ? examsError
+            ? () => void refreshExams()
+            : () => onNavigate('exams')
+          : undefined}
       />
     </SummaryCardGrid>
   )

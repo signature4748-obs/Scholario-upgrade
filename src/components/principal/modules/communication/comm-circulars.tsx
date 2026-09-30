@@ -1,20 +1,23 @@
 'use client'
 
 /**
- * comm-circulars — official circulars with View/Download/Archive.
+ * comm-circulars (PHASE 7.5) — staff-facing circulars.
  *
- * - Search + filter by status
- * - Circular cards with ref number, title, audience, date, category, status
- * - Actions: View PDF, Download, Share, Archive
+ * DATA SOURCE: real /api/announcements rows filtered to staff audiences
+ * (TEACHERS / STAFF — the staff-facing slice of the announcement
+ * lifecycle). No fabricated circulars: a school with no staff notices
+ * sees the honest empty state. Download / Share render the REAL notice
+ * content with the school letterhead from school-profile.
  */
 
-import { useState, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  FileText, Download, Share2, Archive, Eye, Search, RotateCcw, X,
+  FileText, Download, Share2, Eye, Search, X,
+  Loader2, AlertTriangle, RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useCommunicationStore, type Circular } from '@/lib/store/communication-store'
+import type { Circular } from '@/lib/store/communication-store'
 import { formatDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { downloadHTMLFile, safeFileName, shareText } from '@/lib/download-file'
@@ -22,6 +25,78 @@ import { getSchoolProfile } from '@/lib/school-profile'
 import { CommPanel, CommEmptyState } from './comm-shared'
 import { toast } from 'sonner'
 import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
+
+// ─── Source rows (GET /api/announcements staff view) ───────────────
+
+interface AnnouncementRow {
+  id: string
+  title: string
+  message: string
+  audience: string
+  status: string
+  createdAt: string
+}
+
+const STAFF_AUDIENCES = new Set(['TEACHERS', 'STAFF'])
+
+function audienceText(a: string): string {
+  if (a === 'TEACHERS') return 'All Teachers'
+  if (a === 'STAFF') return 'All Staff'
+  if (a.startsWith('CLASS:')) return a.slice(6).trim()
+  return a
+}
+
+/** Map a real staff announcement onto the circular presentation. */
+function circularFromRow(row: AnnouncementRow): Circular {
+  return {
+    id: row.id,
+    // Document reference derived from the real DB record id (honest:
+    // the circular IS this notification record).
+    refNo: `NTF/${row.id.slice(-8).toUpperCase()}`,
+    title: row.title,
+    audience: audienceText(row.audience),
+    category: 'Staff Circular',
+    date: row.createdAt.slice(0, 10),
+    status: row.status === 'ARCHIVED' ? 'Archived' : 'Active',
+    color: 'oklch(0.55 0.14 162)',
+  }
+}
+
+function useStaffCirculars(): {
+  circulars: Circular[] | null
+  loading: boolean
+  error: string | null
+  reload: () => void
+} {
+  const [rows, setRows] = useState<AnnouncementRow[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      const r = await fetch('/api/announcements', { cache: 'no-store' })
+      if (!r.ok) {
+        const j = (await r.json().catch(() => null)) as { error?: string } | null
+        setError(j?.error ?? 'Staff notices could not be loaded. Please retry.')
+        return
+      }
+      const j = (await r.json()) as { ok?: boolean; data?: { announcements?: AnnouncementRow[] } }
+      setRows(Array.isArray(j.data?.announcements) ? j.data!.announcements! : [])
+    } catch {
+      setError('Announcement server is unreachable — check your connection and retry.')
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const circulars = useMemo(
+    () => (rows === null ? null : rows.filter((r) => STAFF_AUDIENCES.has(r.audience)).map(circularFromRow)),
+    [rows],
+  )
+  return { circulars, loading: rows === null && error === null, error, reload: load }
+}
 
 
 // ─── QA-FIX-A: REAL Download / Share actions ────────────────────────
@@ -107,15 +182,14 @@ async function shareCircular(circular: Circular) {
 }
 
 export function CircularsSection() {
-  const circulars = useCommunicationStore((s) => s.circulars)
-  const archiveCircular = useCommunicationStore((s) => s.archiveCircular)
+  const { circulars, loading, error, reload } = useStaffCirculars()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'active' | 'archived'>('all')
   const [viewing, setViewing] = useState<Circular | null>(null)
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
-    return circulars.filter((c) => {
+    return (circulars ?? []).filter((c) => {
       if (q && !c.title.toLowerCase().includes(q) && !c.refNo.toLowerCase().includes(q)) return false
       if (filter === 'active' && c.status !== 'Active') return false
       if (filter === 'archived' && c.status !== 'Archived') return false
@@ -132,11 +206,12 @@ export function CircularsSection() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search circular by title or reference number…"
+            placeholder="Search staff circular by title or reference number…"
+            aria-label="Search staff circulars"
             className="w-full h-8 pl-8 pr-3 text-xs rounded-md border border-border bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
         </div>
-        <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5">
+        <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5" role="group" aria-label="Filter circulars by status">
           {[
             { value: 'all', label: 'All' },
             { value: 'active', label: 'Active' },
@@ -145,6 +220,7 @@ export function CircularsSection() {
             <button
               key={f.value}
               onClick={() => setFilter(f.value as any)}
+              aria-pressed={filter === f.value}
               className={cn(
                 'px-2.5 py-1 text-[11px] font-medium rounded transition-colors',
                 filter === f.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
@@ -154,41 +230,80 @@ export function CircularsSection() {
             </button>
           ))}
         </div>
+        <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={reload} aria-label="Refresh staff circulars">
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </Button>
       </div>
+
+      {/* Loading / error states */}
+      {loading && (
+        <CommPanel>
+          <div className="p-4 space-y-2" aria-busy="true" aria-live="polite">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading staff circulars…
+            </div>
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-16 rounded-xl bg-muted/60 animate-pulse" aria-hidden />
+            ))}
+          </div>
+        </CommPanel>
+      )}
+      {error !== null && !loading && (
+        <CommPanel>
+          <div className="p-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-foreground">Staff circulars could not be loaded</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">{error}</p>
+              </div>
+            </div>
+            <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={reload}>
+              <RefreshCw className="h-3.5 w-3.5" /> Retry
+            </Button>
+          </div>
+        </CommPanel>
+      )}
 
       {/* Circulars grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {filtered.map((c, i) => (
-          <CircularCard
-            key={c.id}
-            circular={c}
-            index={i}
-            onView={() => setViewing(c)}
-            onArchive={() => { archiveCircular(c.id); toast.success(c.status === 'Active' ? 'Circular archived' : 'Circular restored') }}
-          />
-        ))}
-        {filtered.length === 0 && (
-          <div className="col-span-full">
-            <CommPanel>
-              <CommEmptyState icon={<FileText className="h-6 w-6" />} title="No circulars found" description={search ? "Try a different search." : "No circulars match this filter."} />
-            </CommPanel>
+      {!loading && error === null && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filtered.map((c, i) => (
+              <CircularCard
+                key={c.id}
+                circular={c}
+                index={i}
+                onView={() => setViewing(c)}
+              />
+            ))}
+            {filtered.length === 0 && (
+              <div className="col-span-full">
+                <CommPanel>
+                  <CommEmptyState
+                    icon={<FileText className="h-6 w-6" />}
+                    title="No staff circulars found"
+                    description={search ? 'Try a different search.' : circulars?.length ? 'No staff circulars match this filter.' : 'Circulars here are staff notices (audience: All Teachers / All Staff) sent from the Announcements tab — send one and it appears here.'}
+                  />
+                </CommPanel>
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* View modal */}
-      {viewing && (
-        <CircularViewModal circular={viewing} onClose={() => setViewing(null)} />
+          {/* View modal */}
+          {viewing && (
+            <CircularViewModal circular={viewing} onClose={() => setViewing(null)} />
+          )}
+        </>
       )}
     </div>
   )
 }
 
-function CircularCard({ circular, index, onView, onArchive }: {
+function CircularCard({ circular, index, onView }: {
   circular: Circular
   index: number
   onView: () => void
-  onArchive: () => void
 }) {
   const color = circular.color
   return (
@@ -221,17 +336,14 @@ function CircularCard({ circular, index, onView, onArchive }: {
           {circular.status}
         </span>
         <div className="flex items-center gap-0.5">
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={onView} title="View PDF">
+          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={onView} title="View circular" aria-label="View circular">
             <Eye className="h-3.5 w-3.5" />
           </Button>
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => downloadCircular(circular)} title="Download">
+          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => downloadCircular(circular)} title="Download" aria-label="Download circular">
             <Download className="h-3.5 w-3.5" />
           </Button>
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { void shareCircular(circular) }} title="Share">
+          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { void shareCircular(circular) }} title="Share" aria-label="Share circular">
             <Share2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-amber-600" onClick={onArchive} title={circular.status === 'Active' ? 'Archive' : 'Restore'}>
-            {circular.status === 'Active' ? <Archive className="h-3.5 w-3.5" /> : <RotateCcw className="h-3.5 w-3.5" />}
           </Button>
         </div>
       </div>
@@ -278,12 +390,12 @@ function CircularViewModal({ circular, onClose }: { circular: Circular; onClose:
 
         {/* PDF preview placeholder */}
         <div className="flex-1 overflow-y-auto p-5">
-          <div className="rounded-lg border-2 border-dashed border-border bg-muted/20 p-8 text-center">
-            <FileText className="h-12 w-12 text-muted-foreground/40 mx-auto mb-3" />
+          <div className="rounded-lg border border-border bg-muted/20 p-6 text-center">
+            <FileText className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" aria-hidden />
             <p className="text-sm font-semibold text-muted-foreground">{circular.title}</p>
             <p className="text-[11px] text-muted-foreground mt-1">{circular.refNo} · {formatDate(circular.date)}</p>
             <p className="text-[10px] text-muted-foreground/70 mt-3 max-w-md mx-auto">
-              This is a demo circular. In production, the actual PDF document would render here.
+              The full notice text lives on the announcement record — use Download for the printable memo or open it from the Announcements tab.
             </p>
           </div>
 

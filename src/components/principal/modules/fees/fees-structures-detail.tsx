@@ -72,7 +72,7 @@ import { VersionStatusPill } from './fees-structures-shared'
 // SaaS-STAGE-2A (Task 7-b) — permissions now resolve from the ACTIVE
 // TENANT's config via useEffectiveFeeCapabilities (per-school capability
 // gating); getEffectivePermissions('principal') without a config is gone.
-import { useAcademicSession } from '@/lib/academic-session'
+import { useAcademicSession, SESSION_NOT_SET_LABEL } from '@/lib/academic-session'
 import { useEffectiveFeeCapabilities } from '@/lib/tenant/store'
 // Canonical monetary input — permanently fixes the leading-zero bug
 // (select-all-and-type, paste, clearing, leading "04…") on every amount
@@ -600,6 +600,14 @@ function DetailDrawerInner({
   const handleSaveDraft = () => {
     if (!selectedClass) { toast.error('Please select a class'); return }
     if (!createEffectiveDate) { toast.error('Effective date is required'); return }
+    // PHASE 7.5-D — the draft's academicYear snapshot is session-scoped; a
+    // null session (no server/local year known) is refused honestly rather
+    // than stamped with a guessed year.
+    if (!session.id) {
+      toast.error('Academic session not set', { description: 'The school’s academic year is unknown — set the session (Settings → Academics) and retry.' })
+      return
+    }
+    const academicYear = session.id
     setCreateSubmitting(true)
     setTimeout(() => {
       const newId = createFeeStructure({
@@ -611,7 +619,7 @@ function DetailDrawerInner({
         notes: buildCreateNotes(),
         actor: 'Principal',
         examFeeSchedule: workingExamSchedule.length > 0 ? workingExamSchedule : undefined,
-        academicYear: session.id,
+        academicYear,
       })
       setCreateSubmitting(false)
       if (newId) {
@@ -628,6 +636,11 @@ function DetailDrawerInner({
   const handlePublishNew = () => {
     if (!selectedClass) { toast.error('Please select a class'); return }
     if (!createEffectiveDate) { toast.error('Effective date is required'); return }
+    if (!session.id) {
+      toast.error('Academic session not set', { description: 'The school’s academic year is unknown — set the session (Settings → Academics) and retry.' })
+      return
+    }
+    const academicYear = session.id
     setCreateSubmitting(true)
     setTimeout(() => {
       // Step 1 — create the structure (writes a v1 draft).
@@ -640,7 +653,7 @@ function DetailDrawerInner({
         notes: buildCreateNotes(),
         actor: 'Principal',
         examFeeSchedule: workingExamSchedule.length > 0 ? workingExamSchedule : undefined,
-        academicYear: session.id,
+        academicYear,
       })
       if (!newId) {
         setCreateSubmitting(false)
@@ -825,7 +838,7 @@ function DetailDrawerInner({
                         SaaS-STAGE-1: the session is DERIVED, never typed. */}
                     <p className="text-[11px] text-muted-foreground">
                       {selectedClass
-                        ? `${selectedClass.level} · ${session.label}`
+                        ? `${selectedClass.level} · ${session.label ?? SESSION_NOT_SET_LABEL}`
                         : 'Select a class to begin'}
                     </p>
                     {/* Compact inline metadata — Class select + READ-ONLY
@@ -853,7 +866,7 @@ function DetailDrawerInner({
                         className="h-7 text-[10px] gap-1 bg-muted/40 shrink-0"
                         title="Active academic session — read-only, supplied by the school configuration"
                       >
-                        <CalendarCheck2 className="h-2.5 w-2.5" /> {session.label}
+                        <CalendarCheck2 className="h-2.5 w-2.5" /> {session.label ?? SESSION_NOT_SET_LABEL}
                       </Badge>
                       <Input
                         type="date"

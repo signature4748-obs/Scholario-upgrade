@@ -149,7 +149,7 @@ export function FeesCatalogueView({ onBack }: Props) {
               <BookOpen className="h-4 w-4 text-emerald-600" /> Fee Head Catalogue
             </h2>
             <p className="text-[10px] text-muted-foreground mt-0.5">
-              {activeCount} heads · {archivedCount} archived · defaults for {session.label}
+              {activeCount} heads · {archivedCount} archived · defaults for {session.label ?? 'Session not set'}
             </p>
           </div>
         </div>

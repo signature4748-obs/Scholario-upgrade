@@ -79,6 +79,10 @@ export default function Home() {
       if (role === 'principal') {
         void import('@/lib/store/students-store').then((m) => m.syncStudentsFromServer())
         void import('@/lib/store/teachers-store/server-sync').then((m) => m.syncTeachersFromServer())
+        // PHASE 7.5 — school configuration (identity/branding/settings JSON)
+        // hydrates the settings store's `server` slice; documents, the
+        // settings tabs and the app-shell footer follow the DB from then on.
+        void import('@/lib/store/school-settings-store/server-sync').then((m) => m.syncSchoolSettingsFromServer())
       } else if (role === 'student') {
         void import('@/lib/store/students-store').then((m) => m.syncStudentsFromServer())
       }

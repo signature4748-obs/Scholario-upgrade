@@ -129,13 +129,18 @@ export function capabilitiesOf(position: StudentPosition): StudentCapability[] {
  *
  * Pass the active session id from `useAcademicSession().id` (UI) or
  * `getActiveAcademicSessionId()` (stores) — both from
- * `@/lib/academic-session` ('2026-2027' hyphen convention).
+ * `@/lib/academic-session` ('2026-2027' hyphen convention). The id may be
+ * NULL when no server/local source knows the school's year (PHASE 7.5-D:
+ * never a hardcoded fallback) — a null session can never CONFIRM a
+ * position is live, so the resolver honestly returns nothing rather than
+ * guessing a year.
  */
 export function filterActivePositions(
   positions: StudentPosition[],
   studentId: string,
-  sessionId: string,
+  sessionId: string | null,
 ): StudentPosition[] {
+  if (!sessionId) return []
   return positions.filter(
     (p) => p.active && p.studentId === studentId && p.sessionId === sessionId,
   )

@@ -5,6 +5,7 @@ import { AppError, classifyError, newRequestId } from './security/errors'
 import { runWithContext, patchRequestContext } from './observability/context'
 import { log } from './observability/logger'
 import { sanitizeRequestId } from './observability/http'
+import { evaluateSchoolAccess } from './access-policy'
 
 export type Ctx = { user: AuthUser }
 
@@ -113,6 +114,22 @@ export async function withUser(
       throw new AppError('AUTH_REQUIRED', {
         internalDetail: `withUser: account status ${user.status}`,
       })
+    }
+    // PHASE 7.5 — subscription/tenant access policy at the API boundary.
+    // evaluateSchoolAccess is the single domain-layer decision for
+    // "may this school's users use the product right now?": a SUSPENDED
+    // tenant is blocked for EVERY school-scoped API call — not just at
+    // login — while the school record and its data are preserved (the
+    // platform control plane retains access via its own boundary).
+    // Fail-closed: an unknown/missing school status is denied, never open.
+    if (user.role !== 'SUPER_ADMIN' && user.schoolId) {
+      const access = evaluateSchoolAccess(user.school)
+      if (!access.allowed) {
+        throw new AppError('FORBIDDEN', {
+          publicMessage: access.reason,
+          internalDetail: `withUser: school access denied (tenant status ${access.status})`,
+        })
+      }
     }
     if (opts?.roles && !opts.roles.includes(user.role)) {
       throw new AppError('FORBIDDEN', {

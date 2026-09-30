@@ -10,8 +10,6 @@ import { AppShell, type NavGroup } from '@/components/shell/app-shell'
 import dynamic from 'next/dynamic'
 import { ModuleLoading } from '@/components/shared/module-loading'
 import { useUnreadStudentNotificationCount } from './modules/notifications'
-import { StudentSubscriptionActivation } from './StudentSubscriptionActivation'
-import { getStudentSubscription } from '@/lib/platform-subscription'
 import { useStudentsStore, useMyStudentRecord } from '@/lib/store/students-store'
 import { useStudentMessagingStore, countUnreadConversations } from '@/lib/store/student-messaging-store'
 import { POSITION_DEFS, filterActivePositions } from '@/lib/student-positions'
@@ -197,7 +195,6 @@ export function StudentPanel() {
   // pre-sync paint stays safe.
   const student = useMyStudentRecord()
   const studentId = student?.id
-  const studentName = student?.name ?? 'Student'
 
   // SS-1 — one server fetch on mount hydrates the student's persisted
   // preferences (notification channels + learning reminders) into the
@@ -280,23 +277,11 @@ export function StudentPanel() {
     setActive(LEGACY_MODULE[rawKey] ?? rawKey)
   }
 
-  const [subRecord, setSubRecord] = useState(() => getStudentSubscription(studentId ?? ''))
-  const [forceFirstLoginFlow, setForceFirstLoginFlow] = useState(false)
-
-  const isSubActive = subRecord.isActive && !forceFirstLoginFlow
-
-  if (!isSubActive) {
-    return (
-      <StudentSubscriptionActivation
-        studentId={studentId ?? ''}
-        studentName={studentName}
-        onActivated={() => {
-          setSubRecord(getStudentSubscription(studentId ?? ''))
-          setForceFirstLoginFlow(false)
-        }}
-      />
-    )
-  }
+  // PHASE 7.5 — the fabricated per-student UPI paywall is RETIRED.
+  // School-role access is a TENANT-level decision owned by the domain
+  // access policy (lib/access-policy.ts): login (and every school API
+  // boundary) already blocks non-ACTIVE tenants, so a signed-in student
+  // has passed the subscription gate. No client-side money fiction.
 
   return (
     <AppShell

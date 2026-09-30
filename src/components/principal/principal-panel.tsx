@@ -16,6 +16,13 @@ import { useAdmissionStore } from '@/lib/store/admission-store'
 // PRINCIPAL_NAV_MODULE_KEYS map — no scattered school conditionals.
 import { useFeatureGate } from '@/lib/tenant/store'
 import { PRINCIPAL_NAV_MODULE_KEYS } from '@/lib/tenant/registry'
+// PHASE 7.5-D — the SERVER module flags (GET /api/school-settings
+// moduleFlags; server vocabulary exams/fees/homework/library/transport)
+// are the truth. The registry's client `features` (all-on seeds, zero
+// writers) stay as a decorative AND-gate; the server flag hides a
+// flaggable module's nav item when it is disabled platform-side.
+// Fail-open while the flags are still loading (matches the server design).
+import { useEffectiveModuleFlags } from '@/lib/hooks/use-effective-module-flags'
 import type { UnifiedTab } from './modules/students-classes'
 
 // Every module is a separate lazily-loaded chunk: navigating compiles just
@@ -140,6 +147,7 @@ export function PrincipalPanel() {
   const [active, setActive] = useState(initialActiveModule)
   const alertCount = useLiveAlerts((s) => s.alerts.length)
   const { isModuleEnabled } = useFeatureGate()
+  const { isServerModuleEnabled } = useEffectiveModuleFlags()
   const pendingAdmissions = useAdmissionStore((s) =>
     s.applications.filter((a) =>
       a.status === 'Submitted' || a.status === 'Under Review' || a.status === 'Need Correction'
@@ -152,11 +160,13 @@ export function PrincipalPanel() {
     // SaaS-STAGE-2A — drop nav items whose module is disabled for the
     // ACTIVE school (e.g. Examinations OFF for a school, Transport OFF for
     // another). Dashboard/Settings are always available.
+    // PHASE 7.5-D — the item must ALSO pass the SERVER module flag
+    // (fail-open while the flags load; hidden once the server says off).
     .map((g) => ({
       ...g,
       items: g.items.filter((item) => {
         const moduleKey = PRINCIPAL_NAV_MODULE_KEYS[item.key]
-        return !moduleKey || isModuleEnabled(moduleKey)
+        return !moduleKey || (isModuleEnabled(moduleKey) && isServerModuleEnabled(moduleKey))
       }),
     }))
     .map((g) => {
@@ -167,7 +177,7 @@ export function PrincipalPanel() {
         return { ...g, items: g.items.map((item) => item.key === 'admission' ? { ...item, badge: pendingAdmissions > 0 ? pendingAdmissions : undefined } : item) }
       }
       return g
-    }), [alertCount, pendingAdmissions, isModuleEnabled])
+    }), [alertCount, pendingAdmissions, isModuleEnabled, isServerModuleEnabled])
 
   // Remember the open module for this tab (see initialActiveModule) — a
   // lazy-chunk recovery reload then re-opens exactly where the principal
@@ -193,12 +203,15 @@ export function PrincipalPanel() {
   }, [])
 
   // If the active module gets disabled while viewing it (platform toggle
-  // + tenant switch), fall back to the dashboard — never render a module
-  // the school doesn't have.
+  // + tenant switch — client registry flag OR the server's effective
+  // moduleFlags arriving mid-session), fall back to the dashboard — never
+  // render a module the school doesn't have.
   useEffect(() => {
     const moduleKey = PRINCIPAL_NAV_MODULE_KEYS[active]
-    if (moduleKey && !isModuleEnabled(moduleKey)) setActive('dashboard')
-  }, [active, isModuleEnabled])
+    if (moduleKey && (!isModuleEnabled(moduleKey) || !isServerModuleEnabled(moduleKey))) {
+      setActive('dashboard')
+    }
+  }, [active, isModuleEnabled, isServerModuleEnabled])
 
   const ActiveModule = moduleRegistry[active] ?? PrincipalDashboard
 

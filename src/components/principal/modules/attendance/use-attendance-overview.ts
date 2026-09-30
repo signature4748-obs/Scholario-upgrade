@@ -7,17 +7,20 @@
  * GET /api/attendance/overview derives EVERYTHING from the Attendance table
  * (latest recorded day breakdown, 6-day trend, 6-month trend, per
  * grade-group rates, per-date daily series). This hook unwraps the
- * { ok, data } envelope and exposes it as `{ data, loading }`:
+ * { ok, data } envelope and exposes it as `{ data, loading, error, refresh }`:
  *
- *   · `data` is undefined while the fetch is in flight (or after a silent
- *     failure) — consumers render their existing skeleton / loading tile;
- *   · the fetch is module-level cached — one request per session is shared
- *     by every consumer (Attendance Overview tab, CSV export, dashboard
- *     KPI row, welcome banner); a failed fetch is NOT cached, so a later
- *     mount retries.
+ *   · `data` is undefined while the fetch is in flight — consumers render
+ *     their existing skeleton / loading tile;
+ *   · the fetch is module-level cached (stale-while-revalidate, 60s TTL) —
+ *     one shared request per window, a NEW mount after the TTL keeps the
+ *     data visible and refetches in the background;
+ *   · a failed fetch is NOT cached — the next mount retries, and
+ *     `refresh()` is the retry the KPI card's affordance calls;
+ *   · `error` is true only when a fetch failed with nothing on screen
+ *     (a failed background refetch keeps the visible data).
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 export interface AttendanceOverviewToday {
   present: number
@@ -81,14 +84,27 @@ export interface AttendanceOverviewData {
   daily: AttendanceDayRecord[]
 }
 
-/** Module-level session cache — one fetch per session, shared by all consumers. */
-let cachedOverview: AttendanceOverviewData | null = null
-let inflight: Promise<AttendanceOverviewData | null> | null = null
+export interface UseAttendanceOverviewResult {
+  data: AttendanceOverviewData | undefined
+  loading: boolean
+  /** True when a fetch failed with nothing on screen. */
+  error: boolean
+  /** Force a refetch (retry). Coalesced with any in-flight fetch. */
+  refresh: () => void
+}
 
-function fetchOverview(): Promise<AttendanceOverviewData | null> {
-  if (cachedOverview) return Promise.resolve(cachedOverview)
+/** Module-level session cache — one shared fetch per window (60s TTL). */
+let cachedOverview: AttendanceOverviewData | null = null
+let cachedAt = 0
+let inflight: Promise<AttendanceOverviewData | null> | null = null
+const FRESH_FOR_MS = 60_000
+
+function fetchOverview(force = false): Promise<AttendanceOverviewData | null> {
+  if (!force && cachedOverview && Date.now() - cachedAt < FRESH_FOR_MS) {
+    return Promise.resolve(cachedOverview)
+  }
   if (!inflight) {
-    inflight = fetch('/api/attendance/overview', {
+    const run = fetch('/api/attendance/overview', {
       cache: 'no-store',
       credentials: 'same-origin',
     })
@@ -106,7 +122,10 @@ function fetchOverview(): Promise<AttendanceOverviewData | null> {
         return envelope.data
       })
       .then((data) => {
-        if (data) cachedOverview = data
+        // Stamp ONLY on a real network success (a fresh-cache resolve must
+        // not re-arm the TTL).
+        cachedOverview = data
+        cachedAt = Date.now()
         return data
       })
       .catch((e: unknown) => {
@@ -115,32 +134,40 @@ function fetchOverview(): Promise<AttendanceOverviewData | null> {
         console.warn('[attendance-overview] unavailable, staying on loading state:', e)
         return null
       })
-      .finally(() => {
-        inflight = null
-      })
+    inflight = run
+    run.finally(() => {
+      if (inflight === run) inflight = null
+    })
   }
   return inflight
 }
 
-export function useAttendanceOverview(): {
-  data: AttendanceOverviewData | undefined
-  loading: boolean
-} {
+export function useAttendanceOverview(): UseAttendanceOverviewResult {
   const [data, setData] = useState<AttendanceOverviewData | undefined>(cachedOverview ?? undefined)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
-    if (cachedOverview) {
-      setData(cachedOverview)
-      return
-    }
     let cancelled = false
-    fetchOverview().then((d) => {
-      if (!cancelled && d) setData(d)
+    void fetchOverview().then((d) => {
+      if (cancelled) return
+      if (d) setData(d)
+      else setError(true)
     })
     return () => {
       cancelled = true
     }
   }, [])
 
-  return { data, loading: data === undefined }
+  const refresh = useCallback(() => {
+    void fetchOverview(true).then((d) => {
+      if (d) {
+        setData(d)
+        setError(false)
+      } else if (!cachedOverview) {
+        setError(true)
+      }
+    })
+  }, [])
+
+  return { data, loading: data === undefined && !error, error, refresh }
 }

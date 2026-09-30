@@ -4,17 +4,17 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { io } from 'socket.io-client'
 import { toast } from 'sonner'
-import { Bell, Menu, Plus, Radio, Megaphone, Mail, CalendarCheck } from 'lucide-react'
+import { Bell, Menu, Plus, Radio, Megaphone, Mail, CalendarCheck, AlertTriangle, X } from 'lucide-react'
 import { useAuth } from '@/lib/store/auth-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
 import { useLiveAlerts } from '@/lib/store/live-alerts-store'
 import { useLiveFeedStore } from '@/lib/store/live-feed-store'
 import { readSessionToken } from '@/lib/auth-session-token'
 import { signOut } from '@/lib/signout'
-import { school } from '@/lib/mock/school'
-// SaaS-STAGE-2A — the shell footer reflects the ACTIVE TENANT's school
-// identity (falls back to the school profile for platform surfaces).
-import { useActiveTenant } from '@/lib/tenant/store'
+// SaaS-STAGE-2A — the shell footer reflects the signed-in school's REAL
+// identity: server session school name (current-user store) → school
+// settings server/local identity → neutral 'Our School'.
+import { useSchoolProfile } from '@/lib/school-profile'
 import { cn } from '@/lib/utils'
 import { formatINR } from '@/lib/format'
 import { ThemeToggle } from '@/components/shared/theme-toggle'
@@ -81,6 +81,20 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
   const [notifSource, setNotifSource] = useState<'live' | 'loading' | 'error'>('loading')
   // Real-time event stream status (socket.io mini-service :3003 via gateway)
   const [streamLive, setStreamLive] = useState(false)
+  // ── PHASE 7.5-D — suspended / dead-session guard ─────────────────────
+  // An ALREADY-SIGNED-IN user whose school is suspended mid-session (the
+  // platform revokes the school's sessions server-side) starts receiving
+  // 401s on every session-scoped endpoint. The shell's notification-feed
+  // poll is a session-scoped heartbeat (60s) — it detects the condition:
+  //   · envelope code SCHOOL_SUSPENDED (403, propagated by the API error
+  //     envelope) → the explicit suspension message;
+  //   · repeated 401s (poll + a confirmation probe on /api/auth/me) →
+  //     the honest generic "session has ended" message.
+  // Either way: one dismissible amber banner, then the standard signOut()
+  // flow after a short delay.
+  const [sessionGuard, setSessionGuard] = useState<'suspended' | 'ended' | null>(null)
+  const [guardDismissed, setGuardDismissed] = useState(false)
+  const unauthorizedStreakRef = useRef(0)
   const { user } = useAuth()
   void roleLabel
   // SS-1 — server identity (avatar / session context) for the shell + all
@@ -98,10 +112,42 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
     const load = async () => {
       try {
         const r = await fetch('/api/notifications-feed', { cache: 'no-store' })
-        if (!r.ok || !r.headers.get('content-type')?.includes('application/json')) {
+        if (!r.ok) {
+          // Session guard (PHASE 7.5-D) — see the state declaration above.
+          // The API error envelope carries the canonical `code`.
+          let code: string | null = null
+          try {
+            code = ((await r.json()) as { code?: string } | null)?.code ?? null
+          } catch {
+            /* non-JSON error body — treated as a plain failure below */
+          }
+          if (code === 'SCHOOL_SUSPENDED') {
+            if (!cancelled) setSessionGuard('suspended')
+          } else if (r.status === 401) {
+            unauthorizedStreakRef.current += 1
+            if (unauthorizedStreakRef.current >= 2) {
+              if (!cancelled) setSessionGuard('ended')
+            } else {
+              // Confirmation probe — one extra session-scoped request. A
+              // dead session answers 401 again immediately; a transient
+              // blip recovers on the next poll.
+              try {
+                const probe = await fetch('/api/auth/me', { cache: 'no-store' })
+                if (probe.status === 401 && !cancelled) setSessionGuard('ended')
+              } catch {
+                /* network error — not a session verdict */
+              }
+            }
+          }
           if (!cancelled) setNotifSource('error')
           return
         }
+        if (!r.headers.get('content-type')?.includes('application/json')) {
+          if (!cancelled) setNotifSource('error')
+          return
+        }
+        // A healthy response resets the 401 streak.
+        unauthorizedStreakRef.current = 0
         const j = await r.json().catch(() => null)
         // API wraps payloads as { ok, data } — unwrap defensively
         const payload = j && typeof j === 'object' && 'data' in j ? (j as { data?: { feed?: unknown[] } }).data : j
@@ -125,6 +171,17 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
     const timer = setInterval(load, 60_000)
     return () => { cancelled = true; clearInterval(timer) }
   }, [])
+
+  // PHASE 7.5-D — once the guard trips, run the standard sign-out flow
+  // after a short delay (time to read the banner). Dismissing the banner
+  // hides the notice but does NOT cancel the sign-out — the session is
+  // gone either way; the flow routes through the single signOut() path
+  // (server revocation + client reset, shared with the profile dropdown).
+  useEffect(() => {
+    if (!sessionGuard) return
+    const t = window.setTimeout(() => { void signOut() }, 6000)
+    return () => { window.clearTimeout(t) }
+  }, [sessionGuard])
 
   // ─── Real-time event stream (socket.io mini-service :3003 via gateway) ───
   // Resolves the viewer's school scope + DB user id from the server session
@@ -524,12 +581,34 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
             the viewport on short pages (mt-auto) and is pushed down
             naturally when content is taller than one screen. */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 custom-scrollbar flex flex-col [&>*]:min-w-0">
+          {/* PHASE 7.5-D — suspended / dead-session banner (dismissible;
+              sign-out proceeds after the delay above). */}
+          {sessionGuard && !guardDismissed && (
+            <div
+              role="alert"
+              className="mb-4 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+              <p className="min-w-0 flex-1 text-xs font-medium leading-relaxed text-amber-800 dark:text-amber-300">
+                {sessionGuard === 'suspended'
+                  ? "Your school's access was suspended — you'll be signed out shortly."
+                  : "Your session has ended — you'll be signed out shortly."}
+              </p>
+              <button
+                onClick={() => setGuardDismissed(true)}
+                aria-label="Dismiss notice"
+                className="shrink-0 rounded-md p-1 text-amber-700/70 hover:bg-amber-500/10 hover:text-amber-800 dark:text-amber-400/70 dark:hover:text-amber-300 transition-colors focus-ring"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          )}
           {children}
           {/* Sticky footer */}
           <footer className="mt-auto pt-6 border-t border-border text-center text-[11px] text-muted-foreground font-medium tracking-wide">
             <p>
               &copy; {new Date().getFullYear()} SCHOLARIO-OS &middot; Enterprise School ERP &middot;
-              <span className="text-emerald-700 dark:text-emerald-400 ml-1"><FooterSchoolName fallback={school.name} /></span>
+              <span className="text-emerald-700 dark:text-emerald-400 ml-1"><FooterSchoolName /></span>
               &middot; All systems operational
             </p>
           </footer>
@@ -542,11 +621,12 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
 }
 
 /**
- * Footer school identity: school panels show the ACTIVE tenant's school
- * name (PHASE 6: platform scope lives in its own console — this shell
- * is school-only).
+ * Footer school identity (PHASE 7.5): the signed-in school's REAL name —
+ * server session school first, then the school-settings identity cascade
+ * (server slice → local slice → neutral). No mock/tenant-registry fallback.
  */
-function FooterSchoolName({ fallback }: { fallback: string }) {
-  const tenant = useActiveTenant()
-  return tenant?.name ?? fallback
+function FooterSchoolName() {
+  const sessionSchool = useCurrentUser((s) => s.me?.school?.name)
+  const profile = useSchoolProfile()
+  return sessionSchool?.trim() || profile.name
 }

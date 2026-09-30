@@ -38,6 +38,8 @@ export interface PlatformAnnouncement {
   message: string
   audience: string
   priority: string
+  /** Lifecycle (PHASE 7.5): delivery analytics show PUBLISHED rows only. */
+  status?: string
   sender: string
   createdAt: string
   acknowledgedBy: number
@@ -131,7 +133,12 @@ export function PlatformBroadcasts({ search, refreshSignal, focusNotice, onNotic
       if (!r.ok) throw new Error('unavailable')
       const j = await r.json().catch(() => null)
       const data = j && typeof j === 'object' && 'data' in j ? (j as { data?: { announcements?: PlatformAnnouncement[] } }).data : null
-      setRows(Array.isArray(data?.announcements) ? data!.announcements! : [])
+      const allRows = Array.isArray(data?.announcements) ? data!.announcements! : []
+      // PHASE 7.5 — the staff GET now returns the FULL lifecycle (drafts,
+      // scheduled, archived). This panel is DELIVERY analytics: only rows
+      // actually published appear here (lifecycle management lives in the
+      // Announcements tab).
+      setRows(allRows.filter((a) => a.status === undefined || a.status === 'PUBLISHED'))
       setError(false)
     } catch {
       setError(true)

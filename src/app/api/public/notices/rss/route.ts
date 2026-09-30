@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
+import { resolvePublicSchool } from '@/lib/tenant/resolution'
+import { notificationVisibilityWhere } from '@/lib/notices'
 
 export const runtime = 'nodejs'
 
@@ -27,24 +30,32 @@ function rfc822(d: Date): string {
   return d.toUTCString()
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    // Demo school (same default the public site renders)
-    const school = await db.school.findFirst({
-      where: { isDemo: true },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        city: true,
-        notifications: {
-          where: { audience: { in: ['ALL', 'STUDENTS', 'PUBLIC'] } },
-          orderBy: { createdAt: 'desc' },
-          take: 15,
-          select: { id: true, title: true, message: true, priority: true, createdAt: true },
-        },
-      },
-    })
+    // PHASE 7.5 — tenant-aware: the SAME resolution pipeline as the
+    // public website (host domain → slug → single → demo).
+    const resolved = await resolvePublicSchool(req)
+    const school = resolved
+      ? await db.school.findUnique({
+          where: { id: resolved.schoolId },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            city: true,
+            notifications: {
+              where: {
+                audience: { in: ['ALL', 'STUDENTS', 'PUBLIC'] },
+                status: 'PUBLISHED',
+                ...notificationVisibilityWhere(),
+              },
+              orderBy: { createdAt: 'desc' },
+              take: 15,
+              select: { id: true, title: true, message: true, priority: true, createdAt: true },
+            },
+          },
+        })
+      : null
 
     const schoolName = school?.name ?? 'School'
     const siteOrigin = 'http://localhost:3000' // sandbox origin; see layout metadataBase note

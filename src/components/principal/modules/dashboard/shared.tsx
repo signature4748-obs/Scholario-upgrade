@@ -37,7 +37,10 @@ export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
   // REAL teacher figure — /api/dashboard (canonical db.teacher.count);
   // falls back to an honest "—" while in flight instead of the retired
   // mock school.totalTeachers constant (production data reduction).
-  const schoolStats = useSchoolStats()
+  // PHASE 7.5-D — a failed fetch offers an honest tap-to-retry on the
+  // teachers stat (hook `refresh`), and a remount after the 60s TTL
+  // refetches in the background while the figure stays visible.
+  const { stats: schoolStats, error: statsError, refresh: refreshStats } = useSchoolStats()
   const firstName = user?.name?.split(' ').slice(0, 2).join(' ') ?? 'Principal'
   // REAL student figures — derived from the canonical roster in the students
   // store (DB-hydrated): total = ACTIVE students; birthdays = ACTIVE students
@@ -84,9 +87,9 @@ export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
         </button>
         <div className="h-8 w-px bg-border" />
         <button
-          onClick={() => onNavigate?.('teachers')}
+          onClick={() => (statsError ? void refreshStats() : onNavigate?.('teachers'))}
           className="group flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-muted/60 transition-colors text-left"
-          title="Open Teachers"
+          title={statsError ? 'Could not load teacher count — tap to retry' : 'Open Teachers'}
         >
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
             <GraduationCap className="h-3.5 w-3.5" />

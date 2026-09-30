@@ -39,8 +39,8 @@ export interface LiveAlertsProps {
 export function LiveAlerts({ onNavigate }: LiveAlertsProps) {
   const {
     alerts: storeAlerts, dismissed, snoozed, severityFilter,
-    autoAlertsEnabled, toggleAutoAlerts, resolve, resolveAll, restore, reset,
-    snooze, snoozeAll, unsnooze, unsnoozeExpired, addAlert, clearNewFlag, setSeverityFilter,
+    resolve, resolveAll, restore, reset,
+    snooze, snoozeAll, unsnooze, unsnoozeExpired, setSeverityFilter,
   } = useLiveAlerts()
 
   const [snoozeMenuFor, setSnoozeMenuFor] = useState<string | null>(null)

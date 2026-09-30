@@ -83,6 +83,17 @@ export const TEACHER_UPLOAD_POLICY = {
   dir: 'teachers',
 } as const
 
+/** PHASE 7.5 — Website CMS images (hero, gallery, announcement, logo):
+ *  JPG / PNG / WebP, 4 MB. Principal-only upload; bytes are private by
+ *  default (served publicly ONLY through /api/public/website/media for
+ *  PUBLISHED gallery images / announcements or the school branding). */
+export const WEBSITE_UPLOAD_POLICY = {
+  allowedExts: ['jpg', 'png', 'webp'] as const,
+  allowedTypes: ['jpeg', 'png', 'webp'] as readonly SniffedFileType[],
+  maxBytes: 4 * 1024 * 1024,
+  dir: 'website',
+} as const
+
 /**
  * Validate declared-vs-actual content for a policy. Returns a safe,
  * user-facing error string or null when the file is acceptable.

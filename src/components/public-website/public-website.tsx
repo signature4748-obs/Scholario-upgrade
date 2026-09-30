@@ -13,7 +13,6 @@ import {
   Building2,
   ShieldCheck,
   MonitorPlay,
-  Dumbbell,
   Library,
   Phone,
   Mail,
@@ -26,12 +25,34 @@ import {
   Rss,
   Megaphone,
   Check,
+  Sprout,
+  Compass,
+  Rocket,
+  Trophy,
+  Bus,
+  Palette,
+  Globe,
+  Music,
+  Laptop,
+  Quote,
+  Facebook,
+  Instagram,
+  Youtube,
+  Twitter,
+  Linkedin,
   type LucideIcon,
 } from 'lucide-react'
 import { useAuth } from '@/lib/store/auth-store'
 import { ThemeToggle } from '@/components/shared/theme-toggle'
 import { usePublicSchoolData, useAdmissionForm } from './use-public-website-data'
-import type { PublicSchoolData } from './types'
+import type { PublicSchoolData, PublicGalleryAlbum } from './types'
+import {
+  NEUTRAL_WEBSITE_CONTENT,
+  websiteSeo,
+  type WebsiteContent,
+  type PillarItem,
+} from '@/lib/website-content'
+import { isValidHexColor } from '@/lib/branding-contrast'
 
 /* ------------------------------------------------------------------ */
 /*  Small primitives — kept local to this file so the landing page    */
@@ -65,6 +86,55 @@ function FadeIn({ children, delay = 0, y = 24, className }: FadeInProps) {
   )
 }
 
+/* ------------------------------------------------------------------ */
+/*  PHASE 7.5 — per-school branding                                    */
+/*                                                                     */
+/*  The resolved school's themeColor/accentColor (server-validated     */
+/*  hex) become CSS custom properties on the site wrapper. The         */
+/*  `school-brand-*` token classes (globals.css) consume them with     */
+/*  inert emerald/amber fallbacks, so brand colors own the "identity"  */
+/*  surfaces (hero gradient, CTAs, badges, notice accents) while the   */
+/*  structural surfaces keep the Scholario design language.            */
+/* ------------------------------------------------------------------ */
+
+const BRAND_DEFAULT_PRIMARY = '#059669' // Scholario emerald-600
+const BRAND_DEFAULT_ACCENT = '#f59e0b' // Scholario amber-500
+
+function resolveBrandColor(value: unknown, fallback: string): string {
+  return typeof value === 'string' && isValidHexColor(value) ? value.trim() : fallback
+}
+
+function brandVars(themeColor?: string, accentColor?: string): React.CSSProperties {
+  return {
+    '--school-primary': resolveBrandColor(themeColor, BRAND_DEFAULT_PRIMARY),
+    '--school-accent': resolveBrandColor(accentColor, BRAND_DEFAULT_ACCENT),
+  } as React.CSSProperties
+}
+
+/* CMS icon-key → lucide icon (exactly the WEBSITE_ICON_KEYS registry). */
+const CMS_ICON_MAP: Record<string, LucideIcon> = {
+  target: Target,
+  heart: Heart,
+  building: Building2,
+  shield: ShieldCheck,
+  sprout: Sprout,
+  compass: Compass,
+  rocket: Rocket,
+  library: Library,
+  flask: FlaskConical,
+  trophy: Trophy,
+  monitor: MonitorPlay,
+  bus: Bus,
+  palette: Palette,
+  globe: Globe,
+  music: Music,
+  laptop: Laptop,
+}
+
+function cmsIcon(key: string): LucideIcon {
+  return CMS_ICON_MAP[key] ?? Building2
+}
+
 function PrimaryCta({
   children,
   onClick,
@@ -76,7 +146,7 @@ function PrimaryCta({
   href?: string
   className?: string
 }) {
-  const cls = `group inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full text-sm font-semibold text-white bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:shadow-emerald-500/40 hover:-translate-y-0.5 active:translate-y-0 transition-all ${className}`
+  const cls = `group inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full text-sm font-semibold school-brand-cta hover:-translate-y-0.5 active:translate-y-0 transition-all ${className}`
   if (href) {
     return (
       <a href={href} className={cls}>
@@ -94,19 +164,55 @@ function PrimaryCta({
 function GhostCta({
   children,
   onClick,
+  href,
   className = '',
 }: {
   children: React.ReactNode
   onClick?: () => void
+  href?: string
   className?: string
 }) {
+  const cls = `inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-full text-sm font-semibold school-brand-ghost bg-white/60 dark:bg-white/5 backdrop-blur border transition-all ${className}`
+  if (href) {
+    return (
+      <a href={href} className={cls}>
+        {children}
+      </a>
+    )
+  }
   return (
-    <button
-      onClick={onClick}
-      className={`inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-full text-sm font-semibold text-emerald-700 dark:text-emerald-300 bg-white/60 dark:bg-white/5 backdrop-blur border border-emerald-500/30 hover:bg-emerald-500/10 hover:border-emerald-500/50 transition-all ${className}`}
-    >
+    <button onClick={onClick} className={cls}>
       {children}
     </button>
+  )
+}
+
+/* School logo — uploaded branding image when configured, the brand
+ * gradient crest otherwise. Used by the header + footer. */
+function BrandLogo({
+  logoUrl,
+  shortName,
+  className = 'h-10 w-10',
+}: {
+  logoUrl?: string | null
+  shortName: string
+  className?: string
+}) {
+  if (logoUrl) {
+    return (
+      <Image
+        src={logoUrl}
+        alt={`${shortName} logo`}
+        width={48}
+        height={48}
+        className={`${className} rounded-full object-cover border border-border/60 bg-card shrink-0`}
+      />
+    )
+  }
+  return (
+    <div className={`${className} rounded-full school-brand-grad flex items-center justify-center text-white shadow-lg shrink-0`}>
+      <GraduationCap className="w-5 h-5" aria-hidden="true" />
+    </div>
   )
 }
 
@@ -128,7 +234,7 @@ function SectionHeader({
 }) {
   return (
     <FadeIn className="text-center mb-12 lg:mb-16">
-      <span className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-600 dark:text-emerald-400">
+      <span className="text-xs font-semibold uppercase tracking-[0.2em] school-brand-text">
         {eyebrow}
       </span>
       <h2 className="mt-3 font-display text-3xl lg:text-4xl font-bold tracking-tight text-foreground text-balance">
@@ -139,6 +245,30 @@ function SectionHeader({
       </p>
       {children}
     </FadeIn>
+  )
+}
+
+/* Card-grid skeleton for CMS sections while the school profile loads. */
+function SectionSkeleton({
+  count = 4,
+  grid = 'md:grid-cols-2 lg:grid-cols-4',
+  label = 'Loading section',
+}: {
+  count?: number
+  grid?: string
+  label?: string
+}) {
+  return (
+    <div className={`grid gap-6 ${grid}`} aria-busy="true" aria-label={label}>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="h-64 rounded-3xl border border-border/60 bg-card p-8">
+          <div className="skeleton h-12 w-12 rounded-full mb-6" aria-hidden="true" />
+          <div className="skeleton h-5 w-2/3 rounded mb-3" aria-hidden="true" />
+          <div className="skeleton h-3.5 w-full rounded" aria-hidden="true" />
+          <div className="skeleton h-3.5 w-4/5 rounded mt-2.5" aria-hidden="true" />
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -164,19 +294,44 @@ export function PublicWebsite({ onOpenPortal }: {
     setAdmSuccess,
     admError,
     handleAdmissionSubmit,
-  } = useAdmissionForm()
+  } = useAdmissionForm(schoolData?.slug)
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
 
-  // school-derived strings
+  // school-derived strings — server identity first, neutral fallbacks
+  // only for a payload that never arrived (never fabricated values).
   const schoolName = schoolData?.name || 'Our School'
+  const shortName = schoolData?.shortName || schoolName.split(' ')[0] || 'Our School'
   const city = schoolData?.city || ''
   const phone = schoolData?.phone || ''
   const email = schoolData?.email || ''
   const address = schoolData?.address || ''
-  const academicYear = schoolData?.academicYear || '2025–26'
-  const shortName = schoolName.split(' ')[0] || 'Demo'
+  const website = schoolData?.website || ''
+  const established = schoolData?.established || ''
+  const principalName = schoolData?.principalName || ''
+
+  // PHASE 7.5 — the CMS document (server merges neutral fallbacks for
+  // unconfigured schools, so copy is always claim-free).
+  const content: WebsiteContent = schoolData?.websiteContent ?? NEUTRAL_WEBSITE_CONTENT
+  const albums = schoolData?.gallery ?? []
+
+  // SEO — client-rendered <title>/<meta description> from the CMS doc.
+  // The SPA is a single client route, so the public view updates the
+  // live document head while active and restores it on unmount.
+  useEffect(() => {
+    if (!schoolData) return
+    const prevTitle = document.title
+    const seo = websiteSeo(content, schoolData.name)
+    document.title = seo.title
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="description"]')
+    const prevDesc = meta?.getAttribute('content') ?? null
+    if (meta && seo.description) meta.setAttribute('content', seo.description)
+    return () => {
+      document.title = prevTitle
+      if (meta && prevDesc !== null) meta.setAttribute('content', prevDesc)
+    }
+  }, [schoolData, content])
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8)
@@ -195,9 +350,13 @@ export function PublicWebsite({ onOpenPortal }: {
   }, [])
 
   return (
-    <div className="min-h-screen mesh-bg text-foreground selection:bg-emerald-500/20 selection:text-emerald-700 dark:selection:text-emerald-300 flex flex-col">
+    <div
+      style={brandVars(schoolData?.themeColor, schoolData?.accentColor)}
+      className="min-h-screen mesh-bg text-foreground selection:bg-emerald-500/20 selection:text-emerald-700 dark:selection:text-emerald-300 flex flex-col"
+    >
       <Header
-        schoolName={schoolName}
+        shortName={shortName}
+        logoUrl={schoolData?.logoUrl}
         scrolled={scrolled}
         mobileMenuOpen={mobileMenuOpen}
         setMobileMenuOpen={setMobileMenuOpen}
@@ -207,19 +366,31 @@ export function PublicWebsite({ onOpenPortal }: {
       <main>
         <Hero
           schoolData={schoolData}
-          schoolName={schoolName}
-          city={city}
+          hero={content.hero}
           loading={loading}
           onOpenPortal={onOpenPortal}
         />
 
-        <WhyChooseUs shortName={shortName} />
+        <WhyChooseUs shortName={shortName} about={content.about} pillars={content.pillars} loading={loading} />
 
-        <Journey />
+        <Journey journey={content.journey} loading={loading} />
 
-        <Facilities />
+        <Facilities facilities={content.facilities} loading={loading} />
 
-        <CampusLife shortName={shortName} />
+        <PrincipalMessage
+          message={content.principalMessage}
+          principalName={principalName}
+          schoolName={schoolName}
+          shortName={shortName}
+          logoUrl={schoolData?.logoUrl}
+        />
+
+        <CampusLife
+          shortName={shortName}
+          albums={albums}
+          isDemo={schoolData?.isDemo === true}
+          loading={loading}
+        />
 
         <NoticeBoard
           notices={schoolData?.announcements ?? []}
@@ -228,9 +399,9 @@ export function PublicWebsite({ onOpenPortal }: {
         />
 
         <Admissions
-          schoolName={schoolName}
-          academicYear={academicYear}
+          admissions={content.admissions}
           phone={phone}
+          loading={loading}
           admForm={admForm}
           setAdmForm={setAdmForm}
           admSubmitting={admSubmitting}
@@ -243,10 +414,16 @@ export function PublicWebsite({ onOpenPortal }: {
 
       <Footer
         schoolName={schoolName}
+        shortName={shortName}
+        logoUrl={schoolData?.logoUrl}
         phone={phone}
         email={email}
         address={address}
         city={city}
+        website={website}
+        established={established}
+        footer={content.footer}
+        contact={content.contact}
         onOpenPortal={onOpenPortal}
       />
     </div>
@@ -258,13 +435,15 @@ export function PublicWebsite({ onOpenPortal }: {
 /* ------------------------------------------------------------------ */
 
 function Header({
-  schoolName,
+  shortName,
+  logoUrl,
   scrolled,
   mobileMenuOpen,
   setMobileMenuOpen,
   onOpenPortal,
 }: {
-  schoolName: string
+  shortName: string
+  logoUrl?: string | null
   scrolled: boolean
   mobileMenuOpen: boolean
   setMobileMenuOpen: (v: boolean) => void
@@ -280,8 +459,6 @@ function Header({
     { label: 'Contact', href: '#footer' },
   ]
 
-  const shortName = schoolName.split(' ')[0] || 'Demo'
-
   return (
     <header
       className={`sticky top-0 z-50 transition-all duration-300 ${
@@ -293,9 +470,7 @@ function Header({
       <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center justify-between gap-4">
         {/* Logo */}
         <a href="#top" className="flex items-center gap-3 group min-w-0">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/25 group-hover:scale-105 transition-transform shrink-0">
-            <GraduationCap className="w-5 h-5" aria-hidden="true" />
-          </div>
+          <BrandLogo logoUrl={logoUrl} shortName={shortName} className="h-10 w-10 group-hover:scale-105 transition-transform" />
           <div className="leading-tight min-w-0">
             <h1 className="font-display font-bold text-foreground text-base truncate">{shortName}</h1>
             <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 tracking-widest uppercase">
@@ -322,7 +497,7 @@ function Header({
           <ThemeToggle className="border border-border bg-card/40 rounded-full" />
           <button
             onClick={onOpenPortal}
-            className="group inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white bg-gradient-to-br from-emerald-500 to-teal-600 shadow-md shadow-emerald-500/25 hover:shadow-lg hover:shadow-emerald-500/35 hover:-translate-y-0.5 active:translate-y-0 transition-all"
+            className="group inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold school-brand-cta hover:-translate-y-0.5 active:translate-y-0 transition-all"
           >
             <Lock className="w-3.5 h-3.5" aria-hidden="true" />
             Login Portal
@@ -368,7 +543,7 @@ function Header({
                   setMobileMenuOpen(false)
                   onOpenPortal()
                 }}
-                className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-full text-sm font-semibold text-white bg-gradient-to-br from-emerald-500 to-teal-600 shadow-md"
+                className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-full text-sm font-semibold school-brand-cta"
               >
                 <Lock className="w-3.5 h-3.5" aria-hidden="true" />
                 Login Portal
@@ -405,18 +580,18 @@ function realHeroStats(counts?: PublicSchoolData['counts']): Stat[] {
 
 function Hero({
   schoolData,
-  schoolName,
-  city,
+  hero,
   loading,
   onOpenPortal,
 }: {
   schoolData: PublicSchoolData | null
-  schoolName: string
-  city: string
+  hero: WebsiteContent['hero']
   loading: boolean
   onOpenPortal: () => void
 }) {
   const counts = schoolData?.counts
+  const schoolName = schoolData?.name || 'Our School'
+  const city = schoolData?.city || ''
   // PHASE 7 — REAL derivations replace the fabricated marketing numbers
   // ("30+ Years Legacy / 1:12 Ratio / 98% Board Pass"): the ratio is
   // computed from real faculty/student counts (hidden when not
@@ -431,6 +606,15 @@ function Hero({
     { label: 'Academic Year', value: schoolData?.academicYear || '—' },
   ]
 
+  // PHASE 7.5 — the badge needs the canonical academic year; there is
+  // no honest fallback, so it hides entirely when the year is unknown.
+  const academicYear = schoolData?.academicYear || ''
+  const badgeText = [hero.badgePrefix, academicYear].filter(Boolean).join(' ')
+  const showBadge = academicYear.trim().length > 0 && badgeText.trim().length > 0
+
+  const ctaPrimaryLabel = hero.ctaPrimary.label || 'Apply for Admission'
+  const ctaPrimaryHref = hero.ctaPrimary.href || '#admissions'
+
   return (
     <section id="top" className="relative pt-12 pb-16 lg:pt-20 lg:pb-20 overflow-hidden">
       {/* ambient orbs */}
@@ -439,56 +623,101 @@ function Hero({
 
       <div className="max-w-7xl mx-auto px-6 relative z-10">
         <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
-          {/* Left — copy */}
+          {/* Left — copy (CMS hero document; skeletons while loading) */}
           <FadeIn className="space-y-7 min-w-0">
-            <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full glass border border-emerald-500/30 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
-              Admissions open for {schoolData?.academicYear || '2025–26'}
-            </span>
-
-            <h2 className="font-display text-5xl lg:text-7xl font-extrabold tracking-tight leading-[1.05] text-balance">
-              Empowering Minds, <br />
-              <span
-                className="bg-clip-text text-transparent bg-gradient-to-br from-emerald-500 via-teal-500 to-amber-500"
-                style={{
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                }}
-              >
-                Inspiring Excellence
-              </span>
-            </h2>
-
-            <p className="text-lg text-muted-foreground max-w-xl leading-relaxed text-pretty">
-              A future-ready learning community where tradition meets innovation. Discover an education that
-              nurtures intellect, character, and curiosity at <span className="font-semibold text-foreground">{schoolName}</span>.
-            </p>
-
-            <div className="flex flex-wrap items-center gap-4">
-              <PrimaryCta href="#admissions">
-                Apply for Admission
-                <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" aria-hidden="true" />
-              </PrimaryCta>
-              <GhostCta onClick={onOpenPortal}>Login Portal</GhostCta>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-8 gap-y-5 sm:gap-x-10 pt-6">
-              {legacyStats.map((s) => (
-                <div key={s.label} className="shrink-0">
-                  <div className="font-display text-3xl font-bold text-foreground tabular-nums tracking-tight">{s.value}</div>
-                  <div className="text-xs font-semibold text-muted-foreground mt-1.5 uppercase tracking-widest">{s.label}</div>
+            {loading ? (
+              <div className="space-y-7" aria-busy="true">
+                <span className="sr-only">Loading school information</span>
+                <div className="skeleton h-7 w-56 rounded-full" aria-hidden="true" />
+                <div className="space-y-3">
+                  <div className="skeleton h-14 w-4/5 rounded-2xl" aria-hidden="true" />
+                  <div className="skeleton h-14 w-3/5 rounded-2xl" aria-hidden="true" />
                 </div>
-              ))}
-            </div>
+                <div className="space-y-2.5 max-w-xl">
+                  <div className="skeleton h-4 w-full rounded" aria-hidden="true" />
+                  <div className="skeleton h-4 w-11/12 rounded" aria-hidden="true" />
+                  <div className="skeleton h-4 w-2/3 rounded" aria-hidden="true" />
+                </div>
+                <div className="flex flex-wrap gap-4 pt-2">
+                  <div className="skeleton h-12 w-44 rounded-full" aria-hidden="true" />
+                  <div className="skeleton h-12 w-36 rounded-full" aria-hidden="true" />
+                </div>
+              </div>
+            ) : (
+              <>
+                {showBadge && (
+                  <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full glass border school-brand-badge text-xs font-semibold">
+                    <Sparkles className="w-3.5 h-3.5" style={{ color: 'var(--school-accent)' }} aria-hidden="true" />
+                    {badgeText}
+                  </span>
+                )}
+
+                <h2 className="font-display text-5xl lg:text-7xl font-extrabold tracking-tight leading-[1.05] text-balance">
+                  {hero.title}
+                  {hero.titleAccent ? (
+                    <>
+                      <br />
+                      <span
+                        className="bg-clip-text text-transparent"
+                        style={{
+                          backgroundImage:
+                            'linear-gradient(to bottom right, var(--school-primary), var(--school-accent))',
+                          WebkitBackgroundClip: 'text',
+                          WebkitTextFillColor: 'transparent',
+                        }}
+                      >
+                        {hero.titleAccent}
+                      </span>
+                    </>
+                  ) : null}
+                </h2>
+
+                {hero.description ? (
+                  <p className="text-lg text-muted-foreground max-w-xl leading-relaxed text-pretty">
+                    {hero.description}
+                  </p>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-4">
+                  <PrimaryCta href={ctaPrimaryHref}>
+                    {ctaPrimaryLabel}
+                    <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" aria-hidden="true" />
+                  </PrimaryCta>
+                  {hero.ctaSecondary.label ? (
+                    <GhostCta href={hero.ctaSecondary.href || '#campus-life'}>
+                      {hero.ctaSecondary.label}
+                    </GhostCta>
+                  ) : (
+                    <GhostCta onClick={onOpenPortal}>Login Portal</GhostCta>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-8 gap-y-5 sm:gap-x-10 pt-6">
+                  {legacyStats.map((s) => (
+                    <div key={s.label} className="shrink-0">
+                      <div className="font-display text-3xl font-bold text-foreground tabular-nums tracking-tight">{s.value}</div>
+                      <div className="text-xs font-semibold text-muted-foreground mt-1.5 uppercase tracking-widest">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </FadeIn>
 
-          {/* Right — campus photograph composition */}
+          {/* Right — campus photograph composition.
+              The photograph is a PLATFORM-DEFAULT asset (documented):
+              per-school imagery is never fabricated — a school that
+              wants its own photos publishes gallery albums. */}
           <FadeIn delay={0.15} className="relative min-w-0">
             <div className="relative">
               {/* offset frame — peeks out behind the photograph */}
               <div
                 aria-hidden
-                className="absolute inset-0 translate-x-4 translate-y-4 lg:translate-x-6 lg:translate-y-6 rounded-[2.25rem] border border-emerald-500/25 bg-emerald-500/5 pointer-events-none"
+                className="absolute inset-0 translate-x-4 translate-y-4 lg:translate-x-6 lg:translate-y-6 rounded-[2.25rem] border bg-transparent pointer-events-none"
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--school-primary) 25%, transparent)',
+                  backgroundColor: 'color-mix(in srgb, var(--school-primary) 5%, transparent)',
+                }}
               />
 
               {/* dominant photograph */}
@@ -517,11 +746,12 @@ function Hero({
 
               {/* floating glass stat — ONE REAL number (the school's live
                   student count; hidden entirely when the count is not
-                  available — never a fabricated "98% board pass"). */}
-              {typeof counts?.students === 'number' && (
+                  available or zero — never a fabricated "98% board pass",
+                  and never an awkward "0 Students enrolled"). */}
+              {typeof counts?.students === 'number' && counts.students > 0 && (
                 <div className="absolute -bottom-5 -left-2 sm:-left-6 lg:-left-8">
                   <div className="glass-strong rounded-2xl border border-border/60 shadow-premium-lg px-5 py-4 flex items-center gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/25 shrink-0">
+                    <div className="w-10 h-10 rounded-xl school-brand-grad flex items-center justify-center text-white shadow-lg shrink-0">
                       <GraduationCap className="w-5 h-5" strokeWidth={1.75} aria-hidden="true" />
                     </div>
                     <div className="min-w-0">
@@ -529,7 +759,7 @@ function Hero({
                         {counts.students.toLocaleString('en-IN')}
                       </div>
                       <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground mt-1.5">
-                        Students enrolled
+                        {counts.students === 1 ? 'Student enrolled' : 'Students enrolled'}
                       </div>
                     </div>
                   </div>
@@ -539,7 +769,8 @@ function Hero({
               {/* floating accent */}
               <div
                 aria-hidden
-                className="hidden lg:block absolute -top-8 -right-8 w-24 h-24 rounded-full bg-gradient-to-br from-amber-400 to-amber-500 opacity-70 blur-2xl pointer-events-none"
+                className="hidden lg:block absolute -top-8 -right-8 w-24 h-24 rounded-full opacity-70 blur-2xl pointer-events-none"
+                style={{ backgroundColor: 'var(--school-accent)' }}
               />
             </div>
           </FadeIn>
@@ -584,168 +815,346 @@ function TrustBar({ loading, counts }: { loading: boolean; counts?: PublicSchool
 }
 
 /* ------------------------------------------------------------------ */
-/*  Why families choose us                                             */
+/*  Why families choose us — CMS pillars                               */
 /* ------------------------------------------------------------------ */
 
-const pillars: Array<{
-  title: string
-  desc: string
-  icon: LucideIcon
-  bg: string
-}> = [
-  {
-    title: 'Academic Excellence',
-    desc: 'A rigorous, NEP-aligned curriculum that consistently produces top-tier board results.',
-    icon: Target,
-    bg: 'from-emerald-500 to-teal-600',
-  },
-  {
-    title: 'Holistic Growth',
-    desc: 'Sports, arts, and life-skills programs that shape confident, well-rounded individuals.',
-    icon: Heart,
-    bg: 'from-rose-400 to-rose-500',
-  },
-  {
-    title: 'Modern Facilities',
-    desc: 'Smart classrooms, advanced labs, and digital libraries built for 21st-century learning.',
-    icon: Building2,
-    bg: 'from-sky-400 to-sky-500',
-  },
-  {
-    title: 'Safe & Inclusive',
-    desc: 'A nurturing, secure campus where every child feels seen, heard, and valued.',
-    icon: ShieldCheck,
-    bg: 'from-lime-400 to-lime-500',
-  },
+/** Per-index gradient chips (Scholario design language — positional,
+ *  not per-school content). */
+const PILLAR_CHIPS = [
+  'from-emerald-500 to-teal-600',
+  'from-rose-400 to-rose-500',
+  'from-sky-400 to-sky-500',
+  'from-lime-400 to-lime-500',
+  'from-violet-400 to-violet-500',
+  'from-amber-400 to-orange-500',
 ]
 
-function WhyChooseUs({ shortName }: { shortName: string }) {
+function WhyChooseUs({
+  shortName,
+  about,
+  pillars,
+  loading,
+}: {
+  shortName: string
+  about: WebsiteContent['about']
+  pillars: PillarItem[]
+  loading: boolean
+}) {
+  const items = Array.isArray(pillars) ? pillars : []
+  if (!loading && items.length === 0) return null
+
   return (
     <section id="about" className="max-w-7xl mx-auto px-6 py-20 lg:py-28">
       <SectionHeader
         eyebrow={`Why ${shortName}`}
-        title="Why families choose us"
-        subtitle={`Four pillars that define the ${shortName} experience.`}
+        title={about.title}
+        subtitle={about.subtitle}
       />
 
-      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {pillars.map((p, i) => (
-          <FadeIn key={p.title} delay={i * 0.08}>
-            <div className="h-full bg-card rounded-3xl p-8 shadow-premium border border-border/60 hover:-translate-y-1.5 hover:shadow-premium-lg transition-all">
-              <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${p.bg} flex items-center justify-center text-white shadow-lg mb-6`}>
-                <p.icon className="w-5 h-5" strokeWidth={1.5} aria-hidden="true" />
-              </div>
-              <h3 className="text-xl font-bold text-foreground mb-3">{p.title}</h3>
-              <p className="text-muted-foreground leading-relaxed text-sm">{p.desc}</p>
-            </div>
-          </FadeIn>
-        ))}
-      </div>
+      {loading ? (
+        <SectionSkeleton label="Loading pillars" />
+      ) : (
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {items.map((p, i) => {
+            const Icon = cmsIcon(p.icon)
+            return (
+              <FadeIn key={`${p.title}-${i}`} delay={i * 0.08}>
+                <div className="h-full bg-card rounded-3xl p-8 shadow-premium border border-border/60 hover:-translate-y-1.5 hover:shadow-premium-lg transition-all">
+                  <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${PILLAR_CHIPS[i % PILLAR_CHIPS.length]} flex items-center justify-center text-white shadow-lg mb-6`}>
+                    <Icon className="w-5 h-5" strokeWidth={1.5} aria-hidden="true" />
+                  </div>
+                  <h3 className="text-xl font-bold text-foreground mb-3">{p.title}</h3>
+                  <p className="text-muted-foreground leading-relaxed text-sm">{p.description}</p>
+                </div>
+              </FadeIn>
+            )
+          })}
+        </div>
+      )}
     </section>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/*  A journey for every stage                                          */
+/*  A journey for every stage — CMS stages                             */
 /* ------------------------------------------------------------------ */
 
-const stages: Array<{
-  grade: string
-  title: string
-  desc: string
-  accent: string
-  badge: string
-}> = [
-  {
-    grade: 'Grade 1 – 5',
-    title: 'Primary School',
-    desc: 'Activity-led learning that builds strong foundations in literacy, numeracy, and curiosity.',
-    accent: 'from-emerald-400 to-teal-500',
-    badge: 'text-emerald-600 dark:text-emerald-400',
-  },
-  {
-    grade: 'Grade 6 – 8',
-    title: 'Middle School',
-    desc: 'Inquiry-based classrooms that develop critical thinking, collaboration, and creativity.',
-    accent: 'from-sky-400 to-blue-500',
-    badge: 'text-sky-600 dark:text-sky-400',
-  },
-  {
-    grade: 'Grade 9 – 12',
-    title: 'Senior School',
-    desc: 'Specialised streams in Science, Commerce, and Humanities with expert mentorship.',
-    accent: 'from-orange-400 to-pink-500',
-    badge: 'text-orange-600 dark:text-orange-400',
-  },
+const JOURNEY_ACCENTS = [
+  { bar: 'from-emerald-400 to-teal-500', badge: 'text-emerald-600 dark:text-emerald-400' },
+  { bar: 'from-sky-400 to-blue-500', badge: 'text-sky-600 dark:text-sky-400' },
+  { bar: 'from-orange-400 to-pink-500', badge: 'text-orange-600 dark:text-orange-400' },
 ]
 
-function Journey() {
+function Journey({
+  journey,
+  loading,
+}: {
+  journey: WebsiteContent['journey']
+  loading: boolean
+}) {
+  const stages = Array.isArray(journey?.stages) ? journey.stages : []
+  if (!loading && stages.length === 0) return null
+
   return (
     <section id="journey" className="max-w-7xl mx-auto px-6 py-20 lg:py-28">
       <SectionHeader
         eyebrow="Academics"
-        title="A journey for every stage"
-        subtitle="From first steps to graduation, we grow with your child."
+        title={journey.title}
+        subtitle={journey.subtitle}
       />
 
-      <div className="grid md:grid-cols-3 gap-8">
-        {stages.map((s, i) => (
-          <FadeIn key={s.title} delay={i * 0.1}>
-            <div className="relative h-full bg-card rounded-3xl pt-2 pb-8 px-8 shadow-premium border border-border/60 hover:-translate-y-1.5 hover:shadow-premium-lg transition-all overflow-hidden">
-              <div className={`absolute top-0 left-0 right-0 h-2 bg-gradient-to-r ${s.accent}`} aria-hidden="true" />
-              <div className={`text-xs font-bold ${s.badge} uppercase tracking-wider mt-6 mb-2`}>
-                {s.grade}
-              </div>
-              <h3 className="font-display text-2xl font-bold text-foreground mb-4">{s.title}</h3>
-              <p className="text-muted-foreground leading-relaxed">{s.desc}</p>
-            </div>
-          </FadeIn>
-        ))}
-      </div>
+      {loading ? (
+        <SectionSkeleton count={3} grid="md:grid-cols-3" label="Loading academic stages" />
+      ) : (
+        <div className="grid md:grid-cols-3 gap-8">
+          {stages.map((s, i) => {
+            const accent = JOURNEY_ACCENTS[i % JOURNEY_ACCENTS.length]
+            const Icon = cmsIcon(s.icon)
+            return (
+              <FadeIn key={`${s.title}-${i}`} delay={i * 0.1}>
+                <div className="relative h-full bg-card rounded-3xl pt-2 pb-8 px-8 shadow-premium border border-border/60 hover:-translate-y-1.5 hover:shadow-premium-lg transition-all overflow-hidden">
+                  <div className={`absolute top-0 left-0 right-0 h-2 bg-gradient-to-r ${accent.bar}`} aria-hidden="true" />
+                  <div className="flex items-center gap-4 mt-6 mb-2 min-w-0">
+                    <div className="h-9 w-9 shrink-0 rounded-lg school-brand-soft flex items-center justify-center">
+                      <Icon className="w-4.5 h-4.5 school-brand-text" strokeWidth={1.75} aria-hidden="true" />
+                    </div>
+                    <div className={`text-xs font-bold ${accent.badge} uppercase tracking-wider truncate`}>
+                      {[s.grades, s.years].filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                  <h3 className="font-display text-2xl font-bold text-foreground mb-4">{s.title}</h3>
+                  <p className="text-muted-foreground leading-relaxed">{s.description}</p>
+                </div>
+              </FadeIn>
+            )
+          })}
+        </div>
+      )}
     </section>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/*  World-class facilities                                             */
+/*  Facilities — CMS items                                             */
 /* ------------------------------------------------------------------ */
 
-const facilities: Array<{ title: string; desc: string; icon: LucideIcon }> = [
-  { title: 'Smart Classrooms', desc: 'AI-enabled interactive boards in every room.', icon: MonitorPlay },
-  { title: 'Science Labs', desc: 'Physics, chemistry & biology labs of university grade.', icon: FlaskConical },
-  { title: 'Sports Complex', desc: 'Olympic-sized pool, courts, and a 400m track.', icon: Dumbbell },
-  { title: 'Library', desc: '30,000+ titles and a fully digital research hub.', icon: Library },
-]
+function Facilities({
+  facilities,
+  loading,
+}: {
+  facilities: WebsiteContent['facilities']
+  loading: boolean
+}) {
+  const items = Array.isArray(facilities?.items) ? facilities.items : []
+  if (!loading && items.length === 0) return null
 
-function Facilities() {
   return (
     <section id="facilities" className="max-w-7xl mx-auto px-6 py-20 lg:py-28">
       <SectionHeader
         eyebrow="Our Campus"
-        title="World-class facilities"
-        subtitle="Spaces designed to inspire discovery."
+        title={facilities.title}
+        subtitle={facilities.subtitle}
       />
 
-      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {facilities.map((f, i) => (
-          <FadeIn key={f.title} delay={i * 0.08}>
-            <div className="h-full bg-card rounded-3xl p-8 shadow-premium border border-border/60 hover:-translate-y-1.5 hover:shadow-premium-lg hover:border-emerald-500/40 transition-all">
-              <f.icon className="w-8 h-8 text-emerald-600 dark:text-emerald-400 mb-6" strokeWidth={1.5} aria-hidden="true" />
-              <h3 className="text-xl font-bold text-foreground mb-3">{f.title}</h3>
-              <p className="text-muted-foreground leading-relaxed text-sm">{f.desc}</p>
-            </div>
-          </FadeIn>
-        ))}
-      </div>
+      {loading ? (
+        <SectionSkeleton label="Loading facilities" />
+      ) : (
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {items.map((f, i) => {
+            const Icon = cmsIcon(f.icon)
+            return (
+              <FadeIn key={`${f.title}-${i}`} delay={i * 0.08}>
+                <div className="h-full bg-card rounded-3xl p-8 shadow-premium border border-border/60 hover:-translate-y-1.5 hover:shadow-premium-lg hover:border-emerald-500/40 transition-all">
+                  <Icon className="w-8 h-8 text-emerald-600 dark:text-emerald-400 mb-6" strokeWidth={1.5} aria-hidden="true" />
+                  <h3 className="text-xl font-bold text-foreground mb-3">{f.title}</h3>
+                  <p className="text-muted-foreground leading-relaxed text-sm">{f.description}</p>
+                </div>
+              </FadeIn>
+            )
+          })}
+        </div>
+      )}
     </section>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/*  Campus life — gallery mosaic                                       */
+/*  Principal's message — CMS-gated section (hidden unless enabled)   */
 /* ------------------------------------------------------------------ */
 
-const gallery: Array<{
+function PrincipalMessage({
+  message,
+  principalName,
+  schoolName,
+  shortName,
+  logoUrl,
+}: {
+  message: WebsiteContent['principalMessage']
+  principalName: string
+  schoolName: string
+  shortName: string
+  logoUrl?: string | null
+}) {
+  // Render ONLY when the school has enabled the section AND written a
+  // message — an empty quote card would be a hollow promise.
+  if (!message.enabled || !message.message.trim()) return null
+
+  const name = principalName.trim() || 'The Principal'
+  const initials = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('')
+
+  return (
+    <section id="principal-message" className="max-w-7xl mx-auto px-6 py-20 lg:py-28">
+      <SectionHeader
+        eyebrow="Leadership"
+        title={message.title}
+        subtitle="A word from the head of the school."
+      />
+
+      <FadeIn>
+        <figure className="relative mx-auto max-w-3xl bg-card rounded-3xl p-8 sm:p-10 shadow-premium border border-border/60 overflow-hidden">
+          <div aria-hidden className="absolute top-0 left-0 right-0 h-1.5 school-brand-bar" />
+          <Quote className="w-10 h-10 school-brand-text mb-6" strokeWidth={1.5} aria-hidden="true" />
+          <blockquote className="text-lg sm:text-xl leading-relaxed text-foreground/90 text-pretty whitespace-pre-line">
+            {message.message}
+          </blockquote>
+          <figcaption className="mt-8 flex items-center gap-4 min-w-0">
+            {logoUrl ? (
+              <Image
+                src={logoUrl}
+                alt={`${shortName} logo`}
+                width={48}
+                height={48}
+                className="h-12 w-12 shrink-0 rounded-full object-cover border border-border/60"
+              />
+            ) : (
+              <div className="h-12 w-12 shrink-0 rounded-full school-brand-soft school-brand-text flex items-center justify-center font-display font-bold text-sm">
+                {initials || 'P'}
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="font-bold text-foreground truncate">{name}</p>
+              <p className="text-sm text-muted-foreground truncate">Principal, {schoolName}</p>
+            </div>
+          </figcaption>
+        </figure>
+      </FadeIn>
+    </section>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Campus life — CMS gallery albums / platform-default demo mosaic   */
+/* ------------------------------------------------------------------ */
+
+/** Max images rendered per album (honest "...and N more" note beyond). */
+const MAX_ALBUM_IMAGES = 12
+
+const GALLERY_SIZES = '(min-width: 1024px) 25vw, (min-width: 640px) 33vw, 50vw'
+
+function CampusLife({
+  shortName,
+  albums,
+  isDemo,
+  loading,
+}: {
+  shortName: string
+  albums: PublicGalleryAlbum[]
+  isDemo: boolean
+  loading: boolean
+}) {
+  if (loading) {
+    return (
+      <section id="campus-life" className="max-w-7xl mx-auto px-6 py-20 lg:py-28">
+        <SectionHeader
+          eyebrow="Campus Life"
+          title={`Life at ${shortName}`}
+          subtitle="Learning happens everywhere — in labs, on fields, and between the shelves."
+        />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4" aria-busy="true" aria-label="Loading campus gallery">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="skeleton aspect-[4/3] rounded-xl" aria-hidden="true" />
+          ))}
+        </div>
+      </section>
+    )
+  }
+
+  if (albums.length === 0) {
+    // No published albums: the static platform-default mosaic is a DEMO
+    // aesthetic — a real, unconfigured school gets an honest skip (the
+    // section hides; per-school imagery is never fabricated).
+    if (!isDemo) return null
+    return <DemoCampusMosaic shortName={shortName} />
+  }
+
+  return (
+    <section id="campus-life" className="max-w-7xl mx-auto px-6 py-20 lg:py-28">
+      <SectionHeader
+        eyebrow="Campus Life"
+        title={`Life at ${shortName}`}
+        subtitle="Learning happens everywhere — in labs, on fields, and between the shelves."
+      />
+
+      {albums.map((album) => {
+        const images = album.images.slice(0, MAX_ALBUM_IMAGES)
+        const hiddenCount = album.images.length - images.length
+        return (
+          <FadeIn key={album.id} className="mt-10 first:mt-0">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 mb-5">
+              <h3 className="font-display text-xl font-bold text-foreground">{album.title}</h3>
+              {album.description ? (
+                <p className="text-sm text-muted-foreground">{album.description}</p>
+              ) : null}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+              {images.map((img) => {
+                const alt = img.caption || album.title
+                return (
+                  <figure key={img.id} className="relative m-0 aspect-[4/3] overflow-hidden rounded-xl border border-border/60 bg-muted shadow-premium group">
+                    <Image
+                      src={img.url}
+                      alt={alt}
+                      fill
+                      sizes={GALLERY_SIZES}
+                      loading="lazy"
+                      className="object-cover transition-transform duration-700 ease-out motion-safe:group-hover:scale-105"
+                    />
+                    {img.caption ? (
+                      <>
+                        <div
+                          aria-hidden
+                          className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/65 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+                        />
+                        <figcaption className="absolute bottom-0 inset-x-0 p-3 text-xs font-medium text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.5)] opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                          {img.caption}
+                        </figcaption>
+                      </>
+                    ) : null}
+                  </figure>
+                )
+              })}
+            </div>
+            {hiddenCount > 0 ? (
+              <p className="mt-4 text-sm text-muted-foreground">
+                …and {hiddenCount} more {hiddenCount === 1 ? 'photo' : 'photos'} in this album.
+              </p>
+            ) : null}
+          </FadeIn>
+        )
+      })}
+    </section>
+  )
+}
+
+/** Platform-default campus mosaic — rendered ONLY for the demo school
+ *  when it has no published albums (documented demo aesthetic; the
+ *  tiles are curated platform assets, not school data). */
+const DEMO_GALLERY_TILES: Array<{
   src: string
   alt: string
   caption: string
@@ -787,7 +1196,7 @@ const gallery: Array<{
   },
 ]
 
-function CampusLife({ shortName }: { shortName: string }) {
+function DemoCampusMosaic({ shortName }: { shortName: string }) {
   return (
     <section id="campus-life" className="max-w-7xl mx-auto px-6 py-20 lg:py-28">
       <SectionHeader
@@ -797,7 +1206,7 @@ function CampusLife({ shortName }: { shortName: string }) {
       />
 
       <div className="grid grid-cols-1 auto-rows-[240px] sm:grid-cols-2 sm:auto-rows-[230px] lg:grid-cols-3 lg:auto-rows-[250px] gap-4 sm:gap-5">
-        {gallery.map((g, i) => (
+        {DEMO_GALLERY_TILES.map((g, i) => (
           <FadeIn key={g.caption} delay={i * 0.08} className={`min-w-0 ${g.tile}`}>
             <figure className="relative m-0 h-full overflow-hidden rounded-2xl border border-border/60 bg-muted shadow-premium group">
               <Image
@@ -836,6 +1245,8 @@ interface PublicNotice {
   message: string
   createdAt: string
   priority: string
+  imageId?: string | null
+  imageUrl?: string | null
 }
 
 const PRIORITY_TONES: Record<string, { label: string; chip: string; bar: string; dot: string }> = {
@@ -851,11 +1262,13 @@ const PRIORITY_TONES: Record<string, { label: string; chip: string; bar: string;
     bar: 'bg-amber-500',
     dot: 'bg-amber-500',
   },
+  // PHASE 7.5 — the NORMAL priority accent follows the school brand
+  // (token classes with inert emerald fallback; see globals.css).
   NORMAL: {
     label: 'Notice',
-    chip: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-    bar: 'bg-emerald-500',
-    dot: 'bg-emerald-500',
+    chip: 'school-brand-chip',
+    bar: 'school-brand-bar',
+    dot: 'school-brand-dot',
   },
 }
 
@@ -998,44 +1411,59 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
   return (
     <>
       <div className="grid lg:grid-cols-5 gap-6 items-start">
-        {/* Featured notice — the newest broadcast gets the big canvas */}
+        {/* Featured notice — the newest broadcast gets the big canvas
+            (with its optional image as a full-width banner). */}
         <FadeIn className={hasRest ? 'lg:col-span-3' : 'lg:col-span-5'}>
           <article
             aria-label={`Featured notice: ${featured.title}`}
-            className="group relative h-full overflow-hidden rounded-3xl border border-border/60 bg-card p-8 shadow-premium transition-all hover:-translate-y-1.5 hover:shadow-premium-lg"
+            className="group relative h-full overflow-hidden rounded-3xl border border-border/60 bg-card shadow-premium transition-all hover:-translate-y-1.5 hover:shadow-premium-lg"
           >
-            <span aria-hidden className={`absolute left-0 top-0 bottom-0 w-1.5 ${featuredTone.bar}`} />
-            <div className="flex flex-wrap items-start gap-5">
-              <NoticeDateTile iso={featured.createdAt} tone="from-emerald-500/10" />
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${featuredTone.chip}`}>
-                    <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${featuredTone.dot}`} />
-                    {featuredTone.label}
-                  </span>
-                  <time
-                    dateTime={featured.createdAt}
-                    className="text-xs font-medium text-muted-foreground"
-                  >
-                    {noticeRelativeTime(featured.createdAt)}
-                  </time>
+            <span aria-hidden className={`absolute left-0 top-0 bottom-0 w-1.5 z-10 ${featuredTone.bar}`} />
+            {featured.imageUrl ? (
+              <div className="relative h-44 sm:h-52 overflow-hidden bg-muted">
+                <Image
+                  src={featured.imageUrl}
+                  alt={featured.title}
+                  fill
+                  sizes="(min-width: 1024px) 60vw, 100vw"
+                  className="object-cover"
+                />
+                <div aria-hidden className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-card via-card/30 to-transparent" />
+              </div>
+            ) : null}
+            <div className="p-8">
+              <div className="flex flex-wrap items-start gap-5">
+                <NoticeDateTile iso={featured.createdAt} tone="from-emerald-500/10" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${featuredTone.chip}`}>
+                      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${featuredTone.dot}`} />
+                      {featuredTone.label}
+                    </span>
+                    <time
+                      dateTime={featured.createdAt}
+                      className="text-xs font-medium text-muted-foreground"
+                    >
+                      {noticeRelativeTime(featured.createdAt)}
+                    </time>
+                  </div>
+                  <h3 className="mt-3 font-display text-2xl font-bold leading-snug text-foreground group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                    {featured.title}
+                  </h3>
+                  <p className="mt-3 leading-relaxed text-muted-foreground line-clamp-5">
+                    {featured.message}
+                  </p>
+                  <p className="mt-5 flex items-center gap-2 text-xs font-medium text-muted-foreground/80">
+                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+                    Issued by the school office · verified broadcast
+                  </p>
                 </div>
-                <h3 className="mt-3 font-display text-2xl font-bold leading-snug text-foreground group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
-                  {featured.title}
-                </h3>
-                <p className="mt-3 leading-relaxed text-muted-foreground line-clamp-5">
-                  {featured.message}
-                </p>
-                <p className="mt-5 flex items-center gap-2 text-xs font-medium text-muted-foreground/80">
-                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
-                  Issued by the school office · verified broadcast
-                </p>
               </div>
             </div>
           </article>
         </FadeIn>
 
-        {/* Earlier notices — compact stack */}
+        {/* Earlier notices — compact stack (optional image thumbs) */}
         {hasRest && (
           <div className="lg:col-span-2 flex flex-col gap-4">
             {rest.map((n, i) => {
@@ -1049,6 +1477,16 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
                     <span aria-hidden className={`absolute left-0 top-0 bottom-0 w-1 ${tone.bar}`} />
                     <div className="flex items-start gap-4 pl-2">
                       <NoticeDateTile iso={n.createdAt} tone="from-emerald-500/10" />
+                      {n.imageUrl ? (
+                        <Image
+                          src={n.imageUrl}
+                          alt=""
+                          width={56}
+                          height={56}
+                          loading="lazy"
+                          className="h-14 w-14 shrink-0 rounded-xl border border-border/60 object-cover"
+                        />
+                      ) : null}
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.chip}`}>
@@ -1089,21 +1527,13 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
 }
 
 /* ------------------------------------------------------------------ */
-/*  Admissions — copy + premium form card (two-column on lg)          */
+/*  Admissions — CMS copy + premium form card (two-column on lg)      */
 /* ------------------------------------------------------------------ */
 
-const admissionHighlights = (academicYear: string): string[] => [
-  `Applications for the ${academicYear} academic year are open now`,
-  'Campus tours run every Saturday, 10 am – 1 pm',
-  'Entrance assessments take place in the last week of February',
-  'Merit and sibling scholarships available from Grade 6 onwards',
-  'Small classes capped at 30 students — a genuine 1:12 teacher ratio',
-]
-
 function Admissions({
-  schoolName,
-  academicYear,
+  admissions,
   phone,
+  loading,
   admForm,
   setAdmForm,
   admSubmitting,
@@ -1112,9 +1542,9 @@ function Admissions({
   admError,
   handleAdmissionSubmit,
 }: {
-  schoolName: string
-  academicYear: string
+  admissions: WebsiteContent['admissions']
   phone: string
+  loading: boolean
   admForm: any
   setAdmForm: (f: any) => void
   admSubmitting: boolean
@@ -1129,46 +1559,70 @@ function Admissions({
     setAdmForm({ ...admForm, [k]: e.target.value })
   }
 
+  const highlights = Array.isArray(admissions?.highlights) ? admissions.highlights : []
+  const officeHours = admissions?.officeHours?.trim() || ''
+
   return (
     <section id="admissions" className="max-w-7xl mx-auto px-6 py-20 lg:py-28">
       <SectionHeader
-        eyebrow="Admissions"
-        title="Begin your admissions journey"
-        subtitle="Tell us a little about your child and we&apos;ll be in touch."
+        eyebrow={admissions.title}
+        title={admissions.heading}
+        subtitle={admissions.subtitle}
       />
 
       <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-start">
-        {/* Left — admission copy + key dates & highlights */}
+        {/* Left — admission copy + highlights + office hours (CMS) */}
         <FadeIn className="min-w-0">
-          <h3 className="font-display text-2xl lg:text-3xl font-bold text-foreground tracking-tight">
-            A place for every ambition
-          </h3>
-          <p className="mt-4 text-muted-foreground leading-relaxed">
-            Every year a limited number of seats open at <span className="font-semibold text-foreground">{schoolName}</span> —
-            and every application is read by a person, not a filter. Here is what applying families can expect:
-          </p>
+          {loading ? (
+            <div className="space-y-4" aria-busy="true">
+              <span className="sr-only">Loading admissions information</span>
+              <div className="skeleton h-4 w-full rounded" aria-hidden="true" />
+              <div className="skeleton h-4 w-11/12 rounded" aria-hidden="true" />
+              <div className="skeleton h-4 w-3/4 rounded" aria-hidden="true" />
+              <div className="skeleton h-24 w-full rounded-2xl mt-6" aria-hidden="true" />
+            </div>
+          ) : (
+            <>
+              {admissions.description ? (
+                <p className="text-muted-foreground leading-relaxed">
+                  {admissions.description}
+                </p>
+              ) : null}
 
-          <ul className="mt-8 space-y-4">
-            {admissionHighlights(academicYear).map((h) => (
-              <li key={h} className="flex items-start gap-3">
-                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                  <Check className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" />
-                </span>
-                <span className="text-sm leading-relaxed text-foreground/90">{h}</span>
-              </li>
-            ))}
-          </ul>
+              {highlights.length > 0 ? (
+                <ul className="mt-8 space-y-4">
+                  {highlights.map((h) => (
+                    <li key={h} className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full school-brand-soft school-brand-text">
+                        <Check className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" />
+                      </span>
+                      <span className="text-sm leading-relaxed text-foreground/90">{h}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
 
-          <div className="mt-8 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-5 py-4 flex items-start gap-3">
-            <Phone className="h-4.5 w-4.5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" strokeWidth={1.75} aria-hidden="true" />
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              Prefer to talk it through? The admissions office answers between 9 am and 4 pm, Monday to
-              Saturday —{' '}
-              <a href={`tel:${phone}`} className="font-semibold text-foreground hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
-                {phone}
-              </a>
-            </p>
-          </div>
+              {(officeHours || phone) ? (
+                <div
+                  className="mt-8 rounded-2xl border px-5 py-4 flex items-start gap-3"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--school-primary) 20%, transparent)',
+                    backgroundColor: 'color-mix(in srgb, var(--school-primary) 5%, transparent)',
+                  }}
+                >
+                  <Phone className="h-4.5 w-4.5 school-brand-text shrink-0 mt-0.5" strokeWidth={1.75} aria-hidden="true" />
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    {officeHours ? <>{officeHours}{phone ? ' — ' : null}</> : null}
+                    {phone ? (
+                      <a href={`tel:${phone}`} className="font-semibold text-foreground hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                        {phone}
+                      </a>
+                    ) : null}
+                  </p>
+                </div>
+              ) : null}
+            </>
+          )}
         </FadeIn>
 
         {/* Right — the form, untouched logic in a premium card */}
@@ -1189,7 +1643,7 @@ function Admissions({
                 </p>
                 <button
                   onClick={() => setAdmSuccess(false)}
-                  className="inline-flex items-center gap-2 px-5 py-3 rounded-full text-sm font-semibold text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/10 transition-colors"
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-full text-sm font-semibold school-brand-ghost border transition-colors"
                 >
                   Submit another inquiry
                 </button>
@@ -1237,7 +1691,7 @@ function Admissions({
                       onChange={update('grade')}
                       className="w-full px-4 py-3 rounded-xl border border-border bg-background/60 focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 transition-all outline-none appearance-none"
                     >
-                      <option value="">Select grade</option>
+                      <option value="">Select stage</option>
                       <option value="primary">Primary (1–5)</option>
                       <option value="middle">Middle (6–8)</option>
                       <option value="senior">Senior (9–12)</option>
@@ -1274,7 +1728,7 @@ function Admissions({
                 <button
                   type="submit"
                   disabled={admSubmitting}
-                  className="group w-full inline-flex items-center justify-center gap-2 px-6 py-4 rounded-xl text-base font-semibold text-white bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/25 hover:shadow-xl hover:shadow-emerald-500/35 disabled:opacity-60 disabled:cursor-not-allowed hover:-translate-y-0.5 active:translate-y-0 transition-all"
+                  className="group w-full inline-flex items-center justify-center gap-2 px-6 py-4 rounded-xl text-base font-semibold school-brand-cta hover:-translate-y-0.5 active:translate-y-0 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {admSubmitting ? 'Submitting…' : 'Submit Inquiry'}
                   {!admSubmitting && (
@@ -1303,23 +1757,45 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 /*  Footer                                                             */
 /* ------------------------------------------------------------------ */
 
+const SOCIAL_LINKS: Array<{
+  key: keyof WebsiteContent['footer']['social']
+  label: string
+  icon: LucideIcon
+}> = [
+  { key: 'facebook', label: 'Facebook', icon: Facebook },
+  { key: 'instagram', label: 'Instagram', icon: Instagram },
+  { key: 'youtube', label: 'YouTube', icon: Youtube },
+  { key: 'twitter', label: 'X (Twitter)', icon: Twitter },
+  { key: 'linkedin', label: 'LinkedIn', icon: Linkedin },
+]
+
 function Footer({
   schoolName,
+  shortName,
+  logoUrl,
   phone,
   email,
   address,
   city,
+  website,
+  established,
+  footer,
+  contact,
   onOpenPortal,
 }: {
   schoolName: string
+  shortName: string
+  logoUrl?: string | null
   phone: string
   email: string
   address: string
   city: string
+  website: string
+  established: string
+  footer: WebsiteContent['footer']
+  contact: WebsiteContent['contact']
   onOpenPortal: () => void
 }) {
-  const shortName = schoolName.split(' ')[0] || 'Demo'
-
   const quickLinks = [
     { label: 'About Us', href: '#about' },
     { label: 'Campus Life', href: '#campus-life' },
@@ -1328,15 +1804,30 @@ function Footer({
     { label: 'Admissions', href: '#admissions' },
   ]
 
+  const aboutLine = footer.about?.trim() || ''
+  // Only ever display an establishment year the school actually
+  // recorded — never an invented "since YYYY".
+  const establishedYear = established?.trim() || ''
+
+  const socialLinks = SOCIAL_LINKS.flatMap(({ key, label, icon }) => {
+    const href = footer.social?.[key]
+    if (typeof href !== 'string') return []
+    const url = href.trim()
+    if (!/^https?:\/\//i.test(url)) return []
+    return [{ key, label, icon, url }]
+  })
+
+  const contactTitle = contact.title?.trim() || 'Contact'
+  const contactSubtitle = contact.subtitle?.trim() || ''
+  const websiteUrl = /^https?:\/\//i.test(website) ? website : ''
+
   return (
     <footer id="footer" className="mt-auto bg-card border-t border-border/60 pt-16 pb-8 px-6">
       <div className="max-w-7xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10 lg:gap-12 mb-10">
         {/* Brand */}
         <div>
           <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shrink-0">
-              <GraduationCap className="w-5 h-5" aria-hidden="true" />
-            </div>
+            <BrandLogo logoUrl={logoUrl} shortName={shortName} />
             <div className="min-w-0">
               <h2 className="font-display font-bold text-foreground leading-tight">{shortName}</h2>
               <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 tracking-widest uppercase">
@@ -1344,27 +1835,68 @@ function Footer({
               </p>
             </div>
           </div>
-          <p className="text-muted-foreground text-sm leading-relaxed">
-            Nurturing minds, shaping character, and inspiring excellence since 1995.
-          </p>
+          {aboutLine ? (
+            <p className="text-muted-foreground text-sm leading-relaxed">
+              {aboutLine}
+            </p>
+          ) : null}
+          {establishedYear ? (
+            <span className="mt-3 inline-flex items-center rounded-full school-brand-soft school-brand-text px-2.5 py-0.5 text-[11px] font-semibold">
+              Estd. {establishedYear}
+            </span>
+          ) : null}
+          {socialLinks.length > 0 ? (
+            <div className="flex items-center gap-3 mt-5">
+              {socialLinks.map((s) => (
+                <a
+                  key={s.key}
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`${shortName} on ${s.label}`}
+                  title={`${shortName} on ${s.label}`}
+                  className="h-9 w-9 flex items-center justify-center rounded-full border border-border bg-card/60 school-brand-text hover:border-emerald-500/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <s.icon className="w-4 h-4" aria-hidden="true" />
+                </a>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         {/* Contact */}
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground/80 mb-5">Contact</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground/80 mb-5">{contactTitle}</h3>
+          {contactSubtitle ? (
+            <p className="text-sm text-muted-foreground mb-4 leading-relaxed">{contactSubtitle}</p>
+          ) : null}
           <ul className="space-y-4 text-sm text-muted-foreground">
-            <li className="flex items-start gap-3">
-              <MapPin className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" strokeWidth={1.75} aria-hidden="true" />
-              <span>{address}, {city}</span>
-            </li>
-            <li className="flex items-center gap-3">
-              <Phone className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" strokeWidth={1.75} aria-hidden="true" />
-              <a href={`tel:${phone}`} className="hover:text-foreground transition-colors">{phone}</a>
-            </li>
-            <li className="flex items-center gap-3 min-w-0">
-              <Mail className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" strokeWidth={1.75} aria-hidden="true" />
-              <a href={`mailto:${email}`} className="hover:text-foreground transition-colors truncate">{email}</a>
-            </li>
+            {address || city ? (
+              <li className="flex items-start gap-3">
+                <MapPin className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" strokeWidth={1.75} aria-hidden="true" />
+                <span>{[address, city].filter(Boolean).join(', ')}</span>
+              </li>
+            ) : null}
+            {phone ? (
+              <li className="flex items-center gap-3">
+                <Phone className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                <a href={`tel:${phone}`} className="hover:text-foreground transition-colors">{phone}</a>
+              </li>
+            ) : null}
+            {email ? (
+              <li className="flex items-center gap-3 min-w-0">
+                <Mail className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                <a href={`mailto:${email}`} className="hover:text-foreground transition-colors truncate">{email}</a>
+              </li>
+            ) : null}
+            {websiteUrl ? (
+              <li className="flex items-center gap-3 min-w-0">
+                <Globe className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                <a href={websiteUrl} target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors truncate">
+                  {websiteUrl.replace(/^https?:\/\//i, '')}
+                </a>
+              </li>
+            ) : null}
           </ul>
         </div>
 
@@ -1390,7 +1922,7 @@ function Footer({
           </p>
           <button
             onClick={onOpenPortal}
-            className="group inline-flex items-center gap-2 px-5 py-3 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/5 rounded-full text-sm font-semibold transition-colors"
+            className="group inline-flex items-center gap-2 px-5 py-3 border school-brand-ghost rounded-full text-sm font-semibold transition-colors"
           >
             Open Login Portal
             <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" aria-hidden="true" />

@@ -4,22 +4,33 @@
  * ID Card tab (School Settings) — the SCHOOL'S identity-card template.
  *
  * The Principal/Admin configures the institutional card design once here;
- * every student's card (view + print) renders FROM this template. The
- * preview shows a real roster student so the school always sees exactly
- * what will print. Every change persists live to the tenant-scoped
- * school-settings store.
+ * every student's card (view + print) renders FROM this template.
+ *
+ * PHASE 7.5:
+ *   · the template persists server-side through
+ *     PATCH /api/school-settings { settings: { idCard: {…} } }
+ *   · the live preview renders a REAL roster student (the first record of
+ *     the hydrated students store) — the old DEMO_STUDENT_ID lookup no
+ *     longer resolved and left a permanent "Loading preview…". An honest
+ *     empty state shows when the school has no students yet.
  */
 
-import { IdCard as IdCardIcon, ShieldAlert } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { IdCard as IdCardIcon, ShieldAlert, Save, UserX } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+import {
+  useSchoolSettingsStore,
+  applySchoolConfig,
+} from '@/lib/store/school-settings-store'
 import { useStudentsStore } from '@/lib/store/students-store'
-import { DEMO_STUDENT_ID } from '@/components/student/modules/applications/student'
 import { StudentIdCard } from '@/components/student/shell/student-id-card'
-import { SettingsTab, FieldGroup } from './shared'
+import { toast } from 'sonner'
+import { patchSettingsSlice } from './server-api'
+import { SettingsTab, FieldGroup, SyncGate, SyncChip } from './shared'
 
 const THEME_SWATCHES: { key: 'violet' | 'sky' | 'emerald' | 'rose' | 'amber'; label: string; gradient: string }[] = [
   { key: 'violet', label: 'Violet', gradient: 'from-violet-600 via-purple-600 to-fuchsia-600' },
@@ -47,18 +58,49 @@ const FIELD_TOGGLES: FieldToggle[] = [
 export function IdCardTab() {
   const idCard = useSchoolSettingsStore((s) => s.idCard)
   const updateIdCard = useSchoolSettingsStore((s) => s.updateIdCard)
-  // Preview against a REAL roster record — what the school sees is what
-  // every student's card will look like with their own particulars.
-  const previewStudent = useStudentsStore((s) => s.students.find((x) => x.id === DEMO_STUDENT_ID))
+  const serverIdCard = useSchoolSettingsStore((s) => s.server.settings.idCard)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Preview against a REAL roster record — the first student of the
+  // canonical roster (hydrated from GET /api/students/roster). What the
+  // school sees is what every student's card will look like with their own
+  // particulars. No student rows → honest empty state.
+  const previewStudent = useStudentsStore((s) => s.students[0])
+
+  // Dirty = template differs from the server-persisted slice.
+  useEffect(() => { setError(null) }, [serverIdCard])
+  const dirty = useMemo(
+    () => JSON.stringify(idCard) !== JSON.stringify(serverIdCard ?? idCard),
+    [idCard, serverIdCard],
+  )
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    const result = await patchSettingsSlice('idCard', idCard)
+    setSaving(false)
+    if (result.ok && result.config) {
+      applySchoolConfig(result.config)
+      toast.success('ID-card template saved', {
+        description: 'Every student\u2019s card now renders from this design.',
+      })
+    } else {
+      setError(result.error)
+      toast.error(result.error ?? 'The ID-card template could not be saved.')
+    }
+  }
 
   if (!idCard) return null
 
   return (
-    <SettingsTab
-      icon={IdCardIcon}
-      title="Student Identity Cards"
-      description="The school's card template — every student's ID card renders from this design. Changes apply to all students immediately."
-    >
+    <SyncGate>
+      <SettingsTab
+        icon={IdCardIcon}
+        title="Student Identity Cards"
+        description="The school's card template — every student's ID card renders from this design. Changes apply to all students immediately."
+        action={<SyncChip dirty={dirty} saving={saving} />}
+      >
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
         {/* ── Configuration ──────────────────────────────────────────── */}
         <div className="space-y-6">
@@ -147,7 +189,13 @@ export function IdCardTab() {
             {previewStudent ? (
               <StudentIdCard student={previewStudent} className="mx-auto shadow-none" />
             ) : (
-              <p className="py-16 text-center text-xs text-muted-foreground">Loading preview…</p>
+              <div className="py-12 text-center space-y-2">
+                <UserX className="h-8 w-8 mx-auto text-muted-foreground/50" aria-hidden />
+                <p className="text-xs font-semibold text-muted-foreground">No students enrolled yet</p>
+                <p className="text-[11px] text-muted-foreground/70 max-w-[220px] mx-auto">
+                  The preview renders once the school has at least one student on the roster.
+                </p>
+              </div>
             )}
             <p className="mt-3 text-center text-[10px] leading-relaxed text-muted-foreground">
               Rendered with a live roster student — each student sees this exact design with their own particulars.
@@ -155,6 +203,28 @@ export function IdCardTab() {
           </div>
         </div>
       </div>
-    </SettingsTab>
+
+      {error && (
+        <div
+          role="alert"
+          className="rounded-xl border border-rose-500/30 bg-rose-500/[0.06] px-3 py-2.5 text-[11px] text-rose-700 dark:text-rose-300"
+        >
+          {error}
+        </div>
+      )}
+
+      <div className="flex items-center justify-end pt-1">
+        <Button
+          size="sm"
+          disabled={saving || !dirty}
+          onClick={handleSave}
+          className={cn('gap-1.5 text-xs font-bold', 'bg-emerald-600 hover:bg-emerald-700 text-white')}
+        >
+          <Save className="h-3.5 w-3.5" />
+          {saving ? 'Saving…' : 'Save Card Template'}
+        </Button>
+      </div>
+      </SettingsTab>
+    </SyncGate>
   )
 }

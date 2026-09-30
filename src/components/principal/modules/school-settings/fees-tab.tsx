@@ -2,9 +2,13 @@
 
 // Fees Structure tab — manages fee heads/templates. Owns the local state for
 // the "Add Fee Head" dialog and wires the create handler to store.addFeeHead.
+//
+// PHASE 7.5: honest-scope banner added — the FEE CATALOGUE used for actual
+// billing lives in Fee Management → Catalogue (DB MasterFeeHead rows via
+// /api/fees/catalogue); this editor is the school's local template list.
 
 import { useState } from 'react'
-import { IndianRupee, Plus } from 'lucide-react'
+import { IndianRupee, Plus, Info } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
@@ -59,6 +63,16 @@ export function FeesTab() {
           </Button>
         }
       >
+        <div
+          role="note"
+          className="flex items-start gap-2.5 rounded-xl border border-sky-500/25 bg-sky-500/[0.05] px-3 py-2.5 text-[11px] leading-relaxed text-sky-700 dark:text-sky-300"
+        >
+          <Info className="h-3.5 w-3.5 shrink-0 mt-px" aria-hidden />
+          <span className="min-w-0 flex-1">
+            The fee catalogue used for billing lives in <strong>Fee Management → Catalogue</strong>.
+            This editor maintains the school&apos;s local template list only.
+          </span>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
           {store.fees.feeHeads.map((fh) => (
             <div key={fh.id} className="p-3.5 rounded-xl border border-border bg-card space-y-1.5 shadow-2xs">

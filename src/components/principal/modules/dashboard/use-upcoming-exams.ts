@@ -5,13 +5,31 @@
  * "Pre-Board in 12 days" constant). Derives from /api/exams
  * (canonical DB rows): count = status 'SCHEDULED', sub = the nearest
  * upcoming exam's name + day delta.
+ *
+ * PHASE 7.5-D lifecycle (was: one fetch per session — no retry, no
+ * invalidation):
+ *   · module cache = stale-while-revalidate store with a 60s TTL;
+ *   · in-flight guard — concurrent consumers share ONE fetch;
+ *   · a failed fetch is never cached — the next mount retries, and
+ *     `refresh()` lets the KPI card's "tap to retry" affordance work;
+ *   · a failed background refetch keeps the visible data.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 export interface UpcomingExamsKpi {
   count: number
   sub: string
+}
+
+export interface UseUpcomingExamsResult {
+  /** Real KPI, or null while loading / after a failure. */
+  kpi: UpcomingExamsKpi | null
+  loading: boolean
+  /** True when the fetch failed and there is no data to show. */
+  error: boolean
+  /** Force a refetch (retry). Coalesced with any in-flight fetch. */
+  refresh: () => void
 }
 
 interface ExamRow {
@@ -21,7 +39,10 @@ interface ExamRow {
   startDate: string | null
 }
 
+const FRESH_FOR_MS = 60_000
+
 let cached: UpcomingExamsKpi | null = null
+let cachedAt = 0
 let inflight: Promise<UpcomingExamsKpi | null> | null = null
 
 async function fetchUpcoming(): Promise<UpcomingExamsKpi | null> {
@@ -53,22 +74,63 @@ async function fetchUpcoming(): Promise<UpcomingExamsKpi | null> {
         sub = `${next.name} · date to be announced`
       }
     }
-    const kpi: UpcomingExamsKpi = { count: scheduled.length, sub }
-    cached = kpi
-    return kpi
+    return { count: scheduled.length, sub }
   } catch {
     return null
   }
 }
 
-export function useUpcomingExams(): UpcomingExamsKpi | null {
-  const [kpi, setKpi] = useState<UpcomingExamsKpi | null>(cached)
+function ensureUpcoming(force = false): Promise<UpcomingExamsKpi | null> {
+  if (inflight) return inflight
+  if (!force && cached && Date.now() - cachedAt < FRESH_FOR_MS) {
+    return Promise.resolve(cached)
+  }
+  const run = (async () => {
+    const fetched = await fetchUpcoming()
+    if (fetched) {
+      cached = fetched
+      cachedAt = Date.now()
+    }
+    return fetched
+  })()
+  inflight = run
+  run.finally(() => {
+    if (inflight === run) inflight = null
+  })
+  return run
+}
+
+export function useUpcomingExams(): UseUpcomingExamsResult {
+  const [state, setState] = useState<{ kpi: UpcomingExamsKpi | null; loading: boolean; error: boolean }>(() => ({
+    kpi: cached,
+    loading: cached === null,
+    error: false,
+  }))
+
   useEffect(() => {
-    if (cached) return
-    if (!inflight) inflight = fetchUpcoming()
-    void inflight.then((k) => {
-      if (k) setKpi(k)
+    let cancelled = false
+    if (!cached) setState({ kpi: null, loading: true, error: false })
+    void ensureUpcoming().then(() => {
+      if (cancelled) return
+      if (cached) setState({ kpi: cached, loading: false, error: false })
+      else setState({ kpi: null, loading: false, error: true })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const refresh = useCallback(() => {
+    void ensureUpcoming(true).then(() => {
+      setState((prev) =>
+        cached
+          ? { kpi: cached, loading: false, error: false }
+          : prev.kpi
+            ? prev // failed refresh, visible data kept
+            : { kpi: null, loading: false, error: true },
+      )
     })
   }, [])
-  return kpi
+
+  return { ...state, refresh }
 }

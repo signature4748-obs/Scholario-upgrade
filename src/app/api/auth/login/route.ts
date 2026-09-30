@@ -13,6 +13,7 @@ import {
 } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, emailSchema, passwordInputSchema } from '@/lib/security/validation'
 import { auditEvent, auditRateLimit } from '@/lib/security/audit'
+import { evaluateSchoolAccess } from '@/lib/access-policy'
 
 export const runtime = 'nodejs'
 
@@ -121,8 +122,10 @@ export async function POST(req: NextRequest) {
     }
     // 2. Suspended or not-yet-activated tenants cannot sign in (school
     //    suspension is a destructive platform action; activation is the
-    //    second provisioning step).
-    if (!user.schoolId || !user.school || user.school.status !== 'ACTIVE') {
+    //    second provisioning step). PHASE 7.5: the decision now flows
+    //    through the domain-layer access policy (lib/access-policy.ts)
+    //    — the same model every school API boundary uses.
+    if (!user.schoolId || !user.school) {
       await auditEvent({
         schoolId: user.schoolId,
         userId: user.id,
@@ -130,14 +133,28 @@ export async function POST(req: NextRequest) {
         actorLabel: body.email,
         ip,
         requestId,
-        detail: user.school?.status === 'SUSPENDED' ? 'School suspended by platform' : 'School not active',
+        detail: 'School not active (no school binding)',
       }).catch(() => {})
       throw new AppError('SCHOOL_SUSPENDED', {
         publicMessage:
-          user.school?.status === 'SUSPENDED'
-            ? "Your school's Scholario access is currently suspended. Please contact your school administrator."
-            : "Your school's Scholario access is not active yet. Please contact your school administrator.",
-        internalDetail: `school login blocked: tenant status ${user.school?.status ?? 'NO_SCHOOL'}`,
+          "Your school's Scholario access is not active yet. Please contact your school administrator.",
+        internalDetail: 'school login blocked: no school binding',
+      })
+    }
+    const access = evaluateSchoolAccess(user.school)
+    if (!access.allowed) {
+      await auditEvent({
+        schoolId: user.schoolId,
+        userId: user.id,
+        action: 'LOGIN_FAILED',
+        actorLabel: body.email,
+        ip,
+        requestId,
+        detail: `School ${access.status} (subscription access policy)`,
+      }).catch(() => {})
+      throw new AppError('SCHOOL_SUSPENDED', {
+        publicMessage: access.reason,
+        internalDetail: `school login blocked by access policy: tenant status ${access.status}`,
       })
     }
 

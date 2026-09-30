@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { getUserPreferences, getTeacherPreferences } from '@/lib/user-preferences'
-import { audienceAllows } from '@/lib/notices'
+import { audienceAllows, notificationVisibilityWhere } from '@/lib/notices'
 
 export const runtime = 'nodejs'
 
@@ -54,7 +54,7 @@ export async function GET() {
     // (fetch a wider window, filter, then trim so the list stays full).
     const announcementRows = prefAnnouncements
       ? await db.notification.findMany({
-          where: { schoolId },
+          where: { schoolId, status: 'PUBLISHED', ...notificationVisibilityWhere() },
           orderBy: { createdAt: 'desc' },
           take: 24,
           include: { reads: { where: { userId: user.id }, select: { id: true } } },

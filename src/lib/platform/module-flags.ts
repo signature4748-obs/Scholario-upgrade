@@ -52,6 +52,27 @@ export async function isModuleEnabled(schoolId: string, module: FlaggableModule)
   return true
 }
 
+/**
+ * PHASE 7.5 — every effective flag for a school in one read (the settings
+ * Modules tab + client nav gating consume this; server vocabulary only).
+ */
+export async function effectiveModuleFlags(schoolId: string): Promise<Record<string, boolean>> {
+  const school = await db.school.findUnique({
+    where: { id: schoolId },
+    select: { featureFlags: true },
+  })
+  const schoolFlags = school ? parseFlags(school.featureFlags) : {}
+  const setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+  const master = parseFlags(setting?.modules ?? '{}')
+  const out: Record<string, boolean> = {}
+  for (const m of FLAGGABLE_MODULES) {
+    const sf = schoolFlags[m]
+    const mf = master[m]
+    out[m] = typeof sf === 'boolean' ? sf : typeof mf === 'boolean' ? mf : true
+  }
+  return out
+}
+
 /** Guard for school module routes: throws FEATURE_DISABLED when off. */
 export async function assertModuleEnabled(schoolId: string, module: FlaggableModule): Promise<void> {
   const enabled = await isModuleEnabled(schoolId, module)

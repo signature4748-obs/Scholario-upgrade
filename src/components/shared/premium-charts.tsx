@@ -789,6 +789,11 @@ export function AreaTrendChart({
 
   return (
     <div className="relative w-full" style={{ height }}>
+      {/* PHASE 7.5 QA fix — the plot lives in its own right-offset wrapper
+          (left-10) so the Y-axis label GUTTER can never overlap the curve
+          or the first month label. All viewBox-relative overlays (svg,
+          x-labels, tooltip) resolve percentages against this wrapper. */}
+      <div className="absolute inset-y-0 left-10 right-0">
       <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full overflow-visible">
         <defs>
           <linearGradient id={`${uid}-p`} x1="0" y1="0" x2="0" y2="1">
@@ -854,26 +859,7 @@ export function AreaTrendChart({
           </g>
         ))}
       </svg>
-      {/* Y-axis labels (left) — subtle, formatted */}
-      <div className="absolute left-0 top-0 bottom-4 flex flex-col justify-between py-1 text-[8px] text-muted-foreground pointer-events-none tabular-nums leading-none w-12">
-        <span>{formatYAxisValue(maxVal)}</span>
-        <span>{formatYAxisValue(valMin + valRange * 0.5)}</span>
-        <span>{formatYAxisValue(valMin)}</span>
-      </div>
-      {/* Legend above the chart (only if multi-series) */}
-      {data.some((d) => d[secondaryKey] !== undefined) && (
-        <div className="absolute top-0 right-2 flex items-center gap-3 text-[10px] text-muted-foreground pointer-events-none">
-          <span className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full" style={{ background: primaryColor }} />
-            {primaryLabel ?? 'Primary'}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full" style={{ background: secondaryColor }} />
-            {secondaryLabel ?? 'Secondary'}
-          </span>
-        </div>
-      )}
-      {/* X-axis labels */}
+      {/* X-axis labels (inside the plot wrapper → aligned with points) */}
       <div className="absolute inset-x-0 bottom-0 flex justify-between px-2 text-[9px] text-muted-foreground pointer-events-none font-medium">
         {data.map((d, i) => (
           <span key={i} className={hover === i ? 'text-foreground' : ''}>{d[labelKey]}</span>
@@ -900,6 +886,26 @@ export function AreaTrendChart({
             </div>
           )}
         </motion.div>
+      )}
+      </div>{/* /plot wrapper */}
+      {/* Y-axis labels — own gutter at the left, never over the plot */}
+      <div className="absolute left-0 top-0 bottom-4 w-10 pr-1 flex flex-col justify-between py-1 text-[8px] text-muted-foreground pointer-events-none tabular-nums leading-none text-right">
+        <span>{formatYAxisValue(maxVal)}</span>
+        <span>{formatYAxisValue(valMin + valRange * 0.5)}</span>
+        <span>{formatYAxisValue(valMin)}</span>
+      </div>
+      {/* Legend above the chart (only if multi-series) */}
+      {data.some((d) => d[secondaryKey] !== undefined) && (
+        <div className="absolute top-0 right-2 flex items-center gap-3 text-[10px] text-muted-foreground pointer-events-none">
+          <span className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: primaryColor }} />
+            {primaryLabel ?? 'Primary'}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: secondaryColor }} />
+            {secondaryLabel ?? 'Secondary'}
+          </span>
+        </div>
       )}
     </div>
   )

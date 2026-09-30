@@ -4,7 +4,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { StudentPosition, StudentsState, StudentStatus } from './types'
 import { POSITION_DEFS, filterActivePositions } from '@/lib/student-positions'
-import { ACTIVE_SESSION_ID, getActiveAcademicSessionId } from '@/lib/academic-session'
+import { getActiveAcademicSessionId } from '@/lib/academic-session'
 import { HOUSE_DEFS, SEED_SUBJECTS } from './constants'
 import { SS, SC } from './seed-data'
 import { SUBJECTS_BY_LEVEL } from './constants'
@@ -15,6 +15,15 @@ import {
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
 
 migrateLegacyScopedStore('scholario-students-v1', DEFAULT_TENANT_ID)
+
+/**
+ * SEED_SESSION_ID — the academic session the two DEMO seed rows below
+ * (POS-SEED-1/2) were awarded in (the demo school's DB session,
+ * AY 2026–2027). This is SEED-DATA scoping, NOT session resolution —
+ * live resolution is server-first and nullable (lib/academic-session.ts,
+ * PHASE 7.5-D: no hardcoded fallback year).
+ */
+const SEED_SESSION_ID = '2026-2027'
 
 /**
  * Helper — keep a ClassRecord's legacy `subjects: string[]` array in sync
@@ -83,7 +92,7 @@ export const useStudentsStore = create<StudentsState>()(
       id: 'POS-SEED-1',
       studentId: 'STU-27',
       studentName: 'Myra Patel',
-      sessionId: ACTIVE_SESSION_ID,
+      sessionId: SEED_SESSION_ID,
       // STU-27 is enrolled in Class 9 (C12) · A — the classId must match
       // the canonical class record so the Class 9 Leadership tab sees the
       // assignment (§3 — no invisible authority).
@@ -101,7 +110,7 @@ export const useStudentsStore = create<StudentsState>()(
       id: 'POS-SEED-2',
       studentId: 'STU-58',
       studentName: 'Aarav Sharma',
-      sessionId: ACTIVE_SESSION_ID,
+      sessionId: SEED_SESSION_ID,
       classId: 'C05',
       // SD-3b — display label matches the server enrollment (Grade 9) so
       // the captaincy never contradicts the sidebar/profile identity.
@@ -224,6 +233,15 @@ export const useStudentsStore = create<StudentsState>()(
     // directly (RB-1 constitution). Replacing an existing holder ends their
     // position first (history preserved).
     const sessionId = getActiveAcademicSessionId()
+    // PHASE 7.5-D — positions are SESSION-SCOPED records; when no source
+    // knows the school's year there is nothing honest to stamp, so the
+    // assignment is refused instead of guessing a session.
+    if (!sessionId) {
+      return {
+        ok: false as const,
+        error: 'Academic session not set — class responsibilities are session-scoped. Set the school session (Settings → Academics) and retry.',
+      }
+    }
     const displaced = st.studentPositions.filter(
       (p) =>
         p.classId === student.classId &&
@@ -670,14 +688,14 @@ export const useStudentsStore = create<StudentsState>()(
         }
         if (version < 3) {
           const positions = (state.studentPositions ?? []).map((p) =>
-            p.sessionId ? p : { ...p, sessionId: ACTIVE_SESSION_ID },
+            p.sessionId ? p : { ...p, sessionId: SEED_SESSION_ID },
           )
-          if (!positions.some((p) => p.studentId === 'STU-58' && p.sessionId === ACTIVE_SESSION_ID)) {
+          if (!positions.some((p) => p.studentId === 'STU-58' && p.sessionId === SEED_SESSION_ID)) {
             positions.push({
               id: 'POS-SEED-2',
               studentId: 'STU-58',
               studentName: 'Aarav Sharma',
-              sessionId: ACTIVE_SESSION_ID,
+              sessionId: SEED_SESSION_ID,
               classId: 'C05',
               className: 'Class 2',
               section: 'A',

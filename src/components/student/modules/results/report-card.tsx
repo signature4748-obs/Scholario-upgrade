@@ -27,7 +27,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { downloadHTMLFile, safeFileName } from '@/lib/download-file'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
-import { getActiveAcademicSessionLabel } from '@/lib/academic-session'
+import { getActiveAcademicSessionLabel, SESSION_NOT_SET_LABEL } from '@/lib/academic-session'
 import {
   useStudentAttendanceStore,
   computeStats,
@@ -126,7 +126,9 @@ function buildReportCardHTML(input: ReportCardInput): string {
   const issuedOn = fullDate(new Date().toISOString().slice(0, 10))
   // The ACADEMIC session (school settings) — never the exam's conducted
   // date range (which for a single-term exam would read e.g. 2026–2026).
-  const sessionLabel = getActiveAcademicSessionLabel()
+  // PHASE 7.5-D — server-first, nullable session: the printed document
+  // says "Session not set" rather than inventing a year.
+  const sessionLabel = getActiveAcademicSessionLabel() ?? SESSION_NOT_SET_LABEL
 
   return `<!doctype html>
 <html lang="en">
@@ -253,7 +255,7 @@ export function ReportCard(props: ReportCardProps) {
           <h3 className="text-sm font-bold tracking-tight text-foreground">Official Report Card</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">Your school-issued academic record</p>
           <p className="mt-1.5 truncate text-[11px] font-medium text-foreground/75">
-            {props.assessment.name} · {getActiveAcademicSessionLabel()}
+            {props.assessment.name} · {getActiveAcademicSessionLabel() ?? SESSION_NOT_SET_LABEL}
           </p>
         </div>
       </div>

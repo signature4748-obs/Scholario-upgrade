@@ -6,6 +6,12 @@
  * Both the Super Admin control plane AND the school panels consume this
  * catalog — so adding a new flag later is a one-line change here, never a
  * UI rewrite. No component hardcodes school ids.
+ *
+ * PHASE 7.5-D NOTE: the registry's per-tenant module `features` flags are
+ * DECORATIVE post-Phase-7.5 (all-on seeds, zero writers) — the SERVER's
+ * effective moduleFlags (GET /api/school-settings) are the truth; nav
+ * gating consumes them via src/lib/hooks/use-effective-module-flags.ts.
+ * The catalog + mapping helpers below remain load-bearing — do not delete.
  */
 
 import type {

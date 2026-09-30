@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
-import { audienceAllows } from '@/lib/notices'
+import { audienceAllows, notificationVisibilityWhere } from '@/lib/notices'
 
 export const runtime = 'nodejs'
 
@@ -64,14 +64,23 @@ async function estimateRecipients(schoolId: string, audience: string): Promise<n
   }
 }
 
-// POST /api/announcements — publish a real school announcement.
-// Creates a Notification row; the event-stream mini-service picks it up
-// within ~4s and pushes a live toast to every connected dashboard.
+// POST /api/announcements — create a real school announcement with the
+// FULL lifecycle (PHASE 7.5): status DRAFT|PUBLISHED (default PUBLISHED),
+// scheduled publishAt, optional expiry expiresAt, optional image (a
+// website-scope uploaded file owned by the school).
+// Creates a Notification row; published rows are picked up by the
+// event-stream mini-service within ~4s and pushed as live toasts.
+function parseDate(v: unknown): Date | null {
+  if (typeof v !== 'string' || !v.trim()) return null
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
 export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
       const schoolId = schoolScoped(user)
-      if (user.role !== 'PRINCIPAL') throw new Error('FORBIDDEN')
+      if (user.role !== 'PRINCIPAL' && user.role !== 'MANAGEMENT') throw new Error('FORBIDDEN')
 
       const body = await req.json().catch(() => null)
       const title = String(body?.title || '').trim()
@@ -82,6 +91,27 @@ export async function POST(req: NextRequest) {
       if (!message || message.length < 3) throw new Error('Message must be at least 3 characters')
       if (title.length > 120) throw new Error('Title too long (max 120 characters)')
       if (message.length > 2000) throw new Error('Message too long (max 2000 characters)')
+
+      // Lifecycle (PHASE 7.5)
+      const status = body?.status === 'DRAFT' ? 'DRAFT' : 'PUBLISHED'
+      const publishAt = parseDate(body?.publishAt)
+      const expiresAt = parseDate(body?.expiresAt)
+      if (status === 'PUBLISHED' && publishAt && publishAt.getTime() < Date.now() - 60_000) {
+        throw new Error('Scheduled publish time must be in the future')
+      }
+      if (expiresAt && publishAt && expiresAt.getTime() <= publishAt.getTime()) {
+        throw new Error('Expiry must be after the publish time')
+      }
+      // Image must be a website-scope upload owned by THIS school.
+      let imageId: string | null = null
+      if (typeof body?.imageId === 'string' && body.imageId.trim()) {
+        const imageFile = await db.uploadedFile.findFirst({
+          where: { id: body.imageId.trim(), schoolId, scope: 'website' },
+          select: { id: true },
+        })
+        if (!imageFile) throw new Error('Image not found. Upload it first.')
+        imageId = imageFile.id
+      }
 
       const audience = mapAudience(audienceRaw)
       const priority = mapPriority(category)
@@ -95,6 +125,11 @@ export async function POST(req: NextRequest) {
           audience,
           priority,
           senderId: user.id,
+          status,
+          publishAt,
+          expiresAt,
+          imageId,
+          updatedById: user.id,
         },
         include: { sender: { select: { name: true, role: true } } },
       })
@@ -104,13 +139,18 @@ export async function POST(req: NextRequest) {
         title: notification.title,
         audience: notification.audience,
         priority: notification.priority,
+        status: notification.status,
+        publishAt: notification.publishAt,
+        expiresAt: notification.expiresAt,
+        imageId: notification.imageId,
+        imageUrl: notification.imageId ? `/api/public/website/media/${notification.imageId}` : null,
         createdAt: notification.createdAt,
         sender: notification.sender?.name ?? user.name,
         estimatedRecipients: recipients,
-        live: true,
+        live: status === 'PUBLISHED',
       }
     },
-    { roles: ['PRINCIPAL'] }
+    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }
 
@@ -133,8 +173,12 @@ export async function GET() {
       user.role === 'TEACHER' ||
       user.role === 'ACCOUNTANT' ||
       user.role === 'SUPER_ADMIN'
+    // Staff see the full lifecycle (drafts/scheduled/archived included);
+    // non-staff roles see only PUBLISHED + currently-visible rows.
     let rows = await db.notification.findMany({
-      where: { schoolId },
+      where: isStaff
+        ? { schoolId }
+        : { schoolId, status: 'PUBLISHED', ...notificationVisibilityWhere() },
       orderBy: { createdAt: 'desc' },
       take: 20,
       include: {
@@ -163,8 +207,14 @@ export async function GET() {
         message: n.message,
         audience: n.audience,
         priority: n.priority,
+        status: n.status,
+        publishAt: n.publishAt,
+        expiresAt: n.expiresAt,
+        imageId: n.imageId,
+        imageUrl: n.imageId ? `/api/public/website/media/${n.imageId}` : null,
         sender: n.sender?.name ?? 'Unknown',
         createdAt: n.createdAt,
+        updatedAt: n.updatedAt,
         acknowledgedBy: n._count.reads,
         estimatedRecipients: resolved.get(n.audience) ?? null,
       })),

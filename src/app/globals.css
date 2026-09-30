@@ -395,6 +395,71 @@
   }
 }
 
+/* ============================================================
+   PHASE 7.5 — PER-SCHOOL BRAND TOKENS (public website + login).
+   The public site / login wrappers define `--school-primary` and
+   `--school-accent` (hex, client-validated — the server additionally
+   enforces WCAG contrast ≥ 3.5:1 on white before storing them). These
+   classes are INERT anywhere the wrapper vars are absent (var() falls
+   back to the declared default = the Scholario emerald/amber identity).
+   Brand colors own the "identity" surfaces (hero gradient, CTAs,
+   badges, notice accents); structural surfaces keep the design system.
+   ============================================================ */
+.school-brand-text { color: var(--school-primary, #059669); }
+.dark .school-brand-text { color: color-mix(in srgb, var(--school-primary, #059669) 60%, white); }
+
+.school-brand-grad {
+  background-image: linear-gradient(
+    to bottom right,
+    var(--school-primary, #059669),
+    color-mix(in srgb, var(--school-primary, #059669) 78%, #000)
+  );
+}
+
+.school-brand-cta {
+  color: #fff;
+  background-image: linear-gradient(
+    to bottom right,
+    var(--school-primary, #059669),
+    color-mix(in srgb, var(--school-primary, #059669) 78%, #000)
+  );
+  box-shadow: 0 10px 15px -3px color-mix(in srgb, var(--school-primary, #059669) 30%, transparent);
+}
+.school-brand-cta:hover {
+  box-shadow: 0 20px 25px -5px color-mix(in srgb, var(--school-primary, #059669) 40%, transparent);
+  filter: brightness(1.06);
+}
+.school-brand-cta:active { filter: brightness(0.98); }
+
+.school-brand-ghost {
+  color: var(--school-primary, #059669);
+  border-color: color-mix(in srgb, var(--school-primary, #059669) 30%, transparent);
+}
+.dark .school-brand-ghost { color: color-mix(in srgb, var(--school-primary, #059669) 60%, white); }
+.school-brand-ghost:hover {
+  background-color: color-mix(in srgb, var(--school-primary, #059669) 10%, transparent);
+  border-color: color-mix(in srgb, var(--school-primary, #059669) 50%, transparent);
+}
+
+.school-brand-badge {
+  border-color: color-mix(in srgb, var(--school-primary, #059669) 30%, transparent);
+  color: var(--school-primary, #059669);
+}
+.dark .school-brand-badge { color: color-mix(in srgb, var(--school-primary, #059669) 60%, white); }
+
+.school-brand-chip {
+  border-color: color-mix(in srgb, var(--school-primary, #059669) 30%, transparent);
+  background-color: color-mix(in srgb, var(--school-primary, #059669) 10%, transparent);
+  color: var(--school-primary, #059669);
+}
+.dark .school-brand-chip { color: color-mix(in srgb, var(--school-primary, #059669) 60%, white); }
+
+.school-brand-bar { background-color: var(--school-primary, #059669); }
+.school-brand-dot { background-color: var(--school-primary, #059669); }
+
+.school-brand-soft { background-color: color-mix(in srgb, var(--school-primary, #059669) 12%, white); }
+.dark .school-brand-soft { background-color: color-mix(in srgb, var(--school-primary, #059669) 20%, transparent); }
+
 /* Super Admin accent (slate/indigo — distinct from emerald school roles) */
 .role-superadmin {
   --sa-accent: oklch(0.45 0.18 265);

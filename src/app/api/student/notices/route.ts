@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
-import { audienceAllows, audienceLabel } from '@/lib/notices'
+import { audienceAllows, audienceLabel , notificationVisibilityWhere} from '@/lib/notices'
 
 export const runtime = 'nodejs'
 
@@ -26,7 +26,7 @@ export async function GET() {
       // Audience tags are free-form — fetch a wider window, filter to what
       // THIS student may see, then trim.
       const rows = await db.notification.findMany({
-        where: { schoolId },
+        where: { schoolId, status: 'PUBLISHED', ...notificationVisibilityWhere() },
         orderBy: { createdAt: 'desc' },
         take: 60,
         include: {

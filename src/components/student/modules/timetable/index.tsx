@@ -30,7 +30,7 @@ import { type DayType } from '@/lib/timetable/config'
 import { useTimetableStore } from '@/lib/store/timetable-store'
 import { useLiveFeedStore } from '@/lib/store/live-feed-store'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
-import { ACTIVE_SESSION_ID, normalizeSessionId, formatSessionLabel } from '@/lib/academic-session'
+import { useAcademicSession, SESSION_NOT_SET_LABEL } from '@/lib/academic-session'
 import { nextOccurrenceISO, type IcsEventInput } from '@/lib/ics/builder'
 import { ExportIcsButton } from '@/components/shared/export-ics-button'
 import { parsePeriodTime } from './time-utils'
@@ -154,8 +154,10 @@ export function TimetableModule() {
   const publications = useTimetableStore((s) => s.publications)
 
   // ── session + school context (settings store) ──
-  const rawSession = useSchoolSettingsStore((s) => s.academics?.currentSession)
-  const sessionLabel = formatSessionLabel(normalizeSessionId(rawSession) ?? ACTIVE_SESSION_ID)
+  // PHASE 7.5-D — server-first session resolution (no hardcoded year);
+  // honest "Session not set" chip when no source knows the school's year.
+  const session = useAcademicSession()
+  const sessionLabel = session.label ?? SESSION_NOT_SET_LABEL
   const schoolName = useSchoolSettingsStore((s) => s.general?.schoolName) ?? 'Your school'
 
   /* ── calendar export events (MY CLASS, weekly recurrences) ── */

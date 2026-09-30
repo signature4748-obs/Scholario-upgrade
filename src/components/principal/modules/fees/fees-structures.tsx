@@ -405,7 +405,7 @@ export function FeesStructuresSection({ data, onNavigate }: { data: ReturnType<t
               lib/academic-session.ts): the Principal selects the class; the
               system supplies the session. Never hand-typed. */}
           <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-muted/40" title="Active academic session (read-only, from school configuration)">
-            <CalendarCheck2 className="h-2.5 w-2.5" /> {session.label}
+            <CalendarCheck2 className="h-2.5 w-2.5" /> {session.label ?? 'Session not set'}
           </Badge>
         </div>
         <div className="flex items-center gap-2">

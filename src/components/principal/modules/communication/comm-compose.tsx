@@ -3,38 +3,43 @@
 /**
  * comm-compose — unified composer for announcements.
  *
+ * PHASE 7.5 — REAL LIFECYCLE (no client-store fiction):
+ *   · Send Now       → POST /api/announcements { status: 'PUBLISHED' }
+ *   · Save as Draft  → POST { status: 'DRAFT' }
+ *   · Schedule       → POST { status: 'PUBLISHED', publishAt }
+ *   · Optional image → POST /api/school/website/upload, then imageId rides
+ *     the announcement POST (preview thumbnail + remove button).
+ *
+ * The row lands in the school DB; the live event stream pushes published
+ * rows to every connected dashboard within seconds. Server errors are
+ * surfaced VERBATIM in toasts.
+ *
  * - Template picker (small practical set)
  * - Audience selector (school-wide + DB-backed class roster) with live recipient count
  * - Title + message (with character count for SMS)
  * - Category picker
- * - Channel selector (Push / SMS / Email checkboxes)
+ * - Channel selector (Push / SMS / Email checkboxes) — shapes the preview
  * - Live preview (updates based on selected channels)
- * - Schedule option (now or future)
  * - Confirmation modal before send
- * - REAL platform broadcast: "Send Now" additionally POSTs to
- *   /api/announcements — the row lands in the school DB and the live event
- *   stream pushes it to every connected dashboard within seconds.
- *
- * No separate SMS/Email/Push tabs — channels live inside composer.
  */
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Smartphone, MessageSquare, Mail, Send, FileText, Check,
-  AlertCircle, ChevronDown, Loader2, RadioTower, Globe,
+  AlertCircle, ChevronDown, Loader2, RadioTower, Globe, ImagePlus, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
-  useCommunicationStore,
   getAudienceOptions,
   TEMPLATES,
   type AnnouncementCategory,
   type Channel,
   type Audience,
 } from '@/lib/store/communication-store'
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile, type SchoolProfile } from '@/lib/school-profile'
+import { uploadWebsiteImage } from '@/components/principal/modules/school-settings/server-api'
 import { cn } from '@/lib/utils'
 import { CategoryBadge } from './comm-shared'
 import { toast } from 'sonner'
@@ -57,12 +62,35 @@ interface DbClass { id: string; name: string; section: string | null; students: 
 
 type BroadcastState = 'idle' | 'sending' | 'sent' | 'failed'
 
-export function ComposeSection() {
-  const createAnnouncement = useCommunicationStore((s) => s.createAnnouncement)
-  const sendAnnouncement = useCommunicationStore((s) => s.sendAnnouncement)
-  const scheduleAnnouncement = useCommunicationStore((s) => s.scheduleAnnouncement)
-  const markSynced = useCommunicationStore((s) => s.markSynced)
+interface ComposerImage {
+  fileId: string
+  url: string
+  name: string
+}
 
+/** POST /api/announcements with the full lifecycle payload. */
+async function postAnnouncement(payload: Record<string, unknown>): Promise<{ ok: boolean; error: string | null }> {
+  try {
+    const r = await fetch('/api/announcements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const j = (await r.json().catch(() => null)) as { ok?: boolean; error?: string } | null
+    if (!r.ok || !j?.ok) {
+      return { ok: false, error: j?.error ?? 'The announcement could not be saved. Please try again.' }
+    }
+    return { ok: true, error: null }
+  } catch {
+    return { ok: false, error: 'Announcement server is unreachable — check your connection and retry.' }
+  }
+}
+
+export function ComposeSection() {
+  // The store is un-seeded (Phase 7.5): the composer no longer writes
+  // client-side rows — every action posts the REAL lifecycle to the
+  // server. getAudienceOptions still derives counts from canonical stores.
+  const school = useSchoolProfile()
   const audienceOptions = useMemo(() => getAudienceOptions(), [])
 
   // Real class roster from the school DB — used for class-targeted audiences
@@ -104,6 +132,11 @@ export function ComposeSection() {
   const [showConfirm, setShowConfirm] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
 
+  // Optional announcement image (uploaded server-side before send).
+  const [image, setImage] = useState<ComposerImage | null>(null)
+  const [imageUploading, setImageUploading] = useState(false)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+
   // Audience selector expanded state
   const [audienceExpanded, setAudienceExpanded] = useState<'global' | 'classes'>('global')
 
@@ -143,82 +176,102 @@ export function ComposeSection() {
     toast.success('Template applied', { description: template.name })
   }
 
-  const handleSend = async () => {
-    if (!title.trim()) { toast.error('Title required', { description: 'Please enter a title.' }); return }
-    if (!message.trim()) { toast.error('Message required', { description: 'Please enter a message.' }); return }
-    if (channels.length === 0) { toast.error('Select at least one channel', { description: 'Push, SMS or Email.' }); return }
-    if (scheduleMode === 'later' && !scheduledFor) { toast.error('Schedule date required', { description: 'Pick a date and time.' }); return }
-
-    const localId = createAnnouncement({
-      title,
-      message,
-      category,
-      audience,
-      channels,
-      author: 'Principal',
-      recipientCount,
-    })
-
-    if (scheduleMode === 'now') {
-      sendAnnouncement(localId)
-      setBroadcastState('sending')
-
-      // REAL platform broadcast — persist to the school DB; the live event
-      // stream picks the row up (~4s) and pushes a toast to every dashboard.
-      let delivered = false
-      let deliveryNote = ''
-      try {
-        const r = await fetch('/api/announcements', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: title.trim(), message: message.trim(), audience, category }),
-        })
-        const j = await r.json().catch(() => null)
-        const payload = j && typeof j === 'object' && 'data' in j ? (j as { data?: { id?: string; estimatedRecipients?: number | null } }).data : j as { id?: string } | null
-        if (r.ok && payload?.id) {
-          markSynced(localId, payload.id)
-          delivered = true
-        } else {
-          deliveryNote = (j as { error?: string })?.error === 'FORBIDDEN'
-            ? 'Platform broadcasts require the Principal role.'
-            : 'Platform broadcast service unavailable — announcement kept in this session.'
-        }
-      } catch {
-        deliveryNote = 'Platform broadcast unreachable — announcement kept in this session.'
-      }
-
-      if (delivered) {
-        setBroadcastState('sent')
-        toast.success('Announcement broadcast live', {
-          description: `${recipientCount.toLocaleString('en-IN')} recipients via ${channels.join(' + ')} · pushed to every connected dashboard in real time`,
-          icon: <RadioTower className="h-4 w-4 text-emerald-500" />,
-        })
-      } else {
-        setBroadcastState('failed')
-        toast.warning('Announcement sent (demo mode)', { description: deliveryNote || 'Delivery not confirmed.' })
-      }
-      setTimeout(() => setBroadcastState('idle'), 3200)
-    } else {
-      scheduleAnnouncement(localId, new Date(scheduledFor).toISOString())
-      toast.success('Announcement scheduled', {
-        description: `${formatScheduledDate(scheduledFor)} · ${recipientCount.toLocaleString('en-IN')} recipients`,
-      })
+  const handleImageFile = async (file: File) => {
+    setImageUploading(true)
+    const up = await uploadWebsiteImage(file)
+    setImageUploading(false)
+    if (!up.ok || !up.fileId) {
+      toast.error(up.error ?? 'Image upload failed. Please try again.')
+      return
     }
+    setImage({ fileId: up.fileId, url: up.url ?? `/api/public/website/media/${up.fileId}`, name: file.name })
+  }
 
-    // Reset form
+  const validateComposer = (): boolean => {
+    if (!title.trim()) { toast.error('Title required', { description: 'Please enter a title.' }); return false }
+    if (!message.trim()) { toast.error('Message required', { description: 'Please enter a message.' }); return false }
+    if (channels.length === 0) { toast.error('Select at least one channel', { description: 'Push, SMS or Email.' }); return false }
+    if (scheduleMode === 'later' && !scheduledFor) { toast.error('Schedule date required', { description: 'Pick a date and time.' }); return false }
+    if (scheduleMode === 'later' && new Date(scheduledFor).getTime() <= Date.now()) {
+      toast.error('Scheduled publish time must be in the future')
+      return false
+    }
+    return true
+  }
+
+  const resetForm = () => {
     setTitle('')
     setMessage('')
     setChannels(['Push'])
     setScheduleMode('now')
     setScheduledFor('')
+    setImage(null)
     setShowConfirm(false)
   }
 
+  /** Shared POST payload for all three lifecycle actions. */
+  const lifecyclePayload = () => ({
+    title: title.trim(),
+    message: message.trim(),
+    audience,
+    category,
+    ...(image ? { imageId: image.fileId } : {}),
+  })
+
+  // Send Now → POST status PUBLISHED (live broadcast + event-stream push).
+  const handleSendNow = async () => {
+    if (!validateComposer()) return
+    setBroadcastState('sending')
+    const result = await postAnnouncement({ ...lifecyclePayload(), status: 'PUBLISHED' })
+    if (result.ok) {
+      setBroadcastState('sent')
+      toast.success('Announcement broadcast live', {
+        description: `${recipientCount.toLocaleString('en-IN')} recipients · pushed to every connected dashboard in real time`,
+        icon: <RadioTower className="h-4 w-4 text-emerald-500" />,
+      })
+      resetForm()
+      setTimeout(() => setBroadcastState('idle'), 3200)
+    } else {
+      setBroadcastState('failed')
+      toast.error(result.error)
+    }
+  }
+
+  // Save as Draft → POST status DRAFT (no broadcast, editable later).
+  const handleSaveDraft = async () => {
+    if (!title.trim()) { toast.error('Title required', { description: 'Please enter a title.' }); return }
+    if (!message.trim()) { toast.error('Message required', { description: 'Please enter a message.' }); return }
+    const result = await postAnnouncement({ ...lifecyclePayload(), status: 'DRAFT' })
+    if (result.ok) {
+      toast.success('Draft saved', {
+        description: 'Find it under Announcements → Drafts — publish it when ready.',
+      })
+      resetForm()
+    } else {
+      toast.error(result.error)
+    }
+  }
+
+  // Schedule → POST status PUBLISHED + publishAt (visibility starts then).
+  const handleSchedule = async () => {
+    if (!validateComposer()) return
+    const result = await postAnnouncement({
+      ...lifecyclePayload(),
+      status: 'PUBLISHED',
+      publishAt: new Date(scheduledFor).toISOString(),
+    })
+    if (result.ok) {
+      toast.success('Announcement scheduled', {
+        description: `${formatScheduledDate(scheduledFor)} · ${recipientCount.toLocaleString('en-IN')} recipients · visible from then`,
+      })
+      resetForm()
+    } else {
+      toast.error(result.error)
+    }
+  }
+
   const openConfirm = () => {
-    if (!title.trim()) { toast.error('Title required'); return }
-    if (!message.trim()) { toast.error('Message required'); return }
-    if (channels.length === 0) { toast.error('Select a channel'); return }
-    if (scheduleMode === 'later' && !scheduledFor) { toast.error('Schedule date required'); return }
+    if (!validateComposer()) return
     setShowConfirm(true)
   }
 
@@ -419,6 +472,55 @@ export function ComposeSection() {
             </div>
           </div>
 
+          {/* Optional image */}
+          <div>
+            <label className="text-[10px] text-muted-foreground uppercase font-semibold tracking-wider mb-1 block">
+              Image (optional)
+            </label>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (file) void handleImageFile(file)
+              }}
+            />
+            {image ? (
+              <div className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-2">
+                <img src={image.url} alt="Announcement image preview" className="h-12 w-12 rounded-md object-cover shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium truncate">{image.name}</p>
+                  <p className="text-[9px] text-muted-foreground">Attached to the announcement</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 w-8 p-0 shrink-0 text-rose-600 hover:text-rose-700 hover:bg-rose-500/10"
+                  onClick={() => setImage(null)}
+                  aria-label="Remove image"
+                  title="Remove image"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={imageUploading}
+                onClick={() => imageInputRef.current?.click()}
+                className="h-8 text-xs gap-1.5 w-full"
+              >
+                {imageUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
+                {imageUploading ? 'Uploading…' : 'Attach Image'}
+              </Button>
+            )}
+            <p className="mt-1 text-[10px] text-muted-foreground">JPG / PNG / WebP · max 4 MB · shows on the notice card.</p>
+          </div>
+
           {/* Schedule */}
           <div>
             <label className="text-[10px] text-muted-foreground uppercase font-semibold tracking-wider mb-1 block">Schedule</label>
@@ -448,35 +550,46 @@ export function ComposeSection() {
             )}
           </div>
 
-          {/* Send button */}
-          <Button
-            size="lg"
-            disabled={broadcastState === 'sending'}
-            className={cn(
-              'w-full h-10 text-sm gap-2 transition-all',
-              isEmergency
-                ? 'bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-700 hover:to-pink-700 text-white'
-                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white',
-              broadcastState === 'sent' && 'from-emerald-500 to-teal-500',
-              broadcastState === 'sending' && 'opacity-80 cursor-wait',
-            )}
-            onClick={openConfirm}
-          >
-            {broadcastState === 'sending' ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Broadcasting…
-              </>
-            ) : broadcastState === 'sent' ? (
-              <>
-                <RadioTower className="h-4 w-4" /> Broadcast delivered
-              </>
-            ) : (
-              <>
-                <Send className="h-4 w-4" />
-                {scheduleMode === 'now' ? (isEmergency ? 'Send Emergency Alert' : 'Send Announcement') : 'Schedule Announcement'}
-              </>
-            )}
-          </Button>
+          {/* Action row: primary (Send / Schedule) + secondary (Save as Draft) */}
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+            <Button
+              size="lg"
+              disabled={broadcastState === 'sending' || imageUploading}
+              className={cn(
+                'w-full h-10 text-sm gap-2 transition-all',
+                isEmergency
+                  ? 'bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-700 hover:to-pink-700 text-white'
+                  : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white',
+                broadcastState === 'sent' && 'from-emerald-500 to-teal-500',
+                broadcastState === 'sending' && 'opacity-80 cursor-wait',
+              )}
+              onClick={scheduleMode === 'now' ? openConfirm : handleSchedule}
+            >
+              {broadcastState === 'sending' ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Broadcasting…
+                </>
+              ) : broadcastState === 'sent' ? (
+                <>
+                  <RadioTower className="h-4 w-4" /> Broadcast delivered
+                </>
+              ) : (
+                <>
+                  <Send className="h-4 w-4" />
+                  {scheduleMode === 'now' ? (isEmergency ? 'Send Emergency Alert' : 'Send Announcement') : 'Schedule Announcement'}
+                </>
+              )}
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              disabled={broadcastState === 'sending' || imageUploading}
+              onClick={handleSaveDraft}
+              className="h-10 text-sm gap-2"
+            >
+              <FileText className="h-4 w-4" /> Save as Draft
+            </Button>
+          </div>
 
           {/* Broadcast status strip */}
           <AnimatePresence>
@@ -503,7 +616,7 @@ export function ComposeSection() {
                 ) : (
                   <>
                     <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                    Kept in demo session — platform broadcast was not confirmed.
+                    Broadcast was not delivered — nothing was saved. Check the error message and retry.
                   </>
                 )}
               </motion.div>
@@ -519,13 +632,13 @@ export function ComposeSection() {
           </div>
 
           {channels.includes('Push') && (
-            <PushPreview title={title || 'Your title here'} message={message || 'Your message will appear here.'} audience={audience} />
+            <PushPreview school={school} title={title || 'Your title here'} message={message || 'Your message will appear here.'} audience={audience} />
           )}
           {channels.includes('SMS') && (
-            <SmsPreview title={title} message={message || 'Your message will appear here.'} segments={smsSegments} audience={audience} recipientCount={recipientCount} />
+            <SmsPreview school={school} title={title} message={message || 'Your message will appear here.'} segments={smsSegments} audience={audience} recipientCount={recipientCount} />
           )}
           {channels.includes('Email') && (
-            <EmailPreview title={title || 'Your subject here'} message={message || 'Your message will appear here.'} audience={audience} />
+            <EmailPreview school={school} title={title || 'Your subject here'} message={message || 'Your message will appear here.'} audience={audience} />
           )}
           {channels.length === 0 && (
             <div className="rounded-xl border-2 border-dashed border-border bg-muted/20 p-8 text-center">
@@ -547,8 +660,9 @@ export function ComposeSection() {
             scheduleMode={scheduleMode}
             scheduledFor={scheduledFor}
             isEmergency={isEmergency}
+            hasImage={!!image}
             onCancel={() => setShowConfirm(false)}
-            onConfirm={handleSend}
+            onConfirm={handleSendNow}
           />
         )}
       </AnimatePresence>
@@ -558,16 +672,24 @@ export function ComposeSection() {
 
 // ─── Push Preview ────────────────────────────────────────────────────
 
-function PushPreview({ title, message, audience }: { title: string; message: string; audience: string }) {
+/** Crest initials derived from the school's real short/full name. */
+function crestInitials(school: SchoolProfile): string {
+  const words = (school.shortName || school.name).trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return 'S'
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
+  return `${words[0][0]}${words[words.length - 1][0]}`.toUpperCase()
+}
+
+function PushPreview({ school, title, message, audience }: { school: SchoolProfile; title: string; message: string; audience: string }) {
   return (
     <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-border bg-gradient-to-br from-sky-50 to-white dark:from-sky-950/20 dark:to-card p-3">
       <div className="flex items-start gap-2">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 text-white text-xs font-bold">
-          {school.logo}
+          {crestInitials(school)}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold">{school.shortName}</p>
+            <p className="text-xs font-semibold">{school.shortName || school.name}</p>
             <span className="text-[9px] text-muted-foreground">now</span>
           </div>
           <p className="text-xs font-semibold mt-0.5 line-clamp-1">{title}</p>
@@ -583,7 +705,7 @@ function PushPreview({ title, message, audience }: { title: string; message: str
 
 // ─── SMS Preview ─────────────────────────────────────────────────────
 
-function SmsPreview({ title, message, segments, audience: _audience, recipientCount }: { title: string; message: string; segments: number; audience: string; recipientCount: number }) {
+function SmsPreview({ school, title, message, segments, audience: _audience, recipientCount }: { school: SchoolProfile; title: string; message: string; segments: number; audience: string; recipientCount: number }) {
   const smsText = `${title ? title + ': ' : ''}${message} — ${school.name}`
   return (
     <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-border bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/20 dark:to-card p-3">
@@ -611,7 +733,7 @@ function SmsPreview({ title, message, segments, audience: _audience, recipientCo
 
 // ─── Email Preview ──────────────────────────────────────────────────
 
-function EmailPreview({ title, message, audience }: { title: string; message: string; audience: string }) {
+function EmailPreview({ school, title, message, audience }: { school: SchoolProfile; title: string; message: string; audience: string }) {
   return (
     <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-border bg-gradient-to-br from-amber-50 to-white dark:from-amber-950/20 dark:to-card p-3">
       <div className="flex items-start gap-2">
@@ -641,7 +763,7 @@ function EmailPreview({ title, message, audience }: { title: string; message: st
 
 // ─── Confirm Modal ───────────────────────────────────────────────────
 
-function ConfirmModal({ title, audience, recipientCount, channels, scheduleMode, scheduledFor, isEmergency, onCancel, onConfirm }: {
+function ConfirmModal({ title, audience, recipientCount, channels, scheduleMode, scheduledFor, isEmergency, hasImage, onCancel, onConfirm }: {
   title: string
   audience: string
   recipientCount: number
@@ -649,6 +771,7 @@ function ConfirmModal({ title, audience, recipientCount, channels, scheduleMode,
   scheduleMode: 'now' | 'later'
   scheduledFor: string
   isEmergency: boolean
+  hasImage: boolean
   onCancel: () => void
   onConfirm: () => void
 }) {
@@ -694,6 +817,12 @@ function ConfirmModal({ title, audience, recipientCount, channels, scheduleMode,
             <span className="text-muted-foreground">Schedule</span>
             <span className="font-medium">{scheduleMode === 'now' ? 'Send now' : formatScheduledDate(scheduledFor)}</span>
           </div>
+          {hasImage && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Image</span>
+              <span className="font-medium">Attached</span>
+            </div>
+          )}
         </div>
 
         {scheduleMode === 'now' && (

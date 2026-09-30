@@ -31,6 +31,30 @@ model School {
   // {"fees":false}). Effective availability = this map ?? PlatformSetting
   // modules map ?? true. Managed exclusively via the control plane.
   featureFlags String   @default("{}")
+
+  // PHASE 7.5 — School identity extensions (canonical, server-side).
+  // The School row is the single source of truth for school identity:
+  // the settings store hydrates from /api/school-settings, documents /
+  // login / public website read these fields (never a client seed).
+  shortName     String? // crest label, footers, login wordmark
+  tagline       String?
+  affiliation   String? // e.g. "CBSE — Affiliation No. 1730456"
+  website       String?
+  principalName String? // document signatory + website principal message
+  established   String? // founding year (display string)
+  faviconUrl    String?
+
+  // PHASE 7.5 — School Configuration JSON (settings tabs beyond the
+  // column-backed identity/branding: timetable rules, attendance,
+  // admission config, library rules, documents, communication…).
+  // Written ONLY through /api/school-settings (validated, school-scoped).
+  settings String @default("{}")
+
+  // PHASE 7.5 — Website CMS document (hero, sections, admissions copy,
+  // principal message, contact, footer, SEO, social links). Written ONLY
+  // through the website management API; rendered by the public site.
+  websiteContent String @default("{}")
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -59,6 +83,7 @@ model School {
   activityLogs         ActivityLog[]
   messages             Message[]
   events               SchoolEvent[]
+  galleryAlbums        GalleryAlbum[]
   examTypes            ExamTypeConfig[]
   gradeScales          GradeScale[]
   examRules            ExamRule[]
@@ -1007,6 +1032,17 @@ model Notification {
   /// optional expiry — readers stop serving the row after this instant
   expiresAt DateTime?
 
+  // PHASE 7.5 — announcement lifecycle (real workflow states; the
+  // client-side draft/schedule fiction is retired). status is the
+  // editorial state; publishAt/expiresAt gate VISIBILITY in every feed
+  // (notificationVisibilityWhere). imageId is a soft reference to an
+  // UploadedFile row (scope 'website') — bytes are only served publicly
+  // while the announcement is published+visible.
+  status      String   @default("PUBLISHED") // DRAFT | PUBLISHED | ARCHIVED
+  imageId     String?
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
   reads NotificationRead[]
 
   // PHASE 3 — the bell-feed polls (school, createdAt) on every app open.
@@ -1206,6 +1242,46 @@ model SchoolEvent {
   createdBy   String?
   creator     User?     @relation(fields: [createdBy], references: [id], onDelete: SetNull)
   createdAt   DateTime  @default(now())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 7.5 — School Website CMS gallery.
+//
+// Tenant-scoped gallery: albums + images per school. Images reference
+// UploadedFile rows (scope 'website') by soft id; the PUBLIC media route
+// only serves bytes for images whose album is published (privacy by
+// default — upload requires a principal session, publication is an
+// explicit per-album act).
+// ═══════════════════════════════════════════════════════════════════════════
+
+model GalleryAlbum {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  published   Boolean  @default(false)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  images      GalleryImage[]
+
+  @@unique([schoolId, title])
+}
+
+model GalleryImage {
+  id        String       @id @default(cuid())
+  albumId   String
+  album     GalleryAlbum @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  /// UploadedFile id (scope 'website') — bytes served via the public
+  /// media route only while the parent album is published.
+  fileId    String
+  caption   String?
+  order     Int          @default(0)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([albumId, order])
 }
 
 // ─── Examination Configuration (school-scoped, persisted) ─────────────
