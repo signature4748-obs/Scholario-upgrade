@@ -3433,3 +3433,22 @@ Stage Summary:
 - No duplicate API calls exist on the golden paths (measured, not assumed): login mount = 4 unique endpoints, module switch = 1, switch-back = 0, idle = 2/min pollers with proper cleanup.
 - Real wins landed: ~86KB students-store family code-split out of logged-out/teacher initial chunks; KpiCard chart import scoped.
 - Left as-is (measured, deliberately): notifications 60s poll frequency (correct UX tradeoff); no memo() sprinkling (no measured hot-spot justified it); no RSC rearchitecture (client SPA by design — tenant/security boundaries preserved per instruction).
+
+---
+Task ID: 5-final
+Agent: Z.ai Code (main orchestrator)
+Task: PHASE 5 close — responsive QA, docs/UI_UX_AUDIT.md, full validation, commit
+
+Work Log:
+- Completed the responsive QA: scrollWidth>innerWidth probed at 320/360/375/390/414/768/1024/1280/1440/1920 on public site (light+dark), login, principal Dashboard/Exams/Timetable/Fees/Students/Admissions, teacher Dashboard+Marks, student Dashboard — ZERO overflow everywhere post-fix.
+- Performance measurement completed (5-e residuals): login mount = 4 unique calls, module switch = 1, switch-back = 0 (store-cached), idle 65s = exactly 2 poller ticks with cleanup; image sizes attributes responsive; panels dynamic-imported.
+- Fixed RadialGauge animated-counter float tails (charts/index.tsx formatValue rounding) after reproducing 95.13771665493368% in a mid-animation screenshot.
+- Wrote docs/UI_UX_AUDIT.md (findings→fixes per surface, 10-breakpoint QA matrix, a11y summary, measured perf table, token consistency, verification gates, honest residuals).
+- VALIDATION: bunx tsc --noEmit → 0 errors · bunx eslint src/ → 0 errors/61 pre-existing warnings · bun run test → 378 pass/0 fail · bun run test:e2e → 5/5 · bun run build → SUCCESS (50s compile, 130/130 pages; 3 pre-existing instrumentation warnings) · dev stack restored post-build (:3000 dev + :3003 event-stream + keepalive watchdog) · browser golden paths re-verified post-restore: public site renders, principal login → dashboard with aria-current + skip-link + <main>, Exams/Timetable (sticky period column + compact break rows VLM-verified)/Fees all render, 390px fees mobile no overflow, 0 page errors, 0 console errors.
+- VLM design review of the polished public site: premium 8.5/10, hero 9/10, rhythm 8/10, typography 8.5/10 — "feels like a premium school website, not an admin dashboard".
+- Committed (see git log: PHASE 5 commit).
+
+Stage Summary:
+- All 13 Phase-5 audit areas addressed: public website premium pass with real campus imagery; school login stripped of Super Admin exposure; dashboard/exams/timetable/fees responsive+empty-state polish; teacher/principal workspace cohesion preserved via shared shell + a11y core; 10-breakpoint responsive QA zero-overflow; keyboard/ARIA/focus/touch-target pass; measured performance (zero duplicate calls, ~86KB initial-chunk win); design tokens strengthened (ModuleEmptyState + SectionHeader unification); docs/UI_UX_AUDIT.md delivered.
+- Constraints honored: no Supabase migration, no mock-data removal, admission form byte-identical, no business-logic changes, emerald/teal/Sora identity preserved, no security/tenant boundary touched for performance.
+- Gates at close: tsc 0 · eslint 0 errors · 378+5 tests green · build SUCCESS · browser-verified golden paths · dev stack healthy. STOP.
