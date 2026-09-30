@@ -1,3 +1,4 @@
+import { assertModuleEnabled } from '@/lib/platform/module-flags'
 import { NextRequest } from 'next/server'
 import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
@@ -19,6 +20,8 @@ export const runtime = 'nodejs'
 ///     (any school's student id could be linked to this school's book).
 export async function GET() {
   return withAuthz({ permission: 'school.library.manage' }, async (ctx) => {
+    // PHASE 6 — platform module switch (school override ?? platform master).
+    await assertModuleEnabled(ctx.schoolId, 'library')
     const schoolId = ctx.schoolId
     const books = await db.libraryBook.findMany({
       where: { schoolId },

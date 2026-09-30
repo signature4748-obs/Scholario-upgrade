@@ -31,7 +31,7 @@ export type { CapabilityKey }
 /** Effective permission record — one boolean per CapabilityKey. */
 export type EffectivePermissions = Record<CapabilityKey, boolean>
 
-export type PrincipalRole = 'principal' | 'teacher' | 'student' | 'superadmin'
+export type PrincipalRole = 'principal' | 'teacher' | 'student'
 
 /** Per-school capability configuration — fed from the ACTIVE tenant. */
 export interface SchoolPermissionConfig {
@@ -78,14 +78,6 @@ const ROLE_BASE: Record<PrincipalRole, EffectivePermissions> = {
     fee_catalogue_manage: false,
     fee_entry_policy_manage: false,
   },
-  superadmin: {
-    fee_structure_edit: true,
-    fee_structure_publish: true,
-    fee_structure_archive: true,
-    fee_structure_delete: true, // platform actor
-    fee_catalogue_manage: true,
-    fee_entry_policy_manage: true,
-  },
 }
 
 /**
@@ -105,7 +97,7 @@ export function getEffectivePermissions(
   for (const key of ALL_CAPABILITY_KEYS) {
     if (key === 'fee_structure_delete') {
       // Platform-reserved: false for every school role regardless of config.
-      out[key] = base[key] === true && role === 'superadmin'
+      out[key] = base[key] === true
       continue
     }
     out[key] = base[key] === true && caps[key] !== false

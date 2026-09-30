@@ -99,6 +99,48 @@ export async function POST(req: NextRequest) {
       })
     }
 
+    // ── PHASE 6 — platform/school boundary hardening ──────────────────
+    // 1. The school authentication system NEVER issues a session for a
+    //    platform identity. Legacy User rows with role SUPER_ADMIN are
+    //    suspended by the platform migration, and this role gate is the
+    //    belt-and-braces invariant (audited as an attack signal).
+    if (user.role === 'SUPER_ADMIN') {
+      await auditEvent({
+        schoolId: null,
+        userId: user.id,
+        action: 'PLATFORM_LOGIN_BLOCKED',
+        actorLabel: body.email,
+        ip,
+        requestId,
+        detail: 'SUPER_ADMIN role attempted school login — platform identities use /platform/login only',
+      }).catch(() => {})
+      throw new AppError('AUTH_REQUIRED', {
+        publicMessage: 'Invalid email or password',
+        internalDetail: 'school login refused a platform identity (Phase 6 invariant)',
+      })
+    }
+    // 2. Suspended or not-yet-activated tenants cannot sign in (school
+    //    suspension is a destructive platform action; activation is the
+    //    second provisioning step).
+    if (!user.schoolId || !user.school || user.school.status !== 'ACTIVE') {
+      await auditEvent({
+        schoolId: user.schoolId,
+        userId: user.id,
+        action: 'LOGIN_FAILED',
+        actorLabel: body.email,
+        ip,
+        requestId,
+        detail: user.school?.status === 'SUSPENDED' ? 'School suspended by platform' : 'School not active',
+      }).catch(() => {})
+      throw new AppError('SCHOOL_SUSPENDED', {
+        publicMessage:
+          user.school?.status === 'SUSPENDED'
+            ? "Your school's Scholario access is currently suspended. Please contact your school administrator."
+            : "Your school's Scholario access is not active yet. Please contact your school administrator.",
+        internalDetail: `school login blocked: tenant status ${user.school?.status ?? 'NO_SCHOOL'}`,
+      })
+    }
+
     // ── Success: reset the per-account failure bucket ───────────────────
     resetRateLimit(accountKey)
 
@@ -144,6 +186,7 @@ export async function POST(req: NextRequest) {
             logoUrl: user.school.logoUrl,
             academicYear: user.school.academicYear ?? '',
             plan: user.school.plan,
+            featureFlags: user.school.featureFlags,
           }
         : null,
     }

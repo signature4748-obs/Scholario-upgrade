@@ -1,3 +1,4 @@
+import { assertModuleEnabled } from '@/lib/platform/module-flags'
 import { NextRequest } from 'next/server'
 import { withAuthz } from '@/lib/security/authz'
 import { listExams, createExam, getClasses } from '@/lib/exams/service'
@@ -7,6 +8,8 @@ export const runtime = 'nodejs'
 
 export async function GET() {
   return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+    // PHASE 6 — platform module switch (school override ?? platform master).
+    await assertModuleEnabled(ctx.schoolId, 'exams')
     const school = await db.school.findUnique({ where: { id: ctx.schoolId }, select: { academicYear: true } })
     const exams = await listExams(ctx.schoolId)
     return { exams, classes: await getClasses(ctx.schoolId), academicYear: school?.academicYear ?? '2025-2026' }

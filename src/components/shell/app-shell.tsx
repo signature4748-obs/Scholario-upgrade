@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { io } from 'socket.io-client'
 import { toast } from 'sonner'
-import { Bell, Menu, Plus, Globe, Radio, Megaphone, Mail, CalendarCheck } from 'lucide-react'
+import { Bell, Menu, Plus, Radio, Megaphone, Mail, CalendarCheck } from 'lucide-react'
 import { useAuth } from '@/lib/store/auth-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
 import { useLiveAlerts } from '@/lib/store/live-alerts-store'
@@ -493,19 +493,7 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
                       Live event stream connected
                     </p>
                     <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
-                      {role === 'superadmin'
-                        ? 'Platform-wide — payments & announcements from every tenant arrive instantly.'
-                        : 'Payments & announcements from your school arrive instantly — no refresh needed.'}
-                    </p>
-                  </div>
-                )}
-                {role === 'superadmin' && (
-                  <div className="mx-1 mb-2 rounded-lg border border-violet-500/20 bg-violet-500/5 px-2.5 py-2">
-                    <p className="text-[10px] font-bold text-violet-600 dark:text-violet-400 flex items-center gap-1">
-                      <Globe className="h-3 w-3" /> Platform scope
-                    </p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
-                      Super admins manage tenants across schools — no personal school inbox. Tenant activity is monitored from the Schools module.
+                      Payments & announcements from your school arrive instantly — no refresh needed.
                     </p>
                   </div>
                 )}
@@ -526,8 +514,6 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
                 user={user}
                 role={role}
                 onNavigateSettings={() => { onNavigate('settings'); setProfileOpen(false) }}
-                // SaaS-STAGE-2A — super admins jump straight back to the control plane.
-                onOpenPlatform={role === 'superadmin' ? () => onNavigate('overview') : undefined}
                 onLogout={() => { setProfileOpen(false); void signOut() }}
               />
             </div>
@@ -556,12 +542,11 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
 }
 
 /**
- * SaaS-STAGE-2A — footer school identity: school panels show the ACTIVE
- * tenant's school name; the platform control plane shows its own label.
+ * Footer school identity: school panels show the ACTIVE tenant's school
+ * name (PHASE 6: platform scope lives in its own console — this shell
+ * is school-only).
  */
 function FooterSchoolName({ fallback }: { fallback: string }) {
-  const role = useAuth((s) => s.user?.role)
   const tenant = useActiveTenant()
-  if (role === 'superadmin') return 'Platform Control Plane'
   return tenant?.name ?? fallback
 }

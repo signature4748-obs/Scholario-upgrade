@@ -69,6 +69,12 @@ export type AppErrorCode =
   | 'CSRF_REJECTED'
   | 'ACCOUNT_LOCKED'
   | 'INTERNAL_ERROR'
+  // PHASE 6 — platform control plane
+  | 'MFA_REQUIRED' // 401 — platform login: authenticator code missing
+  | 'MFA_INVALID' // 401 — platform login/step-up: bad authenticator code
+  | 'STEP_UP_REQUIRED' // 403 — destructive action needs recent MFA
+  | 'SCHOOL_SUSPENDED' // 403 — school tenant suspended by the platform
+  | 'FEATURE_DISABLED' // 403 — module disabled by platform/school flags
   // deprecated aliases (legacy typed throws; classify to themselves)
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
@@ -119,6 +125,11 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   DATABASE_FAILURE: 500,
   INTERNAL_ERROR: 500,
   EXTERNAL_SERVICE_FAILURE: 503,
+  MFA_REQUIRED: 401,
+  MFA_INVALID: 401,
+  STEP_UP_REQUIRED: 403,
+  SCHOOL_SUSPENDED: 403,
+  FEATURE_DISABLED: 403,
 }
 
 const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
@@ -139,6 +150,11 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   DATABASE_FAILURE: 'Internal server error',
   INTERNAL_ERROR: 'Internal server error',
   EXTERNAL_SERVICE_FAILURE: 'An external service is temporarily unavailable',
+  MFA_REQUIRED: 'Enter your authenticator code',
+  MFA_INVALID: 'Invalid authenticator code',
+  STEP_UP_REQUIRED: 'This action requires recent multi-factor verification',
+  SCHOOL_SUSPENDED: "Your school's Scholario access is currently suspended",
+  FEATURE_DISABLED: 'This module is currently disabled',
 }
 
 /** Heuristics that mark an error message as UNSAFE for client exposure. */

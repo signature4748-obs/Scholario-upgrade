@@ -55,6 +55,10 @@ export const AUDIT_ACTIONS = [
   // boundary (row exists in a foreign school). Fired by authz guards;
   // the client envelope stays a fail-safe 404.
   'TENANT_MISMATCH',
+  // PHASE 6 — school-visible platform events (written into the SCHOOL's
+  // ActivityLog so principals see platform oversight of their tenant).
+  'PLATFORM_SUPPORT_SESSION',
+  'PLATFORM_LOGIN_BLOCKED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

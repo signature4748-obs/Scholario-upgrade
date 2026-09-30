@@ -232,12 +232,14 @@ describe('teacher permissions (fixture teacher)', () => {
     expect(Array.isArray(body.data)).toBe(true)
   }, T)
 
-  test('GET /api/superadmin/settings as teacher → 403 FORBIDDEN (platform-only route)', async () => {
-    const res = await as('tenant.teacher.a@scholario.test', '/api/superadmin/settings')
-    expect(res.status).toBe(403)
+  test('GET /api/platform/settings as teacher (school session) → 401 (platform boundary)', async () => {
+    // PHASE 6 — the platform control plane has its own credential space;
+    // a school session never reaches platform routes.
+    const res = await as('tenant.teacher.a@scholario.test', '/api/platform/settings')
+    expect(res.status).toBe(401)
     const body = (await res.json()) as { ok: boolean; code: string; error: string }
     expect(body.ok).toBe(false)
-    expect(body.code).toBe('FORBIDDEN')
+    expect(body.code).toBe('AUTH_REQUIRED')
   }, T)
 
   test('GET /api/teacher/dashboard as PRINCIPAL → 403 (role gate is symmetric)', async () => {

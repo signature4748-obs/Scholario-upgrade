@@ -1,3 +1,4 @@
+import { assertModuleEnabled } from '@/lib/platform/module-flags'
 import { NextRequest } from 'next/server'
 import { withAuthz } from '@/lib/security/authz'
 import { listHomework, createHomework, getClasses, getTeachers, getAnalytics } from '@/lib/homework/service'
@@ -13,6 +14,8 @@ export const runtime = 'nodejs'
 // reach a student account.
 export function GET(req: NextRequest) {
   return withAuthz({ permission: 'school.homework.read' }, async (ctx) => {
+    // PHASE 6 — platform module switch (school override ?? platform master).
+    await assertModuleEnabled(ctx.schoolId, 'homework')
     const schoolId = ctx.schoolId
     const { searchParams } = new URL(req.url)
     const view = searchParams.get('view') || 'list'

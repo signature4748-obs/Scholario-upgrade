@@ -3,7 +3,19 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type Role = 'principal' | 'teacher' | 'student' | 'superadmin'
+/**
+ * PHASE 6 — SCHOOL roles only.
+ *
+ * 'superadmin' was removed from the school SPA's client auth vocabulary:
+ * the platform identity lives exclusively in the /platform/* route
+ * namespace with its own server-side session boundary
+ * (PlatformAdminSession). A client-side role change can therefore never
+ * produce a platform administrator — there is no such school role to
+ * spoof into (persisted v1 states carrying it are discarded on
+ * rehydrate; the school login API additionally rejects SUPER_ADMIN
+ * users server-side).
+ */
+export type Role = 'principal' | 'teacher' | 'student'
 
 export interface SessionUser {
   role: Role
@@ -53,13 +65,6 @@ const roleProfiles: Record<Role, SessionUser> = {
     email: 'aarav.sharma@greenwood.edu.in',
     studentId: 'STU-58',
   },
-  superadmin: {
-    role: 'superadmin',
-    name: 'Arjun Malhotra',
-    avatar: 'AM',
-    id: 'SA-001',
-    email: 'admin@scholario.cloud',
-  },
 }
 
 export const useAuth = create<AuthState>()(
@@ -93,7 +98,19 @@ export const useAuth = create<AuthState>()(
       name: 'scholario-auth',
       // v1 — re-key student identity to the canonical STU-58 (fresh sessions
       // after the roster unification; stale persisted users are discarded).
-      version: 1,
+      // v2 (PHASE 6) — 'superadmin' removed from the school role set: any
+      // persisted superadmin state (the retired client-only platform
+      // console) is discarded — those users simply land logged-out.
+      version: 2,
+      migrate: (persisted, version) => {
+        if (version < 2) {
+          const state = persisted as { user?: { role?: string } } | undefined
+          if (state?.user?.role && !['principal', 'teacher', 'student'].includes(state.user.role)) {
+            return { user: null, isAuthenticated: false, isAuthenticating: false, hydrated: false }
+          }
+        }
+        return persisted as AuthState
+      },
       onRehydrateStorage: () => (state) => {
         useAuth.setState({ hydrated: true })
         if (state) state.setHydrated()

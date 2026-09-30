@@ -57,6 +57,17 @@ export const RATE_LIMITS = {
   webhook: { name: 'webhook', limit: 120, windowMs: 60_000 },
   /** Public school-profile reads (per-IP) — anonymous, cache-friendly page. */
   publicSchool: { name: 'public-school-profile', limit: 60, windowMs: 60_000 },
+  // PHASE 6 — platform control plane (stricter: privileged surface).
+  /** Platform login per-IP (password+MFA attempts). */
+  platformLogin: { name: 'platform-login', limit: 10, windowMs: 15 * 60_000 },
+  /** Platform login per-account lockout. */
+  platformLoginAccount: { name: 'platform-login-account', limit: 5, windowMs: 15 * 60_000 },
+  /** TOTP step-up attempts per admin (brake force on code guessing). */
+  platformStepUp: { name: 'platform-step-up', limit: 8, windowMs: 5 * 60_000 },
+  /** Control-plane mutations per admin (general abuse brake). */
+  platformMutation: { name: 'platform-mutation', limit: 60, windowMs: 60_000 },
+  /** Platform announcements public read (school login page, per-IP). */
+  platformAnnouncementPublic: { name: 'platform-announcement-public', limit: 30, windowMs: 60_000 },
 } satisfies Record<string, RateLimitProfile>
 
 export interface RateLimitResult {

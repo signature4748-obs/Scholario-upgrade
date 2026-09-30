@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { LogOut, Settings, ShieldCheck, Building2, ChevronDown } from 'lucide-react'
+import { LogOut, Settings, Building2, ChevronDown } from 'lucide-react'
 // The school context line renders the authenticated user's actual school
 // (the active tenant) — never a switcher. Multi-school switching only
 // exists when the session carries real, authorized memberships.
@@ -22,11 +22,9 @@ interface ProfileDropdownProps {
   role: ShellRole
   onNavigateSettings: () => void
   onLogout: () => void
-  /** Navigate to the platform control plane (super admin). */
-  onOpenPlatform?: () => void
 }
 
-type ShellRole = 'principal' | 'teacher' | 'student' | 'superadmin'
+type ShellRole = 'principal' | 'teacher' | 'student'
 
 export function ProfileDropdownTrigger({
   user,
@@ -75,7 +73,6 @@ export function ProfileDropdown({
   role,
   onNavigateSettings,
   onLogout,
-  onOpenPlatform,
 }: ProfileDropdownProps) {
   const activeTenant = useActiveTenant()
 
@@ -111,29 +108,12 @@ export function ProfileDropdown({
                 <span className="inline-block text-[9px] font-extrabold px-2 py-0.5 rounded bg-primary/15 text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
                   {role}
                 </span>
-                {role !== 'superadmin' && (
-                  <span className="inline-flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground" title={activeTenant.name}>
-                    <Building2 className="h-3 w-3 shrink-0" aria-hidden="true" />
-                    <span className="truncate">{activeTenant.name}</span>
-                  </span>
-                )}
+                <span className="inline-flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground" title={activeTenant.name}>
+                  <Building2 className="h-3 w-3 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{activeTenant.name}</span>
+                </span>
               </div>
             </div>
-
-            {role === 'superadmin' && onOpenPlatform && (
-              <div className="py-1 border-b border-border space-y-0.5">
-                <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-                  <ShieldCheck className="h-3 w-3 text-primary" /> Platform
-                </p>
-                <button
-                  onClick={() => { onClose(); onOpenPlatform() }}
-                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-foreground hover:bg-muted rounded-md transition-colors text-left focus-ring"
-                >
-                  <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
-                  Go to Control Plane
-                </button>
-              </div>
-            )}
 
             <div className="py-1 space-y-0.5">
               <button

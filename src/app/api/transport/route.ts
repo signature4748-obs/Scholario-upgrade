@@ -1,3 +1,4 @@
+import { assertModuleEnabled } from '@/lib/platform/module-flags'
 import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 
@@ -14,6 +15,8 @@ export const runtime = 'nodejs'
 /// alternative was unnecessary; the full P/M gate breaks no legit flow.)
 export async function GET() {
   return withAuthz({ permission: 'school.transport.read' }, async (ctx) => {
+    // PHASE 6 — platform module switch (school override ?? platform master).
+    await assertModuleEnabled(ctx.schoolId, 'transport')
     const schoolId = ctx.schoolId
     const [vehicles, routes, drivers] = await Promise.all([
       db.vehicle.findMany({

@@ -17,9 +17,6 @@ const PublicWebsite = dynamic(() => import('@/components/public-website/public-w
 const LoginPage = dynamic(() => import('@/components/login/login-page').then((m) => m.LoginPage), {
   loading: () => <LoadingSpinner />,
 })
-const PlatformLanding = dynamic(() => import('@/components/superadmin/platform-landing').then((m) => m.PlatformLanding), {
-  loading: () => <LoadingSpinner />,
-})
 const PrincipalPanel = dynamic(() => import('@/components/principal/principal-panel').then((m) => m.PrincipalPanel), {
   loading: () => <LoadingSpinner />,
 })
@@ -27,9 +24,6 @@ const TeacherPanel = dynamic(() => import('@/components/teacher/teacher-panel').
   loading: () => <LoadingSpinner />,
 })
 const StudentPanel = dynamic(() => import('@/components/student/student-panel').then((m) => m.StudentPanel), {
-  loading: () => <LoadingSpinner />,
-})
-const SuperAdminPanel = dynamic(() => import('@/components/superadmin/superadmin-panel').then((m) => m.SuperAdminPanel), {
   loading: () => <LoadingSpinner />,
 })
 
@@ -47,8 +41,9 @@ export default function Home() {
   const hydrated = useAuth((s) => s.hydrated)
   const [mounted, setMounted] = useState(false)
 
-  // Unauthenticated view states: 'website' | 'portal' | 'platform'
-  const [viewState, setViewState] = useState<'website' | 'portal' | 'platform'>('website')
+  // Unauthenticated view states: 'website' | 'portal'
+  // (PHASE 6: 'platform' moved to the real /platform route namespace)
+  const [viewState, setViewState] = useState<'website' | 'portal'>('website')
 
   useEffect(() => {
     setMounted(true)
@@ -81,14 +76,17 @@ export default function Home() {
     }
   }, [isAuthenticated, user?.role])
 
-  // Handle URL hash or path parameters if needed
+  // PHASE 6 — the platform control plane moved to the REAL /platform/*
+  // route namespace with its own identity boundary. Legacy #platform /
+  // #superadmin deep links are redirected there (a full document
+  // navigation — the SPA never renders platform UI itself).
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash
-      if (hash === '#portal' || hash === '#login') {
+      if (hash === '#platform' || hash === '#superadmin') {
+        window.location.replace('/platform')
+      } else if (hash === '#portal' || hash === '#login') {
         setViewState('portal')
-      } else if (hash === '#platform' || hash === '#superadmin') {
-        setViewState('platform')
       }
     }
   }, [])
@@ -102,7 +100,11 @@ export default function Home() {
     )
   }
 
-  // If user is logged in, show their dashboard directly
+  // If user is logged in, show their dashboard directly. PHASE 6: the
+  // school SPA renders SCHOOL roles only — a spoofed client-side role
+  // ('superadmin') matches no branch and falls through to the public
+  // website; platform identity lives exclusively in the /platform
+  // namespace with server-side session validation.
   if (isAuthenticated && user) {
     if (user.role === 'principal')
       return (
@@ -122,12 +124,6 @@ export default function Home() {
           <StudentPanel />
         </AssetErrorBoundary>
       )
-    if (user.role === 'superadmin')
-      return (
-        <AssetErrorBoundary>
-          <SuperAdminPanel />
-        </AssetErrorBoundary>
-      )
   }
 
   // Unauthenticated public views
@@ -139,20 +135,13 @@ export default function Home() {
     )
   }
 
-  if (viewState === 'platform') {
-    return (
-      <AssetErrorBoundary>
-        <PlatformLanding onBackToSchool={() => setViewState('website')} />
-      </AssetErrorBoundary>
-    )
-  }
-
-  // Default: Public School Website (the registered school)
+  // Default: Public School Website (the registered school).
+  // The platform console is reachable ONLY at /platform (its own route
+  // namespace) — never rendered inside the school SPA.
   return (
     <AssetErrorBoundary>
       <PublicWebsite
         onOpenPortal={() => setViewState('portal')}
-        onOpenPlatform={() => setViewState('platform')}
       />
     </AssetErrorBoundary>
   )

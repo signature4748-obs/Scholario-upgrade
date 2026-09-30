@@ -22,6 +22,7 @@
     "db:seed-teacher-hub": "bun prisma/seed-teacher-hub.ts",
     "db:seed-teacher-academics": "bun prisma/seed-teacher-academics.ts",
     "db:seed-tenant-isolation": "bun prisma/seed-tenant-isolation.ts",
+    "db:seed-platform": "bun prisma/seed-platform.ts",
     "test": "bun test tests/unit/ tests/integration/ tests/api/ tests/regression/ tests/security/",
     "test:unit": "bun test tests/unit/",
     "test:integration": "bun test tests/integration/",
@@ -29,6 +30,7 @@
     "test:regression": "bun test tests/regression/",
     "test:security": "bun test tests/security/",
     "test:tenant": "bun test tests/security/tenant-isolation.test.ts tests/security/tenant-isolation-model.test.ts",
+    "test:platform": "bun test tests/security/platform-isolation.test.ts",
     "test:e2e": "bun test tests/e2e/",
     "test:all": "bun run test && bun run test:e2e",
     "typecheck": "tsc --noEmit"

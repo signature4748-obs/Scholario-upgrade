@@ -572,27 +572,41 @@ describe('PHASE 2 · indirect leakage probes', () => {
 // 5. SUPER_ADMIN boundary (platform role ≠ tenant access)
 // ─────────────────────────────────────────────────────────────────────────
 
-describe('PHASE 2 · platform admin boundary', () => {
-  test('SUPER_ADMIN is REFUSED on school-scoped routes', async () => {
-    const res = await as(fx.users.superadmin.email, '/api/students')
-    expect(res.status).toBe(403)
+describe('PHASE 2/6 · platform admin boundary', () => {
+  // PHASE 6 — the legacy SUPER_ADMIN school identity is dead: school login
+  // rejects the role outright (the platform identity migrated to the
+  // separate /platform boundary — see platform-isolation.test.ts).
+  test('legacy SUPER_ADMIN email is REFUSED at SCHOOL login (401, no session)', async () => {
+    const res = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: fx.users.superadmin.email, password: PW }),
+    })
+    const body = (await res.json()) as { ok: boolean; code?: string }
+    expect(res.status).toBe(401)
+    expect(body.ok).toBe(false)
+    expect(body.code).toBe('AUTH_REQUIRED')
   }, T)
 
-  test('SUPER_ADMIN cannot read a school dashboard', async () => {
-    const res = await as(fx.users.superadmin.email, '/api/dashboard')
-    // Platform-scope dashboard is by design; assert it is NOT school-scoped
-    const body = (await res.json()) as { data: { scope: string } }
-    expect(['PLATFORM']).toContain(body.data.scope)
+  test('school session CANNOT access the platform control plane (401)', async () => {
+    const res = await as(fx.users.principalA.email, '/api/platform/schools')
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { ok: boolean; code: string }
+    expect(body.ok).toBe(false)
+    expect(body.code).toBe('AUTH_REQUIRED')
   }, T)
 
-  test('SUPER_ADMIN platform routes work (activity feed)', async () => {
-    const res = await as(fx.users.superadmin.email, '/api/superadmin/activity')
-    expect(res.status).toBe(200)
+  test('school session CANNOT read the platform audit trail (401)', async () => {
+    const res = await as(fx.users.principalB.email, '/api/platform/audit')
+    expect(res.status).toBe(401)
   }, T)
 
-  test('School B principal is REFUSED on platform routes', async () => {
-    const res = await as(fx.users.principalB.email, '/api/superadmin/activity')
-    expect(res.status).toBe(403)
+  test('school session CANNOT mint a platform session via step-up (401)', async () => {
+    const res = await as(fx.users.teacherA.email, '/api/platform/auth/step-up', {
+      method: 'POST',
+      body: JSON.stringify({ code: '123456' }),
+    })
+    expect(res.status).toBe(401)
   }, T)
 
   test('non-admin cannot read another school via /api/schools/[id]', async () => {

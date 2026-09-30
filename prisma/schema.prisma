@@ -27,6 +27,10 @@ model School {
   academicYear String?
   board        String   @default("CBSE") // CBSE | UP_BOARD | ICSE | STATE | CUSTOM
   isDemo       Boolean  @default(false)
+  // PHASE 6 — per-school module overrides (JSON map, e.g.
+  // {"fees":false}). Effective availability = this map ?? PlatformSetting
+  // modules map ?? true. Managed exclusively via the control plane.
+  featureFlags String   @default("{}")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -104,6 +108,11 @@ model School {
   // Phase 4 — background-job run tracking (JobRun rows; system jobs carry
   // a null schoolId).
   jobRuns JobRun[]
+
+  // PHASE 6 — platform support sessions ("Access School"): time-boxed,
+  // reason-required, read-only oversight sessions created by platform
+  // admins through the control plane. See SupportSession.
+  supportSessions SupportSession[]
 }
 
 /// Per-user conversation state for DIRECT (Message-row) threads. The
@@ -1153,6 +1162,14 @@ model UserPreference {
 model PlatformSetting {
   id             String   @id @default("global")
   showDemoSchool Boolean  @default(true)
+  // PHASE 6 — platform module master switches (JSON map, e.g.
+  // {"exams":true,"fees":true,...}). Effective module availability for a
+  // school = school.featureFlags[key] ?? platform modules[key] ?? true.
+  // Absent key = enabled (fail-open for existing tenants; these are product
+  // toggles, not security boundaries).
+  modules        String   @default("{}")
+  // PHASE 6 — upper bound (minutes) for support-session duration.
+  supportMaxDuration Int  @default(60)
   updatedAt      DateTime @updatedAt
 }
 
@@ -2252,4 +2269,168 @@ model UploadedFile {
   createdAt    DateTime @default(now())
 
   @@index([schoolId, scope])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 6 — SUPER ADMIN CONTROL PLANE
+//
+// A SEPARATE platform identity/security boundary. These tables are
+// intentionally DISJOINT from the school User/Session universe:
+//   · PlatformAdmin       — NOT a User row. The school authentication
+//                           system can never issue a platform session
+//                           (and vice versa: a platform session is never
+//                           a school session).
+//   · PlatformAdminSession— own token space (sha256-hashed at rest), own
+//                           cookie (`scholario_platform_session`), own
+//                           validation path, own revocation.
+//   · PlatformPermission  — per-admin capability grants (root implies all).
+//   · PlatformAuditLog    — platform-only trail (cross-school actions,
+//                           sign-ins, step-ups, support sessions). Deliberate
+//                           NO foreign keys: audit rows must SURVIVE school
+//                           or admin deletion.
+//   · SupportSession      — "Access School" oversight credentials: explicit
+//                           admin action + reason + duration + audit event;
+//                           read-only by construction (no school-session
+//                           token is ever minted).
+//   · PlatformAnnouncement— platform-level notices for school surfaces.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Platform administrator identity. Migrated from the legacy
+/// User(role='SUPER_ADMIN') rows (see prisma/seed-platform.ts — the legacy
+/// User row is retained but SUSPENDED; school login rejects SUPER_ADMIN).
+model PlatformAdmin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  /// scrypt hash — same format as User.passwordHash (salt:hash).
+  passwordHash String
+  name         String
+  /// ACTIVE | SUSPENDED (suspension also revokes every session).
+  status       String   @default("ACTIVE")
+  /// Root admins implicitly hold EVERY platform permission.
+  isRoot       Boolean  @default(false)
+  /// RFC 6238 TOTP secret, base32. NEVER sent to the browser (the dev-only
+  /// demo-code endpoint returns a 30s code, never the secret).
+  totpSecret   String
+  /// Dev-preview flag: the seeded demo admins may use the demo-code
+  /// endpoint. Production admins are never isDemo → the endpoint is inert.
+  isDemo       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions    PlatformAdminSession[]
+  permissions PlatformPermission[]
+  supportSessions SupportSession[]
+
+  @@index([status])
+}
+
+/// Platform session — a SEPARATE credential space from the school Session
+/// table. Token is random 32 bytes; at rest only sha256(token) is stored
+/// (a DB leak does not yield usable credentials).
+model PlatformAdminSession {
+  id        String    @id @default(cuid())
+  adminId   String
+  admin     PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  /// sha256(token) hex. The raw token lives only in the HttpOnly cookie
+  /// (or the dev-preview bearer header).
+  tokenHash String    @unique
+  /// Last successful TOTP verification (login MFA or explicit step-up).
+  /// Destructive actions require this within STEP_UP_WINDOW (10 min).
+  stepUpAt  DateTime?
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  /// Set when revoked (logout / logout-all / admin suspension). Soft row:
+  /// revocation history for the audit viewer.
+  revokedAt DateTime?
+  userAgent String?
+  ipAddress String?
+
+  @@index([adminId])
+  @@index([expiresAt])
+}
+
+/// Per-admin platform capability grants. Root admins bypass this table.
+/// Keys: src/lib/platform/permissions.ts is the single source.
+model PlatformPermission {
+  id      String  @id @default(cuid())
+  adminId String
+  admin   PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  /// Capability key (e.g. 'schools.manage'). Unknown keys fail closed at
+  /// authorization time.
+  key     String
+  granted Boolean @default(true)
+
+  @@unique([adminId, key])
+}
+
+/// Platform audit trail. Deliberately NO FKs — rows survive the deletion
+/// of the school/admin they describe (audit must outlive resources).
+model PlatformAuditLog {
+  id         String   @id @default(cuid())
+  /// PlatformAdmin.id (null = system events, e.g. expiry sweeps).
+  adminId    String?
+  /// Dot-namespaced action, e.g. 'platform.school.suspended'.
+  action     String
+  /// SCHOOL | ADMIN | PLATFORM_SESSION | SUPPORT_SESSION | SETTING | ANNOUNCEMENT | AUTH
+  targetType String?
+  targetId   String?
+  /// Informational school scope (no FK — see above).
+  schoolId   String?
+  /// Required for gated actions (suspend/delete/support access/…).
+  reason     String?
+  /// JSON metadata (counts, diffs) — no PII, no secrets.
+  metadata   String?
+  ip         String?
+  requestId  String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([adminId, createdAt])
+  @@index([schoolId, createdAt])
+  @@index([action])
+}
+
+/// "Access School" support session — time-boxed READ-ONLY oversight of one
+/// school by one platform admin. NOT an impersonation mechanism: no school
+/// Session row is created; the token only unlocks the support overview
+/// endpoints. Creation requires step-up auth + a reason; the school's own
+/// ActivityLog also records the event (visible to the school).
+model SupportSession {
+  id              String   @id @default(cuid())
+  adminId         String
+  admin           PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  schoolId        String
+  school          School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// Why this oversight session exists (required, ≥10 chars).
+  reason          String
+  /// Granted duration (5..PlatformSetting.supportMaxDuration minutes).
+  durationMinutes Int
+  /// sha256(token) hex — same at-rest rule as platform sessions.
+  tokenHash       String   @unique
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime
+  /// Set on explicit exit/revoke (expiry is checked against expiresAt).
+  revokedAt       DateTime?
+
+  @@index([adminId])
+  @@index([schoolId, createdAt])
+}
+
+/// Platform-level announcements shown on school-facing surfaces (school
+/// login page). Managed exclusively through the control plane.
+model PlatformAnnouncement {
+  id        String    @id @default(cuid())
+  title     String
+  body      String
+  /// INFO | WARNING | CRITICAL (render styling).
+  level     String    @default("INFO")
+  /// ALL (every school surface) | SCHOOLS (school login surfaces).
+  audience  String    @default("ALL")
+  /// PlatformAdmin.id of the publisher (null = system).
+  createdBy String?
+  createdAt DateTime  @default(now())
+  /// Soft hide: rows are kept (audit/history), excluded when expired.
+  expiresAt DateTime?
+
+  @@index([createdAt])
 }

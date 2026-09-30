@@ -22,7 +22,7 @@ export interface UseCommandPaletteArgs {
   open: boolean
   onOpenChange: (o: boolean) => void
   groups: NavGroup[]
-  role: 'principal' | 'teacher' | 'student' | 'superadmin'
+  role: 'principal' | 'teacher' | 'student'
   onNavigate: (key: string) => void
 }
 

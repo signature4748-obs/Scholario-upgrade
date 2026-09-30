@@ -19,7 +19,7 @@ interface SidebarAsideProps {
   role: ShellRole
 }
 
-type ShellRole = 'principal' | 'teacher' | 'student' | 'superadmin'
+type ShellRole = 'principal' | 'teacher' | 'student'
 
 export function SidebarAside({
   collapsed,

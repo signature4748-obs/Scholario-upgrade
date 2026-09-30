@@ -1,3 +1,4 @@
+import { assertModuleEnabled } from '@/lib/platform/module-flags'
 import { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { db, trackedTransaction } from '@/lib/db'
@@ -20,6 +21,8 @@ export const runtime = 'nodejs'
 /// legit flow).
 export async function GET(req: NextRequest) {
   return withAuthz({ permission: 'school.finance.read' }, async (ctx) => {
+    // PHASE 6 — platform module switch (school override ?? platform master).
+    await assertModuleEnabled(ctx.schoolId, 'fees')
     const { searchParams } = new URL(req.url)
     const studentId = searchParams.get('studentId')
     const status = searchParams.get('status')

@@ -145,9 +145,8 @@ function SectionHeader({
 /*  Main component                                                     */
 /* ------------------------------------------------------------------ */
 
-export function PublicWebsite({ onOpenPortal, onOpenPlatform }: {
+export function PublicWebsite({ onOpenPortal }: {
   onOpenPortal: () => void
-  onOpenPlatform?: () => void
 }) {
   const { isAuthenticated, user, logout } = useAuth()
   void isAuthenticated
@@ -248,7 +247,6 @@ export function PublicWebsite({ onOpenPortal, onOpenPlatform }: {
         address={address}
         city={city}
         onOpenPortal={onOpenPortal}
-        onOpenPlatform={onOpenPlatform}
       />
     </div>
   )
@@ -1287,7 +1285,6 @@ function Footer({
   address,
   city,
   onOpenPortal,
-  onOpenPlatform,
 }: {
   schoolName: string
   phone: string
@@ -1295,10 +1292,8 @@ function Footer({
   address: string
   city: string
   onOpenPortal: () => void
-  onOpenPlatform?: () => void
 }) {
   const shortName = schoolName.split(' ')[0] || 'Demo'
-  void onOpenPlatform
 
   const quickLinks = [
     { label: 'About Us', href: '#about' },

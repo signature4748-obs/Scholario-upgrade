@@ -11,7 +11,7 @@
 
 import { useAuth } from '@/lib/store/auth-store'
 
-export type ExamRole = 'principal' | 'teacher' | 'student' | 'superadmin'
+export type ExamRole = 'principal' | 'teacher' | 'student'
 
 interface RoleGate {
   role: ExamRole | null
@@ -47,7 +47,7 @@ export function useRoleGate(): RoleGate {
   }
 
   const role = user.role as ExamRole
-  const isPrincipal = role === 'principal' || role === 'superadmin'
+  const isPrincipal = role === 'principal'
   const isTeacher = role === 'teacher'
 
   return {

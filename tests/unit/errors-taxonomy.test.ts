@@ -46,6 +46,12 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     DATABASE_FAILURE: 500,
     INTERNAL_ERROR: 500,
     EXTERNAL_SERVICE_FAILURE: 503,
+    // PHASE 6 — platform control plane codes.
+    MFA_REQUIRED: 401,
+    MFA_INVALID: 401,
+    STEP_UP_REQUIRED: 403,
+    SCHOOL_SUSPENDED: 403,
+    FEATURE_DISABLED: 403,
   }
 
   test('the table is exactly the documented taxonomy (no stray/missing codes)', () => {

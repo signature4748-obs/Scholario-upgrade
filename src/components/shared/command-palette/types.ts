@@ -6,7 +6,7 @@ export interface CommandPaletteProps {
   onOpenChange: (o: boolean) => void
   groups?: NavGroup[]
   onNavigate: (key: string) => void
-  role?: 'principal' | 'teacher' | 'student' | 'superadmin'
+  role?: 'principal' | 'teacher' | 'student'
 }
 
 export type { SearchResultItem }

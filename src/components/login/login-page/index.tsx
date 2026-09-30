@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState, type ComponentType } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import Image from 'next/image'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, Info, AlertTriangle } from 'lucide-react'
 import { useAuth, type Role } from '@/lib/store/auth-store'
 import { saveSessionToken } from '@/lib/auth-session-token'
 import { school } from '@/lib/mock/school'
@@ -73,8 +73,12 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       }
 
       const serverRole = payload.data?.role?.toLowerCase()
+      // PHASE 6 — school roles only: the login API rejects SUPER_ADMIN
+      // identities server-side, so the client accepts exactly the three
+      // school roles (a 'superadmin' literal here would be dead code and
+      // a misleading hint that such a school login exists).
       const role: Role =
-        serverRole === 'principal' || serverRole === 'teacher' || serverRole === 'student' || serverRole === 'superadmin'
+        serverRole === 'principal' || serverRole === 'teacher' || serverRole === 'student'
           ? serverRole
           : roleOverride ?? selectedRole ?? 'principal'
 
@@ -151,6 +155,87 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
         <ForgotPasswordModal onClose={() => setForgotOpen(false)} />
       )}
     </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  PlatformAnnouncementBanner — PHASE 6 (additive, read-only).        */
+/*  Active platform notices for the school login door, fetched from    */
+/*  the anonymous public announcements endpoint. Purely a display      */
+/*  block: no auth logic, no form coupling; any fetch failure or       */
+/*  empty list renders nothing.                                       */
+/* ------------------------------------------------------------------ */
+
+interface PlatformAnnouncement {
+  id: string
+  title: string
+  body: string
+  level: 'INFO' | 'WARNING' | 'CRITICAL'
+}
+
+const PLATFORM_ANNOUNCEMENT_STYLES: Record<
+  PlatformAnnouncement['level'],
+  { border: string; icon: ComponentType<{ className?: string }>; iconClass: string }
+> = {
+  INFO: { border: 'border-l-emerald-600', icon: Info, iconClass: 'text-emerald-600' },
+  WARNING: { border: 'border-l-amber-500', icon: AlertTriangle, iconClass: 'text-amber-600' },
+  CRITICAL: { border: 'border-l-red-500', icon: AlertTriangle, iconClass: 'text-red-600' },
+}
+
+function PlatformAnnouncementBanner() {
+  const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch('/api/platform/announcements/public')
+        const body = (await res.json()) as {
+          ok?: boolean
+          data?: { announcements?: PlatformAnnouncement[] }
+        }
+        if (!cancelled && body.ok && Array.isArray(body.data?.announcements)) {
+          setAnnouncements(body.data.announcements.slice(0, 3))
+        }
+      } catch {
+        // Silent by design — the sign-in form must never depend on this.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (announcements.length === 0) return null
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
+      className="mb-6 space-y-2.5"
+      aria-live="polite"
+      aria-label="Platform announcements"
+    >
+      {announcements.map((a) => {
+        const style = PLATFORM_ANNOUNCEMENT_STYLES[a.level] ?? PLATFORM_ANNOUNCEMENT_STYLES.INFO
+        const LevelIcon = style.icon
+        return (
+          <div
+            key={a.id}
+            className={`rounded-lg border border-border/70 border-l-4 bg-card px-3.5 py-3 ${style.border}`}
+          >
+            <div className="flex items-start gap-2.5">
+              <LevelIcon className={`mt-0.5 h-4 w-4 shrink-0 ${style.iconClass}`} aria-hidden />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold leading-snug text-foreground">{a.title}</p>
+                <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{a.body}</p>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </motion.div>
   )
 }
 
@@ -349,6 +434,11 @@ function RightPane({
         >
           Sign in to access your dashboard.
         </motion.p>
+
+        {/* PHASE 6 — platform announcements (additive, read-only; see
+            PlatformAnnouncementBanner above). Renders nothing when the
+            platform has no active notices. */}
+        <PlatformAnnouncementBanner />
 
         {/* Error message — rendered ABOVE the fields so it is always
             visible without scrolling, on every viewport. */}

@@ -36,7 +36,7 @@ interface NotificationsDropdownProps {
   children?: React.ReactNode
 }
 
-type ShellRole = 'principal' | 'teacher' | 'student' | 'superadmin'
+type ShellRole = 'principal' | 'teacher' | 'student'
 
 type FeedFilter = 'all' | 'unread' | 'messages' | 'announcements'
 
