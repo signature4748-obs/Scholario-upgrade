@@ -15,6 +15,8 @@ export function LoadingPhase({ selectedRole }: LoadingPhaseProps) {
       key="loading"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
+      role="status"
+      aria-live="polite"
       className="relative z-10 flex flex-col items-center"
     >
       <motion.div
@@ -44,7 +46,6 @@ export function LoadingPhase({ selectedRole }: LoadingPhaseProps) {
           {selectedRole === 'principal' && 'Loading administrative dashboard…'}
           {selectedRole === 'teacher' && 'Loading your classroom…'}
           {selectedRole === 'student' && 'Loading your learning space…'}
-          {selectedRole === 'superadmin' && 'Loading platform console…'}
           {!selectedRole && 'Signing you in…'}
         </p>
       </motion.div>

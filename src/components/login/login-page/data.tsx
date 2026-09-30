@@ -1,4 +1,4 @@
-import { User, BookOpen, ShieldCheck, Cloud } from 'lucide-react'
+import { User, BookOpen, ShieldCheck } from 'lucide-react'
 import type { Role } from '@/lib/store/auth-store'
 
 export interface CredentialCard {
@@ -18,9 +18,14 @@ export interface CredentialCard {
  *
  * `process.env.NODE_ENV` is inlined at BUILD time, so production bundles
  * compile this to `[]` — the plaintext demo passwords and the one-click
- * role chips (including the super-admin account) can never ship in a
- * production build. Development/preview keeps them for the demo flow.
- * `NEXT_PUBLIC_DISABLE_DEMO_LOGIN=1` additionally turns them off in dev.
+ * role chips can never ship in a production build. Development/preview
+ * keeps them for the demo flow. `NEXT_PUBLIC_DISABLE_DEMO_LOGIN=1`
+ * additionally turns them off in dev.
+ *
+ * SCHOOL-ROLES ONLY (Phase 5-b): the school login surface communicates
+ * exclusively the school platform experience — the super-admin console
+ * is reachable ONLY via the separate `#platform` route (PlatformLanding)
+ * and must never be advertised here.
  */
 const DEMO_LOGIN_ENABLED =
   process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_DISABLE_DEMO_LOGIN !== '1'
@@ -64,17 +69,6 @@ export const credentials: CredentialCard[] = DEMO_LOGIN_ENABLED
     gradient: 'from-violet-500 to-purple-600',
     accent: 'violet',
     description: 'Learning & performance',
-  },
-  {
-    role: 'superadmin',
-    title: 'Super Admin',
-    name: 'Arjun Malhotra',
-    email: 'admin@scholario.cloud',
-    password: 'admin123',
-    icon: <Cloud className="h-5 w-5" />,
-    gradient: 'from-indigo-600 to-violet-700',
-    accent: 'indigo',
-    description: 'Platform console',
   },
       ]
   : []

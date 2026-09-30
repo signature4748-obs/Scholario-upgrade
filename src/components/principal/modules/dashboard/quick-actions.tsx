@@ -83,11 +83,11 @@ function QuickActionsCard({ onNavigate }: { onNavigate?: (m: string) => void }) 
 // ─── Notice Board ─────────────────────────────────────────────────────
 
 const CATEGORY_TONES: Record<string, string> = {
-  Urgent: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
-  Event: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  Holiday: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  Academic: 'bg-violet-500/10 text-violet-600 dark:text-violet-400',
-  General: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
+  Urgent: 'bg-rose-500/10 text-rose-700 dark:text-rose-400',
+  Event: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+  Holiday: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
+  Academic: 'bg-violet-500/10 text-violet-700 dark:text-violet-400',
+  General: 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-400',
 }
 
 function NoticeBoardCard({ onNavigate }: { onNavigate?: (m: string) => void }) {
@@ -129,12 +129,13 @@ function NoticeBoardCard({ onNavigate }: { onNavigate?: (m: string) => void }) {
     >
       <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
         {notices.map((a, i) => (
-          <motion.div
+          <motion.button
             key={a.id}
+            type="button"
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: i * 0.06 }}
-            className="flex items-start gap-2.5 rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors cursor-pointer"
+            className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors cursor-pointer text-left focus-ring"
             onClick={() => onNavigate?.('communication')}
           >
             <span className={cn(
@@ -146,11 +147,11 @@ function NoticeBoardCard({ onNavigate }: { onNavigate?: (m: string) => void }) {
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium text-foreground truncate">{a.title}</p>
               <p className="text-[11px] text-muted-foreground line-clamp-1 mt-0.5">{a.content}</p>
-              <p className="text-[10px] text-muted-foreground/70 mt-1">
+              <p className="text-[10px] text-muted-foreground mt-1">
                 {a.postedBy} · {new Date(a.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
               </p>
             </div>
-          </motion.div>
+          </motion.button>
         ))}
       </div>
     </Panel>

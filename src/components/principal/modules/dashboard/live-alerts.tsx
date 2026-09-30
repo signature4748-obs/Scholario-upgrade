@@ -182,18 +182,18 @@ export function LiveAlerts({ onNavigate }: LiveAlertsProps) {
       subtitle={
         <span className="inline-flex items-center gap-2">
           <span className="inline-flex items-center gap-1">
-            <span className={`h-1.5 w-1.5 rounded-full ${activeCount > 0 ? 'bg-rose-500' : 'bg-emerald-500'}`} />
+            <span className={`h-1.5 w-1.5 rounded-full ${activeCount > 0 ? 'bg-rose-500' : 'bg-emerald-500'}`} aria-hidden="true" />
             <span>{activeCount} active</span>
           </span>
           {criticalCount > 0 && (
-            <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400">
-              <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+            <span className="inline-flex items-center gap-1 text-rose-700 dark:text-rose-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-rose-500" aria-hidden="true" />
               <span>{criticalCount} critical</span>
             </span>
           )}
           {showLiveFee && (
-            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+            <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" aria-hidden="true" />
               <span>1 live</span>
             </span>
           )}

@@ -25,6 +25,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Wallet, CheckCircle2, AlertCircle, Users, ArrowRight, CheckCheck, Banknote, Send,
+  PieChart, TrendingUp, AlertTriangle, IndianRupee,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useFeeData, CURRENT_ACADEMIC_YEAR } from '@/lib/store/fee-store'
@@ -35,7 +36,8 @@ import { SummaryCard, SummaryCardGrid } from '../shared/summary-card'
 import { LiveChip } from '../shared/live-chip'
 import { Panel } from '../shared/panel'
 import { OpenChartSection } from '../shared/open-chart-section'
-import { FeeEmptyState, ModeIcon, modeAccent } from './fees-shared'
+import { ModuleEmptyState } from '../shared/empty-state'
+import { ModeIcon, modeAccent } from './fees-shared'
 import { MiniAreaChart, FEES_CHART_PALETTE } from './fees-charts'
 import type { FeeTab } from './fees-shared'
 
@@ -234,7 +236,12 @@ export function FeesOverviewSection({ data, onNavigate }: Props) {
             {trendHasData ? (
               <MiniAreaChart data={analytics.monthly} height={150} format={(n) => formatINR(n, true)} showArea />
             ) : (
-              <p className="text-xs text-muted-foreground py-6 text-center">No collections yet — record a payment to see the trend.</p>
+              <ModuleEmptyState
+                className="my-2"
+                icon={<TrendingUp className="h-5 w-5" />}
+                title="No collections yet"
+                description="Collections will appear here as payments are recorded."
+              />
             )}
           </OpenChartSection>
 
@@ -317,9 +324,11 @@ export function FeesOverviewSection({ data, onNavigate }: Props) {
                 )}
               </div>
             ) : (
-              <div className="py-6">
-                <FeeEmptyState icon={<Users className="h-5 w-5" />} title="No classes yet." description="Enrol students and assign fee structures to see class-wise collections." />
-              </div>
+              <ModuleEmptyState
+                icon={<Users className="h-5 w-5" />}
+                title="No classes yet"
+                description="Enrol students and assign fee structures to see class-wise collections."
+              />
             )}
           </Panel>
         </div>
@@ -363,9 +372,22 @@ export function FeesOverviewSection({ data, onNavigate }: Props) {
               )}
             </div>
           ) : (
-            <div className="py-6">
-              <FeeEmptyState icon={<Wallet className="h-5 w-5" />} title="No fee heads configured." description="Set up fee structures to see the breakdown." />
-            </div>
+            <ModuleEmptyState
+              icon={<PieChart className="h-5 w-5" />}
+              title="No fee heads configured"
+              description="Set up fee structures to see the expected amount broken down by fee head."
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5"
+                  onClick={() => onNavigate('structures')}
+                >
+                  Configure Fee Structures
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              }
+            />
           )}
         </Panel>
       </div>
@@ -375,11 +397,18 @@ export function FeesOverviewSection({ data, onNavigate }: Props) {
           signal inline so no separate buckets section is needed. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Panel
-          title="Outstanding Dues"
+          title={
+            <span className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-slate-500/10 text-slate-600 dark:text-slate-400">
+                <IndianRupee className="h-3.5 w-3.5" aria-hidden />
+              </span>
+              Outstanding Dues
+            </span>
+          }
           subtitle={
             dues
-              ? `${topDues.length} ledger accounts · largest balances`
-              : `${topDues.length} student${topDues.length === 1 ? '' : 's'} · largest balances`
+              ? `${topDues.length} ledger accounts · every account with a balance, largest first`
+              : `${topDues.length} student${topDues.length === 1 ? '' : 's'} · every account with a balance, largest first`
           }
           className="h-full"
           action={
@@ -435,19 +464,24 @@ export function FeesOverviewSection({ data, onNavigate }: Props) {
               ))}
             </div>
           ) : (
-            <div className="py-6">
-              <FeeEmptyState
-                icon={<CheckCheck className="h-5 w-5" />}
-                title="All student accounts are clear."
-                description="No outstanding dues to follow up on right now."
-              />
-            </div>
+            <ModuleEmptyState
+              icon={<CheckCheck className="h-5 w-5" />}
+              title="All student accounts are clear"
+              description="No outstanding dues to follow up on right now."
+            />
           )}
         </Panel>
 
         <Panel
-          title="Needs Attention"
-          subtitle={`${analytics.urgentActions.length} urgent · oldest overdue first`}
+          title={
+            <span className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+              </span>
+              Needs Attention
+            </span>
+          }
+          subtitle={`${analytics.urgentActions.length} urgent · aging worklist, most overdue first`}
           className="h-full"
           action={
             <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1.5" onClick={() => onNavigate('accounts')}>
@@ -484,9 +518,11 @@ export function FeesOverviewSection({ data, onNavigate }: Props) {
               </motion.button>
             ))}
             {analytics.urgentActions.length === 0 && (
-              <div className="py-6">
-                <FeeEmptyState icon={<CheckCircle2 className="h-5 w-5" />} title="All fees are paid." description="No dues to follow up on." />
-              </div>
+              <ModuleEmptyState
+                icon={<CheckCircle2 className="h-5 w-5" />}
+                title="All fees are paid"
+                description="No dues to follow up on."
+              />
             )}
           </div>
         </Panel>
@@ -536,13 +572,11 @@ export function FeesOverviewSection({ data, onNavigate }: Props) {
                 ))}
               </div>
             ) : (
-              <div className="py-6">
-                <FeeEmptyState
-                  icon={<Banknote className="h-5 w-5" />}
-                  title="No payments recorded yet."
-                  description="Successful payments will appear here as they come in."
-                />
-              </div>
+              <ModuleEmptyState
+                icon={<Banknote className="h-5 w-5" />}
+                title="No payments recorded yet"
+                description="Successful payments will appear here as they come in."
+              />
             )}
           </Panel>
         </div>
@@ -576,9 +610,13 @@ export function FeesOverviewSection({ data, onNavigate }: Props) {
               ))}
             </div>
           ) : (
-            <div className="py-6">
-              <FeeEmptyState icon={<Wallet className="h-5 w-5" />} title="No payments yet." />
-            </div>
+            <ModuleEmptyState
+              framed={false}
+              className="py-6"
+              icon={<Wallet className="h-5 w-5" />}
+              title="No payments yet"
+              description="The collected-amount mix by payment mode will appear here."
+            />
           )}
         </Panel>
       </div>

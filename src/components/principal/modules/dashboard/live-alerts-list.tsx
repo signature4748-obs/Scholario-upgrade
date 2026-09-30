@@ -41,18 +41,18 @@ export function LiveAlertsList({
   // click-catcher backdrop below).
   useDismissOnEscape(() => setSnoozeMenuFor(null), snoozeMenuFor !== null)
   return (
-    <div className="relative space-y-1 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+    <div className="relative max-h-72 overflow-y-auto pr-1 custom-scrollbar divide-y divide-border/50">
       {alerts.length === 0 ? (
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           className="flex flex-col items-center justify-center py-8 text-center"
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 mb-2">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 mb-2">
             <Check className="h-5 w-5" />
           </div>
           <p className="text-sm font-semibold text-foreground">All clear</p>
-          <p className="text-xs text-muted-foreground mt-1">No active alerts — everything is running smoothly.</p>
+          <p className="text-xs text-muted-foreground mt-1 max-w-xs">No active alerts — everything is running smoothly.</p>
           {dismissedCount > 0 && (
             <button onClick={onRestore} className="mt-3 text-xs font-semibold text-primary hover:underline">
               Restore {dismissedCount} dismissed alert{dismissedCount > 1 ? 's' : ''}
@@ -84,23 +84,31 @@ export function LiveAlertsList({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, x: 8, height: 0, marginBottom: 0 }}
               transition={{ duration: 0.18 }}
-              onClick={() => onAlertClick(alert)}
+              // A11y — the row itself is NOT interactive (a clickable div
+              // would be a mouse-only target and would nest interactive
+              // controls). The accessible deep-link is the title button;
+              // Snooze/Resolve are the row's other keyboard actions.
               className={cn(
-                'group flex items-center gap-2.5 rounded-md px-2.5 py-2 cursor-pointer hover:bg-muted/40 transition-colors relative',
+                'group flex items-center gap-2.5 rounded-md px-2.5 py-2.5 hover:bg-muted/40 transition-colors relative',
                 alert.isNew && 'bg-violet-500/5',
               )}
             >
               {/* New indicator: small violet dot, no ping */}
               {alert.isNew && (
-                <span className="absolute left-0.5 top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-violet-500" />
+                <span className="absolute left-0.5 top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-violet-500" aria-hidden="true" />
               )}
               <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-md', alertColorMap[alert.color])}>
                 {alert.icon}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-medium text-foreground truncate">{alert.title}</p>
-                  <span className="text-[10px] text-muted-foreground font-mono shrink-0">{alert.time}</span>
+                  <button
+                    onClick={() => onAlertClick(alert)}
+                    className="text-xs font-medium text-foreground truncate text-left hover:underline focus-ring rounded-sm"
+                  >
+                    {alert.title}
+                  </button>
+                  <span className="text-[10px] text-muted-foreground font-mono tabular-nums whitespace-nowrap shrink-0">{alert.time}</span>
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">{alert.desc}</p>
               </div>
@@ -109,13 +117,13 @@ export function LiveAlertsList({
                 <button
                   onClick={(e) => { e.stopPropagation(); setSnoozeMenuFor(snoozeMenuFor === alert.id ? null : alert.id) }}
                   className={cn(
-                    'flex h-6 w-6 items-center justify-center rounded-md text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 transition-colors',
-                    snoozeMenuFor === alert.id ? 'opacity-100 bg-amber-500/15' : 'opacity-0 group-hover:opacity-100'
+                    'flex h-6 w-6 items-center justify-center rounded-md text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 transition-colors focus-ring',
+                    snoozeMenuFor === alert.id ? 'opacity-100 bg-amber-500/15' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
                   )}
                   title="Snooze alert"
                   aria-label={`Snooze ${alert.title}`}
                 >
-                  <Clock className="h-3.5 w-3.5" />
+                  <Clock className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
                 <AnimatePresence>
                   {snoozeMenuFor === alert.id && (
@@ -150,11 +158,11 @@ export function LiveAlertsList({
                 {/* Resolve button */}
                 <button
                   onClick={(e) => { e.stopPropagation(); onResolve(alert.id) }}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity flex h-6 w-6 items-center justify-center rounded-md text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/15"
+                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex h-6 w-6 items-center justify-center rounded-md text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/15 focus-ring"
                   title="Mark as resolved"
                   aria-label={`Mark ${alert.title} as resolved`}
                 >
-                  <Check className="h-3.5 w-3.5" />
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               </div>
             </motion.div>

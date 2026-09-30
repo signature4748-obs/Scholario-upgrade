@@ -44,6 +44,7 @@ import { useFocusStore } from '@/lib/store/focus-store'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { SummaryCard, SummaryCardGrid } from '../shared/summary-card'
 import { LiveChip } from '../shared/live-chip'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useAttendanceOverview } from '../attendance/use-attendance-overview'
 import { useUpcomingExams } from './use-upcoming-exams'
 
@@ -120,7 +121,7 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
     <SummaryCardGrid columns={4}>
       <SummaryCard
         label="Attendance"
-        value={attendance ? attendance.today.rate : '—'}
+        value={attendance ? attendance.today.rate : <Skeleton className="h-7 w-16" />}
         suffix={attendance ? '%' : undefined}
         sub={attendance
           ? `${attendance.today.present.toLocaleString('en-IN')} present`
@@ -157,8 +158,8 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
       />
       <SummaryCard
         label="Upcoming Exams"
-        value={upcoming ? upcoming.count : '—'}
-        sub={upcoming ? upcoming.sub : 'No scheduled exams'}
+        value={upcoming ? upcoming.count : <Skeleton className="h-7 w-16" />}
+        sub={upcoming ? upcoming.sub : 'Checking schedule…'}
         tone="amber"
         icon={<FileText className="h-4 w-4" />}
         delay={0.12}

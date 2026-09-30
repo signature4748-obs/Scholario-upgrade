@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { formatDate, formatTime } from '@/lib/format'
 import { collectorSourceLabel, type FeeTransaction, type PaymentMode } from '@/lib/store/fee-store'
 import { Panel } from '../shared/panel'
+import { ModuleEmptyState } from '../shared/empty-state'
 
 // ─── Tab type ────────────────────────────────────────────────────────
 
@@ -257,20 +258,12 @@ export function FeePill({ children, accent, className }: { children: React.React
 
 // ─── FeeEmptyState ───────────────────────────────────────────────────
 
+// Rendered through the shared ModuleEmptyState (unframed variant) so every
+// fee empty state shares the Phase-5 icon-tile/title/description/action
+// hierarchy with the dashboard, exams and timetable modules.
 export function FeeEmptyState({ icon, title, description, action }: { icon: React.ReactNode; title: string; description?: string; action?: React.ReactNode }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.98 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="flex flex-col items-center justify-center py-12 text-center"
-    >
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted/40 text-muted-foreground/60 mb-3">
-        {icon}
-      </div>
-      <p className="text-sm font-semibold text-muted-foreground">{title}</p>
-      {description && <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">{description}</p>}
-      {action && <div className="mt-3">{action}</div>}
-    </motion.div>
+    <ModuleEmptyState framed={false} icon={icon} title={title} description={description} action={action} />
   )
 }
 

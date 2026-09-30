@@ -67,6 +67,11 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
   const [mobileOpen, setMobileOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
+  // A11y — refs used to restore focus after Escape closes the mobile
+  // drawer / profile dropdown (focus returns to the trigger that opened
+  // them instead of falling to <body>).
+  const menuBtnRef = useRef<HTMLButtonElement | null>(null)
+  const profileBtnRef = useRef<HTMLButtonElement | null>(null)
   const [cmdOpen, setCmdOpen] = useState(false)
   const [notifList, setNotifList] = useState<NotificationItem[]>([])
   // STABILIZATION — the bell NEVER renders fabricated notifications. The
@@ -218,8 +223,8 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <p className="text-xs font-bold text-foreground truncate">{item.title}</p>
-                    <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 shrink-0">
-                      <Radio className="h-2 w-2 animate-pulse" /> Live
+                    <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400 shrink-0">
+                      <Radio className="h-2 w-2 animate-pulse" aria-hidden="true" /> Live
                     </span>
                   </div>
                   <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{item.description}</p>
@@ -258,6 +263,38 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [])
+
+  // A11y — Escape closes the mobile navigation drawer and returns focus to
+  // the hamburger trigger (the drawer's own contents stay keyboard-focusable
+  // while open: <main> is inert while the drawer overlays it, below). The
+  // focus restore is deferred one frame so it happens AFTER React removes
+  // the inert attribute (focusing an element inside an inert subtree is a
+  // silent no-op).
+  useEffect(() => {
+    if (!mobileOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMobileOpen(false)
+        requestAnimationFrame(() => requestAnimationFrame(() => menuBtnRef.current?.focus()))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mobileOpen])
+
+  // A11y — Escape closes the profile dropdown (it previously only closed
+  // via its backdrop click, which keyboard users could not reach).
+  useEffect(() => {
+    if (!profileOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setProfileOpen(false)
+        profileBtnRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [profileOpen])
 
   const persistRead = (id: string, type?: string) => {
     // Fire-and-forget persistence for live-feed items
@@ -299,8 +336,24 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
     onNavigate('communication')
   }
 
+  const bellLabel = `Notifications${totalBadgeCount > 0 ? `, ${totalBadgeCount > 9 ? '9+' : totalBadgeCount} unread` : ''}${streamLive ? ' — live event stream connected' : ''}`
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
+      {/* A11y — skip link: first tabbable element in the shell; jumps over
+          the ~24 sidebar controls straight to the module content. Hidden by
+          an off-screen translate (not sr-only — not-sr-only's position:static
+          fights focus:fixed) and slides into view when focused. Inert while
+          the mobile drawer is open so the drawer's focus trap stays sealed
+          (focusing inert <main> would be a silent no-op anyway). */}
+      <a
+        href="#main-content"
+        inert={mobileOpen}
+        className="fixed left-4 top-4 z-[200] -translate-y-24 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-lg outline-none transition-transform duration-150 focus:translate-y-0"
+      >
+        Skip to main content
+      </a>
+
       {/* Sidebar Overlay */}
       <AnimatePresence>
         {mobileOpen && (
@@ -344,15 +397,23 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
         />
       )}
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 bg-background overflow-hidden">
+      {/* Main Content Area — inert while the mobile drawer overlays it so
+          Tab/character focus stays inside the drawer (A11y focus trap). */}
+      <main
+        id="main-content"
+        inert={mobileOpen}
+        className="flex-1 flex flex-col min-w-0 bg-background overflow-hidden"
+      >
         {/* Header */}
         <header className="h-16 bg-card border-b border-border flex items-center justify-between px-6 lg:px-8 shrink-0">
           <div className="flex items-center gap-3">
             <button
+              ref={menuBtnRef}
               onClick={() => setMobileOpen(true)}
               aria-label="Open navigation menu"
-              className="lg:hidden text-muted-foreground hover:text-foreground shrink-0 p-1 rounded-md hover:bg-muted"
+              aria-expanded={mobileOpen}
+              aria-controls="app-sidebar"
+              className="lg:hidden flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground shrink-0 hover:bg-muted focus-ring transition-colors"
             >
               <Menu className="h-5 w-5" aria-hidden="true" />
             </button>
@@ -379,22 +440,30 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
             <div className="relative">
               <button
                 onClick={() => setNotifOpen((o) => !o)}
-                aria-label={`Notifications${streamLive ? ' — live event stream connected' : ''}`}
-                className="relative p-1 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                aria-label={bellLabel}
+                aria-expanded={notifOpen}
+                className="relative flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground transition-colors cursor-pointer focus-ring"
               >
-                <Bell className="h-5 w-5" />
+                <Bell className="h-5 w-5" aria-hidden="true" />
                 {/* realtime stream indicator — emerald pulsing dot bottom-right */}
                 {streamLive && (
-                  <span className="absolute bottom-0.5 right-0.5 flex h-2 w-2" title="Live event stream connected">
+                  <span
+                    className="absolute bottom-0.5 right-0.5 flex h-2 w-2"
+                    title="Live event stream connected"
+                    aria-hidden="true"
+                  >
                     <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 ring-1 ring-card" />
                   </span>
                 )}
                 {totalBadgeCount > 0 && (
-                  <span className={cn(
-                    'absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full border-2 border-card flex items-center justify-center text-[9px] font-bold text-white',
-                    role === 'principal' && liveAlertCount > 0 ? 'bg-rose-500 animate-pulse' : 'bg-red-500'
-                  )}>
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      'absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full border-2 border-card flex items-center justify-center text-[10px] font-bold text-white',
+                      role === 'principal' && liveAlertCount > 0 ? 'bg-red-600 animate-pulse' : 'bg-red-600'
+                    )}
+                  >
                     {totalBadgeCount > 9 ? '9+' : totalBadgeCount}
                   </span>
                 )}
@@ -416,7 +485,7 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
                 {/* realtime stream status — shown for every role when connected */}
                 {streamLive && (
                   <div className="mx-1 mb-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2">
-                    <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                    <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
                       <span className="relative flex h-2 w-2">
                         <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
@@ -449,6 +518,7 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
                 user={user}
                 open={profileOpen}
                 onToggle={() => { setProfileOpen((o) => !o); setNotifOpen(false) }}
+                buttonRef={profileBtnRef}
               />
               <ProfileDropdown
                 open={profileOpen}
@@ -470,10 +540,10 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 custom-scrollbar flex flex-col [&>*]:min-w-0">
           {children}
           {/* Sticky footer */}
-          <footer className="mt-auto pt-6 border-t border-border text-center text-[11px] text-muted-foreground/80 font-medium tracking-wide">
+          <footer className="mt-auto pt-6 border-t border-border text-center text-[11px] text-muted-foreground font-medium tracking-wide">
             <p>
               &copy; {new Date().getFullYear()} SCHOLARIO-OS &middot; Enterprise School ERP &middot;
-              <span className="text-primary/80 ml-1"><FooterSchoolName fallback={school.name} /></span>
+              <span className="text-emerald-700 dark:text-emerald-400 ml-1"><FooterSchoolName fallback={school.name} /></span>
               &middot; All systems operational
             </p>
           </footer>

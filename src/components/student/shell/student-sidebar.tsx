@@ -22,6 +22,7 @@
 
 import { ChevronLeft, ChevronRight, X, Search } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useMyStudentRecord } from '@/lib/store/students-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
@@ -53,6 +54,14 @@ export function StudentSidebar({
 }: StudentSidebarProps) {
   void cmdOpen
 
+  // A11y — focus lands on the drawer's close button when it opens so
+  // keyboard users start inside the drawer (see app-shell.tsx for the
+  // inert-main focus trap that keeps Tab there).
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    if (mobileOpen) closeBtnRef.current?.focus()
+  }, [mobileOpen])
+
   // Personal workspace identity — the SERVER enrollment context
   // (user → student → class, resolved by /api/auth/me) is the truth;
   // the canonical roster record (session-resolved) is only a hydrating
@@ -71,6 +80,7 @@ export function StudentSidebar({
 
   return (
     <motion.aside
+      id="app-sidebar"
       initial={false}
       animate={{ width: collapsed ? 76 : 280 }}
       transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
@@ -97,7 +107,7 @@ export function StudentSidebar({
               <span className="font-display text-base font-bold leading-none tracking-tight text-foreground">
                 SCHOLARIO
               </span>
-              <span className="mt-1 text-[10px] font-medium uppercase tracking-[0.16em] text-emerald-600 dark:text-emerald-400">
+              <span className="mt-1 text-[10px] font-medium uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-400">
                 Student Workspace
               </span>
             </div>
@@ -115,11 +125,12 @@ export function StudentSidebar({
           {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
         <button
+          ref={closeBtnRef}
           onClick={() => setMobileOpen(false)}
-          className="lg:hidden absolute right-3 top-3.5 p-1.5 rounded-lg border border-border/50 text-muted-foreground hover:bg-muted cursor-pointer"
+          className="lg:hidden absolute right-3 top-3.5 flex h-9 w-9 items-center justify-center p-1.5 rounded-lg border border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer focus-ring"
           aria-label="Close navigation menu"
         >
-          <X className="h-4 w-4" />
+          <X className="h-4 w-4" aria-hidden="true" />
         </button>
       </div>
 
@@ -185,7 +196,7 @@ export function StudentSidebar({
               <Search className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400 transition-transform group-hover:scale-110" />
               <span className="truncate font-medium">Search…</span>
             </span>
-            <kbd className="shrink-0 rounded-md border border-border/60 bg-background/80 px-1.5 py-0.5 text-[9px] font-mono font-semibold text-muted-foreground/80 shadow-2xs">
+            <kbd className="shrink-0 rounded-md border border-border/60 bg-background px-1.5 py-0.5 text-[9px] font-mono font-semibold text-muted-foreground shadow-2xs">
               ⌘K
             </kbd>
           </button>
@@ -211,7 +222,7 @@ export function StudentSidebar({
         {groups.map((group) => (
           <div key={group.label}>
             {!collapsed && (
-              <h3 className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground/65">
+              <h3 className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">
                 {group.label}
               </h3>
             )}
@@ -219,6 +230,13 @@ export function StudentSidebar({
             <div className="space-y-1">
               {group.items.map((item) => {
                 const isActive = activeKey === item.key
+                // A11y — when expanded the accessible name comes from the
+                // button's CONTENT (label + live badge count, so "Messages 2"
+                // is announced). When collapsed only the icon renders, so an
+                // explicit label carries the name + badge.
+                const itemLabel = collapsed
+                  ? item.label + (item.badge != null && item.badge > 0 ? `, ${item.badge > 99 ? '99+' : item.badge} new` : '')
+                  : undefined
                 return (
                   <button
                     key={item.key}
@@ -228,7 +246,7 @@ export function StudentSidebar({
                     }}
                     title={collapsed ? item.label : undefined}
                     aria-current={isActive ? 'page' : undefined}
-                    aria-label={item.label}
+                    aria-label={itemLabel}
                     className={cn(
                       'relative flex w-full items-center rounded-[10px] text-left transition-all duration-150 cursor-pointer group/icon',
                       'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -258,7 +276,7 @@ export function StudentSidebar({
                     </span>
                     {!collapsed && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
                     {!collapsed && item.badge != null && item.badge > 0 && (
-                      <span className="ml-auto shrink-0 rounded-full bg-primary/[0.12] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-primary">
+                      <span className="ml-auto shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-emerald-700 dark:text-emerald-300">
                         {item.badge > 99 ? '99+' : item.badge}
                       </span>
                     )}
@@ -284,10 +302,10 @@ export function StudentSidebar({
       >
         {!collapsed ? (
           <>
-            <span className="text-[10px] font-medium text-muted-foreground/70">SCHOLARIO v{APP_VERSION}</span>
+            <span className="text-[10px] font-medium text-muted-foreground">SCHOLARIO v{APP_VERSION}</span>
             <span className="flex items-center gap-1.5" title="System online">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-              <span className="text-[10px] font-sans font-semibold text-emerald-600 dark:text-emerald-400">Live</span>
+              <span className="text-[10px] font-sans font-semibold text-emerald-700 dark:text-emerald-400">Live</span>
             </span>
           </>
         ) : (

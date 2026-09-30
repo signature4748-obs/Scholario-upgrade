@@ -48,7 +48,7 @@ export function ExamsOverviewTab({ exams, classes: _classes, loading, error, ses
   return (
     <div className="space-y-4">
       {/* 4 KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KpiCard
           label="Examinations"
           value={data.total}
@@ -73,12 +73,16 @@ export function ExamsOverviewTab({ exams, classes: _classes, loading, error, ses
           tone="cyan"
           delay={0.1}
         />
+        {/* Label reflects its data source (exams whose STATUS is ongoing —
+            a record count, not a session verdict), so this card can never
+            visually contradict the date-driven “No examination is currently
+            active.” line in ExaminationContext below. */}
         <KpiCard
-          label="Current Status"
-          value={data.statusLabel}
-          sub={data.statusSub}
+          label="Ongoing Exams"
+          value={data.ongoing}
+          sub={data.currentExam ? data.currentExam.name : 'None in progress'}
           icon={<Activity className="h-4 w-4" />}
-          tone={data.statusTone}
+          tone={data.ongoing > 0 ? 'amber' : 'sky'}
           delay={0.15}
         />
       </div>
@@ -231,7 +235,7 @@ function KpiCard({ label, value, sub, icon, tone, delay }: {
         <span className={t.text}>{icon}</span>
       </div>
       <p className={cn('font-display text-2xl font-bold tabular-nums tracking-tight', t.text)}>{value}</p>
-      <p className="text-[10px] text-muted-foreground mt-1 leading-tight">{sub}</p>
+      <p className="text-[10px] text-muted-foreground mt-1 leading-snug">{sub}</p>
     </motion.div>
   )
 }
@@ -241,30 +245,30 @@ function KpiCard({ label, value, sub, icon, tone, delay }: {
 function OverviewSkeleton() {
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[0, 1, 2, 3].map((i) => (
           <div key={i} className="rounded-xl border border-border bg-card p-4 space-y-2">
             <div className="flex justify-between">
-              <div className="h-2.5 w-16 rounded bg-muted animate-pulse" />
-              <div className="h-4 w-4 rounded bg-muted animate-pulse" />
+              <div className="h-2.5 w-16 rounded skeleton" />
+              <div className="h-4 w-4 rounded skeleton" />
             </div>
-            <div className="h-7 w-20 rounded bg-muted animate-pulse" />
-            <div className="h-2.5 w-24 rounded bg-muted/60 animate-pulse" />
+            <div className="h-7 w-20 rounded skeleton" />
+            <div className="h-2.5 w-24 rounded skeleton" />
           </div>
         ))}
       </div>
       <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-        <div className="h-3 w-32 rounded bg-muted animate-pulse" />
-        <div className="h-5 w-48 rounded bg-muted animate-pulse" />
+        <div className="h-3 w-32 rounded skeleton" />
+        <div className="h-5 w-48 rounded skeleton" />
         <div className="grid grid-cols-4 gap-3">
-          {[0, 1, 2, 3].map((i) => <div key={i} className="h-12 rounded-lg bg-muted/40 animate-pulse" />)}
+          {[0, 1, 2, 3].map((i) => <div key={i} className="h-12 rounded-lg skeleton" />)}
         </div>
       </div>
       {/* Skeleton for Session Top Performers */}
       <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-        <div className="h-4 w-44 rounded bg-muted animate-pulse" />
+        <div className="h-4 w-44 rounded skeleton" />
         <div className="grid grid-cols-3 gap-3">
-          {[0, 1, 2].map((i) => <div key={i} className="h-32 rounded-lg bg-muted/40 animate-pulse" />)}
+          {[0, 1, 2].map((i) => <div key={i} className="h-32 rounded-lg skeleton" />)}
         </div>
       </div>
     </div>

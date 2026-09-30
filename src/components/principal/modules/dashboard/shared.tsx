@@ -53,9 +53,12 @@ export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
     <div className="rounded-xl border border-border bg-card p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
       <div className="min-w-0">
         <p className="text-[11px] text-muted-foreground uppercase tracking-wider">{today}</p>
-        <h1 className="text-base sm:text-lg font-semibold tracking-tight text-foreground mt-0.5">
+        {/* h2 (not a second h1): the shell header already owns the page's h1
+            ("Dashboard"); this greeting is page content, so it starts the
+            content heading order at h2 → panels use h3 (clean hierarchy). */}
+        <h2 className="text-base sm:text-lg font-semibold tracking-tight text-foreground mt-0.5">
           Good morning, {firstName}
-        </h1>
+        </h2>
         <p className="text-xs text-muted-foreground mt-1">
           {school.shortName} · Attendance {attendance ? attendance.today.rate : '—'}% · {birthdaysToday} birthdays today
         </p>

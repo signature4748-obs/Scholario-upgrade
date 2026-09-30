@@ -42,16 +42,17 @@ function UpcomingEventsCard({ onNavigate }: { onNavigate?: (m: string) => void }
     <Panel title="Upcoming Events" subtitle="School calendar">
       <div className="space-y-1.5">
         {upcomingEvents.map((e, i) => (
-          <motion.div
+          <motion.button
             key={e.id}
+            type="button"
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: i * 0.05 }}
             onClick={() => onNavigate?.('calendar')}
-            className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40 transition-colors cursor-pointer"
+            className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40 transition-colors cursor-pointer text-left focus-ring"
           >
             {/* Small 28×28 date chip */}
-            <div className="flex flex-col items-center justify-center h-7 w-7 shrink-0 rounded-md bg-muted/60 text-foreground">
+            <div className="flex flex-col items-center justify-center h-7 w-7 shrink-0 rounded-md bg-muted/60 text-foreground" aria-hidden="true">
               <span className="text-[11px] font-bold leading-none">
                 {new Date(e.date).getDate()}
               </span>
@@ -63,10 +64,10 @@ function UpcomingEventsCard({ onNavigate }: { onNavigate?: (m: string) => void }
               <p className="text-xs font-medium text-foreground truncate">{e.title}</p>
               <p className="text-[11px] text-muted-foreground">{e.type} · {e.time}</p>
             </div>
-            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70 hidden sm:inline-block">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground hidden sm:inline-block">
               {e.type}
             </span>
-          </motion.div>
+          </motion.button>
         ))}
       </div>
     </Panel>
@@ -127,13 +128,14 @@ function PendingReviewsCard({ onNavigate }: { onNavigate?: (m: string) => void }
     <Panel title="Pending Reviews" subtitle="Queues needing your attention">
       <div className="space-y-1.5">
         {reviews.map((r, i) => (
-          <motion.div
+          <motion.button
             key={r.label}
+            type="button"
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: i * 0.05 }}
             onClick={() => onNavigate?.(r.navKey)}
-            className="group flex items-center gap-2.5 rounded-md px-2 py-2 hover:bg-muted/40 transition-colors cursor-pointer"
+            className="group flex w-full items-center gap-2.5 rounded-md px-2 py-2 hover:bg-muted/40 transition-colors cursor-pointer text-left focus-ring"
           >
             <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${r.tone}`}>
               {r.icon}
@@ -147,8 +149,8 @@ function PendingReviewsCard({ onNavigate }: { onNavigate?: (m: string) => void }
             <span className="font-display text-base font-bold tabular-nums text-foreground">
               {r.count}
             </span>
-            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/70 group-hover:text-foreground group-hover:translate-x-0.5 transition-all" />
-          </motion.div>
+            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/70 group-hover:text-foreground group-hover:translate-x-0.5 transition-all" aria-hidden="true" />
+          </motion.button>
         ))}
       </div>
     </Panel>

@@ -109,7 +109,7 @@ function ClassRow({ c, i }: { c: ClassWithState; i: number }) {
             </span>
           )}
           {isNext && (
-            <span className="rounded bg-primary/10 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-primary">
+            <span className="rounded bg-emerald-500/10 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
               Next
             </span>
           )}

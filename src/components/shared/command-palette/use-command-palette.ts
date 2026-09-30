@@ -60,14 +60,35 @@ export function useCommandPalette({
   const { toggle: toggleTheme } = useTheme()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // A11y — remembers the element that had focus before the palette opened
+  // so closing it (Escape / selection) restores focus there instead of
+  // dropping it to <body>.
+  const prevFocusRef = useRef<HTMLElement | null>(null)
 
   // Load recent searches when dialog opens
   useEffect(() => {
     if (open) {
+      prevFocusRef.current = (document.activeElement as HTMLElement | null) ?? null
       setQuery('')
       setActive(0)
       setRecentList(getRecentSearches())
       setTimeout(() => inputRef.current?.focus(), 50)
+    }
+  }, [open])
+
+  // Restore focus when the palette closes. Deferred past the exit animation
+  // (AnimatePresence keeps the panel mounted for ~120ms; focus falls to
+  // <body> only after the unmount).
+  useEffect(() => {
+    if (!open && prevFocusRef.current) {
+      const el = prevFocusRef.current
+      prevFocusRef.current = null
+      const t = setTimeout(() => {
+        if (document.activeElement === document.body || !document.body.contains(document.activeElement)) {
+          el.focus?.()
+        }
+      }, 250)
+      return () => clearTimeout(t)
     }
   }, [open])
 
@@ -245,6 +266,29 @@ export function useCommandPalette({
         }
       } else if (e.key === 'Escape') {
         onOpenChange(false)
+      } else if (e.key === 'Tab') {
+        // A11y — focus trap: Tab cycles inside the palette dialog instead
+        // of escaping into the background page (the dialog is modal).
+        const panel = inputRef.current?.closest('[role="dialog"]')
+        if (!panel) return
+        const focusables = Array.from(
+          panel.querySelectorAll<HTMLElement>('button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'),
+        ).filter((el) => el.offsetParent !== null)
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const activeEl = document.activeElement
+        if (e.shiftKey) {
+          if (activeEl === first || !panel.contains(activeEl)) {
+            e.preventDefault()
+            last.focus()
+          }
+        } else {
+          if (activeEl === last || !panel.contains(activeEl)) {
+            e.preventDefault()
+            first.focus()
+          }
+        }
       }
     }
     window.addEventListener('keydown', handler)

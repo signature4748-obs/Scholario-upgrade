@@ -66,7 +66,7 @@ export function LiveAlertsToolbar({
           >
             <DropdownMenuTrigger asChild>
               <button
-                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-border bg-card hover:bg-muted/60 text-foreground text-xs font-medium transition-colors"
+                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-border bg-card text-foreground text-xs font-medium shadow-xs transition-colors hover:bg-muted hover:border-border/80"
                 title="Snooze all alerts"
               >
                 <Clock className="h-3.5 w-3.5" />

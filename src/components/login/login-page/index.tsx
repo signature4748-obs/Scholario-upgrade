@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import Image from 'next/image'
+import { Eye, EyeOff } from 'lucide-react'
 import { useAuth, type Role } from '@/lib/store/auth-store'
 import { saveSessionToken } from '@/lib/auth-session-token'
 import { school } from '@/lib/mock/school'
@@ -213,7 +214,7 @@ function LeftPane({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
         <h1 className="font-display text-3xl lg:text-4xl font-bold tracking-tight text-white">
           {school.shortName}
         </h1>
-        <p className="text-[10px] font-bold text-emerald-200 tracking-[0.3em] uppercase mt-2">
+        <p className="text-[11px] font-semibold text-emerald-100 tracking-[0.25em] uppercase mt-2">
           Powered by Scholario
         </p>
       </motion.div>
@@ -233,11 +234,12 @@ function LeftPane({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8, delay: 0.4, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 mt-12 text-xs text-emerald-100/70 tracking-wider flex gap-4 uppercase font-medium"
+        className="relative z-10 mt-12 mb-8 text-xs text-emerald-100/70 tracking-wider flex gap-4 uppercase font-medium"
       >
         <button
+          type="button"
           onClick={onBackToWebsite}
-          className="hover:text-white transition-colors"
+          className="rounded-md px-1.5 -mx-1.5 py-0.5 hover:text-white transition-colors focus-ring"
         >
           ← Back to Website
         </button>
@@ -309,6 +311,7 @@ function RightPane({
   onLogin,
   onForgotPassword,
 }: RightPaneProps) {
+  const [passwordVisible, setPasswordVisible] = useState(false)
   return (
     <section className="relative z-20 flex w-full flex-1 flex-col justify-center overflow-y-auto bg-white p-6 sm:p-8 md:w-[55%] md:p-12 lg:p-16">
       <div className="w-full max-w-md mx-auto">
@@ -324,7 +327,7 @@ function RightPane({
             />
           </div>
           <h1 className="font-display text-xl font-bold text-foreground">{school.shortName}</h1>
-          <p className="text-[10px] font-bold text-emerald-600 tracking-[0.3em] uppercase mt-1">
+          <p className="text-[11px] font-semibold text-emerald-600 tracking-[0.25em] uppercase mt-1">
             Powered by Scholario
           </p>
         </div>
@@ -347,54 +350,13 @@ function RightPane({
           Sign in to access your dashboard.
         </motion.p>
 
-        {/* One-tap demo accounts (dev/preview only — gated out of
-            production builds via login-page/data.tsx) */}
-        {credentials.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
-          className="mb-7"
-        >
-          <p className="text-xs font-medium text-muted-foreground mb-2.5 uppercase tracking-wide">
-            Quick demo access — one tap to sign in
-          </p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {credentials.map((cred) => {
-              const active = selectedRole === cred.role
-              return (
-                <motion.button
-                  key={cred.role}
-                  type="button"
-                  onClick={() => onSelectCredential(cred)}
-                  whileHover={{ y: -2 }}
-                  whileTap={{ scale: 0.97 }}
-                  className={`group relative flex flex-col items-center gap-1.5 rounded-xl border p-2.5 text-center transition-all ${
-                    active
-                      ? 'border-emerald-500 bg-emerald-50 shadow-md shadow-emerald-500/10'
-                      : 'border-border bg-card hover:border-emerald-500/40 hover:bg-emerald-50/30'
-                  }`}
-                >
-                  <div
-                    className={`flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br ${cred.gradient} text-white shadow-md`}
-                  >
-                    {cred.icon}
-                  </div>
-                  <p className="text-[11px] font-semibold text-foreground">{cred.title}</p>
-                </motion.button>
-              )
-            })}
-          </div>
-        </motion.div>
-        )}
-
         {/* Error message — rendered ABOVE the fields so it is always
             visible without scrolling, on every viewport. */}
         {error && (
           <div
             role="alert"
             aria-live="polite"
-            className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-700"
+            className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm font-medium text-destructive"
           >
             {error}
           </div>
@@ -426,7 +388,7 @@ function RightPane({
                 name="identifier"
                 type="text"
                 required
-                autoComplete="username"
+                autoComplete="email"
                 inputMode="email"
                 value={email}
                 onChange={(e) => onEmailChange(e.target.value)}
@@ -457,19 +419,27 @@ function RightPane({
               <input
                 id="password"
                 name="password"
-                type="password"
+                type={passwordVisible ? 'text' : 'password'}
                 required
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => onPasswordChange(e.target.value)}
                 placeholder="Enter your password"
-                className="custom-input block w-full text-foreground placeholder:text-gray-400 py-2.5 focus:ring-0 peer"
+                className="custom-input custom-input-action-end block w-full text-foreground placeholder:text-gray-400 py-2.5 focus:ring-0"
               />
-              <span className="absolute right-0 input-check-icon peer-focus:scale-110 text-emerald-600">
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </span>
+              <button
+                type="button"
+                onClick={() => setPasswordVisible((v) => !v)}
+                aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+                aria-pressed={passwordVisible}
+                className="absolute right-0 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 hover:text-foreground transition-colors focus-ring"
+              >
+                {passwordVisible ? (
+                  <EyeOff className="h-5 w-5" aria-hidden />
+                ) : (
+                  <Eye className="h-5 w-5" aria-hidden />
+                )}
+              </button>
             </div>
           </motion.div>
 
@@ -483,7 +453,7 @@ function RightPane({
             <button
               type="button"
               onClick={onForgotPassword}
-              className="text-sm font-medium text-emerald-700 hover:text-emerald-800 hover:underline transition-colors"
+              className="rounded-md px-1 -mx-1 py-0.5 text-sm font-medium text-emerald-700 hover:text-emerald-800 hover:underline transition-colors focus-ring"
             >
               Forgot password?
             </button>
@@ -500,7 +470,7 @@ function RightPane({
               disabled={submitting}
               whileHover={{ scale: 1.01, y: -1 }}
               whileTap={{ scale: 0.98 }}
-              className="group w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white text-base font-semibold rounded-full shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:shadow-emerald-500/40 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              className="group w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white text-base font-semibold rounded-full shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:shadow-emerald-500/40 transition-all disabled:opacity-60 disabled:cursor-not-allowed focus-ring"
             >
               {submitting ? 'Signing in…' : 'Sign In'}
               {!submitting && (
@@ -518,10 +488,52 @@ function RightPane({
           </motion.div>
         </form>
 
+        {/* One-tap demo accounts — BELOW the primary form so the
+            institutional sign-in flow leads and the keyboard tab order
+            runs email → password → forgot → Sign In → demo chips.
+            (dev/preview only — gated out of production builds via
+            login-page/data.tsx; school roles only, never super-admin) */}
         {credentials.length > 0 && (
-          <p className="text-center text-xs text-muted-foreground mt-6">
-            Tap a role chip above to auto-fill credentials · Demo platform
-          </p>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.55, ease: [0.16, 1, 0.3, 1] }}
+            className="mt-8"
+          >
+            <p className="text-xs font-medium text-muted-foreground mb-2.5 uppercase tracking-wide">
+              Quick demo access — one tap to fill
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              {credentials.map((cred) => {
+                const active = selectedRole === cred.role
+                return (
+                  <motion.button
+                    key={cred.role}
+                    type="button"
+                    onClick={() => onSelectCredential(cred)}
+                    aria-pressed={active}
+                    whileHover={{ y: -2 }}
+                    whileTap={{ scale: 0.97 }}
+                    className={`group relative flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border p-3 text-center transition-all focus-ring ${
+                      active
+                        ? 'border-emerald-500 bg-emerald-50 shadow-md shadow-emerald-500/10'
+                        : 'border-border bg-card hover:border-emerald-500/40 hover:bg-emerald-50/30'
+                    }`}
+                  >
+                    <div
+                      className={`flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br ${cred.gradient} text-white shadow-md`}
+                    >
+                      {cred.icon}
+                    </div>
+                    <p className="text-[11px] font-semibold text-foreground">{cred.title}</p>
+                  </motion.button>
+                )
+              })}
+            </div>
+            <p className="text-center text-[11px] text-muted-foreground mt-3">
+              Demo accounts · development preview only
+            </p>
+          </motion.div>
         )}
       </div>
 
@@ -559,6 +571,17 @@ function RightPane({
           box-shadow: none;
           border-bottom-color: transparent;
         }
+        /* Keyboard-only focus indicator matching the app-wide .focus-ring
+           pattern: mouse/touch focus keeps just the animated underline;
+           keyboard focus additionally draws the high-contrast ring. */
+        .custom-input:focus-visible {
+          box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+        }
+        /* Right padding so text never runs under a trailing inline action
+           (the password show/hide toggle). */
+        .custom-input-action-end {
+          padding-right: 2.5rem;
+        }
         .input-check-icon {
           transition: transform 0.3s ease, opacity 0.3s ease;
           opacity: 0.4;
@@ -593,6 +616,9 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
         exit={{ scale: 0.95, y: 10 }}
         transition={{ duration: 0.2 }}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Reset your password"
         className="w-full max-w-md bg-white rounded-3xl p-8 shadow-2xl"
       >
         {sent ? (
@@ -608,7 +634,7 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
             </p>
             <button
               onClick={onClose}
-              className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:shadow-lg hover:shadow-emerald-500/30 transition-all"
+              className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:shadow-lg hover:shadow-emerald-500/30 transition-all focus-ring"
             >
               Got it
             </button>
@@ -631,22 +657,24 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
               <input
                 type="email"
                 required
+                autoFocus
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@greenwood.edu.in"
+                aria-label="Registered email address"
                 className="w-full px-4 py-3 rounded-xl border border-border bg-card/60 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 outline-none transition-all"
               />
               <div className="flex gap-3">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex-1 px-5 py-2.5 rounded-full text-sm font-semibold text-foreground border border-border hover:bg-accent transition-colors"
+                  className="flex-1 px-5 py-2.5 rounded-full text-sm font-semibold text-foreground border border-border hover:bg-accent transition-colors focus-ring"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-5 py-2.5 rounded-full text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:shadow-lg hover:shadow-emerald-500/30 transition-all"
+                  className="flex-1 px-5 py-2.5 rounded-full text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:shadow-lg hover:shadow-emerald-500/30 transition-all focus-ring"
                 >
                   Send reset link
                 </button>

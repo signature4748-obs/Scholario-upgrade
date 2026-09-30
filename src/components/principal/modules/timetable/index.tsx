@@ -31,6 +31,7 @@ import {
 import { useTeacherRosterStore, type TeacherPick } from '@/lib/store/teacher-roster-store'
 import { useAcademicConfigStore, type DbClassInfo } from '@/lib/academic-config/client'
 import { buildInitialRows, type TimetableSlot as Slot } from './data'
+import { ModuleEmptyState } from '../shared/empty-state'
 import { serverRowsToSlots, type ServerSlot } from '@/lib/timetable/server-mapping'
 import type { TimetableRow } from './schedule-grid'
 import {
@@ -744,15 +745,18 @@ export function TimetableModule() {
           RECORDS ONLY: never a demo schedule). The ladder still renders as
           an editing scaffold once the principal enters Edit mode. */}
       {serverSynced === 'empty' && !editMode && slots.length === 0 && (
-        <div className="rounded-lg border border-dashed border-border/70 bg-muted/20 p-6 text-center">
-          <CalendarClock className="mx-auto h-6 w-6 text-muted-foreground/60" aria-hidden />
-          <p className="mt-2 text-sm font-semibold text-foreground">No timetable on record</p>
-          <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
-            This school has no published schedule yet. Classes and subjects come from your
-            configuration in <span className="font-medium text-foreground">Students &amp; Classes</span> —
-            enter Edit mode to build the first schedule, then publish it to every role.
-          </p>
-        </div>
+        <ModuleEmptyState
+          className="m-0 py-6"
+          icon={<CalendarClock className="h-5 w-5" aria-hidden />}
+          title="No timetable on record"
+          description={
+            <>
+              This school has no published schedule yet. Classes and subjects come from your
+              configuration in <span className="font-medium text-foreground">Students &amp; Classes</span> —
+              enter Edit mode to build the first schedule, then publish it to every role.
+            </>
+          }
+        />
       )}
 
       {/* Pending publish banner */}

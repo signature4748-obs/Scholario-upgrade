@@ -618,3 +618,19 @@ html[data-text-size='large'] {
   height: 1px;
   display: none;
 }
+
+/* ============================================================
+   PRINT / FULL-PAGE SCREENSHOT GUARD
+   Framer-motion whileInView sections start life at opacity:0
+   and only animate in when the IntersectionObserver fires —
+   which never happens for printouts or headless full-page
+   captures. [data-fadein] (emitted by the public site's FadeIn
+   wrapper) is forced visible when printing. Author !important
+   here also beats framer-motion's inline opacity/transform.
+   ============================================================ */
+@media print {
+  [data-fadein] {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}

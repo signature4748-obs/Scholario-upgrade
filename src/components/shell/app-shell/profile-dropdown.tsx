@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { LogOut, Settings, ShieldCheck, Building2, ChevronDown } from 'lucide-react'
 // The school context line renders the authenticated user's actual school
@@ -31,31 +32,38 @@ export function ProfileDropdownTrigger({
   user,
   open,
   onToggle,
+  buttonRef,
 }: {
   user: ProfileUser | null
   open: boolean
   onToggle: () => void
+  /** A11y — lets the shell restore focus here when Escape closes the menu. */
+  buttonRef?: React.Ref<HTMLButtonElement>
 }) {
-  void open
   const serverAvatar = useCurrentUser((s) => s.me?.avatarUrl)
+  const displayName = user?.name || 'Dr. Ramesh Varma'
   return (
     <button
+      ref={buttonRef}
       onClick={onToggle}
-      className="flex items-center gap-3 pl-4 border-l border-border hover:opacity-90 transition-opacity cursor-pointer group"
+      aria-label={`Account menu — ${displayName}`}
+      aria-expanded={open}
+      aria-haspopup="menu"
+      className="flex items-center gap-3 pl-4 border-l border-border rounded-md hover:opacity-90 transition-opacity cursor-pointer group focus-ring"
       title="User Menu"
     >
       <div className="text-right hidden sm:block">
-        <p className="text-xs font-semibold text-foreground leading-none group-hover:text-primary transition-colors">{user?.name || 'Dr. Ramesh Varma'}</p>
+        <p className="text-xs font-semibold text-foreground leading-none group-hover:text-primary transition-colors">{displayName}</p>
         <p className="text-[10px] text-muted-foreground mt-1">{user?.email || 'principal@scholario.edu'}</p>
       </div>
       <div className="w-8 h-8 rounded-full bg-muted text-foreground font-bold border border-border flex items-center justify-center text-xs shrink-0 overflow-hidden group-hover:border-primary transition-colors">
         {serverAvatar ? (
-          <img src={serverAvatar} alt={user?.name || 'Profile photo'} className="h-full w-full object-cover" />
+          <img src={serverAvatar} alt={`${displayName} profile photo`} className="h-full w-full object-cover" />
         ) : (
-          (user?.name || 'Dr. Ramesh Varma').split(' ').map((n) => n[0]).join('').slice(0, 2)
+          displayName.split(' ').map((n) => n[0]).join('').slice(0, 2)
         )}
       </div>
-      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
+      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground transition-colors" aria-hidden="true" />
     </button>
   )
 }
@@ -70,12 +78,26 @@ export function ProfileDropdown({
   onOpenPlatform,
 }: ProfileDropdownProps) {
   const activeTenant = useActiveTenant()
+
+  // A11y — Escape closes the menu from the keyboard (the shell also
+  // restores focus to the trigger; handled there via buttonRef).
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
   return (
     <AnimatePresence>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={onClose} />
+          <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden="true" />
           <motion.div
+            role="dialog"
+            aria-label="Account menu"
             initial={{ opacity: 0, y: 8, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.95 }}
@@ -86,7 +108,7 @@ export function ProfileDropdown({
               <p className="font-bold text-xs text-foreground">{user?.name || 'Dr. Ramesh Varma'}</p>
               <p className="text-[11px] text-muted-foreground truncate">{user?.email || 'principal@scholario.edu'}</p>
               <div className="flex items-center gap-1.5 mt-1.5">
-                <span className="inline-block text-[9px] font-extrabold px-2 py-0.5 rounded bg-primary/15 text-primary uppercase tracking-wider">
+                <span className="inline-block text-[9px] font-extrabold px-2 py-0.5 rounded bg-primary/15 text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
                   {role}
                 </span>
                 {role !== 'superadmin' && (
@@ -105,9 +127,9 @@ export function ProfileDropdown({
                 </p>
                 <button
                   onClick={() => { onClose(); onOpenPlatform() }}
-                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-foreground hover:bg-muted rounded-md transition-colors text-left"
+                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-foreground hover:bg-muted rounded-md transition-colors text-left focus-ring"
                 >
-                  <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+                  <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
                   Go to Control Plane
                 </button>
               </div>
@@ -116,16 +138,16 @@ export function ProfileDropdown({
             <div className="py-1 space-y-0.5">
               <button
                 onClick={onNavigateSettings}
-                className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-foreground hover:bg-muted rounded-md transition-colors font-medium text-left"
+                className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-foreground hover:bg-muted rounded-md transition-colors font-medium text-left focus-ring"
               >
-                <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+                <Settings className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                 Account Settings
               </button>
               <button
                 onClick={onLogout}
-                className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-destructive hover:bg-destructive/10 rounded-md transition-colors font-medium text-left"
+                className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-destructive hover:bg-destructive/10 rounded-md transition-colors font-medium text-left focus-ring"
               >
-                <LogOut className="h-3.5 w-3.5 text-destructive" />
+                <LogOut className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />
                 Sign Out
               </button>
             </div>

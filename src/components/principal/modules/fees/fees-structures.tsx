@@ -54,6 +54,7 @@ import { useFeeData,
   type StructureRevision,
 } from '@/lib/store/fee-store'
 import { useStudentsStore } from '@/lib/store/students-store'
+import { ModuleEmptyState } from '../shared/empty-state'
 // SaaS-STAGE-2A (Task 7-b) — tenant-aware gating: the Catalogue entry point,
 // the New-Structure CTA and the Bulk-Apply action follow the ACTIVE school's
 // sub-features / effective capabilities. The store already enforces every
@@ -446,8 +447,13 @@ export function FeesStructuresSection({ data, onNavigate }: { data: ReturnType<t
       {/* Structure grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {visibleStructures.length === 0 && (
-          <div className="rounded-xl border border-dashed bg-card/50 p-8 text-center md:col-span-2 xl:col-span-3">
-            <p className="text-xs text-muted-foreground">No structures in this view.</p>
+          <div className="md:col-span-2 xl:col-span-3">
+            <ModuleEmptyState
+              className="m-0 py-8"
+              icon={<Layers className="h-5 w-5" aria-hidden />}
+              title="No structures in this view"
+              description="Try a different filter or create a new fee structure."
+            />
           </div>
         )}
         {visibleStructures.map((f, i) => {
@@ -705,33 +711,38 @@ export function FeesStructuresSection({ data, onNavigate }: { data: ReturnType<t
         )}
       </AnimatePresence>
 
-      {/* History dialog (opened from card) */}
-      <FeesStructuresHistoryDialog
-        open={!!historyStructure}
-        structure={historyStructure ?? feeStructures[0]}
-        onClose={() => setHistoryStructure(null)}
-        onRevert={(targetVersionId) => {
-          if (!historyStructure) return
-          const target = versions.find((v) => v.id === targetVersionId)
-          if (!target) return
-          const reason = prompt(`Roll back ${historyStructure.className} to Version ${target.version}?\n\nThis creates a NEW version with the heads from v${target.version}.\n\nReason (required):`)
-          if (!reason || reason.trim().length < 5) {
-            toast.error('Reason is required (min 5 chars)')
-            return
-          }
-          const newId = useFeeStore.getState().revertFeeStructureVersion(historyStructure.id, targetVersionId, reason.trim(), 'Principal')
-          if (newId) {
-            toast.success('Rolled back successfully', {
-              description: `${historyStructure.className} rolled back to v${target.version}. New version is now current.`,
-            })
-            setHistoryStructure(null)
-          }
-        }}
-        onArchive={(versionId) => {
-          archiveFeeStructureVersion(versionId, 'Principal')
-          toast.info('Version archived', { description: `Version archived from ${historyStructure?.className}.` })
-        }}
-      />
+      {/* History dialog (opened from card). Render-guard: the dialog's body
+          reads structure.id even while closed, so a school with ZERO
+          structures (historyStructure null + feeStructures empty) must not
+          mount it — that crashed the whole tab on the empty-data demo. */}
+      {(historyStructure ?? feeStructures[0]) && (
+        <FeesStructuresHistoryDialog
+          open={!!historyStructure}
+          structure={historyStructure ?? feeStructures[0]}
+          onClose={() => setHistoryStructure(null)}
+          onRevert={(targetVersionId) => {
+            if (!historyStructure) return
+            const target = versions.find((v) => v.id === targetVersionId)
+            if (!target) return
+            const reason = prompt(`Roll back ${historyStructure.className} to Version ${target.version}?\n\nThis creates a NEW version with the heads from v${target.version}.\n\nReason (required):`)
+            if (!reason || reason.trim().length < 5) {
+              toast.error('Reason is required (min 5 chars)')
+              return
+            }
+            const newId = useFeeStore.getState().revertFeeStructureVersion(historyStructure.id, targetVersionId, reason.trim(), 'Principal')
+            if (newId) {
+              toast.success('Rolled back successfully', {
+                description: `${historyStructure.className} rolled back to v${target.version}. New version is now current.`,
+              })
+              setHistoryStructure(null)
+            }
+          }}
+          onArchive={(versionId) => {
+            archiveFeeStructureVersion(versionId, 'Principal')
+            toast.info('Version archived', { description: `Version archived from ${historyStructure?.className}.` })
+          }}
+        />
+      )}
 
       {/* SaaS-STAGE-2A (Task 7-b) — the permanent-delete confirmation
           dialog was removed with the "Delete structure…" menu item: the

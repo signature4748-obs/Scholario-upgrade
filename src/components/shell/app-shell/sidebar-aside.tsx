@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
 import { ChevronLeft, ChevronRight, X, Search, ChevronDown } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
@@ -34,8 +35,17 @@ export function SidebarAside({
 }: SidebarAsideProps) {
   void cmdOpen
 
+  // A11y — when the mobile drawer opens, focus lands on its close button
+  // so keyboard users start INSIDE the drawer (main content is inert while
+  // the drawer overlays it — see app-shell.tsx).
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    if (mobileOpen) closeBtnRef.current?.focus()
+  }, [mobileOpen])
+
   return (
     <motion.aside
+      id="app-sidebar"
       initial={false}
       animate={{ width: collapsed ? 80 : 280 }}
       transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
@@ -57,7 +67,7 @@ export function SidebarAside({
               <span className="font-bold text-base tracking-tight text-foreground leading-none font-display">
                 SCHOLARIO
               </span>
-              <span className="text-[10px] text-muted-foreground/80 font-medium mt-0.5 tracking-wider uppercase font-mono">
+              <span className="text-[10px] text-muted-foreground font-medium mt-0.5 tracking-wider uppercase font-mono">
                 Enterprise ERP
               </span>
             </div>
@@ -66,16 +76,19 @@ export function SidebarAside({
         <div className="flex items-center gap-1">
           <button
             onClick={() => setCollapsed((c) => !c)}
-            className="hidden lg:flex p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all shrink-0 cursor-pointer"
+            className="hidden lg:flex p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all shrink-0 cursor-pointer focus-ring"
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
-            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            {collapsed ? <ChevronRight className="h-4 w-4" aria-hidden="true" /> : <ChevronLeft className="h-4 w-4" aria-hidden="true" />}
           </button>
           <button
+            ref={closeBtnRef}
             onClick={() => setMobileOpen(false)}
-            className="lg:hidden p-1.5 border border-border/50 rounded-lg text-muted-foreground hover:bg-muted cursor-pointer"
+            aria-label="Close navigation menu"
+            className="lg:hidden flex h-9 w-9 items-center justify-center p-1.5 border border-border/50 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer focus-ring"
           >
-            <X className="h-4 w-4" />
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -92,7 +105,7 @@ export function SidebarAside({
               <Search className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 transition-transform group-hover:scale-110" />
               <span className="truncate font-medium">Search…</span>
             </div>
-            <kbd className="shrink-0 rounded-md border border-border/60 bg-background/80 px-1.5 py-0.5 text-[9px] font-mono font-semibold text-muted-foreground/80 shadow-2xs">⌘K</kbd>
+            <kbd className="shrink-0 rounded-md border border-border/60 bg-background/80 px-1.5 py-0.5 text-[9px] font-mono font-semibold text-muted-foreground shadow-2xs">⌘K</kbd>
           </button>
         </div>
       )}
@@ -102,7 +115,7 @@ export function SidebarAside({
         {groups.map((group) => (
           <div key={group.label} className="mb-3">
             {!collapsed && (
-              <h3 className="px-3 mb-1.5 text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest font-mono">
+              <h3 className="px-3 mb-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-widest font-mono">
                 {group.label}
               </h3>
             )}
@@ -122,11 +135,12 @@ export function SidebarAside({
                         setMobileOpen(false)
                       }}
                       title={collapsed ? item.label : undefined}
+                      aria-current={isParentActive ? 'page' : undefined}
                       className={cn(
-                        'flex items-center gap-3 w-full transition-all duration-200 cursor-pointer text-left',
+                        'flex items-center gap-3 w-full transition-all duration-200 cursor-pointer text-left focus-ring',
                         isParentActive
                           ? 'bg-emerald-500/10 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold border-l-2 border-emerald-500 rounded-r-xl rounded-l-xs shadow-2xs px-3 py-2 text-xs'
-                          : 'px-3 py-2 text-muted-foreground/90 hover:bg-muted/50 hover:text-foreground text-xs font-medium rounded-xl',
+                          : 'px-3 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground text-xs font-medium rounded-xl',
                         collapsed && 'justify-center px-2'
                       )}
                     >
@@ -142,8 +156,8 @@ export function SidebarAside({
                           className={cn(
                             'rounded-full px-2 py-0.5 text-[10px] font-bold',
                             role === 'principal' && activeKey !== item.key && item.key === 'dashboard'
-                              ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 animate-pulse'
-                              : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                              ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 animate-pulse'
+                              : 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300'
                           )}
                         >
                           {item.badge}
@@ -173,8 +187,9 @@ export function SidebarAside({
                                 onNavigate(child.key)
                                 setMobileOpen(false)
                               }}
+                              aria-current={isChildActive ? 'page' : undefined}
                               className={cn(
-                                'flex items-center gap-2.5 w-full transition-all duration-150 cursor-pointer text-left py-1.5 px-2.5 rounded-lg text-xs font-medium relative',
+                                'flex items-center gap-2.5 w-full transition-all duration-150 cursor-pointer text-left py-1.5 px-2.5 rounded-lg text-xs font-medium relative focus-ring',
                                 isChildActive
                                   ? 'bg-emerald-500/12 dark:bg-emerald-500/18 text-emerald-700 dark:text-emerald-300 font-semibold shadow-2xs before:absolute before:-left-[18px] before:top-1/2 before:-translate-y-1/2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-emerald-500'
                                   : 'text-muted-foreground/80 hover:bg-muted/40 hover:text-foreground'
@@ -201,14 +216,14 @@ export function SidebarAside({
       <div className="p-3 border-t border-border/40 bg-muted/10 shrink-0 flex items-center justify-between text-xs text-muted-foreground font-mono">
         {!collapsed ? (
           <>
-            <span className="text-[11px] font-medium text-muted-foreground/70">SCHOLARIO v2.4</span>
+            <span className="text-[11px] font-medium text-muted-foreground">SCHOLARIO v2.4</span>
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="System Online" />
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-sans font-semibold">Live</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="System Online" aria-hidden="true" />
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-sans font-semibold">Live</span>
             </div>
           </>
         ) : (
-          <span className="w-2 h-2 rounded-full bg-emerald-500 mx-auto animate-pulse" title="System Online" />
+          <span className="w-2 h-2 rounded-full bg-emerald-500 mx-auto animate-pulse" title="System Online" aria-hidden="true" />
         )}
       </div>
     </motion.aside>

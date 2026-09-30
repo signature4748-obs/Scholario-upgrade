@@ -451,7 +451,7 @@ function DonutOrPie({
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">{centerLabel}</p>
                   )}
                   {centerSub && (
-                    <p className="text-[9px] text-muted-foreground/70 mt-0.5">{centerSub}</p>
+                    <p className="text-[9px] text-muted-foreground mt-0.5">{centerSub}</p>
                   )}
                 </motion.div>
               )}
@@ -855,7 +855,7 @@ export function AreaTrendChart({
         ))}
       </svg>
       {/* Y-axis labels (left) — subtle, formatted */}
-      <div className="absolute left-0 top-0 bottom-4 flex flex-col justify-between py-1 text-[8px] text-muted-foreground/50 pointer-events-none tabular-nums leading-none w-12">
+      <div className="absolute left-0 top-0 bottom-4 flex flex-col justify-between py-1 text-[8px] text-muted-foreground pointer-events-none tabular-nums leading-none w-12">
         <span>{formatYAxisValue(maxVal)}</span>
         <span>{formatYAxisValue(valMin + valRange * 0.5)}</span>
         <span>{formatYAxisValue(valMin)}</span>
@@ -874,7 +874,7 @@ export function AreaTrendChart({
         </div>
       )}
       {/* X-axis labels */}
-      <div className="absolute inset-x-0 bottom-0 flex justify-between px-2 text-[9px] text-muted-foreground/60 pointer-events-none font-medium">
+      <div className="absolute inset-x-0 bottom-0 flex justify-between px-2 text-[9px] text-muted-foreground pointer-events-none font-medium">
         {data.map((d, i) => (
           <span key={i} className={hover === i ? 'text-foreground' : ''}>{d[labelKey]}</span>
         ))}

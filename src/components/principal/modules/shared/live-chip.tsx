@@ -26,7 +26,7 @@ export function LiveChip({
       aria-live="polite"
       title={title}
       className={cn(
-        'inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-px text-[8px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400',
+        'inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-px text-[9px] font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-400',
         className,
       )}
     >

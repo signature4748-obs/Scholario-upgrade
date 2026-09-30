@@ -117,11 +117,11 @@ export function MobileSlotCard({ slot, teacherName, publications, isConflicted, 
         )}
       </div>
       <div className="flex items-center gap-2 mt-1.5 pt-1.5 border-t border-border/30">
-        <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-          <UserCheck className="h-2.5 w-2.5" /> {teacherName}
+        <span className="min-w-0 truncate text-[10px] text-muted-foreground flex items-center gap-0.5">
+          <UserCheck className="h-2.5 w-2.5 shrink-0" /> {teacherName}
         </span>
-        <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-          <MapPin className="h-2.5 w-2.5" /> {slot.room}
+        <span className="min-w-0 truncate text-[10px] text-muted-foreground flex items-center gap-0.5">
+          <MapPin className="h-2.5 w-2.5 shrink-0" /> {slot.room}
         </span>
       </div>
     </div>

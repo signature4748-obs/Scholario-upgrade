@@ -238,10 +238,10 @@ export function UpNext({ data, onNavigate }: {
                 </span>
                 <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
                   <span className="truncate">{item.line1}</span>
-                  {item.line2 && <span className="truncate text-muted-foreground/70">· {item.line2}</span>}
+                  {item.line2 && <span className="truncate text-muted-foreground">· {item.line2}</span>}
                 </span>
               </span>
-              <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+              <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
                 {item.action}
                 <ArrowUpRight className="h-3 w-3" aria-hidden />
               </span>

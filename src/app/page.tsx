@@ -5,7 +5,6 @@ import dynamic from 'next/dynamic'
 import { useAuth } from '@/lib/store/auth-store'
 import { installApiBearerInterceptor } from '@/lib/auth-session-token'
 import { AssetErrorBoundary } from '@/components/shared/asset-guard/asset-error-boundary'
-import { syncStudentsFromServer } from '@/lib/store/students-store'
 
 // Install once, before any component can fire an API call. In embedded
 // (cross-site iframe) contexts the session cookie is blocked, so API auth
@@ -66,11 +65,18 @@ export default function Home() {
   // STU-xxx store universe with the real database roster for the roles
   // that own it. Teacher panels stay on their scoped /api/teacher/*
   // surfaces. Once per session; failures keep the existing store data.
+  //
+  // PERF (5-e): the students-store family (store + seed-data + server
+  // sync, ~86KB source) is imported ON DEMAND here. Logged-out visitors
+  // (public website / login) and teachers never download it in the
+  // initial page chunk — only a principal/student login pulls it. The
+  // sync itself stays once-per-session (module-level promise guard
+  // inside server-sync), so re-firing this effect is still free.
   useEffect(() => {
     if (isAuthenticated && user) {
       const role = user.role
       if (role === 'principal' || role === 'student') {
-        void syncStudentsFromServer()
+        void import('@/lib/store/students-store').then((m) => m.syncStudentsFromServer())
       }
     }
   }, [isAuthenticated, user?.role])

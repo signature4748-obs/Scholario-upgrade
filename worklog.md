@@ -3305,3 +3305,131 @@ Stage Summary:
 - Residuals documented honestly in the three docs (no log shipper, stdout-only logs, exhaustive-deps warnings burn-down, health/ready 503-path untested against the shared dev DB, 11 raw routes bypass the envelope but keep middleware correlation).
 - Deliverables: src/lib/observability/* (5 modules), src/middleware.ts, src/instrumentation.ts, src/app/health/*, src/app/{error,loading}.tsx, migration 20260202000000_observability, 24 trackedTransaction labels, 181 new tests in 5 suites, .github/workflows/ci.yml, strict eslint config, ignoreBuildErrors removed, docs/OBSERVABILITY.md + docs/TESTING_STRATEGY.md + docs/FAILURE_RECOVERY.md.
 - Gates at close: tsc 0 · lint 0 errors · 378+5 tests · db:audit 0 · zero migration drift · build SUCCESS (type-checked) · browser-verified golden paths · dev stack healthy. STOP.
+
+---
+Task ID: 5-b
+Agent: login polish (PHASE 5)
+
+Task: School login polish — remove Super Admin exposure
+
+Work Log:
+- Read worklog Phase 4 tail + brief; read the 3 login files (data.tsx / index.tsx / loading-phase.tsx), shared/password-field.tsx, page.tsx hash routing (#portal → LoginPage, #platform → PlatformLanding untouched), and globals.css (.focus-ring pattern, --ring / --destructive tokens).
+- data.tsx: removed the `superadmin` credential entry (admin@scholario.cloud) from the dev-only `credentials` array and the now-unused `Cloud` lucide import; rewrote the doc comment to state SCHOOL-ROLES ONLY + super-admin reachable only via the separate #platform route. Demo chips still compile to [] in production (NODE_ENV gate unchanged).
+- loading-phase.tsx: removed the unreachable `selectedRole === 'superadmin' && 'Loading platform console…'` line; added role="status" aria-live="polite" to the root motion.div so screen readers announce sign-in progress.
+- index.tsx (login surface only — auth/API/role-resolution code untouched):
+  • Left pane: "POWERED BY SCHOLARIO" bumped to text-[11px] font-semibold text-emerald-100 tracking-[0.25em]; footer links row got mb-8 (80px total bottom gap, verified 80px in browser); Back-to-Website button got type="button" + rounded focus-ring; justify-center verified already present.
+  • Mobile logo tagline aligned to the same type scale (11px / 0.25em / semibold, emerald-600 on white).
+  • Demo chips MOVED BELOW the form so the institutional flow leads and tab order runs email → password → (show/hide) → forgot → Sign In → demo chips; grid `grid-cols-2 sm:grid-cols-4 gap-2` → `grid-cols-2 sm:grid-cols-3 gap-2.5`; chips p-2.5 → p-3 + min-h-[44px] (measured 85px) + aria-pressed + focus-ring; kept motion hover/tap; trailing note reworded ("Demo accounts · development preview only").
+  • Error alert: role="alert" verified; recolored to high-contrast destructive tokens (border-destructive/30 bg-destructive/10 text-destructive font-medium; measured oklch(0.58 0.22 27) on 10% tint).
+  • Email input autoComplete="username" → "email"; password keeps type="password" + autoComplete="current-password"; added show/hide eye toggle (Eye/EyeOff from existing lucide dep, type="button", aria-label + aria-pressed, focus-ring, styled-jsx .custom-input-action-end padding so text never runs under it). Inlined the toggle in the underline input rather than swapping in shared/password-field.tsx (that component is a boxed text-xs input that would break the login's underline design language) — same a11y pattern as the shared component.
+  • Focus-visible rings app-wide pattern: styled-jsx `.custom-input:focus-visible { box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring) }` (keyboard-only, matches .focus-ring; verified computed in browser) + .focus-ring class on Sign In / forgot / chips / back / all 3 modal buttons.
+  • Forgot-password modal kept; hardened a11y: role="dialog" aria-modal="true" aria-label, autoFocus + aria-label on email input.
+  • Sign In button already w-full — verified full-width at 320px (272px = form width).
+- Constraints honored: login API call logic, validation order, session-token handling and role resolution (incl. the protected `serverRole === 'superadmin'` branch in index.tsx) untouched; #platform/PlatformLanding untouched; no new dependencies; no `any`; split-pane + emerald identity kept.
+
+Verification:
+- `bunx tsc --noEmit` → exit 0 (0 errors). `bunx eslint src/components/login/` → exit 0 (0 problems).
+- Browser (#portal): full a11y tree contains NO "Super Admin" / scholario.cloud anywhere (rg exit 1); interactive tree = email, password (+ Show/Hide password), forgot, Sign In, Principal/Teacher/Student chips only.
+- Keyboard tab order probed: identifier → password → eye toggle → Forgot password? → Sign In → Principal → Teacher (→ Student).
+- Error path: bad creds → [role=alert] aria-live=polite, text-destructive oklch(0.58 0.22 27) on 10% tint, "Invalid email or password"; auth round-trip still works end-to-end (successful demo login mounted the principal panel).
+- LoadingPhase: with a delayed /api/auth/login (1.5s fetch shim, restored afterwards) the DOM shows [role="status"][aria-live="polite"] "Preparing your workspace / Signing you in…" (on a fast local round-trip the loading phase legitimately never mounts — AnimatePresence mode="wait" 300ms exit vs <300ms auth — pre-existing behavior).
+- Chip geometry: 3 chips on one row at ≥sm, gap 10px, padding 12px, height 85px (≥44px touch), below the Sign In button.
+- 320×568: document.documentElement.scrollWidth (320) > window.innerWidth (320) → false — no horizontal overflow; Sign In full-width.
+- Screenshots: /tmp/5b-desktop-1440.png, /tmp/5b-mobile-390.png, /tmp/5b-mobile-320.png.
+- dev.log: no compile errors; page errors empty; console only pre-existing benign next/image logo warnings.
+
+Stage Summary:
+- Super Admin exposure fully removed from the school login surface: superadmin demo chip deleted (data.tsx), unreachable superadmin loading string deleted (loading-phase.tsx); only the security-hardened role-resolution branch (non-UI, Phase 1-4 code) retains the superadmin literal, and the #platform route remains the sole Super Admin entry point (untouched).
+- Login polish delivered: larger/crisper POWERED BY lockup, footer lifted off the viewport edge (mb-8), demo chips repositioned below the form with sm:grid-cols-3 + gap-2.5 + p-3 + min-h-[44px] + aria-pressed, high-contrast destructive error alert (role="alert"), email autoComplete="email", password show/hide toggle, keyboard-only focus-visible rings matching the app-wide .focus-ring pattern on every input/button, modal dialog semantics, LoadingPhase role="status" aria-live="polite".
+- Verified end-to-end in browser: no Super Admin in a11y tree, correct tab order, no 320px overflow, full-width Sign In on mobile, working chip fill + eye toggle + error + successful login; tsc 0 errors, eslint 0 problems, no new deps.
+
+---
+Task ID: 5-a
+Agent: public-website polish (PHASE 5)
+
+Task: Premium polish of the public school website
+
+Work Log:
+- Read worklog Phase-4 tail + the full target file (1096 lines), use-public-website-data.ts, shared theme-toggle/theme-provider, layout.tsx (ThemeProvider wraps the public site → the shared ThemeToggle works there as a one-import fix), globals.css utilities (glass-strong/mesh-bg/shadow-premium/skeleton/text-balance all exist), the public API route (returns ≤5 announcements + real counts) and the RSS route (15-item archive — used as the honest "View all notices" target).
+- Hero redesign: right column's 2x2 stats-dashboard card REPLACED with a campus photograph composition — hero-campus.jpg (next/image fill + sizes + priority) in a rounded-[2rem] bordered frame with shadow-premium-lg, offset decorative frame behind (translate-x/y), bottom gradient scrim, on-image caption (schoolName · Est. 1995 · city), and ONE floating glass-strong stat card (Trophy, "98% Board pass rate"). Left column kept eyebrow/gradient headline/CTAs/legacy stats with tightened typography (text-balance, leading-[1.05], uppercase tracking-widest stat labels, tabular-nums) and flex-wrap so 320px never clips.
+- The old heroStats 2×2 data (Students 1,840 / Faculty 152 / Labs 18 / Awards 240+) moved to an inline TRUST BAR below the hero: border-t + sm:divide-x dividers, tabular-nums values, small uppercase labels, icons kept small — institutional, not cards. Renders skeletons while `loading` (the previously IGNORED loading flag is now consumed).
+- NEW "Campus Life" section (id=campus-life) between Facilities and NoticeBoard: asymmetric mosaic — library (sm:row-span-2) + science-lab + sports + classroom (sm:col-span-2) with auto-placement, fixed auto-rows, next/image fill + per-tile sizes, rounded-2xl, gradient-scrim captions (The Library / Science Labs / Sports & Athletics / Smart Classrooms), hover zoom via motion-safe:group-hover:scale-105 (prefers-reduced-motion safe), semantic figure/figcaption, descriptive alt text.
+- Section rhythm: new local SectionHeader component (text-xs uppercase tracking-[0.2em] emerald eyebrow + font-display text-3xl lg:text-4xl heading + one-line muted subtitle) applied uniformly to WhyChooseUs (now school-branded "Why Greenwood"), Journey, Facilities, CampusLife, NoticeBoard, Admissions; all sections py-20 lg:py-28.
+- NoticeBoard: loading → 3 skeleton cards (aria-busy, .skeleton shimmer); empty → friendly Megaphone empty state ("No notices right now — school announcements will appear here.") instead of hiding the section; header's live pulse chip became the eyebrow and a "View all notices" link (→ RSS archive feed, new tab) replaced the old RSS chip; featured notice spans full width when it's the only notice; all notice parsing/tone/date logic untouched.
+- Admissions: two-column on lg — left = admission copy + 5 Check-icon key-dates/highlights + admissions-office phone card; right = the form in a premium card (rounded-3xl, shadow-premium-lg, border, halo kept). FORM IS BYTE-IDENTICAL in fields/handlers/submit logic; added role="status" aria-live="polite" (success) and role="alert" (error). Submit button and all inputs untouched.
+- Footer: sm:grid-cols-2 lg:grid-cols-4 grid, eyebrow-style uppercase column headings, icon alignment cleaned (aria-hidden, truncate on email), Campus Life added to quick links, bottom bar now © + "Notices RSS" link + "Powered by SCHOLARIO-OS". Root wrapper got flex flex-col + footer mt-auto → footer sticks to bottom on short pages, pushes naturally on long ones (verified root classes in DOM).
+- Header/nav: "Campus Life" added to nav (7 links) with desktop nav/actions moved to the lg: breakpoint for fit; dead Moon button REPLACED by the real shared ThemeToggle (wired — live-verified: html.dark + data-theme-mode + localStorage persist), also added to the mobile menu in a row with the Login Portal CTA; mobile links at py-3 (44px targets), hamburger h-11 w-11.
+- FadeIn now emits data-fadein; globals.css got an append-only `@media print { [data-fadein] { opacity: 1 !important; transform: none !important; } }` guard so print/full-page captures never show opacity:0 sections (author !important beats framer-motion's inline styles).
+- VERIFICATION: bunx tsc --noEmit → 0 errors · bunx eslint src/components/public-website/ → 0 errors · agent-browser at 1440×900 / 390×844 / 320×568: document.documentElement.scrollWidth > innerWidth = FALSE (no overflow at 320) · VLM-verified screenshots: hero photo + glass card + trust bar (/tmp/5a-desktop.png, /tmp/5a-trustbar.png), gallery mosaic (/tmp/5a-gallery.png), notice card + View-all link (/tmp/5a-notices.png), two-column admissions form (/tmp/5a-admissions.png), 4-col footer + RSS (/tmp/5a-footer.png), mobile hero + stats wrap (/tmp/5a-mobile.png), mobile menu with theme toggle + login CTA (/tmp/5a-mobile-menu.png), dark mode (/tmp/5a-dark.png) · theme toggle click-verified both directions · 0 browser console errors · dev.log clean.
+- Environment note: the shared agent-browser profile carried a stale authenticated principal session (scholario-auth + erp_session cookie) that re-persisted after localStorage.clear() and silently flipped / to the dashboard/portal — worked around by removing the auth key + purging cookies + location.replace('/') in a single eval. Not a site bug; documented in agent-ctx/5-a-public-website-polish.md for future agents.
+
+Stage Summary:
+- Public school website transformed from "SaaS dashboard feel" to premium institutional: hero with real campus photography + floating glass stat, trust-bar stats strip, new Campus Life gallery mosaic, unified eyebrow/heading/subtitle section rhythm, three-state NoticeBoard (skeleton/empty/featured+stack), two-column Admissions with a premium form card, polished 4-column footer with RSS, wired theme toggle in both desktop and mobile headers, sticky-footer flex layout, print-safe FadeIn.
+- Zero business-logic/API/form changes (use-public-website-data.ts untouched; admission form byte-identical); no new dependencies; file remains self-contained (single sanctioned import of the existing shared ThemeToggle per brief); emerald/teal/Sora identity, PrimaryCta/GhostCta/FadeIn/selection styling all preserved.
+- Gates: tsc 0 · eslint 0 · no 320px horizontal overflow · all sections VLM-verified in light + dark · 0 console errors · dev.log clean.
+
+---
+Task ID: 5-c
+Agent: dashboard + dense-tables polish (PHASE 5)
+
+Task: Dashboard, exams, timetable, fees responsive + empty-state polish
+
+Work Log:
+- Read worklog Phase-4/5 tail; found the 5-c working tree already carried an in-progress (uncommitted, crashed-before-worklog) implementation of exactly this brief — audited every hunk of it against the brief before adopting: exams overview-tab grid/label/leading/skeleton changes, summary-card sparkline pb-2 + focus-ring + node-value support, dashboard live-alerts divide-y + tabular-nums timestamps + Snooze-All affordance + KPI Skeleton values + a11y (motion.div→motion.button rows, h1→h2 greeting), timetable sticky Period column + compact dashed break rows + mobile slot truncation, fees ModuleEmptyState migration + differentiated Outstanding-Dues/Needs-Attention headers + render-guard for the zero-structure history dialog, shared ModuleEmptyState (untracked new file), premium-charts muted/70 contrast fixes.
+- Verified the shared empty-state contract: ModuleEmptyState (framed dashed card / unframed) used by fees-overview (7 sites), fees-structures, fees-shared (FeeEmptyState wrapper), exams (archive/invigilation/exams-list), timetable (index + schedule-grid) — one visual language across all four modules.
+- Verified fees navigation API: FeesOverviewSection receives onNavigate={setTab} from fees-shell; 'structures' is a valid FeeTab → the "Configure Fee Structures" empty-state action deep-links correctly (browser click-through confirmed landing on the 12-structures tab).
+- Confirmed NO business-logic/data changes in the adopted diff (grep for new `any`: none; only className/markup/label-copy + the documented render-guard).
+- Browser verification (principal session, dev server live): Dashboard/Examinations/Timetable/Fee Management each screenshotted at 1440 and 390 (/tmp/5c-<module>-<size>.png + close-ups: exams-marks-390, timetable-1440-scrolled, fees-dues-1440, dashboard-donut-390, exams-320, dark-mode dashboard/fees/timetable).
+- 320×568 overflow eval (documentElement.scrollWidth > innerWidth) = false on all four modules; timetable inner grid verified scrollable to max (scrollWidth 3929 / clientWidth 1094 at 1440; max-scroll reached at 1024/1280/1440 with last column flush), sticky Period column pinned (header left == container left at scrollLeft 2835; bg-card in light AND dark), break rows 44px compact with dashed border + muted bg + italic centered label.
+- DOM-verified dashboard chart collisions: AreaTrendChart legend fits (239–366px inside 16–374px container), 8 x-axis month labels 0 collisions at 390; DonutChart legend stacks vertically on mobile (VLM: no clipping); sparkline clearance 17px below svg (pb-2 fix effective).
+- Marks tables (marks-section/schedule-table) confirmed wrapped in overflow-x-auto containers ("wrapped, wrapped" DOM probe) — no change needed.
+- VLM audit of all screenshots: exams KPI cards 2-per-row readable at 390 + clean wrapping at 320 ("no ugly wrapping, no clipping"); timetable mobile day view with ≥44px cards; fees Breakdown empty state "intentional, well-executed" with working CTA; Outstanding Dues (rupee icon, "every account with a balance, largest first") vs Needs Attention (warning triangle, "aging worklist, most overdue first") clearly differentiated while data-level duplication intentionally untouched; dashboard KPI paddings/icon chips/typography consistent, sparklines not clipped, attention rows evenly spaced, timestamps aligned, Snooze All reads as a proper interactive secondary button.
+- Gates: bunx tsc --noEmit → 0 errors; bunx eslint on the four modules + shared → 0 errors, 13 warnings — identical count to the committed HEAD baseline (git stash A/B check, no new warnings); full src/components/principal/ → 0 errors/41 pre-existing warnings (messaging/salary/students/teachers only); dev.log clean; browser console 0 page errors.
+
+Stage Summary:
+- Examinations: 4-card summary row now grid-cols-2 sm:grid-cols-4 (was lg:4 — squashed at 390), subtext leading-tight→leading-snug, 4th card re-labeled "Current Status"→"Ongoing Exams" (value = ongoing count, sub = current ongoing exam name — a record count that can no longer contradict the date-driven "No examination is currently active" context line), OverviewSkeleton skeleton-class shimmer; marks/schedule tables already overflow-x-auto (verified, untouched).
+- Timetable: desktop grid scrolls horizontally with a STICKY Period column (th z-20 bg-muted, td z-10 bg-card + border-r — verified pinned in light and dark at full scroll on 1024/1280/1440); break rows compacted (py-1.5/py-1, text-[9px]/[10px] italic, dashed border-y, bg-muted/30) and mobile break cards restyled to match; mobile slot cards truncate teacher/room; both empty states migrated to ModuleEmptyState.
+- Fee Management: Breakdown empty state is now the shared dashed ModuleEmptyState (PieChart icon, one-line description, "Configure Fee Structures" outline button → setTab('structures'), click-verified); Collection Trend "No collections yet" same treatment ("Collections will appear here as payments are recorded"); all 7 remaining fee empty states migrated (incl. FeeEmptyState wrapper → unframed variant); Outstanding Dues vs Needs Attention headers differentiated (₹ icon + "ledger accounts · every account with a balance" vs ⚠ icon + "urgent · aging worklist, most overdue first") — same-student data duplication intentionally LEFT; zero-structure history-dialog render-guard prevents tab crash on empty-data schools.
+- Principal Dashboard: attention list rows unified (divide-y, banner/pills mb-2, py-2.5 rows), timestamps tabular-nums + whitespace-nowrap, alert title is now the accessible deep-link button (row no longer a clickable div); Snooze All affordance strengthened (border-border + bg-card + shadow-xs + hover:bg-muted, still secondary to Resolve All); sparkline container -mb-1→pb-2 (bottom of line renders fully); SummaryCard value accepts ReactNode → Attendance/Upcoming-Exams KPIs show real Skeletons while fetching; value typography text-2xl lg:text-3xl tabular-nums; KPI card press feedback moved off the wrapper (framer whileTap tabindex a11y fix); greeting h1→h2; chart legends verified collision-free at 390.
+- Shared: ModuleEmptyState (src/components/principal/modules/shared/empty-state.tsx) is the single canonical empty-state language for the four Phase-5 modules — dashed framed card (or unframed), h-11 icon tile, text-sm semibold title, one-line text-xs description, optional secondary action.
+- Constraints honored: zero business-logic/data-fetching/state changes (visual + markup + the two sanctioned label-copy fixes + fees history-dialog render-guard); no files touched outside the four modules + their shared components (shell/command-palette/student/login/public-website changes in the tree belong to sibling agents); emerald/teal identity + shadow-premium/glass/skeleton tokens preserved; no new deps; no new `any`; NO horizontal document overflow at 320px in any of the four modules.
+
+---
+Task ID: 5-d
+Agent: accessibility pass (PHASE 5, completed by orchestrator verification after agent max-turns)
+
+Task: Keyboard/ARIA/contrast/touch-target audit + fixes across app shell + panels
+
+Work Log:
+- The dispatched 5-d agent implemented changes across src/components/shell/app-shell.tsx (+97), shell/app-shell/{sidebar-aside,profile-dropdown,notifications-dropdown}.tsx, student/shell/student-sidebar.tsx, shared/command-palette* before hitting the turn limit without a report; the orchestrator verified its work live in the browser and completed the residuals.
+- Inherited and VERIFIED WORKING in browser: (1) skip-to-main-content link is the first tabbable element, slides into view on focus, targets the real <main> landmark; (2) mobile drawer: focus lands on the drawer close button while open, <main> is inert (focus trap), Escape closes AND restores focus to the hamburger trigger (verified live at 390px); (3) profile dropdown Escape-closes and returns focus to its trigger; (4) sidebar active item carries aria-current="page" (verified: "Fee Management"); (5) notifications bell has a rich aria-label incl. unread count and stream state; (6) command-palette semantics (dialog role/label/Escape per its shodcn base + palette empty-state/search-input a11y).
+- Orchestrator residuals fixed: RadialGauge formatValue now rounds animated intermediate counter frames to one decimal (src/components/shared/charts/index.tsx) — the student attendance gauge previously rendered mid-animation float tails (e.g. 95.13771665493368%) in screenshots; final values were always rounded server-side.
+- Student panel (student login) browser-verified post-changes: renders cleanly, sidebar aria-current present ("Dashboard"), 0 page errors.
+- bunx tsc --noEmit → 0 errors (the `[m`-swallowing terminal display artifact was investigated and ruled out as file corruption via od hex-dump — files are intact).
+
+Stage Summary:
+- App-shell a11y core landed and live-verified: skip link, main landmark + inert-under-drawer, Escape + focus restoration on drawer/profile dropdown, aria-current navigation, labelled icon controls, contrast bumps on tiny muted text ([8px]→[9px] emerald-700), touch-target sizing on mobile controls.
+- Defects fixed: mobile drawer focus trap + Escape; profile dropdown keyboard close; skip link; gauge float-tail display.
+- Residuals (acceptable, documented): full visual focus-trap audit of every custom modal in principal modules was not exhaustively completed (shadcn Dialog-based modals inherit traps; custom motion.div dialogs rely on Escape where implemented); contrast audit was spot-check based on actual failures, not an exhaustive matrix.
+
+---
+Task ID: 5-e
+Agent: performance pass (PHASE 5, completed by orchestrator verification after agent max-turns)
+
+Task: Duplicate API calls / poller leaks / wasteful renders / bundle trim
+
+Work Log:
+- Dispatched agent landed two verified-good changes before hitting the turn limit: (1) src/app/page.tsx — the students-store family (~86KB source: store + seed-data + server-sync) is now imported ON DEMAND inside the login-role effect, so logged-out visitors (public website / login) and teachers never download it in the initial chunk; the once-per-session syncPromise guard in students-store/server-sync.ts makes re-firing the effect free. (2) src/components/shared/kpi-card.tsx — imports MiniLine directly from charts/legacy-circular instead of the charts barrel, keeping KpiCard consumers scoped to recharts while the barrel stays recharts-free.
+- Orchestrator completed the measurement pass with fetch instrumentation in the live browser (post-reload instrumentation, principal session):
+  · Login → panel mount: POST /api/auth/login, GET /api/students/roster, GET /api/auth/me, GET /api/notifications-feed — 4 calls, all unique, ZERO duplicates.
+  · Module switch Dashboard → Examinations: exactly 1 call (GET /api/exams).
+  · Switch back Examinations → Dashboard: 0 calls — fully served from stores (no refetch storm).
+  · Idle 65s: exactly 2 poller ticks (GET /api/app-version, GET /api/notifications-feed) — no interval stacking; app-shell notifications poller clears its interval on unmount (return clearInterval verified in source), version-guard uses visibility-gated interval with cleanup.
+- Image loading: public-website hero + gallery all use next/image with responsive sizes attributes ("(min-width: 1024px) 45vw, 100vw" hero; 33vw/50vw/66vw gallery variants) — mobile never downloads desktop crops; hero has priority, gallery lazy.
+- Panel chunks: all four role panels + PlatformLanding remain dynamic-imported in page.tsx (initial bundle contains only auth-store + asset-guard + VersionGuard) — verified unchanged.
+- bunx tsc --noEmit → 0 errors after both landed changes.
+
+Stage Summary:
+- No duplicate API calls exist on the golden paths (measured, not assumed): login mount = 4 unique endpoints, module switch = 1, switch-back = 0, idle = 2/min pollers with proper cleanup.
+- Real wins landed: ~86KB students-store family code-split out of logged-out/teacher initial chunks; KpiCard chart import scoped.
+- Left as-is (measured, deliberately): notifications 60s poll frequency (correct UX tradeoff); no memo() sprinkling (no measured hot-spot justified it); no RSC rearchitecture (client SPA by design — tenant/security boundaries preserved per instruction).

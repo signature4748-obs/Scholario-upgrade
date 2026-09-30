@@ -4,7 +4,11 @@ import { motion } from 'framer-motion'
 import { TrendingUp, TrendingDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AnimatedCounter } from './animated-counter'
-import { MiniLine } from './charts'
+// PERF (5-e): direct module import (not the charts barrel) — MiniLine
+// is the only recharts-based chart KpiCard needs; importing it directly
+// keeps modules that use KpiCard scoped to recharts while the barrel
+// itself stays recharts-free for premium-chart-only consumers.
+import { MiniLine } from './charts/legacy-circular'
 
 export interface KpiProps {
   label: string

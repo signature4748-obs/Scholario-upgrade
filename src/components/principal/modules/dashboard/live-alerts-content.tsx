@@ -53,7 +53,7 @@ export function LiveAlertsContent({
     <>
       {/* Severity filter pills — compact Academics-style row */}
       {alerts.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
           {severityFilters.map((filter) => {
             const count = filter === 'all' ? alerts.length : alerts.filter((a) => a.severity === filter).length
             if (filter !== 'all' && count === 0) return null
@@ -79,7 +79,7 @@ export function LiveAlertsContent({
 
       {/* Snoozed alerts — compact flattened row above the active list */}
       {snoozed.length > 0 && (
-        <div className="mb-3 rounded-md border border-border bg-muted/20 px-2.5 py-2">
+        <div className="mb-2 rounded-md border border-border bg-muted/20 px-2.5 py-2">
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               <Clock className="h-3 w-3" />

@@ -1,6 +1,6 @@
 'use client'
 
-import { Search, Clock, Trash2, ChevronRight, X } from 'lucide-react'
+import { Search, Clock, Trash2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SearchResultItem } from '@/lib/search-service'
 import { renderItemIcon } from './utils'
@@ -47,48 +47,45 @@ export function PaletteEmptyState({
                 <div
                   key={`rec-${item.id}`}
                   data-idx={idx}
-                  onMouseMove={() => setActive(idx)}
-                  onClick={() => handleSelect(item)}
-                  className={cn(
-                    'group flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm cursor-pointer transition-all',
-                    isActive
-                      ? 'bg-primary/10 text-primary font-medium'
-                      : 'hover:bg-accent/60 text-foreground'
-                  )}
+                  className="group flex items-center gap-1"
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <button
+                    onMouseMove={() => setActive(idx)}
+                    onClick={() => handleSelect(item)}
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-all focus-ring',
+                      isActive
+                        ? 'bg-primary/10 text-primary font-medium'
+                        : 'hover:bg-accent/60 text-foreground'
+                    )}
+                  >
                     <span
                       className={cn(
                         'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border/50 text-muted-foreground',
                         isActive && 'bg-primary/15 text-primary border-primary/20'
                       )}
+                      aria-hidden="true"
                     >
                       {renderItemIcon(item.iconName)}
                     </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-xs font-semibold">{item.title}</p>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <span className="truncate text-xs font-semibold">{item.title}</span>
                         <span className="text-[10px] px-1.5 py-0.2 rounded border bg-muted text-muted-foreground font-normal">
                           {item.category}
                         </span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground truncate">{item.subtitle}</p>
-                    </div>
-                  </div>
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground truncate">{item.subtitle}</span>
+                    </span>
+                  </button>
 
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        removeRecent(item.id)
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-muted-foreground hover:bg-muted hover:text-destructive transition-all"
-                      title="Remove"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-primary transition-colors" />
-                  </div>
+                  <button
+                    onClick={() => removeRecent(item.id)}
+                    aria-label={`Remove ${item.title} from recent searches`}
+                    className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-muted hover:text-destructive transition-all focus-ring"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
                 </div>
               )
             })}

@@ -145,10 +145,10 @@ export function NotificationsDropdown({
                 className={cn(
                   'inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide',
                   source === 'live'
-                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                     : source === 'error'
-                      ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
-                      : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                      ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
+                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
                 )}
                 title={
                   source === 'live'
@@ -171,7 +171,7 @@ export function NotificationsDropdown({
               {totalBadgeCount > 0 && (
                 <span className={cn(
                   'text-[10px] font-extrabold px-1.5 py-0.2 rounded-full',
-                  role === 'principal' && liveAlertCount > 0 ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400' : 'bg-primary/15 text-primary'
+                  role === 'principal' && liveAlertCount > 0 ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400' : 'bg-primary/15 text-emerald-700 dark:text-emerald-400'
                 )}>
                   {totalBadgeCount} new
                 </span>
@@ -180,7 +180,7 @@ export function NotificationsDropdown({
             {unreadCount > 0 && (
               <button
                 onClick={onMarkAllRead}
-                className="flex items-center gap-1 text-[10px] text-primary hover:underline font-semibold"
+                className="flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-400 hover:underline font-semibold focus-ring rounded-sm"
                 aria-label="Mark all notifications as read"
               >
                 <CheckCheck className="h-3 w-3" aria-hidden="true" />
@@ -215,7 +215,7 @@ export function NotificationsDropdown({
                   {t.count > 0 && (
                     <span className={cn(
                       'text-[9px] font-bold px-1 rounded-full tabular-nums',
-                      isActive ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'
+                      isActive ? 'bg-primary/15 text-emerald-800 dark:text-emerald-300' : 'bg-muted text-muted-foreground'
                     )}>
                       {t.count}
                     </span>
@@ -321,7 +321,7 @@ export function NotificationsDropdown({
                   onClick={() => onNotificationClick(n.id)}
                   className={cn(
                     'w-full text-left p-2.5 rounded-lg hover:bg-muted cursor-pointer transition-all duration-150 flex items-start gap-2.5 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-                    n.unread ? 'bg-primary/5 border-l-2 border-primary' : 'opacity-85 border-l-2 border-transparent'
+                    n.unread ? 'bg-primary/5 border-l-2 border-primary' : 'border-l-2 border-transparent'
                   )}
                 >
                   <div className={cn('p-1.5 rounded-lg shrink-0 mt-0.5 shadow-xs transition-transform duration-150 group-hover:scale-110', iconBg)} aria-hidden="true">
@@ -331,7 +331,12 @@ export function NotificationsDropdown({
                     <div className="flex items-center justify-between gap-1">
                       <p className="font-bold text-xs text-foreground truncate flex items-center gap-1.5">
                         {n.title}
-                        {n.unread && <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse shrink-0" aria-label="unread" />}
+                        {n.unread && (
+                          <>
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse shrink-0" aria-hidden="true" />
+                            <span className="sr-only">(unread)</span>
+                          </>
+                        )}
                       </p>
                       <span className="text-[9px] text-muted-foreground font-mono shrink-0">{n.time || n.timestamp}</span>
                     </div>

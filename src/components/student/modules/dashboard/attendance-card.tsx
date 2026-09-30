@@ -105,7 +105,7 @@ export function AttendanceCard({ data, onNavigate }: {
         <button
           type="button"
           onClick={() => onNavigate('attendance')}
-          className="text-[11px] font-semibold text-primary hover:underline"
+          className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
         >
           Details
         </button>

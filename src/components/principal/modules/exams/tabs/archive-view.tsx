@@ -35,6 +35,7 @@ import {
   type ArchivedSession,
   type ArchiveSearchResult,
 } from '@/lib/exams/archive-data'
+import { ModuleEmptyState } from '../../shared/empty-state'
 
 interface Props {
   onBack: () => void
@@ -200,12 +201,12 @@ export function ArchiveView({ onBack }: Props) {
                 {currentSession ? (
                   <SessionDetail session={currentSession} />
                 ) : (
-                  <div className="rounded-xl border border-dashed border-border/60 py-12 text-center">
-                    <ArchiveIcon className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-                    <p className="text-xs text-muted-foreground">
-                      Select an archived session to view its examinations.
-                    </p>
-                  </div>
+                  <ModuleEmptyState
+                    className="m-0 py-12"
+                    icon={<ArchiveIcon className="h-5 w-5" aria-hidden />}
+                    title="No session selected"
+                    description="Select an archived session to view its examinations."
+                  />
                 )}
               </div>
             </motion.div>
@@ -385,13 +386,12 @@ function ArchivedExamRow({
 function SearchResults({ results }: { results: ArchiveSearchResult[] }) {
   if (results.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-border/60 py-12 text-center">
-        <Search className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-sm font-medium text-foreground">No results found</p>
-        <p className="text-xs text-muted-foreground mt-1">
-          Try a different student name, class, or session.
-        </p>
-      </div>
+      <ModuleEmptyState
+        className="m-0 py-12"
+        icon={<Search className="h-5 w-5" aria-hidden />}
+        title="No results found"
+        description="Try a different student name, class, or session."
+      />
     )
   }
 

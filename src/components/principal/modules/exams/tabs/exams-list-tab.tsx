@@ -44,6 +44,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { EXAM_TYPES, type ExamDTO } from '@/lib/exams/types'
 import { InlineLoading } from '../inline-loading'
+import { ModuleEmptyState } from '../../shared/empty-state'
 import { useUpdateExam, useDeleteExam } from '@/lib/exams/use-exams'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -305,9 +306,11 @@ function ExamSection({
         </span>
       </div>
       {exams.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border/60 py-5 text-center">
-          <p className="text-xs text-muted-foreground">{emptyMessage}</p>
-        </div>
+        <ModuleEmptyState
+          className="m-0 rounded-lg py-5"
+          icon={icon}
+          title={emptyMessage}
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {exams.map((exam, i) => (

@@ -44,7 +44,7 @@ export function NoticesStrip({ data, onNavigate }: {
         <button
           type="button"
           onClick={() => onNavigate('announcements')}
-          className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
+          className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
         >
           View all <ArrowUpRight className="h-3 w-3" aria-hidden />
         </button>
@@ -78,7 +78,7 @@ export function NoticesStrip({ data, onNavigate }: {
                   <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                     <span className={cn('truncate text-xs font-semibold', n.read && 'text-foreground/80')}>{n.title}</span>
                     {important && !n.read && (
-                      <span className="rounded bg-rose-500/10 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
+                      <span className="rounded bg-rose-500/10 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
                         Important
                       </span>
                     )}

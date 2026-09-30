@@ -19,15 +19,20 @@
      - ChartCard (container) and MiniLine (sparkline) keep their
        legacy implementations — they're already visually polished and
        the premium system doesn't have direct equivalents.
+     - PERF (5-e): ChartCard lives in ./chart-card (recharts-free) and
+       MiniLine is imported DIRECTLY from ./charts/legacy-circular by
+       its single consumer (kpi-card), so THIS barrel no longer pulls
+       the recharts runtime into premium-only consumers (student
+       dashboard RadialGauge, student fees ProgressBar, teacher
+       analytics AreaTrend…).
    ============================================================ */
 
 // Shared helpers (kept as legacy)
 export { AXIS_TICK, formatAxisTick } from './colors'
 export { PremiumTooltip, GlowFilter } from './utils'
 
-// Legacy components kept as-is (container + sparkline)
-export { ChartCard } from './legacy'
-export { MiniLine } from './legacy-circular'
+// Container — recharts-free split (see header note)
+export { ChartCard } from './chart-card'
 
 // ─── Adapters that delegate to the premium-charts system ────────────
 
@@ -89,7 +94,10 @@ export function RadialGauge({ value, max = 100, color = 'oklch(0.55 0.14 162)', 
       label={label}
       showTicks
       glow
-      formatValue={(n) => `${n}%`}
+      // Round the displayed counter to one decimal — animated intermediate
+      // frames (ease-out passing through e.g. 95.13771665493368) must never
+      // render long float tails on screen.
+      formatValue={(n) => `${Math.round(n * 10) / 10}%`}
     />
   )
 }

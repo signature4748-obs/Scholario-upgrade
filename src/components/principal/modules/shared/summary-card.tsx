@@ -42,8 +42,9 @@ const TONES: Record<SummaryTone, ToneStyles> = {
 
 export interface SummaryCardProps {
   label: string
-  /** numeric value (animated count-up) OR string value (no animation) */
-  value: number | string
+  /** numeric value (animated count-up), string value (no animation), or an
+   * arbitrary node (e.g. a loading Skeleton rendered in place of the value) */
+  value: number | string | ReactNode
   /** optional suffix appended to numeric value (e.g. "%", "/24") */
   suffix?: string
   /** small helper text below the value */
@@ -100,14 +101,15 @@ export function SummaryCard({
   }, [numericValue, reduce, inView])
 
   const toneStyles = TONES[tone]
+  const isNodeValue = numericValue === null && typeof value !== 'string' && typeof value !== 'number'
   const formattedValue = numericValue !== null
     ? `${displayValue.toLocaleString()}${suffix ?? ''}`
-    : `${value}${suffix ?? ''}`
+    : isNodeValue ? '' : `${value}${suffix ?? ''}`
 
   const baseClass = cn(
     'rounded-xl border p-4 transition-all duration-200',
     toneStyles.bg, toneStyles.border, toneStyles.hoverBorder,
-    onClick && 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40',
+    onClick && 'cursor-pointer focus-ring',
     className,
   )
 
@@ -137,7 +139,9 @@ export function SummaryCard({
     return path
   }, [sparkline])
 
-  const trendColor = trend === 'up' ? 'text-emerald-600' : trend === 'down' ? 'text-rose-600' : 'text-muted-foreground'
+  // A11y — trend arrows are 11px bold glyphs: -600 tones fall under 4.5:1 on
+  // the card surface in light mode, so -700 + dark counterparts carry them.
+  const trendColor = trend === 'up' ? 'text-emerald-700 dark:text-emerald-400' : trend === 'down' ? 'text-rose-700 dark:text-rose-400' : 'text-muted-foreground'
   const TrendIcon = trend === 'up' ? '↑' : trend === 'down' ? '↓' : null
 
   const inner = (
@@ -151,17 +155,17 @@ export function SummaryCard({
         </span>
         {icon && <span className={cn('shrink-0', toneStyles.text)}>{icon}</span>}
       </div>
-      <div className={cn('font-display text-2xl sm:text-3xl font-extrabold tabular-nums leading-tight', toneStyles.text)}>
-        {formattedValue}
+      <div className={cn('font-display text-2xl lg:text-3xl font-extrabold tabular-nums leading-tight', toneStyles.text)}>
+        {isNodeValue ? value : formattedValue}
       </div>
       {sub && (
-        <p className="text-[11px] mt-1 leading-tight break-words flex items-center gap-1">
+        <p className="text-[11px] mt-1 leading-snug break-words flex items-center gap-1">
           {TrendIcon && <span className={cn('font-bold', trendColor)}>{TrendIcon}</span>}
           <span className="text-muted-foreground">{sub}</span>
         </p>
       )}
       {sparklinePath && (
-        <div className="mt-2 -mb-1">
+        <div className="mt-2 pb-2">
           <svg viewBox="0 0 100 28" preserveAspectRatio="none" className="w-full h-7 overflow-visible">
             <motion.path
               d={sparklinePath}
@@ -200,10 +204,14 @@ export function SummaryCard({
       animate={inView ? { opacity: 1, y: 0 } : {}}
       transition={{ duration: 0.5, delay, ease: [0.22, 1, 0.36, 1] }}
       whileHover={onClick ? { y: -2, scale: 1.01 } : { y: -2, scale: 1.005 }}
-      whileTap={onClick ? { scale: 0.99 } : undefined}
+      // NOTE (a11y): no `whileTap` here — framer-motion injects tabindex="0"
+      // on any motion element with whileTap/onTap, which made this wrapper a
+      // focusable GENERIC (no role, no keyboard handler) wrapping the real
+      // button → a double Tab stop + a nameless focusable in the a11y tree.
+      // The press feedback moved to the button itself (active:scale-[0.99]).
     >
       {onClick ? (
-        <button onClick={onClick} className={cn(baseClass, 'block w-full text-left')}>
+        <button onClick={onClick} className={cn(baseClass, 'block w-full text-left active:scale-[0.99]')}>
           {inner}
         </button>
       ) : (

@@ -60,7 +60,7 @@ export function LiveFeeAlert({ onNavigate }: { onNavigate?: (module: string) => 
       onClick={openOutreach}
       aria-label={`Fee dues alert: ${dues.defaulterCount} students owe ${formatINR(dues.totalOutstanding)}. Open the outreach workspace.`}
       className={cn(
-        'group relative mb-3 flex w-full items-center gap-3 overflow-hidden rounded-xl border bg-gradient-to-r px-3.5 py-3 text-left transition-all hover:shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/30',
+        'group relative mb-2 flex w-full items-center gap-3 overflow-hidden rounded-xl border bg-gradient-to-r px-3.5 py-3 text-left transition-all hover:shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/30',
         urgent
           ? 'border-rose-500/30 hover:border-rose-500/50 from-rose-500/[0.07] via-rose-500/[0.04] to-transparent'
           : 'border-amber-500/30 hover:border-amber-500/50 from-amber-500/[0.07] via-amber-500/[0.04] to-transparent',
@@ -80,7 +80,7 @@ export function LiveFeeAlert({ onNavigate }: { onNavigate?: (module: string) => 
             role="status"
             aria-live="polite"
             title="Live server value — synced from the school database"
-            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-px text-[8px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400"
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-px text-[9px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400"
           >
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" aria-hidden />
             live
@@ -91,8 +91,8 @@ export function LiveFeeAlert({ onNavigate }: { onNavigate?: (module: string) => 
       <span className={cn(
         'flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-bold transition-colors',
         urgent
-          ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 group-hover:bg-rose-500/20'
-          : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 group-hover:bg-amber-500/20',
+          ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400 group-hover:bg-rose-500/20'
+          : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 group-hover:bg-amber-500/20',
       )}>
         <Send className="h-3 w-3" aria-hidden />
         <span className="hidden sm:inline">Remind</span>

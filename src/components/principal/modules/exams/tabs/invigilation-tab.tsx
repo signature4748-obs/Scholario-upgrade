@@ -47,6 +47,7 @@ import {
 } from '@/lib/exams/use-exams-extended'
 import { useRoleGate } from '@/lib/exams/use-role-gate'
 import { InlineLoading } from '../inline-loading'
+import { ModuleEmptyState } from '../../shared/empty-state'
 
 // ── helpers ────────────────────────────────────────────────────────────
 
@@ -403,12 +404,12 @@ export function InvigilationTab() {
 
       {/* ── the duty timetable ── */}
       {exam == null || groups.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border bg-card p-6 text-center">
-          <p className="text-sm font-medium text-foreground">No papers scheduled</p>
-          <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
-            {exam ? `${exam.name} has no paper schedule yet — add papers from the examination setup.` : ''}
-          </p>
-        </div>
+        <ModuleEmptyState
+          className="m-0 py-6"
+          icon={<ClipboardCheck className="h-5 w-5" aria-hidden />}
+          title="No papers scheduled"
+          description={exam ? `${exam.name} has no paper schedule yet — add papers from the examination setup.` : undefined}
+        />
       ) : (
         <div className="space-y-3">
           {groups.map((g, gi) => {

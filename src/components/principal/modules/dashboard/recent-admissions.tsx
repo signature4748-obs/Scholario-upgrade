@@ -37,12 +37,12 @@ export interface RecentAdmissionsProps {
 
 const STATUS_STYLES: Record<AdmissionStatus, { dot: string; pill: string; label?: string }> = {
   Draft:           { dot: 'bg-muted-foreground', pill: 'bg-muted/40 text-muted-foreground' },
-  Submitted:       { dot: 'bg-sky-500',          pill: 'bg-sky-500/10 text-sky-600 dark:text-sky-400' },
-  'Under Review':  { dot: 'bg-amber-500',        pill: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
-  'Need Correction':{ dot: 'bg-orange-500',      pill: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
-  Resubmitted:     { dot: 'bg-sky-500',          pill: 'bg-sky-500/10 text-sky-600 dark:text-sky-400' },
-  Approved:        { dot: 'bg-emerald-500',       pill: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
-  Rejected:        { dot: 'bg-rose-500',          pill: 'bg-rose-500/10 text-rose-600 dark:text-rose-400' },
+  Submitted:       { dot: 'bg-sky-500',          pill: 'bg-sky-500/10 text-sky-700 dark:text-sky-400' },
+  'Under Review':  { dot: 'bg-amber-500',        pill: 'bg-amber-500/10 text-amber-700 dark:text-amber-400' },
+  'Need Correction':{ dot: 'bg-orange-500',      pill: 'bg-orange-500/10 text-orange-700 dark:text-orange-400' },
+  Resubmitted:     { dot: 'bg-sky-500',          pill: 'bg-sky-500/10 text-sky-700 dark:text-sky-400' },
+  Approved:        { dot: 'bg-emerald-500',       pill: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' },
+  Rejected:        { dot: 'bg-rose-500',          pill: 'bg-rose-500/10 text-rose-700 dark:text-rose-400' },
   Completed:       { dot: 'bg-emerald-600',       pill: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' },
   Archived:        { dot: 'bg-slate-500',         pill: 'bg-slate-500/10 text-slate-600 dark:text-slate-400' },
 }
