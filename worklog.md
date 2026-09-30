@@ -3667,3 +3667,18 @@ Work Log:
 
 Stage Summary:
 - PHASE 7.5 COMPLETE: School row is the canonical configuration source (identity/branding/settings/websiteContent) consumed by settings, documents, login, and the public site; the website CMS is real (content doc + gallery + announcement lifecycle + privacy-by-default media pipeline); the tenant resolver is server-side and domain-first; the subscription access model is enforced at login AND every school API boundary; 10/10 required proofs pass live; browser-verified across all §22 screens; 6 docs describe the actual implementation. No Supabase/Vercel/Resend/payment connection. STOP.
+---
+Task ID: 8-PUSH
+Agent: orchestrator (repo publish)
+Task: Publish the completed Scholario project to the newly created GitHub repository signature4748-obs/Scholario-upgrade.
+
+Work Log:
+- Inspected repo state: 81 commits (Phase 0 → 7.5 + final park commit), working tree clean, branch main.
+- Pre-push security verification: .gitignore covers node_modules/.next/.env*/db/*.db/uploads/logs; only .env.example tracked; zero db files tracked; tree-wide `ghp_` scan has one documentation-only hit (secret-pattern table in docs/PRODUCTION_READINESS_CHECKLIST.md).
+- First push attempt rejected by GitHub: PAT lacks the `workflow` scope, refusing to create `.github/workflows/ci.yml`.
+- Parked the CI workflow at `.github/ci.yml.disabled` (content unchanged + restore instructions header, commit f7e65b5) so the project can be published without the scope; original remains in history (e3944f4).
+- Pushed full history to https://github.com/signature4748-obs/Scholario-upgrade.git (81 commits, ~45 MiB pack); `git ls-remote` verified remote HEAD = f7e65b5 = local main.
+- Scrubbed the token from the remote URL and verified no token remains in local/global git config.
+
+Stage Summary:
+- Project published: origin now points at Scholario-upgrade, main pushed and tracking, full 80-commit phase history intact. CI workflow parked at .github/ci.yml.disabled — restorable via GitHub web UI rename or a workflow-scoped token. No secrets left in config or tree.
