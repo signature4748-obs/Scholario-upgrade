@@ -20,7 +20,8 @@ import { BookOpen, Archive, Pencil } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { EntityCard } from '../../shared/entity-card'
 import { useStudentsStore } from '@/lib/store/students-store'
-import { useTeachersMockStore } from '@/lib/store/teachers-mock-store'
+// PHASE 7 — the assigned subject teacher resolves from the server roster.
+import { useTeacherRosterStore } from '@/lib/store/teacher-roster-store'
 import type { ClassRecord } from '@/lib/store/students-store'
 import { RenameSubjectDialog } from './rename-subject-dialog'
 
@@ -47,9 +48,11 @@ export function SubjectCard({ subject, cls, manageable = false, onArchive, class
 
   // Look up the assigned teacher. Subject teachers are keyed by subject id
   // (Spec §28 — survives renames). For backward-compat, also try by name.
+  // Dual-id match (Phase 7): ClassSubjectAssignment.teacherUserId is the
+  // teacher's USER id; roster picks carry the Teacher row id.
   const teacherId = cls.subjectTeachers?.[subject] ?? (subj ? cls.subjectTeachers?.[subj.id] : undefined)
-  const teacher = useTeachersMockStore((s) =>
-    teacherId ? s.teachers.find((t) => t.id === teacherId) : undefined
+  const teacher = useTeacherRosterStore((s) =>
+    teacherId ? s.teachers.find((t) => t.id === teacherId || t.userId === teacherId) : undefined
   )
 
   return (
@@ -63,7 +66,7 @@ export function SubjectCard({ subject, cls, manageable = false, onArchive, class
           <span className="text-[10px] text-muted-foreground">{category}</span>
         </>
       }
-      metadata={teacher && !teacher.archived ? `${teacher.name} · ${teacher.employeeId}` : 'No teacher assigned'}
+      metadata={teacher ? `${teacher.name}${teacher.employeeId ? ` · ${teacher.employeeId}` : ''}` : 'No teacher assigned'}
       action={
         manageable ? (
           <div className="flex items-center gap-0.5">

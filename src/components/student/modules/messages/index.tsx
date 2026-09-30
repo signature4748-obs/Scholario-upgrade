@@ -33,7 +33,10 @@ import {
 } from '@/lib/store/student-messaging-store'
 import { useStudentsStore, useMyStudentRecord, type StudentRecord, type ClassRecord } from '@/lib/store/students-store'
 import type { SubjectDef } from '@/lib/mock/academic'
-import { teachers } from '@/lib/mock/teachers'
+// PHASE 7 (Task 7-a) — teacher identities resolve from the school's real
+// roster store (hydrated from /api/teachers for staff sessions; students
+// see an honest empty list — never fabricated teacher names).
+import { useTeacherRosterStore } from '@/lib/store/teacher-roster-store'
 
 /** Timestamp label for a message bubble — time today, date otherwise. */
 function messageStamp(iso: string): string {
@@ -62,7 +65,10 @@ function classContacts(
   const seen = new Set<string>()
   const push = (id: string | undefined, subject: string, role: string) => {
     if (!id || seen.has(id)) return
-    const t = teachers.find((x) => x.id === id)
+    // Dual-id match (Phase 7): class data carries the teacher's USER id
+    // (Class.classTeacherId / CSA.teacherUserId); the roster keys Teacher
+    // rows — real appointed teachers must resolve.
+    const t = useTeacherRosterStore.getState().teachers.find((x) => x.id === id || x.userId === id)
     if (!t) return
     seen.add(id)
     roster.push({ id: t.id, name: t.name, subject, role })
@@ -422,7 +428,18 @@ function NewMessageDialog({
           </Button>
         </div>
         <div className="px-4 py-4 space-y-3 max-h-[60vh] overflow-y-auto custom-scrollbar">
-          {/* Recipient picker — restricted to the student's class staff */}
+          {/* Recipient picker — restricted to the student's class staff.
+              7-b guard: with no resolvable class staff the picker stays
+              honestly empty (no fabricated recipients). */}
+          {contacts.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-card/40 px-4 py-6 text-center" role="note">
+              <p className="text-xs font-medium text-foreground">No class staff available to message</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Your class teacher and subject teachers will appear here once the school assigns
+                them to your class.
+              </p>
+            </div>
+          ) : (
           <div role="radiogroup" aria-label="Recipient" className="space-y-1.5">
             {contacts.map((c) => (
               <button
@@ -453,6 +470,7 @@ function NewMessageDialog({
               </button>
             ))}
           </div>
+          )}
 
           <div>
             <label htmlFor="nm-subject" className="text-xs font-medium text-muted-foreground">

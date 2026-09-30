@@ -7,13 +7,16 @@
  *
  *   Timetable        → timetable-store publications (≤72h, affects the
  *                      student's class) — one notification per publication.
- *   Exams            → mock academics `exams` (Scheduled)
  *   Fee reminder     → the session student's roster record (feeStatus ≠ Paid)
  *   Library overdue  → library-store issues (own borrower id, Overdue)
  *   New messages     → student-messaging store unread conversations
  *   School news      → LR-1: REAL announcements from /api/student/notices
  *                      (audience-scoped Notification rows published by the
  *                      school — no static demo content).
+ *
+ * 7-b: the FAKE exam-schedule items (mock/academics `exams`) are RETIRED —
+ * exam dates are published through real school announcements/notifications
+ * only; nothing is fabricated here.
  *
  * Read state + "Mark all read" persist in the shared student-notif-prefs
  * store (the channel switches live in Settings); announcement rows ALSO
@@ -34,7 +37,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime, formatDate, formatINR } from '@/lib/format'
-import { exams } from '@/lib/mock/academics'
 import { useMyStudentRecord, type StudentRecord } from '@/lib/store/students-store'
 import { useLibraryStore, type IssueRecord } from '@/lib/store/library-store'
 import {
@@ -109,17 +111,8 @@ export function buildStudentNotifications({ student, issues, conversations, seen
     }
   }
 
-  // Exams — Scheduled announcements
-  for (const e of exams.filter((x) => x.status === 'Scheduled')) {
-    items.push({
-      id: `exam-${e.id}`,
-      kind: 'exam',
-      title: `${e.name} — schedule announced`,
-      description: `${e.type} · ${formatDate(e.startDate)} to ${formatDate(e.endDate)} · ${e.classes.join(', ')}`,
-      at: e.startDate,
-      target: 'results',
-    })
-  }
+  // (7-b) Exams — no fabricated schedule announcements. Exam notices reach
+  // the student through REAL school announcements/notifications only.
 
   // Fee reminder — standing, derived from the canonical student record
   if (student && student.feeStatus !== 'Paid') {

@@ -25,6 +25,7 @@ export function useTeachersState() {
     teachers,
     positionsList,
     auditLogs,
+    syncStatus,
     addTeacher,
     addCustomPosition,
     assignPositionToTeacher,
@@ -110,7 +111,7 @@ export function useTeachersState() {
 
   return {
     // store data + actions
-    teachers, positionsList, auditLogs,
+    teachers, positionsList, auditLogs, syncStatus,
     addTeacher, addCustomPosition,
     assignPositionToTeacher, emergencyOverridePosition,
     removePositionFromTeacher, assignSubjectsAndClasses,

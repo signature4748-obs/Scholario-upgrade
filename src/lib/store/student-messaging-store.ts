@@ -3,6 +3,13 @@
 // ============================================================
 // STUDENT MESSAGING STORE — student ↔ teacher direct messages
 // ------------------------------------------------------------
+// 7-b (Mock Data Elimination): the two seeded demo conversations
+// (fabricated teacher threads) are RETIRED. The store starts EMPTY —
+// the module shows its honest "No conversations yet" state until the
+// student actually starts a thread. The persist version was bumped
+// (v1 → v2) with a purge migration so previously seeded threads are
+// discarded on upgrade.
+//
 // Conversations are restricted to the student's OWN class teacher
 // and subject teachers (the recipient picker derives that list from
 // the students-store class record — never a school-wide directory).
@@ -10,7 +17,7 @@
 // Unread is DERIVED honestly: a conversation is unread while its
 // LAST message is from a teacher AND the student has not opened the
 // thread since (seenAt). No fabricated teacher auto-replies — the
-// teacher side of a thread only grows through seeds/manual writes.
+// teacher side of a thread only grows through real writes.
 //
 // Tenant-scoped persistence (SaaS-STAGE-2A): the storage adapter
 // namespaces by active tenant, same pattern as every other store.
@@ -60,39 +67,7 @@ interface StudentMessagingState {
 }
 
 // ─── Seed ────────────────────────────────────────────────────────────
-
-const HOUR = 3_600_000
-const DAY = 24 * HOUR
-const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
-
-function seedConversations(): StudentConversation[] {
-  return [
-    {
-      id: 'SC-01',
-      teacherId: 'T-014',
-      teacherName: 'Rohan Mehta',
-      teacherSubject: 'Mathematics',
-      subject: 'Maths homework — Unit 3',
-      messages: [
-        { id: 'SM-101', from: 'teacher', body: 'Namaste! Please practise the multiplication tables exercise on page 42 before Friday.', sentOn: ago(2 * DAY) },
-        { id: 'SM-102', from: 'student', body: 'Yes sir, I have started it.', sentOn: ago(DAY) },
-        { id: 'SM-103', from: 'teacher', body: 'Great! Bring your notebook tomorrow, I will check the first 10 sums.', sentOn: ago(3 * HOUR) },
-      ],
-      lastOn: ago(3 * HOUR),
-    },
-    {
-      id: 'SC-02',
-      teacherId: 'T-011',
-      teacherName: 'Kavita Joshi',
-      teacherSubject: 'Science',
-      subject: 'Science project — plant life cycle',
-      messages: [
-        { id: 'SM-201', from: 'teacher', body: 'Your group needs to submit the plant life cycle chart by Wednesday. Let me know if you need chart paper.', sentOn: ago(DAY) },
-      ],
-      lastOn: ago(DAY),
-    },
-  ]
-}
+// RETIRED (7-b): seedConversations() is gone — initial state is EMPTY.
 
 const nowIso = () => new Date().toISOString()
 const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
@@ -120,7 +95,7 @@ export function countUnreadConversations(conversations: StudentConversation[], s
 export const useStudentMessagingStore = create<StudentMessagingState>()(
   persist(
     (set, get) => ({
-      conversations: seedConversations(),
+      conversations: [],
       seenAt: {},
 
       sendMessage: (conversationId, body) => {
@@ -191,9 +166,16 @@ export const useStudentMessagingStore = create<StudentMessagingState>()(
       },
     }),
     {
+      // Same key as the retired seeded store — persisted browsers holding
+      // the demo threads (persisted version 1) are PURGED in place by the
+      // v2 migration below (the 7-a same-key + version-bump pattern); a
+      // renamed key would orphan the stale threads instead of clearing them.
       name: 'scholario-student-messages-v1',
       storage: createTenantScopedStorage('scholario-student-messages-v1'),
-      version: 1,
+      version: 2,
+      // 7-b — purge the retired demo threads (and their seen stamps) on
+      // upgrade; the store re-seeds nothing and stays honestly empty.
+      migrate: () => ({ conversations: [], seenAt: {} }),
       partialize: (s) => ({
         conversations: s.conversations,
         seenAt: s.seenAt,

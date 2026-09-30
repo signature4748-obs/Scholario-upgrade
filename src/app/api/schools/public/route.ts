@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
-import { school as schoolMock, classList as classListMock, subjects as subjectsMock } from '@/lib/mock/school'
 import {
   RATE_LIMITS,
   checkRateLimit,
@@ -122,48 +121,11 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    // Demo slug but no demo school registered (fresh dev environment with
-    // an unreachable/empty DB) — the seeded school profile snapshot keeps
-    // the public website renderable. Any OTHER unknown slug fails 404.
-    if (slug === DEMO_SLUG) {
-      return NextResponse.json({
-        success: true,
-        data: {
-          id: 'demo-school-id',
-          name: schoolMock.name,
-          slug: 'demo-school',
-          code: 'SCH-DEMO',
-          domain: schoolMock.website,
-          address: schoolMock.address,
-          city: 'Gurugram',
-          phone: schoolMock.phone,
-          email: schoolMock.email,
-          themeColor: '#0d9488',
-          accentColor: '#14b8a6',
-          academicYear: schoolMock.academicYear,
-          isDemo: true,
-          counts: {
-            students: schoolMock.totalStudents,
-            teachers: schoolMock.totalTeachers,
-            classes: schoolMock.classes,
-            subjects: subjectsMock.length,
-            libraryBooks: 4500,
-          },
-          classes: classListMock.map(c => ({ id: c.id, name: c.name, grade: c.name, section: c.sections[0] || 'A', room: '101' })),
-          subjects: subjectsMock.map(s => ({ id: s.id, name: s.name, code: s.code, department: 'Academic' })),
-          announcements: [
-            {
-              id: 'a1',
-              title: 'Welcome to SCHOLARIO-OS',
-              message: 'Annual admissions for session 2025-2026 are now open.',
-              priority: 'HIGH',
-              createdAt: new Date().toISOString(),
-            },
-          ],
-        },
-      })
-    }
-
+    // PHASE 7 — REAL DATA CONTRACT: the fabricated fallback payload
+    // (mock school profile with invented counts: 1,842 students, 96
+    // teachers, 4,500 books) is RETIRED. When the demo slug is not
+    // registered the honest answer is 404 — the public site then renders
+    // its neutral degraded identity, never a fabricated school.
     return NextResponse.json(
       { success: false, error: 'School profile not found' },
       { status: 404 },

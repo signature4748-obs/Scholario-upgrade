@@ -12,9 +12,9 @@
  *     KPIs, so they live here as a quiet summary instead of as 2 of 8 cards)
  */
 
-import { school } from '@/lib/mock/school'
 import { useSchoolStats } from './use-school-stats'
 import { useAuth } from '@/lib/store/auth-store'
+import { useCurrentUser } from '@/lib/store/current-user-store'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { useAttendanceOverview } from '../attendance/use-attendance-overview'
 import { Users, GraduationCap } from 'lucide-react'
@@ -25,6 +25,11 @@ export interface WelcomeBannerProps {
 
 export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
   const { user } = useAuth()
+  // PHASE 7 — REAL school identity: the name comes from the
+  // authenticated session (/api/auth/me → current-user-store), not the
+  // retired mock/school constant ("Greenwood").
+  const schoolName = useCurrentUser((s) => s.me?.school?.name) ?? user?.name ?? 'Your school'
+  const schoolShort = schoolName.split(' ').slice(0, 2).join(' ')
   // attendance-overview-real — the sub-meta attendance rate reads the
   // canonical Attendance table (session-cached hook, same fetch as the
   // KPI row); "—" while in flight.
@@ -60,7 +65,7 @@ export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
           Good morning, {firstName}
         </h2>
         <p className="text-xs text-muted-foreground mt-1">
-          {school.shortName} · Attendance {attendance ? attendance.today.rate : '—'}% · {birthdaysToday} birthdays today
+          {schoolShort} · Attendance {attendance ? attendance.today.rate : '—'}% · {birthdaysToday} birthdays today
         </p>
       </div>
       <div className="flex items-center gap-3 shrink-0 text-sm">

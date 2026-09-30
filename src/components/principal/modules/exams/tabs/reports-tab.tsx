@@ -10,84 +10,101 @@
  *   4. Examination Operations — marks submission & evaluation report
  *   5. Documents — admit cards (professional layout, 1-per-A4 / 2-per-A4, bulk)
  *
- * All data consumed from canonical mock stores — no duplicate datasets.
+ * 7-b (Mock Data Elimination): the mock-marks store is RETIRED — every
+ * table below computes from the REAL ExamMark rows loaded via
+ * /api/exams/[id]/results/class/[classId] (useExamMarksAll). Exam-day
+ * attendance + invigilator analytics have no real data source in this
+ * surface yet, so those sections render honest "not tracked" states
+ * instead of fabricated sessions/duties.
  */
 
 import { useState, useMemo, useEffect } from 'react'
 import {
   FileText, Download, User, GraduationCap, Ticket, TrendingUp, Calendar, ShieldCheck, Award,
-  Eye, BookOpen, AlertTriangle, Clock,
+  Eye, BookOpen, AlertTriangle, Clock, RotateCw, ClipboardList,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
 import { CollapsibleSection } from '../collapsible-section'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { getSchoolProfile } from '@/lib/school-profile'
 import {
   type ExamDTO, type SchoolContextDTO,
-  type StudentResult, type ReportCardConfigDTO,
-  DEFAULT_GRADE_BOUNDARIES,
+  type StudentResult, type SubjectResult, type ReportCardConfigDTO,
+  DEFAULT_GRADE_BOUNDARIES, getGradeForPercentage,
 } from '@/lib/exams/types'
-import { useMockMarksStore } from '@/lib/exams/mock-marks-data'
-import { useMockAttendanceStore } from '@/lib/exams/mock-attendance-data'
-import { useMockInvigilatorStore } from '@/lib/exams/mock-invigilator-data'
-import { useStudentsStore } from '@/lib/store/students-store'
-import {
-  computeStudentResults, computeExamAnalytics, computeSubjectPerformance,
-  computeClassPerformance,
-} from '@/lib/exams/analytics'
+import { computeExamAnalytics, type SubjectPerformanceRow, type ClassPerformanceRow } from '@/lib/exams/analytics'
+import { api } from '@/lib/exams/api-client'
 import {
   generateClassGradeSheetPDF, generateStudentReportCardPDF, } from '@/lib/exams/pdf'
 import { useSchoolContext } from '@/lib/exams/use-pdf-context'
 import { useAdmitCardConfig, useReportCardConfig } from '@/lib/exams/use-exam-settings'
 import { generateClassResultPDF } from '@/lib/exams/result-pdf'
+import {
+  useExamMarksAll, useTeacherDirectory, buildTeacherNameMap, resolveEnteredBy,
+} from '../marks-hooks'
 
 interface Props {
   exams: ExamDTO[]
 }
 
 export function ReportsTab({ exams }: Props) {
-  const [examId, setExamId] = useState<string>(exams[0]?.id ?? '')
+  const [examIdRaw, setExamId] = useState<string>(exams[0]?.id ?? '')
   const [classId, setClassId] = useState<string>('all')
   const [studentId, setStudentId] = useState<string>('')
 
+  // Late-arriving exams list (async /api/exams): default the selection to
+  // the first examination instead of leaving a dead "select an exam" state.
+  const examId = examIdRaw || exams[0]?.id || ''
+
   const exam = exams.find((e) => e.id === examId) ?? null
 
-  // Canonical data sources.
-  const storeMarks = useMockMarksStore((s) => s.marks)
-  const initMarks = useMockMarksStore((s) => s.initMarks)
-  const allStudents = useStudentsStore((s) => s.students)
-  const attendanceStore = useMockAttendanceStore()
-  const initAttendance = useMockAttendanceStore((s) => s.initAttendance)
-  const invigilatorStore = useMockInvigilatorStore()
+  // 7-b — REAL data: every ExamMark row of the selected examination
+  // (one /api/exams/[id]/results/class/[classId] request per class —
+  // see marks-hooks.useExamMarksAll). The mock-marks store is retired.
+  const { allMarks, loading: marksLoading, error: marksError, reload: reloadMarks } = useExamMarksAll(exam)
+  // 7-b — REAL published results: GET /api/results?examId=<id> (PRINCIPAL
+  // scope = this school's Result rows, legacy + declared-flow alike).
+  // The analytics tables below derive from THESE rows — never fabricated.
+  const [resultsRows, setResultsRows] = useState<ResultRowDTO[]>([])
+  const [resultsLoading, setResultsLoading] = useState(false)
+  const [resultsError, setResultsError] = useState<string | null>(null)
+  const [resultsTick, setResultsTick] = useState(0)
+  useEffect(() => {
+    if (!examId) { setResultsRows([]); setResultsError(null); return }
+    let cancelled = false
+    setResultsLoading(true)
+    setResultsError(null)
+    api<ResultRowDTO[]>(`/api/results?examId=${encodeURIComponent(examId)}`)
+      .then((rows) => { if (!cancelled) setResultsRows(Array.isArray(rows) ? rows : []) })
+      .catch((e: unknown) => {
+        if (!cancelled) setResultsError(e instanceof Error ? e.message : 'Results could not be loaded.')
+      })
+      .finally(() => { if (!cancelled) setResultsLoading(false) })
+    return () => { cancelled = true }
+  }, [examId, resultsTick])
+  // Real staff directory — resolves ExamMark.enteredBy ids to teacher names.
+  const teacherDirectory = useTeacherDirectory()
+  const teacherNameMap = useMemo(() => buildTeacherNameMap(teacherDirectory), [teacherDirectory])
   const { data: schoolCtx } = useSchoolContext()
   const { config: _admitCfg } = useAdmitCardConfig()
   const { config: reportCfg } = useReportCardConfig()
 
-  // Initialize mock marks + attendance for the selected exam (if not already done).
-  useEffect(() => {
-    if (!exam || exam.classes.length === 0) return
-    const students = allStudents
-      .filter((s) => exam.classes.some((c) => c.classId === s.classId) && s.status === 'Active')
-      .map((s) => ({ id: s.id, name: s.name, rollNo: s.rollNo, classId: s.classId, className: s.className }))
-    if (students.length > 0) {
-      initMarks(exam, students)
-      initAttendance(exam, students)
-    }
-  }, [exam, allStudents, initMarks, initAttendance])
-
   // Filter marks for selected exam.
   const examMarks = useMemo(
-    () => storeMarks.filter((m) => m.examId === examId),
-    [storeMarks, examId],
+    () => allMarks.filter((m) => m.examId === examId),
+    [allMarks, examId],
   )
 
-  // Compute student results from canonical marks.
+  // 7-b — student results mapped from the REAL published Result rows.
   const studentResults = useMemo(
-    () => exam ? computeStudentResults(exam, examMarks, classId === 'all' ? undefined : classId) : [],
-    [exam, examMarks, classId],
+    () => exam
+      ? mapResultRowsToStudentResults(resultsRows, exam, classId === 'all' ? undefined : classId)
+      : [],
+    [exam, resultsRows, classId],
   )
 
   // Compute analytics.
@@ -96,38 +113,34 @@ export function ReportsTab({ exams }: Props) {
     [studentResults],
   )
 
-  // Subject performance.
+  // Subject performance — from the REAL Result rows.
   const subjectPerf = useMemo(
-    () => exam ? computeSubjectPerformance(exam, examMarks) : [],
-    [exam, examMarks],
+    () => exam ? mapResultRowsToSubjectPerformance(resultsRows, exam) : [],
+    [exam, resultsRows],
   )
 
-  // Class performance.
+  // Class performance — from the mapped student results.
   const classPerf = useMemo(
-    () => computeClassPerformance(studentResults, exam ?? {} as ExamDTO),
+    () => mapStudentResultsToClassPerformance(studentResults, exam ?? ({} as ExamDTO)),
     [studentResults, exam],
   )
 
-  // Attendance sessions for this exam.
-  const examSessions = useMemo(
-    () => attendanceStore.sessions.filter((s) => s.examId === examId),
-    [attendanceStore.sessions, examId],
-  )
-
-  // Invigilator duties for this exam.
-  const examDuties = useMemo(
-    () => invigilatorStore.getExamDuties(examId),
-    [invigilatorStore, examId],
-  )
-
-  // Students for the selected class (for student selector).
+  // Students for the selected class (for student selector) — derived from
+  // the REAL marks rows (7-b: the students-store roster is no longer read
+  // here; only students who actually have marks for this exam appear).
   const classStudents = useMemo(() => {
     if (!exam) return []
     const targetClassId = classId === 'all' ? (exam.classes[0]?.classId ?? '') : classId
-    return allStudents
-      .filter((s) => s.classId === targetClassId && s.status === 'Active')
-      .map((s) => ({ id: s.id, rollNo: s.rollNo, name: s.name }))
-  }, [allStudents, exam, classId])
+    const seen = new Set<string>()
+    const rows: { id: string; rollNo: string | null; name: string }[] = []
+    for (const r of studentResults) {
+      if (r.classId !== targetClassId) continue
+      if (seen.has(r.studentId)) continue
+      seen.add(r.studentId)
+      rows.push({ id: r.studentId, rollNo: r.rollNo, name: r.studentName })
+    }
+    return rows.sort((a, b) => (a.rollNo ?? '').localeCompare(b.rollNo ?? ''))
+  }, [exam, classId, studentResults])
 
   // Default configs.
   const DEFAULT_REPORT: ReportCardConfigDTO = { showAttendance: true, showRank: true, showPercentage: true, showGrade: true, showCoScholastic: false, showRemarks: true, showClassTeacherSign: true, showPrincipalSign: true }
@@ -146,6 +159,31 @@ export function ReportsTab({ exams }: Props) {
       <div className="rounded-xl border border-border bg-card p-8 text-center">
         <AlertTriangle className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
         <p className="text-xs text-muted-foreground">Select an examination to view reports.</p>
+      </div>
+    )
+  }
+
+  // 7-b — honest loading state while the real marks + results load.
+  if (marksLoading || resultsLoading) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-6 space-y-3" aria-busy="true" aria-label="Loading examination marks">
+        <Skeleton className="h-8 w-56 rounded-lg" />
+        <Skeleton className="h-20 rounded-lg" />
+        <Skeleton className="h-40 rounded-lg" />
+      </div>
+    )
+  }
+
+  // 7-b — honest error state with a retry (no fabricated fallbacks).
+  if (marksError || resultsError) {
+    return (
+      <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-6 text-center">
+        <AlertTriangle className="h-7 w-7 text-rose-500/60 mx-auto mb-2" />
+        <p className="text-xs font-medium text-rose-700 dark:text-rose-300">Results could not be loaded</p>
+        <p className="text-[11px] text-rose-600/70 mt-1 max-w-sm mx-auto">{marksError ?? resultsError}</p>
+        <Button size="sm" variant="outline" className="mt-3 h-7 gap-1 text-xs" onClick={() => { reloadMarks(); setResultsTick((t) => t + 1) }}>
+          <RotateCw className="h-3 w-3" /> Try again
+        </Button>
       </div>
     )
   }
@@ -232,12 +270,12 @@ export function ReportsTab({ exams }: Props) {
       {exam.status === 'Draft' || exam.status === 'Scheduled' ? (
         /* ─── UPCOMING EXAM: Pre-Examination Monitoring ─── */
         <CollapsibleSection title="Pre-Examination Monitoring" subtitle="readiness & configuration status" accent="sky" defaultOpen={true}>
-          <PreExamMonitoring exam={exam} examSessions={examSessions} examDuties={examDuties} examMarks={examMarks} />
+          <PreExamMonitoring exam={exam} examMarks={examMarks} />
         </CollapsibleSection>
       ) : exam.status === 'Ongoing' ? (
         /* ─── LIVE EXAM: Live Examination Monitoring ─── */
-        <CollapsibleSection title="Live Examination Monitoring" subtitle="sessions, attendance & evaluation progress" accent="amber" defaultOpen={true}>
-          <LiveExamMonitoring exam={exam} examSessions={examSessions} attendanceRecords={attendanceStore.records} examMarks={examMarks} />
+        <CollapsibleSection title="Live Examination Monitoring" subtitle="evaluation progress" accent="amber" defaultOpen={true}>
+          <LiveExamMonitoring examMarks={examMarks} />
         </CollapsibleSection>
       ) : null}
 
@@ -283,21 +321,29 @@ export function ReportsTab({ exams }: Props) {
       </CollapsibleSection>
       )}
 
-      {/* ─── Section 3: Attendance Reports ─── */}
+      {/* ─── Section 3: Attendance Reports — honest "not tracked" (7-b) ─── */}
       <CollapsibleSection title="Attendance Reports" subtitle="exam attendance, room-wise, invigilator duty" accent="amber" defaultOpen={false}>
         <div className="p-3 space-y-3">
-          {/* Room-wise Attendance */}
-          <RoomAttendanceTable sessions={examSessions} attendanceRecords={attendanceStore.records} />
+          {/* Room-wise Attendance — no data source in this surface yet */}
+          <NotTrackedState
+            icon={<Calendar className="h-5 w-5" />}
+            title="Exam-day attendance is not tracked here yet"
+            body="Room-wise exam attendance reports will appear once attendance capture is wired into this surface. Marking registers live in the Examination workspace."
+          />
 
-          {/* Invigilator Duty Report */}
-          <InvigilatorDutyTable duties={examDuties} sessions={examSessions} attendanceRecords={attendanceStore.records} />
+          {/* Invigilator Duty Report — no data source in this surface yet */}
+          <NotTrackedState
+            icon={<ShieldCheck className="h-5 w-5" />}
+            title="Invigilator duty analytics are not tracked here yet"
+            body="Duty rosters are assigned and reviewed in the Invigilation tab — per-exam duty reports are not generated in this view."
+          />
         </div>
       </CollapsibleSection>
 
       {/* ─── Section 4: Examination Operations ─── */}
       <CollapsibleSection title="Examination Operations" subtitle="marks submission & evaluation report" accent="sky" defaultOpen={false}>
         <div className="p-3">
-          <MarksEvaluationReport exam={exam} marks={examMarks} />
+          <MarksEvaluationReport exam={exam} marks={examMarks} teacherNameMap={teacherNameMap} />
         </div>
       </CollapsibleSection>
 
@@ -315,6 +361,169 @@ export function ReportsTab({ exams }: Props) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
+/** 7-b — a published Result row (PRINCIPAL scope, /api/results?examId=). */
+interface ResultRowDTO {
+  studentId: string
+  examId: string
+  subjectId: string
+  marks: number
+  totalMarks: number
+  grade: string | null
+  remarks: string | null
+  createdAt: string
+  subject?: { name?: string | null } | null
+  student?: { rollNo?: string | null; classId?: string | null; user?: { name?: string | null } | null } | null
+}
+
+/** Per-subject pass marks (Result rows carry no passMarks — derive from
+ *  the exam's configured pass percentage, defaulting to the school norm). */
+function passMarksFor(totalMarks: number, exam: ExamDTO): number {
+  const pct = exam.passPercentage && exam.passPercentage > 0 ? exam.passPercentage : 33
+  return Math.max(1, Math.round((totalMarks * pct) / 100))
+}
+
+/** Map the exam's REAL published Result rows → StudentResult[] (ranked). */
+function mapResultRowsToStudentResults(rows: ResultRowDTO[], exam: ExamDTO, classId?: string): StudentResult[] {
+  const classNameById = new Map<string, string>()
+  for (const c of exam.classes) classNameById.set((c as { classId: string }).classId, (c as { className: string }).className)
+
+  const byStudent = new Map<string, ResultRowDTO[]>()
+  for (const r of rows) {
+    const list = byStudent.get(r.studentId)
+    if (list) list.push(r)
+    else byStudent.set(r.studentId, [r])
+  }
+
+  const results: StudentResult[] = []
+  for (const [studentId, sRows] of byStudent) {
+    const first = sRows[0]
+    const studentClassId = first.student?.classId ?? ''
+    if (classId && studentClassId !== classId) continue
+    const subjects: SubjectResult[] = [...sRows]
+      .sort((a, b) => (a.subject?.name ?? '').localeCompare(b.subject?.name ?? ''))
+      .map((r) => {
+        const maxMarks = r.totalMarks > 0 ? r.totalMarks : 100
+        const passMarks = passMarksFor(maxMarks, exam)
+        const pct = maxMarks > 0 ? Math.round((r.marks / maxMarks) * 10000) / 100 : 0
+        return {
+          subjectId: r.subjectId,
+          subjectName: r.subject?.name ?? 'Subject',
+          maxMarks,
+          passMarks,
+          marksObtained: r.marks,
+          status: 'PRESENT',
+          isAbsent: false,
+          passed: r.marks >= passMarks,
+          percentage: pct,
+        }
+      })
+    const totalObtained = subjects.reduce((s, x) => s + (x.marksObtained ?? 0), 0)
+    const totalMax = subjects.reduce((s, x) => s + x.maxMarks, 0)
+    const percentage = totalMax > 0 ? Math.round((totalObtained / totalMax) * 10000) / 100 : 0
+    const { grade, color } = getGradeForPercentage(percentage, [])
+    const subjectsFailed = subjects.filter((s) => !s.passed).length
+    results.push({
+      studentId,
+      studentName: first.student?.user?.name ?? 'Student',
+      rollNo: first.student?.rollNo ?? null,
+      className: classNameById.get(studentClassId) ?? '',
+      classId: studentClassId,
+      subjects,
+      totalObtained,
+      totalMax,
+      percentage,
+      grade,
+      gradeColor: color,
+      passed: subjectsFailed === 0,
+      subjectsPassed: subjects.length - subjectsFailed,
+      subjectsCount: subjects.length,
+      isAbsentInAll: false,
+      rank: 0,
+    })
+  }
+
+  return results
+    .sort((a, b) => b.percentage - a.percentage)
+    .map((r, i) => ({ ...r, rank: i + 1 }))
+}
+
+/** Map the exam's REAL Result rows → per-subject performance rows. */
+function mapResultRowsToSubjectPerformance(rows: ResultRowDTO[], exam: ExamDTO): SubjectPerformanceRow[] {
+  const classNameById = new Map<string, string>()
+  for (const c of exam.classes) classNameById.set((c as { classId: string }).classId, (c as { className: string }).className)
+
+  const byPaper = new Map<string, ResultRowDTO[]>()
+  for (const r of rows) {
+    const key = `${r.student?.classId ?? ''}|${r.subjectId}`
+    const list = byPaper.get(key)
+    if (list) list.push(r)
+    else byPaper.set(key, [r])
+  }
+
+  const out: SubjectPerformanceRow[] = []
+  for (const [key, paperRows] of byPaper) {
+    const [classId, subjectId] = key.split('|')
+    const values = paperRows.map((r) => r.marks)
+    const maxMarks = paperRows[0].totalMarks > 0 ? paperRows[0].totalMarks : 100
+    const passMarks = passMarksFor(maxMarks, exam)
+    const passCount = values.filter((v) => v >= passMarks).length
+    const dist: Record<string, number> = {}
+    for (const g of DEFAULT_GRADE_BOUNDARIES) dist[g.grade] = 0
+    for (const v of values) {
+      const pct = maxMarks > 0 ? (v / maxMarks) * 100 : 0
+      const { grade } = getGradeForPercentage(pct, [])
+      dist[grade] = (dist[grade] ?? 0) + 1
+    }
+    out.push({
+      classId,
+      className: classNameById.get(classId) ?? '',
+      subjectId,
+      subjectName: paperRows[0].subject?.name ?? 'Subject',
+      entered: values.length,
+      total: paperRows.length,
+      avg: values.length > 0 ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10 : 0,
+      highest: values.length > 0 ? Math.max(...values) : 0,
+      lowest: values.length > 0 ? Math.min(...values) : 0,
+      passCount,
+      failCount: values.length - passCount,
+      absentCount: 0,
+      passRate: values.length > 0 ? Math.round((passCount / values.length) * 100) : 0,
+      gradeDistribution: dist,
+    })
+  }
+  return out.sort((a, b) => a.className.localeCompare(b.className) || a.subjectName.localeCompare(b.subjectName))
+}
+
+/** Map the ranked student results → per-class performance rows. */
+function mapStudentResultsToClassPerformance(results: StudentResult[], exam: ExamDTO): ClassPerformanceRow[] {
+  const dist: Record<string, number> = {}
+  for (const g of DEFAULT_GRADE_BOUNDARIES) dist[g.grade] = 0
+  return (exam.classes as Array<{ classId: string; className: string }>).map((c) => {
+    const classResults = results.filter((r) => r.classId === c.classId)
+    const passed = classResults.filter((r) => r.passed)
+    const pcts = classResults.map((r) => r.percentage)
+    const classDist: Record<string, number> = { ...dist }
+    for (const r of classResults) {
+      const { grade } = getGradeForPercentage(r.percentage, [])
+      classDist[grade] = (classDist[grade] ?? 0) + 1
+    }
+    return {
+      classId: c.classId,
+      className: c.className,
+      totalStudents: classResults.length,
+      appeared: classResults.length,
+      absent: 0,
+      passed: passed.length,
+      failed: classResults.length - passed.length,
+      passRate: classResults.length > 0 ? Math.round((passed.length / classResults.length) * 100) : 0,
+      avgPct: pcts.length > 0 ? Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 10) / 10 : 0,
+      highestPct: pcts.length > 0 ? Math.max(...pcts) : 0,
+      lowestPct: pcts.length > 0 ? Math.min(...pcts) : 0,
+      gradeDistribution: classDist,
+    }
+  })
+}
+
 function fallbackSchool(exam: ExamDTO): SchoolContextDTO {
   // School identity falls back to the live School Settings snapshot —
   // never a hardcoded placeholder.
@@ -328,21 +537,17 @@ function fallbackSchool(exam: ExamDTO): SchoolContextDTO {
 
 // ─── Pre-Examination Monitoring (for upcoming exams) ─────────────────
 
-function PreExamMonitoring({ exam, examSessions, examDuties, examMarks }: {
-  exam: ExamDTO; examSessions: any[]; examDuties: any[]; examMarks: any[]
+function PreExamMonitoring({ exam, examMarks }: {
+  exam: ExamDTO; examMarks: Array<{ marksObtained: number | null }>
 }) {
   const hasSchedule = exam.schedule.length > 0
-  const hasSeating = examSessions.length > 0
-  const hasInvigilators = examDuties.length > 0
   const hasMarks = examMarks.length > 0
 
   const items = [
     { label: 'Schedule published', done: hasSchedule, detail: `${exam.schedule.length} papers scheduled` },
     { label: 'Classes configured', done: exam.classes.length > 0, detail: `${exam.classes.length} classes` },
     { label: 'Subjects configured', done: exam.subjects.length > 0, detail: `${exam.subjects.length} subjects` },
-    { label: 'Seating ready', done: hasSeating, detail: hasSeating ? `${examSessions.length} sessions` : 'Not generated' },
-    { label: 'Invigilators assigned', done: hasInvigilators, detail: hasInvigilators ? `${examDuties.length} duties` : 'Not assigned' },
-    { label: 'Marks entry started', done: hasMarks, detail: hasMarks ? `${examMarks.length} marks` : 'Not started' },
+    { label: 'Marks entry started', done: hasMarks, detail: hasMarks ? `${examMarks.length} mark rows` : 'Not started' },
   ]
 
   return (
@@ -373,28 +578,21 @@ function PreExamMonitoring({ exam, examSessions, examDuties, examMarks }: {
 
 // ─── Live Examination Monitoring (for ongoing exams) ─────────────────
 
-function LiveExamMonitoring({ exam, examSessions, attendanceRecords, examMarks }: {
-  exam: ExamDTO; examSessions: any[]; attendanceRecords: any[]; examMarks: any[]
+function LiveExamMonitoring({ examMarks }: {
+  examMarks: Array<{ marksObtained: number | null }>
 }) {
-  const submittedSessions = examSessions.filter((s) => s.submitted).length
-  const pendingSessions = examSessions.length - submittedSessions
-  const totalAttendanceRecords = attendanceRecords.filter((r) => r.examId === exam.id).length
-  const presentCount = attendanceRecords.filter((r) => r.examId === exam.id && r.status === 'PRESENT').length
   const enteredMarks = examMarks.filter((m) => m.marksObtained !== null).length
   const totalMarks = examMarks.length
 
   const items = [
-    { label: 'Sessions Total', value: examSessions.length },
-    { label: 'Sessions Submitted', value: submittedSessions, color: 'text-emerald-600' },
-    { label: 'Sessions Pending', value: pendingSessions, color: pendingSessions > 0 ? 'text-amber-600' : 'text-muted-foreground' },
-    { label: 'Attendance Records', value: totalAttendanceRecords },
-    { label: 'Students Present', value: presentCount, color: 'text-emerald-600' },
+    { label: 'Mark Rows', value: totalMarks },
     { label: 'Marks Entered', value: `${enteredMarks}/${totalMarks}`, color: 'text-amber-600' },
+    { label: 'Awaiting Entry', value: totalMarks - enteredMarks, color: totalMarks - enteredMarks > 0 ? 'text-amber-600' : 'text-muted-foreground' },
   ]
 
   return (
     <div className="p-3 space-y-3">
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         {items.map((item) => (
           <div key={item.label} className="rounded-md bg-muted/30 border border-border/40 px-2.5 py-1.5 text-center">
             <p className="text-[8px] uppercase tracking-wider text-muted-foreground">{item.label}</p>
@@ -619,117 +817,13 @@ function GradeDistributionTable({ analytics }: { analytics: any }) {
   )
 }
 
-function RoomAttendanceTable({ sessions, attendanceRecords }: { sessions: any[]; attendanceRecords: any[] }) {
-  if (sessions.length === 0) {
-    return <EmptyState icon={<Calendar className="h-5 w-5" />} message="No exam attendance sessions available." />
-  }
-  return (
-    <div className="rounded-lg border border-border/60 overflow-hidden">
-      <div className="px-3 py-2 border-b border-border/40 bg-muted/20">
-        <p className="text-[10px] uppercase font-semibold text-muted-foreground">Room-wise Attendance</p>
-      </div>
-      <div className="overflow-x-auto max-h-[16rem]">
-        <table className="w-full text-xs">
-          <thead className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_hsl(var(--border))]">
-            <tr>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Date</th>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Subject</th>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Class</th>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Room</th>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Invigilator</th>
-              <th className="text-center px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Students</th>
-              <th className="text-center px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Present</th>
-              <th className="text-center px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Absent</th>
-              <th className="text-center px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map((s) => {
-              const records = attendanceRecords.filter((r) => r.examId === s.examId && r.scheduleItemId === s.scheduleItemId)
-              const present = records.filter((r) => r.status === 'PRESENT').length
-              const absent = records.filter((r) => r.status === 'ABSENT').length
-              return (
-                <tr key={s.id} className="border-t border-border/30 hover:bg-muted/20 even:bg-muted/10">
-                  <td className="px-2 py-1.5 text-muted-foreground tabular-nums">{s.date}</td>
-                  <td className="px-2 py-1.5 font-medium">{s.subjectName}</td>
-                  <td className="px-2 py-1.5 text-muted-foreground">{s.className}</td>
-                  <td className="px-2 py-1.5">{s.roomName}</td>
-                  <td className="px-2 py-1.5 text-muted-foreground">{s.invigilatorName ?? '—'}</td>
-                  <td className="px-2 py-1.5 text-center tabular-nums">{records.length}</td>
-                  <td className="px-2 py-1.5 text-center tabular-nums text-emerald-600">{present}</td>
-                  <td className="px-2 py-1.5 text-center tabular-nums text-rose-600">{absent}</td>
-                  <td className="px-2 py-1.5 text-center">
-                    {s.submitted ? (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">Submitted</span>
-                    ) : (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300">Pending</span>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function InvigilatorDutyTable({ duties, sessions, attendanceRecords }: { duties: any[]; sessions: any[]; attendanceRecords: any[] }) {
-  if (duties.length === 0) {
-    return <EmptyState icon={<ShieldCheck className="h-5 w-5" />} message="No invigilator duties assigned for this examination." />
-  }
-  return (
-    <div className="rounded-lg border border-border/60 overflow-hidden">
-      <div className="px-3 py-2 border-b border-border/40 bg-muted/20">
-        <p className="text-[10px] uppercase font-semibold text-muted-foreground">Invigilator Duty Report</p>
-      </div>
-      <div className="overflow-x-auto max-h-[16rem]">
-        <table className="w-full text-xs">
-          <thead className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_hsl(var(--border))]">
-            <tr>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Invigilator</th>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Date</th>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Subject</th>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Class</th>
-              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Room</th>
-              <th className="text-center px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Students</th>
-              <th className="text-center px-2 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {duties.map((d) => {
-              const session = sessions.find((s) => s.scheduleItemId === d.scheduleItemId)
-              const records = session ? attendanceRecords.filter((r) => r.scheduleItemId === d.scheduleItemId) : []
-              return (
-                <tr key={d.id} className="border-t border-border/30 hover:bg-muted/20 even:bg-muted/10">
-                  <td className="px-2 py-1.5 font-medium">{d.teacherName}</td>
-                  <td className="px-2 py-1.5 text-muted-foreground tabular-nums">{d.date}</td>
-                  <td className="px-2 py-1.5">{d.subjectName}</td>
-                  <td className="px-2 py-1.5 text-muted-foreground">{d.className}</td>
-                  <td className="px-2 py-1.5">{d.roomName}</td>
-                  <td className="px-2 py-1.5 text-center tabular-nums">{records.length}</td>
-                  <td className="px-2 py-1.5 text-center">
-                    <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold',
-                      d.status === 'SUBMITTED' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' :
-                      d.status === 'ACCEPTED' ? 'bg-sky-500/10 text-sky-700 dark:text-sky-300' :
-                      'bg-amber-500/10 text-amber-700 dark:text-amber-300')}>
-                      {d.status}
-                    </span>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function MarksEvaluationReport({ exam, marks }: { exam: ExamDTO; marks: any[] }) {
+function MarksEvaluationReport({ exam, marks, teacherNameMap }: {
+  exam: ExamDTO
+  marks: Array<{ classId: string; subjectId: string; marksObtained: number | null; workflowStatus: string; enteredBy: string | null; enteredAt: string | null; verifiedAt: string | null; lockedBy: string | null }>
+  teacherNameMap: Map<string, string>
+}) {
   const rows = useMemo(() => {
-    const result: Array<{ classId: string; className: string; subjectId: string; subjectName: string; teacher: string; total: number; entered: number; status: string; enteredAt: string | null; verifiedAt: string | null; lockedAt: string | null }> = []
+    const result: Array<{ classId: string; className: string; subjectId: string; subjectName: string; teacher: string | null; total: number; entered: number; status: string; enteredAt: string | null; verifiedAt: string | null; lockedAt: string | null }> = []
     for (const c of exam.classes) {
       for (const subj of exam.subjects.filter((s: any) => s.classId === c.classId)) {
         const subjectMarks = marks.filter((m) => m.classId === c.classId && m.subjectId === subj.subjectId)
@@ -739,10 +833,13 @@ function MarksEvaluationReport({ exam, marks }: { exam: ExamDTO; marks: any[] })
         const allVerified = subjectMarks.length > 0 && [...statuses].every((s) => ['VERIFIED', 'LOCKED'].includes(s))
         const allSubmitted = subjectMarks.length > 0 && [...statuses].every((s) => ['SUBMITTED', 'VERIFIED', 'LOCKED'].includes(s))
         const status = allLocked ? 'LOCKED' : allVerified ? 'VERIFIED' : allSubmitted ? 'SUBMITTED' : entered > 0 ? 'IN_PROGRESS' : 'DRAFT'
+        // 7-b — the teacher is resolved from the marks' REAL enteredBy id
+        // (staff directory); unresolvable/absent → an honest "—".
+        const enteredBy = subjectMarks.find((m) => m.enteredBy)?.enteredBy ?? null
         result.push({
           classId: c.classId, className: c.className,
           subjectId: subj.subjectId, subjectName: subj.subjectName,
-          teacher: teacherForSubject(subj.subjectName),
+          teacher: resolveEnteredBy(enteredBy, teacherNameMap),
           total: subjectMarks.length, entered, status,
           enteredAt: subjectMarks[0]?.enteredAt ?? null,
           verifiedAt: subjectMarks[0]?.verifiedAt ?? null,
@@ -751,7 +848,20 @@ function MarksEvaluationReport({ exam, marks }: { exam: ExamDTO; marks: any[] })
       }
     }
     return result
-  }, [exam, marks])
+  }, [exam, marks, teacherNameMap])
+
+  // 7-b — no marks-entry rows AND no subject configs → honest "not
+  // tracked" (legacy exams published through the results flow have no
+  // ExamMark workflow rows).
+  if (rows.length === 0) {
+    return (
+      <NotTrackedState
+        icon={<ClipboardList className="h-5 w-5" />}
+        title="No marks-entry records for this examination"
+        body="Marks-entry workflow rows appear here when teachers enter marks through the Examination workspace. Examinations published without the workflow have no entry records."
+      />
+    )
+  }
 
   return (
     <div className="rounded-lg border border-border/60 overflow-hidden">
@@ -774,7 +884,7 @@ function MarksEvaluationReport({ exam, marks }: { exam: ExamDTO; marks: any[] })
               <tr key={i} className="border-t border-border/30 hover:bg-muted/20 even:bg-muted/10">
                 <td className="px-2 py-1.5 text-muted-foreground">{r.className}</td>
                 <td className="px-2 py-1.5 font-medium">{r.subjectName}</td>
-                <td className="px-2 py-1.5 text-muted-foreground">{r.teacher}</td>
+                <td className="px-2 py-1.5 text-muted-foreground">{r.teacher ?? '—'}</td>
                 <td className="px-2 py-1.5 text-center tabular-nums">{r.entered}/{r.total}</td>
                 <td className="px-2 py-1.5 text-center">
                   <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold',
@@ -806,15 +916,15 @@ function EmptyState({ icon, message }: { icon: React.ReactNode; message: string 
   )
 }
 
-function teacherForSubject(subjectName: string): string {
-  const s = subjectName.toLowerCase()
-  if (s.includes('math')) return 'Mr. Anil Sharma'
-  if (s.includes('english')) return 'Ms. Priya Nair'
-  if (s.includes('physics')) return 'Dr. Lakshmi Iyer'
-  if (s.includes('chemistry')) return 'Mr. Venkat Naidu'
-  if (s.includes('biology')) return 'Mrs. Anjali Desai'
-  if (s.includes('social')) return 'Mr. Karthik Reddy'
-  if (s.includes('hindi')) return 'Mrs. Meera Joshi'
-  if (s.includes('commerce') || s.includes('account')) return 'Mr. Sandeep Gupta'
-  return 'Mr. Rajesh Kumar'
+/** 7-b — honest "not tracked" state for sections with no real data source. */
+function NotTrackedState({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-border/70 bg-muted/10 px-3 py-6 text-center">
+      <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-muted/40 mb-2 text-muted-foreground/50">
+        {icon}
+      </div>
+      <p className="text-[11px] font-medium text-foreground/80">{title}</p>
+      <p className="mt-1 max-w-md mx-auto text-[10px] leading-relaxed text-muted-foreground">{body}</p>
+    </div>
+  )
 }

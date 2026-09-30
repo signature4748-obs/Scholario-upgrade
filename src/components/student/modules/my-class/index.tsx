@@ -23,7 +23,10 @@ import { useStudentsStore, useMyStudentRecord, type StudentPosition } from '@/li
 import { POSITION_DEFS, hasCapability, allCapabilities, filterActivePositions, type StudentCapability } from '@/lib/student-positions'
 import { useAcademicSession } from '@/lib/academic-session'
 import { useClassResponsibilityStore, type ClassUpdateCategory, type IssueCategory, type IssuePriority, type ResponsibilityTask } from '@/lib/store/class-responsibility-store'
-import { teachers } from '@/lib/mock/teachers'
+// PHASE 7 (Task 7-a) — teacher identities resolve from the school's real
+// roster store (hydrated from /api/teachers for staff sessions; students
+// see an honest empty list — never fabricated teacher names).
+import { useTeacherRosterStore } from '@/lib/store/teacher-roster-store'
 import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
 import { formatDate, formatRelativeTime } from '@/lib/format'
 import { toast } from 'sonner'
@@ -48,7 +51,10 @@ function allowedTeachers(classId: string, section: string): { id: string; name: 
   const seen = new Set<string>()
   const push = (id: string | undefined, subject: string) => {
     if (!id || seen.has(id)) return
-    const t = teachers.find((x) => x.id === id)
+    // Dual-id match (Phase 7): class data carries the teacher's USER id
+    // (Class.classTeacherId / CSA.teacherUserId); the roster keys Teacher
+    // rows — real appointed teachers must resolve.
+    const t = useTeacherRosterStore.getState().teachers.find((x) => x.id === id || x.userId === id)
     if (!t) return
     seen.add(id)
     roster.push({ id: t.id, name: t.name, subject })
@@ -595,6 +601,11 @@ function MeetingDialog({ onClose }: { onClose: () => void }) {
       <div>
         <label className="text-xs font-medium">Teacher</label>
         <div className="space-y-1.5 mt-1.5">
+          {teacherList.length === 0 && (
+            <p className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2.5 text-[11px] text-muted-foreground" role="note">
+              No class or subject teachers assigned yet — your class teacher and subject teachers will appear here once the school assigns them.
+            </p>
+          )}
           {teacherList.map((t) => (
             <button key={t.id} onClick={() => setTeacherId(t.id)} className={cn(
               'w-full flex items-center gap-3 rounded-lg border p-2.5 text-left transition-colors',

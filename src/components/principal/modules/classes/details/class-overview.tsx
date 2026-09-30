@@ -25,11 +25,13 @@
  * Brief section 39: NO box-inside-box — sections render directly on the page
  * with thin dividers, NOT wrapped in an outer white card.
  */
+import { useEffect } from 'react'
 import { BookOpen, Users, Layers } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStudentsStore } from '@/lib/store/students-store'
 import type { ClassRecord } from '@/lib/store/students-store'
-import { useTeachersMockStore } from '@/lib/store/teachers-mock-store'
+// PHASE 7 — real teacher names resolve from the server roster.
+import { useTeacherRosterStore } from '@/lib/store/teacher-roster-store'
 import { SummaryCard, SummaryCardGrid } from '../../shared/summary-card'
 import { SubjectCard } from './subject-card'
 
@@ -39,14 +41,22 @@ export function ClassOverview({ cls }: { cls: ClassRecord }) {
   // Brief section 35 + 37.
   const liveClass = useStudentsStore((s) => s.getClassById(cls.id)) ?? cls
   const students = useStudentsStore((s) => s.students)
-  const teachers = useTeachersMockStore((s) => s.teachers)
+  const teachers = useTeacherRosterStore((s) => s.teachers)
+  const ensureRoster = useTeacherRosterStore((s) => s.ensure)
+  // Hydrate the roster once (idempotent, in-flight-guarded) so the real
+  // teacher names resolve on the first paint of this tab.
+  useEffect(() => { void ensureRoster() }, [ensureRoster])
   const cap = liveClass.capacity * liveClass.sections.length
   // REAL enrolled count — ACTIVE roster students in this class.
   const enr = students.filter((st) => st.classId === liveClass.id && st.status === 'Active').length
 
   const findTeacher = (id: string | null | undefined) => {
     if (!id) return undefined
-    return teachers.find((t) => t.id === id)
+    // Dual-id match (Phase 7): synced class data carries the teacher's
+    // USER id (Class.classTeacherId convention); roster picks carry the
+    // Teacher row id. Both must resolve — real appointments are never
+    // hidden behind a "—" placeholder.
+    return teachers.find((t) => t.id === id || t.userId === id)
   }
 
   return (
@@ -96,16 +106,18 @@ export function ClassOverview({ cls }: { cls: ClassRecord }) {
                     </div>
                   </div>
                 </div>
-                {/* Compact teacher metadata — single muted line per role */}
+                {/* Compact teacher metadata — single muted line per role.
+                    An id that no longer resolves to a roster teacher (or no
+                    teacher appointed) renders the honest em dash. */}
                 <div className="mt-1.5 pl-9 space-y-0.5">
                   <p className="text-[10px] text-muted-foreground">
                     Class Teacher: <span className="text-foreground font-medium">
-                      {secTeacher && !secTeacher.archived ? secTeacher.name : '—'}
+                      {secTeacher ? secTeacher.name : '—'}
                     </span>
                   </p>
                   <p className="text-[10px] text-muted-foreground">
                     Assistant Class Teacher: <span className="text-foreground font-medium">
-                      {secAssistant && !secAssistant.archived ? secAssistant.name : '—'}
+                      {secAssistant ? secAssistant.name : '—'}
                     </span>
                   </p>
                 </div>

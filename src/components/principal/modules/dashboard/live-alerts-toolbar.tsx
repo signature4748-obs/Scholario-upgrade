@@ -28,14 +28,14 @@ export interface LiveAlertsToolbarProps {
   alertsLength: number
   dismissedCount: number
   snoozedCount: number
-  autoAlertsEnabled: boolean
-  countdown: number
+  autoAlertsEnabled?: boolean
+  countdown?: number
   snoozeAllMenuOpen: boolean
   setSnoozeAllMenuOpen: (open: boolean | ((prev: boolean) => boolean)) => void
   onResolveAll: () => void
   onSnoozeAll: (minutes: number) => void
-  onSimulateNewAlert: () => void
-  onToggleAutoAlerts: () => void
+  onSimulateNewAlert?: () => void
+  onToggleAutoAlerts?: () => void
   onResetAll: () => void
   onRestore: () => void
 }
@@ -107,22 +107,6 @@ export function LiveAlertsToolbar({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuItem onClick={onSimulateNewAlert}>
-            <Zap className="h-3.5 w-3.5" />
-            <div className="flex flex-col">
-              <span>Simulate new alert</span>
-              <span className="text-[10px] text-muted-foreground">Push a fresh test alert</span>
-            </div>
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={onToggleAutoAlerts}>
-            <Radio className={cn('h-3.5 w-3.5', autoAlertsEnabled && 'text-rose-500')} />
-            <div className="flex flex-col">
-              <span>{autoAlertsEnabled ? 'Stop auto-alerts' : 'Enable auto-alerts'}</span>
-              <span className="text-[10px] text-muted-foreground">
-                {autoAlertsEnabled ? `Next in ${countdown}s · click to stop` : 'Auto-arrive every 30s'}
-              </span>
-            </div>
-          </DropdownMenuItem>
           {(dismissedCount > 0 || snoozedCount > 0) && (
             <>
               <DropdownMenuSeparator />

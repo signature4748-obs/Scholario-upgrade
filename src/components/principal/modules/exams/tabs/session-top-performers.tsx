@@ -3,43 +3,185 @@
 /**
  * SessionTopPerformers — premium academic achievement showcase.
  *
- * Replaces the old "No declared examination results yet" empty state.
- * Shows the top-performing students of the SELECTED academic session,
- * derived from published examination results.
+ * 7-b (Mock Data Elimination): the mock topper rosters are RETIRED. The
+ * section now derives REAL top performers from GET /api/results
+ * (PRINCIPAL scope = the school's published Result rows), aggregated per
+ * student across the session's exams:
+ *
+ *   student session-percentage = sum(marks across the session's exams)
+ *                                / sum(totalMarks across the same rows) × 100
+ *   examsConsidered            = distinct exams with rows in the session
  *
  * Structure:
  *   1. Section header — "SESSION TOP PERFORMERS" + session label + meta
  *   2. Top 3 podium cards (with #1 visually emphasized)
  *   3. Compact Top Performers list (rank 4+)
- *   4. Polished empty state when session has no published results
+ *   4. Honest empty state when no published results exist for the session
  *
  * Animations (all respect prefers-reduced-motion):
  *   • Section fades in
  *   • Top 3 cards slide in sequentially with stagger
  *   • Percentage count-up effect
  *   • List rows fade in with subtle stagger
- *
- * Data source: src/lib/exams/session-toppers-data.ts (mock, session-aware).
- * Conceptually derived from aggregated published exam results.
  */
 
-import { useMemo, useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
-import { Trophy, Crown, Medal, Award, GraduationCap, Calendar } from 'lucide-react'
+import { AlertTriangle, RotateCw, Trophy, Crown, Medal, Award, GraduationCap, Calendar } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { api } from '@/lib/exams/api-client'
+import { getGradeForPercentage } from '@/lib/exams/types'
 import {
-  getSessionSummary,
   rankForIndex,
   type SessionTopper,
+  type SessionSummary,
 } from '@/lib/exams/session-toppers-data'
 
 interface Props {
   session: string
+  /** Live class directory (id → name) so toppers show their real class label. */
+  classes: Array<{ id: string; name: string }>
 }
 
-export function SessionTopPerformers({ session }: Props) {
+/** The slice of a Result row the aggregation needs (PRINCIPAL scope). */
+interface ResultRowDTO {
+  studentId: string
+  examId: string
+  marks: number
+  totalMarks: number
+  exam?: { session?: string | null } | null
+  student?: { rollNo?: string | null; classId?: string | null; user?: { name?: string | null } | null } | null
+}
+
+const AVATAR_TOKENS = ['emerald', 'sky', 'amber', 'violet', 'rose', 'cyan'] as const
+
+/** Deterministic avatar colour from the student id (visual token only). */
+function avatarTokenFor(studentId: string): string {
+  let h = 0
+  for (let i = 0; i < studentId.length; i++) h = (h * 31 + studentId.charCodeAt(i)) >>> 0
+  return AVATAR_TOKENS[h % AVATAR_TOKENS.length]
+}
+
+/** Aggregate the session's published Result rows into the toppers list. */
+export function buildSessionSummary(rows: ResultRowDTO[], session: string, classes: Array<{ id: string; name: string }>): SessionSummary | null {
+  const inSession = rows.filter((r) => (r.exam?.session ?? '2025-2026') === session)
+  if (inSession.length === 0) return null
+
+  const classNameById = new Map(classes.map((c) => [c.id, c.name]))
+  const exams = new Set<string>()
+  const byStudent = new Map<
+    string,
+    { obtained: number; total: number; name: string; rollNo: string; className: string }
+  >()
+
+  for (const r of inSession) {
+    exams.add(r.examId)
+    const info = byStudent.get(r.studentId) ?? {
+      obtained: 0,
+      total: 0,
+      name: r.student?.user?.name ?? 'Student',
+      rollNo: r.student?.rollNo ?? '',
+      className: r.student?.classId ? classNameById.get(r.student.classId) ?? '' : '',
+    }
+    info.obtained += r.marks
+    info.total += r.totalMarks > 0 ? r.totalMarks : 100
+    byStudent.set(r.studentId, info)
+  }
+
+  const toppers: SessionTopper[] = [...byStudent.entries()]
+    .map(([studentId, info]) => {
+      const percentage = info.total > 0 ? Math.round((info.obtained / info.total) * 1000) / 10 : 0
+      const { grade } = getGradeForPercentage(percentage, [])
+      return {
+        studentId,
+        name: info.name,
+        rollNo: info.rollNo,
+        className: info.className,
+        section: null,
+        stream: null,
+        totalObtained: info.obtained,
+        totalMax: info.total,
+        percentage,
+        grade,
+        examsConsidered: exams.size,
+        avatarColor: avatarTokenFor(studentId),
+      }
+    })
+    .sort((a, b) => b.percentage - a.percentage || (a.rollNo < b.rollNo ? -1 : 1))
+    .slice(0, 8)
+
+  if (toppers.length === 0) return null
+  return { session, studentCount: byStudent.size, examsConsidered: exams.size, toppers }
+}
+
+export function SessionTopPerformers({ session, classes }: Props) {
   const reduceMotion = useReducedMotion()
-  const summary = useMemo(() => getSessionSummary(session), [session])
+  const [summary, setSummary] = useState<SessionSummary | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [tick, setTick] = useState(0)
+
+  // REAL data — the school's published Result rows (PRINCIPAL scope).
+  // One fetch; the per-session aggregation happens client-side.
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    api<ResultRowDTO[]>('/api/results')
+      .then((rows) => {
+        if (cancelled) return
+        setSummary(buildSessionSummary(Array.isArray(rows) ? rows : [], session, classes))
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : 'Results could not be loaded.')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [session, classes, tick])
+
+  // ─── Loading skeleton ──────────────────────────────────────────────
+  if (loading) {
+    return (
+      <section
+        className="rounded-xl border border-border bg-card p-5 space-y-4"
+        aria-label="Session Top Performers"
+        aria-busy="true"
+      >
+        <div className="h-4 w-44 rounded skeleton" />
+        <div className="grid grid-cols-3 gap-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-32 rounded-lg skeleton" />
+          ))}
+        </div>
+      </section>
+    )
+  }
+
+  // ─── Error state — honest message + retry ──────────────────────────
+  if (error) {
+    return (
+      <motion.section
+        initial={reduceMotion ? undefined : { opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-6 text-center"
+        aria-label="Session Top Performers"
+      >
+        <AlertTriangle className="h-6 w-6 text-rose-500/60 mx-auto mb-2" />
+        <p className="text-sm font-semibold text-rose-700 dark:text-rose-300">Top performers could not load</p>
+        <p className="text-xs text-rose-600/70 mt-1 max-w-sm mx-auto">{error}</p>
+        <Button size="sm" variant="outline" className="mt-3 h-7 gap-1 text-xs" onClick={() => setTick((t) => t + 1)}>
+          <RotateCw className="h-3 w-3" /> Try again
+        </Button>
+      </motion.section>
+    )
+  }
 
   // ─── Empty state: session has no published results ─────────────────
   if (!summary) {
@@ -90,7 +232,7 @@ export function SessionTopPerformers({ session }: Props) {
               {formatSessionLabel(session)}
             </span>
             <span className="text-muted-foreground/40">•</span>
-            <span>{summary.examsConsidered} examinations considered</span>
+            <span>{summary.examsConsidered} examination{summary.examsConsidered === 1 ? '' : 's'} considered</span>
           </div>
         </div>
       </div>
@@ -207,7 +349,7 @@ function TopperPodiumCard({
       </p>
 
       {/* Class */}
-      <p className="text-[10px] text-muted-foreground mt-0.5">{topper.className}</p>
+      <p className="text-[10px] text-muted-foreground mt-0.5">{topper.className || '—'}</p>
 
       {/* Percentage — count-up */}
       <p
@@ -266,7 +408,7 @@ function TopperListRow({
         <p className="text-xs font-medium truncate" title={topper.name}>
           {topper.name}
         </p>
-        <p className="text-[9px] text-muted-foreground">{topper.className}</p>
+        <p className="text-[9px] text-muted-foreground">{topper.className || '—'}</p>
       </div>
       <div className="text-right shrink-0">
         <p className="text-xs font-bold tabular-nums">{topper.percentage.toFixed(1)}%</p>

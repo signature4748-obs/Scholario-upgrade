@@ -7,7 +7,7 @@ import {
   GraduationCap,
   BookOpen,
   FlaskConical,
-  Trophy,
+  School,
   Target,
   Heart,
   Building2,
@@ -31,6 +31,7 @@ import {
 import { useAuth } from '@/lib/store/auth-store'
 import { ThemeToggle } from '@/components/shared/theme-toggle'
 import { usePublicSchoolData, useAdmissionForm } from './use-public-website-data'
+import type { PublicSchoolData } from './types'
 
 /* ------------------------------------------------------------------ */
 /*  Small primitives — kept local to this file so the landing page    */
@@ -169,11 +170,11 @@ export function PublicWebsite({ onOpenPortal }: {
   const [scrolled, setScrolled] = useState(false)
 
   // school-derived strings
-  const schoolName = schoolData?.name || 'Greenwood Public School'
-  const city = schoolData?.city || 'Gurugram'
-  const phone = schoolData?.phone || '+91 124 4567 800'
-  const email = schoolData?.email || 'info@greenwood.edu.in'
-  const address = schoolData?.address || '100 Knowledge Parkway, Sector 47, Gurugram'
+  const schoolName = schoolData?.name || 'Our School'
+  const city = schoolData?.city || ''
+  const phone = schoolData?.phone || ''
+  const email = schoolData?.email || ''
+  const address = schoolData?.address || ''
   const academicYear = schoolData?.academicYear || '2025–26'
   const shortName = schoolName.split(' ')[0] || 'Demo'
 
@@ -387,12 +388,20 @@ function Header({
 
 type Stat = { label: string; value: string; icon: LucideIcon }
 
-const heroStats: Stat[] = [
-  { label: 'Students', value: '1,840', icon: GraduationCap },
-  { label: 'Faculty', value: '152', icon: BookOpen },
-  { label: 'Labs', value: '18', icon: FlaskConical },
-  { label: 'Awards', value: '240+', icon: Trophy },
-]
+/** PHASE 7 — REAL DATA CONTRACT: the trust bar shows the school's REAL
+ * DB counts (students / faculty / classes / subjects from
+ * /api/schools/public). No source exists for the retired fabricated
+ * "Labs 18 / Awards 240+" — those slots now carry real classes /
+ * subjects counts, and a missing payload renders honest "—"s. */
+function realHeroStats(counts?: PublicSchoolData['counts']): Stat[] {
+  const fmt = (n?: number) => (typeof n === 'number' ? n.toLocaleString('en-IN') : '—')
+  return [
+    { label: 'Students', value: fmt(counts?.students), icon: GraduationCap },
+    { label: 'Faculty', value: fmt(counts?.teachers), icon: BookOpen },
+    { label: 'Classes', value: fmt(counts?.classes), icon: School },
+    { label: 'Subjects', value: fmt(counts?.subjects), icon: FlaskConical },
+  ]
+}
 
 function Hero({
   schoolData,
@@ -401,16 +410,25 @@ function Hero({
   loading,
   onOpenPortal,
 }: {
-  schoolData: any
+  schoolData: PublicSchoolData | null
   schoolName: string
   city: string
   loading: boolean
   onOpenPortal: () => void
 }) {
+  const counts = schoolData?.counts
+  // PHASE 7 — REAL derivations replace the fabricated marketing numbers
+  // ("30+ Years Legacy / 1:12 Ratio / 98% Board Pass"): the ratio is
+  // computed from real faculty/student counts (hidden when not
+  // derivable); classes and the academic year are canonical fields.
+  const teacherRatio =
+    counts && counts.teachers > 0 && typeof counts.students === 'number'
+      ? `1:${Math.max(1, Math.round(counts.students / counts.teachers))}`
+      : null
   const legacyStats = [
-    { label: 'Years Legacy', value: '30+' },
-    { label: 'Teacher Ratio', value: '1:12' },
-    { label: 'Board Pass', value: '98%' },
+    ...(teacherRatio ? [{ label: 'Teacher Ratio', value: teacherRatio }] : []),
+    { label: 'Classes', value: counts ? String(counts.classes) : '—' },
+    { label: 'Academic Year', value: schoolData?.academicYear || '—' },
   ]
 
   return (
@@ -491,26 +509,32 @@ function Hero({
                       {schoolName}
                     </p>
                     <p className="text-white/85 text-xs sm:text-sm mt-0.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.5)]">
-                      Est. 1995 · {city}
+                      {city}
                     </p>
                   </div>
                 </div>
               </div>
 
-              {/* floating glass stat — one number, no dashboard feel */}
-              <div className="absolute -bottom-5 -left-2 sm:-left-6 lg:-left-8">
-                <div className="glass-strong rounded-2xl border border-border/60 shadow-premium-lg px-5 py-4 flex items-center gap-3.5">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/25 shrink-0">
-                    <Trophy className="w-5 h-5" strokeWidth={1.75} aria-hidden="true" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-display text-2xl font-bold text-foreground tabular-nums leading-none">98%</div>
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground mt-1.5">
-                      Board pass rate
+              {/* floating glass stat — ONE REAL number (the school's live
+                  student count; hidden entirely when the count is not
+                  available — never a fabricated "98% board pass"). */}
+              {typeof counts?.students === 'number' && (
+                <div className="absolute -bottom-5 -left-2 sm:-left-6 lg:-left-8">
+                  <div className="glass-strong rounded-2xl border border-border/60 shadow-premium-lg px-5 py-4 flex items-center gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/25 shrink-0">
+                      <GraduationCap className="w-5 h-5" strokeWidth={1.75} aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-display text-2xl font-bold text-foreground tabular-nums leading-none">
+                        {counts.students.toLocaleString('en-IN')}
+                      </div>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground mt-1.5">
+                        Students enrolled
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* floating accent */}
               <div
@@ -521,14 +545,15 @@ function Hero({
           </FadeIn>
         </div>
 
-        {/* Trust bar — the institution at a glance */}
-        <TrustBar loading={loading} />
+        {/* Trust bar — the institution at a glance (REAL counts) */}
+        <TrustBar loading={loading} counts={counts} />
       </div>
     </section>
   )
 }
 
-function TrustBar({ loading }: { loading: boolean }) {
+function TrustBar({ loading, counts }: { loading: boolean; counts?: PublicSchoolData['counts'] }) {
+  const heroStats = realHeroStats(counts)
   return (
     <FadeIn delay={0.25} className="mt-14 lg:mt-20">
       <div className="grid grid-cols-2 sm:grid-cols-4 border-t border-border/60 sm:divide-x sm:divide-border/60">

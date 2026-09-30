@@ -67,10 +67,19 @@ export default function Home() {
   // initial page chunk — only a principal/student login pulls it. The
   // sync itself stays once-per-session (module-level promise guard
   // inside server-sync), so re-firing this effect is still free.
+  //
+  // PHASE 7 (Task 7-a) — the same trigger hydrates the FACULTY store
+  // (GET /api/teachers → real Teacher rows incl. User identity) for the
+  // principal: the fabricated 20-member seed universe is retired, and
+  // every teacher-facing consumer (Teachers module, class cards, salary
+  // employees, messaging) follows the canonical server roster.
   useEffect(() => {
     if (isAuthenticated && user) {
       const role = user.role
-      if (role === 'principal' || role === 'student') {
+      if (role === 'principal') {
+        void import('@/lib/store/students-store').then((m) => m.syncStudentsFromServer())
+        void import('@/lib/store/teachers-store/server-sync').then((m) => m.syncTeachersFromServer())
+      } else if (role === 'student') {
         void import('@/lib/store/students-store').then((m) => m.syncStudentsFromServer())
       }
     }

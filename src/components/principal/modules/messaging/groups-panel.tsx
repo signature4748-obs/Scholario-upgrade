@@ -38,7 +38,9 @@ import {
   type MemberDisplay,
 } from '@/lib/store/messaging-store'
 import { useStudentsStore } from '@/lib/store/students-store'
-import { teachers } from '@/lib/mock/teachers'
+// PHASE 7 (Task 7-a) — messaging contacts resolve from the HYDRATED
+// teachers-store (real Teacher rows); empty roster ⇒ honest empty pool.
+import { useTeachersStore, type TeacherRecord } from '@/lib/store/teachers-store'
 import { ACADEMIC_CLASSES } from '@/lib/mock/academic'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -85,17 +87,16 @@ interface PoolMember {
   type: 'teacher' | 'parent'
 }
 
-function getMemberPool(): PoolMember[] {
+function getMemberPool(teachers: TeacherRecord[]): PoolMember[] {
   const students = useStudentsStore.getState().students
   const activeStudents = students.filter((s) => s.status === 'Active')
 
   const teachersPool: PoolMember[] = teachers
-    .filter((t) => !t.archived)
     .map((t) => ({
       ref: `t:${t.id}`,
       name: t.name,
       avatar: t.avatar,
-      role: `${t.designation} · ${t.department}`,
+      role: [t.designation || 'Teacher', t.department].filter(Boolean).join(' · '),
       type: 'teacher' as const,
     }))
 
@@ -334,7 +335,9 @@ function CreateGroupDialog({ open, onOpenChange }: { open: boolean; onOpenChange
   const [selectedRefs, setSelectedRefs] = useState<string[]>([])
   const [memberSearch, setMemberSearch] = useState('')
 
-  const pool = useMemo(() => getMemberPool(), [])
+  // The school's REAL teacher roster (Phase 7 — hydrated from /api/teachers).
+  const teachers = useTeachersStore((s) => s.teachers)
+  const pool = useMemo(() => getMemberPool(teachers), [teachers])
 
   const classOptions = useMemo(() => {
     const seen = new Set<string>()
@@ -355,14 +358,12 @@ function CreateGroupDialog({ open, onOpenChange }: { open: boolean; onOpenChange
     const seen = new Set<string>()
     const out: { id: string; label: string }[] = []
     for (const t of teachers) {
-      if (t.archived) continue
-      if (!seen.has(t.department)) {
-        seen.add(t.department)
-        out.push({ id: t.department, label: t.department })
-      }
+      if (!t.department || seen.has(t.department)) continue
+      seen.add(t.department)
+      out.push({ id: t.department, label: t.department })
     }
     return out
-  }, [])
+  }, [teachers])
 
   // Smart auto-fill: when the user picks a class+section / class / department,
   // pre-fill the suggested members and a suggested name.
@@ -731,7 +732,9 @@ export function ManageMembersDialog({
     [liveGroup],
   )
 
-  const pool = useMemo(() => getMemberPool(), [])
+  // The school's REAL teacher roster (Phase 7 — hydrated from /api/teachers).
+  const teachers = useTeachersStore((s) => s.teachers)
+  const pool = useMemo(() => getMemberPool(teachers), [teachers])
   const memberSet = useMemo(() => new Set(liveGroup?.memberRefs ?? []), [liveGroup])
   const addable = useMemo(
     () => pool

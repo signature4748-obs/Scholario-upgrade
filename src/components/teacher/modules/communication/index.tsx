@@ -52,6 +52,7 @@ import {
 } from '@/components/teacher/modules/shared/hub-stat-cards'
 import { useFocusStore } from '@/lib/store/focus-store'
 import { useTeacherHubStore } from '@/lib/store/teacher-hub-store'
+import { useCurrentUser } from '@/lib/store/current-user-store'
 import { getTeacherActivePermissions, useTeachersStore } from '@/lib/store/teachers-store'
 import type { ThreadMessage } from '@/lib/teacher-hub-types'
 import { cn } from '@/lib/utils'
@@ -195,7 +196,16 @@ export function CommunicationModule({ onNavigate }: { onNavigate?: (key: string)
 
   // ── Permissions (REAL checks — no fake grants) ────────────────────────
   const { teachers, positionsList } = useTeachersStore()
-  const currentTeacher = teachers.find((t) => t.id === 'T-014') || teachers[0]
+  // PHASE 7 (Task 7-a) — the signed-in teacher's OWN staffing record,
+  // matched by the SERVER session email (the old `t.id === 'T-014' ||
+  // teachers[0]` lookup grabbed an unrelated/fabricated teacher's
+  // permissions). An empty or unmatched store resolves to NO record:
+  // school-wide permissions then require an explicit position grant —
+  // never a borrowed identity.
+  const me = useCurrentUser((st) => st.me)
+  const currentTeacher = me?.email
+    ? teachers.find((t) => (t.email ?? '').toLowerCase() === me.email.toLowerCase()) ?? null
+    : null
   const isRelieved =
     currentTeacher != null &&
     ((currentTeacher.status as string) === 'Relieved' ||

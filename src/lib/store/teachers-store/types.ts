@@ -88,6 +88,11 @@ export interface AuditLogItem {
 
 export interface TeacherRecord {
   id: string
+  /** Server link — the Teacher row's USER id. Class.classTeacherId and
+   *  ClassSubjectAssignment.teacherUserId store the teacher's USER id,
+   *  so class-data lookups match `id` OR `serverUserId`. Present ONLY on
+   *  server-hydrated records (server-sync.ts) — never fabricated. */
+  serverUserId?: string
   employeeId: string
   teacherId: string
   name: string
@@ -202,10 +207,18 @@ export interface TeacherRecord {
   remarks?: string
 }
 
+/** Server-hydration status for the canonical faculty roster (Phase 7).
+ *  'idle' until the first principal-session sync starts; 'error' means the
+ *  GET /api/teachers sync failed and the store keeps whatever it already
+ *  has — seed data is NEVER re-injected. */
+export type TeachersSyncStatus = 'idle' | 'syncing' | 'synced' | 'error'
+
 export interface TeachersStoreState {
   teachers: TeacherRecord[]
   positionsList: PositionDefinition[]
   auditLogs: AuditLogItem[]
+  /** Canonical roster sync lineage (not persisted — per-session truth). */
+  syncStatus: TeachersSyncStatus
 
   // Principal Actions
   addTeacher: (teacher: TeacherRecord) => void

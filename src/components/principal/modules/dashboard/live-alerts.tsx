@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useLiveAlerts, getNextSimulatedAlert } from '@/lib/store/live-alerts-store'
+import { useLiveAlerts } from '@/lib/store/live-alerts-store'
 import { useDuesSummaryStore, selectLiveDues } from '@/lib/store/dues-summary-store'
 import { toast } from 'sonner'
 import {
@@ -93,14 +93,6 @@ export function LiveAlerts({ onNavigate }: LiveAlertsProps) {
     toast.info(`${count} alerts snoozed for ${durLabel}`, { description: 'All active alerts have been snoozed' })
   }
 
-  const handleSimulateNewAlert = () => {
-    const newAlert = getNextSimulatedAlert()
-    addAlert(newAlert)
-    toast.success('New alert received!', { description: newAlert.title })
-    // Clear the "isNew" flag after 5 seconds
-    setTimeout(() => clearNewFlag(newAlert.id), 5000)
-  }
-
   const handleUnsnooze = (id: string) => {
     const alert = snoozed.find((a) => a.id === id)
     if (!alert) return
@@ -128,28 +120,8 @@ export function LiveAlerts({ onNavigate }: LiveAlertsProps) {
     toast.info('Alerts reset', { description: 'All alerts restored to initial state' })
   }
 
-  // Auto-arriving alerts with countdown (kept — same store behaviour)
-  const [countdown, setCountdown] = useState(30)
-  useEffect(() => {
-    if (!autoAlertsEnabled) {
-      setCountdown(30)
-      return
-    }
-    setCountdown(30)
-    const tickInterval = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          const newAlert = getNextSimulatedAlert()
-          addAlert(newAlert)
-          toast.success('New alert received!', { description: newAlert.title })
-          setTimeout(() => clearNewFlag(newAlert.id), 5000)
-          return 30
-        }
-        return prev - 1
-      })
-    }, 1000)
-    return () => clearInterval(tickInterval)
-  }, [autoAlertsEnabled, addAlert, clearNewFlag])
+  // PHASE 7 — the simulated auto-alert generator is retired (fabrication);
+  // real alerts arrive via the dues store + the platform event stream.
 
   const criticalCount = alerts.filter((a) => a.severity === 'critical').length
   const activeCount = alerts.length
@@ -167,14 +139,10 @@ export function LiveAlerts({ onNavigate }: LiveAlertsProps) {
           alertsLength={alerts.length}
           dismissedCount={dismissed.length}
           snoozedCount={snoozed.length}
-          autoAlertsEnabled={autoAlertsEnabled}
-          countdown={countdown}
           snoozeAllMenuOpen={snoozeAllMenuOpen}
           setSnoozeAllMenuOpen={setSnoozeAllMenuOpen}
           onResolveAll={handleResolveAll}
           onSnoozeAll={handleSnoozeAll}
-          onSimulateNewAlert={handleSimulateNewAlert}
-          onToggleAutoAlerts={toggleAutoAlerts}
           onResetAll={handleResetAll}
           onRestore={handleRestore}
         />

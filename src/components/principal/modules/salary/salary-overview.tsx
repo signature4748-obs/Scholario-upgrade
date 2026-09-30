@@ -119,7 +119,13 @@ export function SalaryOverviewSection({ onNavigate }: { onNavigate: (tab: string
         >
           <div className="max-h-96 overflow-y-auto -mx-4 salary-scroll">
             <div className="divide-y divide-border">
-              {topRows.map((r) => (
+              {topRows.length === 0 ? (
+                // PHASE 7 — honest empty: the payroll staff list follows the
+                // school's teacher roster (no fabricated employees).
+                <p className="px-4 py-6 text-center text-[11px] text-muted-foreground">
+                  No staff on the payroll yet — the list follows the school&apos;s teacher roster.
+                </p>
+              ) : topRows.map((r) => (
                 <button
                   key={r.employee.id}
                   type="button"
@@ -131,9 +137,9 @@ export function SalaryOverviewSection({ onNavigate }: { onNavigate: (tab: string
                   </Avatar>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold truncate">{r.employee.name}</p>
-                    <p className="text-[10px] text-muted-foreground truncate">{r.employee.designation}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{r.employee.designation || '—'}</p>
                   </div>
-                  <p className="text-xs font-bold tabular-nums shrink-0 hidden sm:block">{moneyMy(r.payable)}</p>
+                  <p className="text-xs font-bold tabular-nums shrink-0 hidden sm:block">{r.payable > 0 ? moneyMy(r.payable) : '—'}</p>
                   <PayslipStateBadge state={r.state} />
                   <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
                 </button>
@@ -145,7 +151,13 @@ export function SalaryOverviewSection({ onNavigate }: { onNavigate: (tab: string
         <SalaryPanel title="Recent Activity" subtitle="Latest updates" className="xl:col-span-2">
           <div className="max-h-96 overflow-y-auto -mx-4 salary-scroll">
             <div className="divide-y divide-border">
-              {audit.slice(0, 8).map((a) => (
+              {audit.length === 0 ? (
+                // PHASE 7 — honest empty: payroll activity records only real
+                // actions taken in this store (no seeded history).
+                <p className="px-4 py-6 text-center text-[11px] text-muted-foreground">
+                  No payroll activity yet — recorded payments and salary changes will appear here.
+                </p>
+              ) : audit.slice(0, 8).map((a) => (
                 <AuditRow key={a.id} action={a.action} title={a.title} detail={a.detail} actor={a.actor} timestamp={a.timestamp} />
               ))}
             </div>

@@ -1,39 +1,30 @@
 'use client'
 
 /**
- * student-results-store — the canonical published result set for the
- * Student role ("My Results").
+ * student-results-store — the published result set for the Student role
+ * ("My Results"), API-BACKED since 7-b (Mock Data Elimination).
  *
- * ONE source of truth connecting the PUBLISHING side (Teacher /
- * Principal exam workflows, future) to the READING side (Student
- * Results, Dashboard academic tiles, Profile academic line):
+ * The STU-58 demo seed (fabricated UT1/UT2/Mid Term marks) is RETIRED.
+ * The store starts EMPTY and is hydrated from the REAL server rows via
+ * GET /api/results (role-scoped: a STUDENT only ever receives their own
+ * Result rows — identity is resolved server-side, a client-supplied
+ * studentId can never widen that scope).
  *
- *   Staff publishes an assessment result  →  row lands here
- *                                          →  Student Results, Dashboard
- *                                             KPIs and the Report Card
- *                                             all re-derive live.
+ *   hydrate() → GET /api/results
+ *            → rows grouped per Exam → AssessmentDef[]
+ *            → the caller's subject marks → AssessmentResult[]
+ *            → percentages, grades, trend, insights re-derive from REAL
+ *              data (no rows → the honest "No published results yet"
+ *              state, never another student's marks).
  *
- * Every number the Student sees is computed from these records —
- * percentages, grades (School Settings scale), ranks (the SAME class
- * standings set), the trend, the snapshot and the printable report
- * card. No UI component carries its own marks.
- *
- * Academic coherence (§37/§49): all seeded assessments belong to the
- * school's ACTIVE session — AY 2026–2027 (Apr 2026 – Mar 2027),
- * anchored around the real clock. The latest published assessment is
- * the Mid Term Examination (published 11 Sep 2026).
- *
- * Class standings (§15/§16/§35): derived from the CANONICAL Class 2-A
- * roster (students-store) — each classmate's per-assessment percentage
- * is their roster performance with a deterministic per-assessment
- * offset (stable hash, same input → same output), while the demo
- * student's percentage ALWAYS comes from their own subject marks.
- * Rank, class size and the privacy-gated Class Top 5 therefore derive
- * from the same published result set everywhere they appear.
+ * Class standings/rank are NOT derived here any more: the student scope
+ * of /api/results has no class-wide rows, so the fabricated
+ * roster-offset standings are retired (standings are empty; rank is
+ * null). Every displayed number comes from the student's own rows.
  */
 
 import { create } from 'zustand'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useStudentsStore, useMyStudentRecord } from '@/lib/store/students-store'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
 
@@ -42,9 +33,8 @@ import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
 export type AssessmentType = 'Unit Test' | 'Mid Term' | 'Final'
 
 /**
- * Student-visible lifecycle only (§4): an assessment is either
- * PUBLISHED (result available) or UPCOMING (conducted/awaiting
- * results — phrased for students, never exposing staff workflow).
+ * Student-visible lifecycle: an assessment is PUBLISHED when result rows
+ * exist for the student (the staff publish/declare flow writes them).
  */
 export interface AssessmentDef {
   id: string
@@ -62,7 +52,8 @@ export interface AssessmentDef {
 }
 
 /** One component of a subject's assessment (only when the school's
- *  structure uses it — e.g. Mid Term English = Written + Oral). */
+ *  structure uses it — the DB Result rows are single-paper, so API-derived
+ *  rows never carry components). */
 export interface MarkComponent {
   name: string
   max: number
@@ -73,8 +64,7 @@ export interface SubjectMark {
   subject: string
   maxMarks: number
   obtained: number
-  /** Dynamic component breakdown (§8/§9) — absent for single-paper
-   *  assessments. When present, components sum to the subject total. */
+  /** Dynamic component breakdown — absent for single-paper assessments. */
   components?: MarkComponent[]
 }
 
@@ -92,194 +82,174 @@ export interface AssessmentResult {
   remark?: ResultRemark
 }
 
+export type ResultsFetchStatus = 'idle' | 'loading' | 'ready' | 'error'
+
 export interface StudentResultsState {
   assessments: AssessmentDef[]
   results: AssessmentResult[]
+  status: ResultsFetchStatus
+  /** First error message while hydrating (null when none). */
+  error: string | null
   /**
-   * Staff-side publish hook (future Teacher/Principal workflow): moves
-   * an assessment to PUBLISHED and stores its result row. Students only
-   * ever read — the Student role performs no writes anywhere.
+   * Fetch the caller's OWN published results (server-scoped) and replace
+   * the store. In-flight guarded; a 60s freshness window prevents
+   * duplicate fetches when several surfaces mount at once.
    */
-  publishResult: (assessment: AssessmentDef, result: Omit<AssessmentResult, 'assessmentId' | 'studentId'>, studentId: string) => void
-  /** Reset to the canonical seed (dev/QA helper). */
-  resetToSeed: () => void
+  hydrate: () => Promise<void>
 }
 
-/* ─── Seed — AY 2026–2027, Class 2-A (demo student STU-58) ───────────
- *
- * SEED-ONLY constant: it keys the legacy demo rows and nothing else.
- * Identity resolution NEVER defaults to it any more — every reader
- * resolves the session student through useMyStudentRecord (userId →
- * email → the legacy demo record while the first roster sync is still
- * in flight) and threads THAT id through the derivation helpers below.
- * Post-sync the canonical student simply has no row here → the honest
- * "No published results yet" state renders (never another student's
- * marks). ────────────────────────────────────────────────────────── */
+/* ─── API row shape (GET /api/results, STUDENT scope) ───────────────── */
 
-const STUDENT_ID = 'STU-58'
+interface ResultRowDTO {
+  studentId: string
+  examId: string
+  marks: number
+  totalMarks: number
+  remarks: string | null
+  createdAt: string
+  subject?: { name?: string | null } | null
+  exam?: {
+    name?: string | null
+    type?: string | null
+    term?: string | null
+    startDate?: string | null
+    endDate?: string | null
+    declaredAt?: string | null
+  } | null
+}
 
-/**
- * Marks are internally coherent by construction:
- *   UT1   126/150 = 84.0%   (21+22+20+20+21+22)
- *   UT2   132/150 = 88.0%   (22+23+22+21+22+22)
- *   Mid   274/300 = 91.33%  (46+48+44+42+45+49)
- * Components sum to their subject totals (English 38+8=46, Science
- * 34+10=44, Hindi 36+9=45, Computer Science 29+20=49).
- */
-const SEED_ASSESSMENTS: AssessmentDef[] = [
-  {
-    id: 'UT1-2026',
-    name: 'Unit Test 1',
-    type: 'Unit Test',
-    term: 'Term 1',
-    conductedFrom: '2026-04-20',
-    conductedTo: '2026-04-24',
-    publishDate: '2026-05-08',
-  },
-  {
-    id: 'UT2-2026',
-    name: 'Unit Test 2',
-    type: 'Unit Test',
-    term: 'Term 1',
-    conductedFrom: '2026-07-13',
-    conductedTo: '2026-07-17',
-    publishDate: '2026-07-29',
-  },
-  {
-    id: 'MID-2026',
-    name: 'Mid Term Examination',
-    type: 'Mid Term',
-    term: 'Term 1',
-    conductedFrom: '2026-08-17',
-    conductedTo: '2026-08-28',
-    publishDate: '2026-09-11',
-  },
-  {
-    id: 'UT3-2026',
-    name: 'Unit Test 3',
-    type: 'Unit Test',
-    term: 'Term 2',
-    conductedFrom: '2026-11-23',
-    conductedTo: '2026-11-27',
-    publishDate: null,
-    expectedBy: '08 December 2026',
-  },
-  {
-    id: 'FINAL-2027',
-    name: 'Final Examination',
-    type: 'Final',
-    term: 'Term 2',
-    conductedFrom: '2027-02-22',
-    conductedTo: '2027-03-12',
-    publishDate: null,
-    expectedBy: '20 March 2027',
-  },
-]
+/* ─── Mapping: Result rows → module shapes ─────────────────────────── */
 
-const SEED_RESULTS: AssessmentResult[] = [
-  {
-    assessmentId: 'UT1-2026',
-    studentId: STUDENT_ID,
-    subjects: [
-      { subject: 'English', maxMarks: 25, obtained: 21 },
-      { subject: 'Mathematics', maxMarks: 25, obtained: 22 },
-      { subject: 'Science', maxMarks: 25, obtained: 20 },
-      { subject: 'Social Studies', maxMarks: 25, obtained: 20 },
-      { subject: 'Hindi', maxMarks: 25, obtained: 21 },
-      { subject: 'Computer Science', maxMarks: 25, obtained: 22 },
-    ],
-    remark: {
-      text: 'A steady start to the year. Focus on reading each question carefully before answering.',
-      by: 'Rohan Mehta',
-      role: 'Class Teacher · 2-A',
-    },
-  },
-  {
-    assessmentId: 'UT2-2026',
-    studentId: STUDENT_ID,
-    subjects: [
-      { subject: 'English', maxMarks: 25, obtained: 22 },
-      { subject: 'Mathematics', maxMarks: 25, obtained: 23 },
-      { subject: 'Science', maxMarks: 25, obtained: 22 },
-      { subject: 'Social Studies', maxMarks: 25, obtained: 21 },
-      { subject: 'Hindi', maxMarks: 25, obtained: 22 },
-      { subject: 'Computer Science', maxMarks: 25, obtained: 22 },
-    ],
-    remark: {
-      text: 'Clear improvement this term. Keep practising word problems in Mathematics.',
-      by: 'Rohan Mehta',
-      role: 'Class Teacher · 2-A',
-    },
-  },
-  {
-    assessmentId: 'MID-2026',
-    studentId: STUDENT_ID,
-    subjects: [
-      {
-        subject: 'English',
-        maxMarks: 50,
-        obtained: 46,
-        components: [
-          { name: 'Written', max: 40, obtained: 38 },
-          { name: 'Oral', max: 10, obtained: 8 },
-        ],
-      },
-      { subject: 'Mathematics', maxMarks: 50, obtained: 48 },
-      {
-        subject: 'Science',
-        maxMarks: 50,
-        obtained: 44,
-        components: [
-          { name: 'Written', max: 40, obtained: 34 },
-          { name: 'Activity', max: 10, obtained: 10 },
-        ],
-      },
-      { subject: 'Social Studies', maxMarks: 50, obtained: 42 },
-      {
-        subject: 'Hindi',
-        maxMarks: 50,
-        obtained: 45,
-        components: [
-          { name: 'Written', max: 40, obtained: 36 },
-          { name: 'Oral', max: 10, obtained: 9 },
-        ],
-      },
-      {
-        subject: 'Computer Science',
-        maxMarks: 50,
-        obtained: 49,
-        components: [
-          { name: 'Written', max: 30, obtained: 29 },
-          { name: 'Practical', max: 20, obtained: 20 },
-        ],
-      },
-    ],
-    remark: {
-      text: 'Excellent performance. Consistent across all subjects. Keep it up!',
-      by: 'Rohan Mehta',
-      role: 'Class Teacher · 2-A',
-    },
-  },
-]
+function isoDate(value: string | null | undefined): string | null {
+  if (!value) return null
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString().slice(0, 10)
+}
 
-export const useStudentResultsStore = create<StudentResultsState>()((set) => ({
-  assessments: SEED_ASSESSMENTS,
-  results: SEED_RESULTS,
+function normalizeType(raw: string | null | undefined): AssessmentType {
+  const v = (raw ?? '').toLowerCase()
+  if (v.includes('mid')) return 'Mid Term'
+  if (v.includes('final') || v.includes('annual') || v.includes('board')) return 'Final'
+  return 'Unit Test'
+}
 
-  publishResult: (assessment, result, studentId) =>
-    set((s) => ({
-      assessments: s.assessments.map((a) =>
-        a.id === assessment.id ? { ...a, publishDate: assessment.publishDate ?? new Date().toISOString().slice(0, 10) } : a
-      ),
-      results: [...s.results.filter((r) => !(r.assessmentId === assessment.id && r.studentId === studentId)), { ...result, assessmentId: assessment.id, studentId }],
-    })),
+function normalizeTerm(raw: string | null | undefined): 'Term 1' | 'Term 2' {
+  const v = (raw ?? '').toLowerCase()
+  if (v.includes('2') || v.includes('ii')) return 'Term 2'
+  return 'Term 1'
+}
 
-  resetToSeed: () => set({ assessments: SEED_ASSESSMENTS, results: SEED_RESULTS }),
+/** Group the caller's rows per exam and build the display shapes. */
+function mapRows(rows: ResultRowDTO[]): { assessments: AssessmentDef[]; results: AssessmentResult[] } {
+  const byExam = new Map<string, ResultRowDTO[]>()
+  for (const row of rows) {
+    const list = byExam.get(row.examId)
+    if (list) list.push(row)
+    else byExam.set(row.examId, [row])
+  }
+
+  const assessments: AssessmentDef[] = []
+  const results: AssessmentResult[] = []
+
+  for (const [examId, examRows] of byExam) {
+    const exam = examRows[0]?.exam ?? null
+    const sorted = [...examRows].sort((a, b) => (a.subject?.name ?? '').localeCompare(b.subject?.name ?? ''))
+    const firstCreated = sorted.reduce<string | null>(
+      (min, r) => (!min || r.createdAt < min ? r.createdAt : min),
+      null,
+    )
+
+    const conductedFrom =
+      isoDate(exam?.startDate) ?? (isoDate(firstCreated) ?? new Date().toISOString().slice(0, 10))
+    const conductedTo = isoDate(exam?.endDate) ?? conductedFrom
+    const publishDate = isoDate(exam?.declaredAt) ?? isoDate(firstCreated)
+
+    assessments.push({
+      id: examId,
+      name: exam?.name ?? 'Examination',
+      type: normalizeType(exam?.type),
+      term: normalizeTerm(exam?.term),
+      conductedFrom,
+      conductedTo,
+      publishDate,
+    })
+
+    results.push({
+      assessmentId: examId,
+      studentId: examRows[0].studentId,
+      subjects: sorted.map((r) => ({
+        subject: r.subject?.name ?? 'Subject',
+        maxMarks: r.totalMarks > 0 ? r.totalMarks : 100,
+        obtained: r.marks,
+      })),
+      // NOTE: the DB has no remark attribution (by/role), so no remark is
+      // fabricated — the Remark section simply renders nothing.
+    })
+  }
+
+  return { assessments, results }
+}
+
+/* ─── Store ─────────────────────────────────────────────────────────── */
+
+const FETCH_FRESH_MS = 60_000
+let inFlight: Promise<void> | null = null
+let lastFetchedAt = 0
+
+export const useStudentResultsStore = create<StudentResultsState>()((set, get) => ({
+  assessments: [],
+  results: [],
+  status: 'idle',
+  error: null,
+
+  hydrate: async () => {
+    const now = Date.now()
+    if (inFlight || (get().status === 'ready' && now - lastFetchedAt < FETCH_FRESH_MS)) {
+      return inFlight ?? Promise.resolve()
+    }
+    const job = (async () => {
+      set({ status: 'loading', error: null })
+      try {
+        const r = await fetch('/api/results', {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        })
+        if (!r.ok) {
+          let message = `Results could not load (${r.status}).`
+          try {
+            const j = await r.json()
+            if (j && typeof j === 'object' && typeof j.error === 'string') {
+              message = j.error
+            }
+          } catch {
+            /* non-JSON error body — keep the fallback */
+          }
+          throw new Error(message)
+        }
+        const j = await r.json()
+        if (!j || typeof j !== 'object' || j.ok !== true || !('data' in j)) {
+          throw new Error('Unexpected response from the server.')
+        }
+        const rows = Array.isArray(j.data) ? (j.data as ResultRowDTO[]) : []
+        const mapped = mapRows(rows)
+        lastFetchedAt = Date.now()
+        set({ ...mapped, status: 'ready', error: null })
+      } catch (e) {
+        set({
+          status: 'error',
+          error: e instanceof Error ? e.message : 'Results could not load.',
+        })
+      } finally {
+        inFlight = null
+      }
+    })()
+    inFlight = job
+    return job
+  },
 }))
 
 /* ─── Derived helpers — the ONLY place numbers are computed ────────── */
-
-export const RESULTS_STUDENT_ID = STUDENT_ID
 
 export interface GradeBand {
   threshold: number
@@ -330,9 +300,9 @@ export function totalsOf(result: AssessmentResult): AssessmentTotals {
 }
 
 /** The student's result row for one assessment (or null). The caller
- * supplies the resolved session student's id — there is deliberately NO
- * demo-id default (an implicit default would leak another student's
- * marks once the canonical roster replaces the mock universe). */
+ *  supplies the resolved session student's id — there is deliberately NO
+ *  demo-id default (an implicit default would leak another student's
+ *  marks once the canonical roster replaces the mock universe). */
 export function resultFor(results: AssessmentResult[], assessmentId: string, studentId: string): AssessmentResult | null {
   return results.find((r) => r.assessmentId === assessmentId && r.studentId === studentId) ?? null
 }
@@ -344,14 +314,15 @@ export function publishedAssessments(assessments: AssessmentDef[]): AssessmentDe
     .sort((a, b) => (a.publishDate! < b.publishDate! ? -1 : a.publishDate! > b.publishDate! ? 1 : 0))
 }
 
-/** Upcoming assessments, next conducted first. */
+/** Upcoming assessments, next conducted first. (API-derived set has none —
+ *  the student's own rows only exist once results are published.) */
 export function upcomingAssessments(assessments: AssessmentDef[]): AssessmentDef[] {
   return assessments
     .filter((a) => a.publishDate == null)
     .sort((a, b) => (a.conductedFrom < b.conductedFrom ? -1 : 1))
 }
 
-/* ─── Class standings — derived from the canonical roster (§15/§16) ── */
+/* ─── Class standings — type kept for consumers, no fabricated data ── */
 
 export interface ClassStanding {
   studentId: string
@@ -360,44 +331,6 @@ export interface ClassStanding {
   percentage: number
   rank: number
   isMe: boolean
-}
-
-/** Stable string hash → small deterministic offset (-2.0 … +2.0). */
-function assessmentOffset(seed: string): number {
-  let h = 0
-  const key = seed.toLowerCase()
-  for (let i = 0; i < key.length; i++) {
-    h = (h * 31 + key.charCodeAt(i)) >>> 0
-  }
-  return ((h % 21) - 10) / 10
-}
-
-function clampPct(p: number): number {
-  return Math.min(99.5, Math.max(35, p))
-}
-
-/**
- * Standings of one PUBLISHED assessment for the class, derived from the
- * canonical roster. The demo student's percentage is replaced by the
- * value computed from their own marks — rank, class size and the Top 5
- * all come from this single list (§35: same set everywhere).
- */
-export function classStandingsOf(
-  assessmentId: string,
-  roster: { id: string; name: string; rollNo: string; overallPercent: number }[],
-  myPercentage: number,
-  myStudentId: string,
-): ClassStanding[] {
-  const entries = roster.map((st) => ({
-    studentId: st.id,
-    name: st.name,
-    rollNo: st.rollNo,
-    percentage:
-      st.id === myStudentId ? myPercentage : clampPct(st.overallPercent + assessmentOffset(`${assessmentId}:${st.id}`)),
-    isMe: st.id === myStudentId,
-  }))
-  entries.sort((a, b) => b.percentage - a.percentage || (a.rollNo < b.rollNo ? -1 : 1))
-  return entries.map((e, i) => ({ ...e, rank: i + 1 }))
 }
 
 /* ─── Trend, insights & snapshot — real derivations only (§12–§14) ─── */
@@ -506,29 +439,17 @@ export function subjectSnapshotOf(
 
 /* ─── Composite reader — everything a Results surface needs ─────────── */
 
-/** The student's class roster (for standings), from the canonical store. */
-function useClassRoster(className: string, section: string) {
-  const students = useStudentsStore((s) => s.students)
-  return useMemo(
-    () =>
-      students
-        .filter((st) => st.className === className && st.section === section && st.status === 'Active')
-        .map((st) => ({
-          id: st.id,
-          name: st.name,
-          rollNo: st.rollNo,
-          overallPercent: st.academics?.overallPercent ?? 0,
-        })),
-    [students, className, section],
-  )
-}
-
 export interface LatestResultSnapshot {
   assessment: AssessmentDef
   result: AssessmentResult
   totals: AssessmentTotals
   grade: string
-  /** Derived from the SAME class standings set (null when rank hidden). */
+  /**
+   * Class rank from REAL class-wide results — or null when the school has
+   * not published a ranking the student can see (7-b: the fabricated
+   * roster-offset standings are retired; the student scope of
+   * /api/results carries only their own rows).
+   */
   rank: number | null
   classSize: number
 }
@@ -537,14 +458,17 @@ export interface LatestResultSnapshot {
  * useMyResults — the ONE composite reader for Student Results surfaces
  * (module, Dashboard academic tiles, Profile academic line). Resolves:
  * canonical session identity (useMyStudentRecord — session user →
- * roster record; the legacy demo record covers the pre-sync paint) →
- * enrollment → active session results → school-configured grading +
- * privacy policy. External consumers get the latest published result
+ * roster record) → API-hydrated own results → school-configured grading
+ * + privacy policy. External consumers get the latest published result
  * snapshot WITHOUT duplicating any derivation logic (§34: one source).
  */
 export function useMyResults(studentId?: string) {
   const assessments = useStudentResultsStore((s) => s.assessments)
   const results = useStudentResultsStore((s) => s.results)
+  const status = useStudentResultsStore((s) => s.status)
+  const error = useStudentResultsStore((s) => s.error)
+  const hydrate = useStudentResultsStore((s) => s.hydrate)
+
   // Canonical identity — when the caller doesn't pin a student, resolve
   // the session user's OWN record (userId → email → the legacy demo
   // record while the first roster sync is still in flight).
@@ -553,7 +477,11 @@ export function useMyResults(studentId?: string) {
   const student = useStudentsStore((s) => s.students.find((x) => x.id === resolvedId))
   const className = student?.className ?? 'Class 2'
   const section = student?.section ?? 'A'
-  const roster = useClassRoster(className, section)
+
+  // 7-b — hydrate the REAL own rows from /api/results once per mount.
+  useEffect(() => {
+    void hydrate()
+  }, [hydrate])
 
   const resultsConfig = useSchoolSettingsStore((s) => s.results)
   const gradeScale: GradeBand[] = resultsConfig?.gradeScale?.length ? resultsConfig.gradeScale : DEFAULT_GRADE_SCALE
@@ -568,16 +496,13 @@ export function useMyResults(studentId?: string) {
   const insight = useMemo(() => insightOf(trend), [trend])
   const snapshot = useMemo(() => subjectSnapshotOf(assessments, results, resolvedId), [assessments, results, resolvedId])
 
-  /** Standings per published assessment — ONE derivation each (§35). */
-  const standings = useMemo(() => {
-    const map = new Map<string, ClassStanding[]>()
-    for (const a of published) {
-      const r = resultFor(results, a.id, resolvedId)
-      const mine = r ? totalsOf(r).pct : 0
-      map.set(a.id, classStandingsOf(a.id, roster, mine, resolvedId))
-    }
-    return map
-  }, [published, results, roster, resolvedId])
+  /**
+   * Standings per published assessment — HONESTLY EMPTY (7-b): the
+   * student scope of /api/results carries no class-wide rows, and the
+   * fabricated roster-offset standings are retired. Surfaces that read
+   * this map render nothing / rank null, which is the truthful state.
+   */
+  const standings = useMemo(() => new Map<string, ClassStanding[]>(), [])
 
   const latest: LatestResultSnapshot | null = useMemo(() => {
     if (published.length === 0) return null
@@ -600,8 +525,8 @@ export function useMyResults(studentId?: string) {
   return {
     student: student ?? null,
     /** The resolved session student's id (seed demo record pre-sync,
-     * canonical DB id after) — consumers thread it into the exported
-     * derivation helpers instead of relying on any default identity. */
+     *  canonical DB id after) — consumers thread it into the exported
+     *  derivation helpers instead of relying on any default identity. */
     studentId: resolvedId,
     className,
     section,
@@ -618,5 +543,9 @@ export function useMyResults(studentId?: string) {
     showClassTop,
     showComparison,
     reportCard,
+    /** 7-b — hydration states for honest loading/error surfaces. */
+    loading: status === 'idle' || status === 'loading',
+    error: status === 'error' ? error : null,
+    reload: hydrate,
   }
 }

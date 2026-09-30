@@ -11,7 +11,6 @@ import { AppShell, type NavGroup } from '@/components/shell/app-shell'
 import { lazyModule } from '@/components/shared/lazy-module'
 import { useLiveAlerts } from '@/lib/store/live-alerts-store'
 import { useAdmissionStore } from '@/lib/store/admission-store'
-import { ensureApplicationSeedData } from '@/lib/store/applications-store'
 // SaaS-STAGE-2A — TENANT MODULE GATING (single choke point). The nav is
 // filtered through the ACTIVE school's module flags via the canonical
 // PRINCIPAL_NAV_MODULE_KEYS map — no scattered school conditionals.
@@ -148,7 +147,6 @@ export function PrincipalPanel() {
   )
 
   // Seed applications demo data once per session (idempotent).
-  useEffect(() => { ensureApplicationSeedData() }, [])
 
   const groups: NavGroup[] = useMemo(() => navGroups
     // SaaS-STAGE-2A — drop nav items whose module is disabled for the

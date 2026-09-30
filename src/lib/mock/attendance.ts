@@ -319,30 +319,13 @@ export interface StaffAttendanceRecord {
   checkOut?: string | null
 }
 
-export const STAFF_DEFS: Omit<StaffAttendanceRecord, 'status' | 'checkIn'>[] = [
-  // Rebuilt from the canonical teacher roster (src/lib/mock/teachers.ts) —
-  // ids, names and departments all resolve to real staff members.
-  { id: 'T-001', name: 'Dr. Ananya Iyer',  role: 'Admin Staff',   department: 'Administration' },
-  { id: 'T-002', name: 'Priya Nair',       role: 'Teacher',       department: 'Languages' },
-  { id: 'T-005', name: 'Meera Krishnan',   role: 'Teacher',       department: 'Languages' },
-  { id: 'T-008', name: 'Sunita Rao',       role: 'Teacher',       department: 'Mathematics' },
-  { id: 'T-011', name: 'Kavita Joshi',     role: 'Teacher',       department: 'Science' },
-  { id: 'T-014', name: 'Rohan Mehta',      role: 'Teacher',       department: 'Mathematics' },
-  { id: 'T-017', name: 'Amit Verma',       role: 'Teacher',       department: 'Science' },
-  { id: 'T-020', name: 'Deepa Menon',      role: 'Teacher',       department: 'Languages' },
-  { id: 'T-023', name: 'Vikram Singh',     role: 'Teacher',       department: 'Social Sciences' },
-  { id: 'T-026', name: 'Neha Gupta',       role: 'Teacher',       department: 'Science' },
-  { id: 'T-029', name: 'Suresh Pillai',    role: 'Teacher',       department: 'Social Sciences' },
-  { id: 'T-032', name: 'Anjali Desai',     role: 'Teacher',       department: 'Mathematics' },
-  { id: 'T-035', name: 'Rajesh Khanna',    role: 'Teacher',       department: 'Mathematics' },
-  { id: 'T-038', name: 'Pooja Bhatt',      role: 'Teacher',       department: 'Science' },
-  { id: 'T-041', name: 'Arjun Kapoor',     role: 'Teacher',       department: 'Computer Science' },
-  { id: 'T-044', name: 'Shalini Agarwal',  role: 'Teacher',       department: 'Commerce' },
-  { id: 'T-047', name: 'Sanjay Reddy',     role: 'Teacher',       department: 'Arts & Sports' },
-  { id: 'T-050', name: 'Lakshmi Venkat',   role: 'Teacher',       department: 'Arts & Sports' },
-  { id: 'T-053', name: 'Faisal Ahmed',     role: 'Teacher',       department: 'Arts & Sports' },
-  { id: 'T-056', name: 'Geeta Sharma',     role: 'Librarian',     department: 'Library' },
-]
+// RETIRED (7-b — Mock Data Elimination): the 20 fabricated staff records
+// below are emptied — no database model for staff attendance exists, so
+// the Principal Staff Attendance tab now renders an honest "not
+// configured" state. Downstream deterministic generators
+// (getStaffAttendanceForDate / buildStaffToday) therefore yield empty
+// arrays — honest, never fabricated.
+export const STAFF_DEFS: Omit<StaffAttendanceRecord, 'status' | 'checkIn'>[] = []
 
 /** Format minutes-since-midnight as a 12-hour clock string ("03:45 PM"). */
 function format12h(totalMinutes: number): string {

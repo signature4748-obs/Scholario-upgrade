@@ -8,7 +8,9 @@ import { StatusBadge } from '@/components/shared/ui'
 import { cn } from '@/lib/utils'
 import { useStudentsStore } from '@/lib/store/students-store'
 import type { ClassRecord } from '@/lib/store/students-store'
-import { getTeacherById } from '@/lib/mock/teachers'
+// PHASE 7 (Task 7-a) — class-teacher names resolve from the HYDRATED
+// teachers-store (canonical DB teacher ids). No fabricated universe.
+import { useTeachersStore } from '@/lib/store/teachers-store'
 import { classStreamBadge } from './class-display'
 import { SummaryCard, SummaryCardGrid } from '../shared/summary-card'
 import { SearchFilterBar, type FilterConfig } from '../shared/search-filter-bar'
@@ -87,13 +89,22 @@ export function ClassesView({ onOpenClass, onAddClass }: { onOpenClass: (c: Clas
 function ClassCard({ cls, index, onClick }: { cls: ClassRecord; index: number; onClick: () => void }) {
   const reduce = useReducedMotion()
   const students = useStudentsStore((s) => s.students)
+  // Real class teacher — canonical DB id resolved against the hydrated
+  // faculty store (the same universe the Teachers module shows).
+  const teachers = useTeachersStore((s) => s.teachers)
   const cap = cls.capacity * cls.sections.length
   // REAL enrolled count — ACTIVE roster students in this class's sections.
   const enr = students.filter((s) => s.classId === cls.id && s.status === 'Active').length
   const vacant = Math.max(0, cap - enr)
   const pct = cap > 0 ? Math.round((enr / cap) * 100) : 0
   const tight = pct >= 90
-  const teacher = cls.classTeacherId ? getTeacherById(cls.classTeacherId) : null
+  // Real class teacher — canonical id resolved against the hydrated
+  // faculty store (the same universe the Teachers module shows). Dual-id
+  // match (Phase 7): synced class data carries the teacher's USER id
+  // (Class.classTeacherId convention) while the store keys Teacher rows.
+  const teacher = cls.classTeacherId
+    ? teachers.find((t) => t.id === cls.classTeacherId || t.serverUserId === cls.classTeacherId)
+    : null
   const avatarText = cls.name.replace('Class ', 'C').replace('Pre-', 'P').slice(0, 3)
   // Spec §4 / §6 — show stream badge so Class 11 PCM vs PCB cards are distinguishable.
   const streamBadge = classStreamBadge(cls)
@@ -138,7 +149,9 @@ function ClassCard({ cls, index, onClick }: { cls: ClassRecord; index: number; o
       </div>
 
       {/* Class teacher — small READ-ONLY derived summary. The appointment
-          itself lives in exactly one place: this class → Teachers tab. */}
+          itself lives in exactly one place: this class → Teachers tab.
+          No teacher appointed (or the id no longer resolves) → the honest
+          "not assigned" line — never a fabricated name. */}
       <div className="mt-2.5 flex min-w-0 items-center gap-1.5">
         <UserCheck className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
         {teacher ? (
@@ -146,7 +159,7 @@ function ClassCard({ cls, index, onClick }: { cls: ClassRecord; index: number; o
             Class Teacher: <span className="font-medium text-foreground">{teacher.name}</span>
           </p>
         ) : (
-          <p className="truncate text-[11px] text-amber-600 dark:text-amber-400">No class teacher appointed</p>
+          <p className="truncate text-[11px] text-amber-600 dark:text-amber-400">Not assigned</p>
         )}
       </div>
 

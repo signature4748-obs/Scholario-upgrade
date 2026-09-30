@@ -118,7 +118,11 @@ export function ExamsModule() {
   // workflow) receives canonical DB exam ids. The old useExamsListMock
   // read the in-memory seed store whose ids never existed in the DB.
   const { exams, classes: serverClasses, academicYear, loading, error, reload } = useExamsList()
-  const [session, setSession] = useState<string>(academicYear || '2025-2026')
+  // 7-b — the session context follows the SERVER's live academic year
+  // (exam rows carry the real session value). The explicit pick wins;
+  // until the Principal picks, the current academic year is the default.
+  const [sessionPick, setSessionPick] = useState<string | null>(null)
+  const session = sessionPick ?? academicYear ?? '2025-2026'
 
   // Classes + subjects for Create Exam come from the SAME server payload
   // (canonical DB classes with their ClassSubjectAssignment subjects) —
@@ -169,7 +173,7 @@ export function ExamsModule() {
           value={section}
           onValueChange={(v) => setSection(v as SectionTab)}
         />
-        {showSessionPicker && <SessionPicker value={session} onChange={setSession} />}
+        {showSessionPicker && <SessionPicker value={session} onChange={setSessionPick} />}
         {showArchiveButton && <ArchiveButton onClick={() => setView({ kind: 'archive' })} />}
       </div>
 
@@ -258,6 +262,23 @@ export function ExamsModule() {
 // NOT shown on Settings — Settings has the Archive button instead.
 
 function SessionPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  // 7-b — options: the live academic year (server) + the historical
+  // sessions, deduped and newest-first. Every option is a REAL session
+  // value the exams' rows can carry.
+  const options = useMemo(() => {
+    const seen = new Set<string>()
+    const rows: Array<{ value: string; label: string }> = []
+    const push = (v: string | null | undefined) => {
+      if (!v || seen.has(v)) return
+      seen.add(v)
+      // "2026-2027" → "2026–27"
+      const label = v.includes('-') ? `${v.slice(0, 4)}–${v.slice(-2)}` : v
+      rows.push({ value: v, label })
+    }
+    push(value)
+    for (const s of AVAILABLE_SESSIONS) push(s.value)
+    return rows
+  }, [value])
   return (
     <div className="relative inline-flex items-center">
       <select
@@ -266,7 +287,7 @@ function SessionPicker({ value, onChange }: { value: string; onChange: (v: strin
         aria-label="Academic session"
         className="appearance-none h-9 pl-3 pr-8 text-xs font-medium rounded-full bg-muted/60 hover:bg-muted text-foreground border border-transparent hover:border-border/60 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/30"
       >
-        {AVAILABLE_SESSIONS.map((s) => (
+        {options.map((s) => (
           <option key={s.value} value={s.value}>
             {s.label}
           </option>

@@ -12,8 +12,9 @@
  * tab row right next to Overview/Exams/Reports/Settings. The selected
  * session drives the Session Top Performers section.
  *
- * All data from useExamsList (real API). Session Top Performers uses
- * mock session-aware data (see src/lib/exams/session-toppers-data.ts).
+ * All data from useExamsList (real API). Session Top Performers (7-b)
+ * computes REAL toppers from GET /api/results aggregated per student
+ * (the mock session rosters are retired).
  */
 
 import { useMemo } from 'react'
@@ -30,7 +31,7 @@ import { ExamComparison } from './exam-comparison'
 
 interface Props {
   exams: ExamDTO[]
-  classes: any[]
+  classes: Array<{ id: string; name: string }>
   loading: boolean
   error: string | null
   session: string
@@ -39,7 +40,7 @@ interface Props {
   onNavigate?: (section: string) => void
 }
 
-export function ExamsOverviewTab({ exams, classes: _classes, loading, error, session, onSelectExam, onNavigate }: Props) {
+export function ExamsOverviewTab({ exams, classes, loading, error, session, onSelectExam, onNavigate }: Props) {
   const data = useMemo(() => computeOverview(exams), [exams])
 
   if (loading) return <OverviewSkeleton />
@@ -93,8 +94,8 @@ export function ExamsOverviewTab({ exams, classes: _classes, loading, error, ses
       {/* Cross-exam comparison analytics */}
       <ExamComparison exams={exams} onSelectExam={onSelectExam} />
 
-      {/* Session Top Performers — replaces old PerformanceSection empty state */}
-      <SessionTopPerformers session={session} />
+      {/* Session Top Performers — REAL aggregation of published results (7-b) */}
+      <SessionTopPerformers session={session} classes={classes} />
     </div>
   )
 }

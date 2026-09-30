@@ -1,6 +1,21 @@
 import type { TeacherRecord } from './types'
 import { teachers as MOCK_ROSTER } from '@/lib/mock/teachers'
 
+/* ════════════════════════════════════════════════════════════════════
+ * ⛔ RETIRED DEV REFERENCE — DO NOT IMPORT AT RUNTIME (Phase 7, Task 7-a)
+ * ════════════════════════════════════════════════════════════════════
+ * This file holds the FABRICATED 20-member faculty universe (Aadhaar
+ * numbers, bank accounts, salaries, credentials, audit logs) that the
+ * store seeded before Phase 7. It is kept ONLY as a historical dev
+ * reference for schema/shape documentation. Nothing imports it:
+ *   · store.ts starts EMPTY and hydrates from GET /api/teachers
+ *     (see ./server-sync.ts — real tenant data, honest empty fields);
+ *   · migrate.ts v6 purges persisted seed rows and never re-seeds;
+ *   · audit-slice no longer imports INITIAL_AUDIT_LOGS.
+ * If you need demo staff records, seed the DATABASE
+ * (prisma/seed-teacher-*.ts) — the store follows the server.
+ * ════════════════════════════════════════════════════════════════════ */
+
 // Seed teachers list
 export const SEED_TEACHERS: TeacherRecord[] = [
   {

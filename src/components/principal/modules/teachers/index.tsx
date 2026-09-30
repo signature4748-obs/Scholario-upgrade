@@ -3,13 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   UserPlus, FileCheck, FileSpreadsheet,
-  ChevronLeft, SlidersHorizontal, Users,
+  ChevronLeft, SlidersHorizontal, Users, RefreshCw, AlertTriangle,
 } from 'lucide-react'
 import { PageTransition } from '@/components/shared/ui'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { departments, school } from '@/lib/mock/school'
 import { toast } from 'sonner'
+// PHASE 7 (Task 7-a) — canonical faculty hydration (server truth) + the
+// honest retry affordance when the sync fails.
+import { syncTeachersFromServer, resetTeachersSyncGuard } from '@/lib/store/teachers-store/server-sync'
 
 import { ModuleHeader } from '../shared/module-header'
 import { SegmentedTabs } from '../shared/segmented-tabs'
@@ -43,6 +46,24 @@ export function TeachersModule() {
   const s = useTeachersState()
   const actions = useTeachersActions(s)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+
+  // Canonical roster hydration (Phase 7): the faculty list follows the
+  // school's REAL Teacher records. The once-per-session promise guard in
+  // server-sync makes this free when the panel-mount sync already ran.
+  useEffect(() => {
+    void syncTeachersFromServer()
+  }, [])
+
+  // Honest retry — a failed sync keeps the existing data and flags
+  // syncStatus 'error'; the principal can retry here. Seed data is never
+  // re-injected.
+  const handleRetrySync = () => {
+    resetTeachersSyncGuard()
+    void syncTeachersFromServer().then((ok) => {
+      if (ok) toast.success('Faculty roster loaded from the school records')
+      else toast.error('Still unable to load the faculty roster')
+    })
+  }
 
   // The responsibility-hub / override modals are pre-targeted at a specific
   // teacher — resolve that teacher for the modal's context header.
@@ -140,6 +161,29 @@ export function TeachersModule() {
           </>
         }
       />
+
+      {/* PHASE 7 — honest sync failure affordance: the roster could not be
+          loaded from the school records; the store keeps its last saved
+          data and the principal can retry. */}
+      {s.syncStatus === 'error' && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-4 py-2.5"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+          <p className="min-w-0 flex-1 text-xs text-amber-700 dark:text-amber-300">
+            Faculty roster couldn&apos;t be loaded from the school records — showing the last saved data.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRetrySync}
+            className="h-7 shrink-0 gap-1.5 border-amber-500/40 text-[11px] text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
+          >
+            <RefreshCw className="h-3 w-3" /> Retry
+          </Button>
+        </div>
+      )}
 
       {/* Segmented tabs — shared component */}
       <SegmentedTabs

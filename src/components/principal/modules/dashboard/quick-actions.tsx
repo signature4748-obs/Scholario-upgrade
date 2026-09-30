@@ -13,10 +13,12 @@
  *       Add Notice (secondary) → communication
  *       Pay Salary (secondary) → salary
  *     All wired to `onNavigate(moduleKey)`.
- *   - "Notice Board" Panel with 4 latest announcements from the shared
- *     communication store (with fallback to mock). Each row uses the
- *     Academics pattern: small category chip + title + meta. "View all"
- *     is wired to `onNavigate('communication')`.
+ *   - "Notice Board" Panel with the 4 latest REAL school announcements
+ *     (GET /api/announcements — PHASE 7: the communication-store/mock
+ *     fallback is retired; loading shows skeletons, none shows an honest
+ *     empty state). Each row uses the Academics pattern: small category
+ *     chip + title + meta. "View all" is wired to
+ *     `onNavigate('communication')`.
  *
  * Removed: 6 colorful gradient tiles + their h-9 w-9 icon tiles.
  */
@@ -24,11 +26,11 @@
 import { motion } from 'framer-motion'
 import {
   UserPlus, CalendarCheck, IndianRupee, FileText, Megaphone, Wallet,
-  ArrowUpRight,
+  ArrowUpRight, Megaphone as MegaphoneIcon,
 } from 'lucide-react'
 import { Panel } from '../shared/panel'
-import { useCommunicationStore } from '@/lib/store/communication-store'
-import { announcements as mockAnnouncements } from '@/lib/mock/operations'
+import { useServerAnnouncements } from './use-server-announcements'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
 export interface QuickActionsRowProps {
@@ -90,27 +92,23 @@ const CATEGORY_TONES: Record<string, string> = {
   General: 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-400',
 }
 
+/** Real notifications carry an audience tag, not a display category —
+ * mapped to the closest chip tone (honest labeling, no invented tone). */
+function audienceTone(audience: string): { tone: string; label: string } {
+  const key = (audience || '').toUpperCase()
+  if (key.includes('ALL')) return { tone: CATEGORY_TONES.General, label: 'All' }
+  if (key.includes('TEACHER')) return { tone: CATEGORY_TONES.Academic, label: 'Staff' }
+  if (key.includes('PARENT')) return { tone: CATEGORY_TONES.Event, label: 'Parents' }
+  if (key.includes('CLASS')) return { tone: CATEGORY_TONES.Academic, label: 'Class' }
+  return { tone: CATEGORY_TONES.General, label: 'Notice' }
+}
+
 function NoticeBoardCard({ onNavigate }: { onNavigate?: (m: string) => void }) {
-  // Prefer the real communication-store announcements (which has the latest
-  // created/scheduled/pinned notices); fall back to mock if the store is empty.
-  const storeAnnouncements = useCommunicationStore((s) => s.announcements)
-  const notices = storeAnnouncements.length > 0
-    ? storeAnnouncements.slice(0, 4).map((a) => ({
-        id: a.id,
-        title: a.title,
-        content: a.message,
-        category: a.category,
-        postedBy: a.author,
-        date: a.createdAt,
-      }))
-    : mockAnnouncements.slice(0, 4).map((a) => ({
-        id: a.id,
-        title: a.title,
-        content: a.content,
-        category: a.category,
-        postedBy: a.postedBy,
-        date: a.date,
-      }))
+  // PHASE 7 — REAL school notifications via GET /api/announcements
+  // (role-visible rows). No store/mock fallback: skeletons while loading,
+  // honest empty state when the school has not published any.
+  const { announcements, status, refresh } = useServerAnnouncements()
+  const notices = announcements.slice(0, 4)
 
   return (
     <Panel
@@ -128,31 +126,68 @@ function NoticeBoardCard({ onNavigate }: { onNavigate?: (m: string) => void }) {
       }
     >
       <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
-        {notices.map((a, i) => (
-          <motion.button
-            key={a.id}
+        {status === 'loading' && (
+          <div className="space-y-2" aria-busy="true">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex items-start gap-2.5 px-2.5 py-2">
+                <Skeleton className="h-6 w-6 rounded-md shrink-0" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-3.5 w-3/4" />
+                  <Skeleton className="h-3 w-full" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {status === 'error' && (
+          <button
             type="button"
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: i * 0.06 }}
-            className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors cursor-pointer text-left focus-ring"
-            onClick={() => onNavigate?.('communication')}
+            onClick={refresh}
+            className="w-full flex items-center justify-center gap-2 rounded-md border border-dashed border-border py-4 text-xs text-muted-foreground hover:bg-muted/40 transition-colors focus-ring"
           >
-            <span className={cn(
-              'inline-flex items-center justify-center h-6 w-6 shrink-0 rounded-md text-[9px] font-bold uppercase tracking-wider',
-              CATEGORY_TONES[a.category] ?? CATEGORY_TONES.General,
-            )}>
-              {a.category.slice(0, 3)}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-foreground truncate">{a.title}</p>
-              <p className="text-[11px] text-muted-foreground line-clamp-1 mt-0.5">{a.content}</p>
-              <p className="text-[10px] text-muted-foreground mt-1">
-                {a.postedBy} · {new Date(a.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-              </p>
+            <MegaphoneIcon className="h-4 w-4" aria-hidden="true" />
+            Could not load announcements — tap to retry
+          </button>
+        )}
+        {status === 'ready' && notices.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-6 gap-1.5 text-center">
+            <div className="h-9 w-9 rounded-xl bg-muted/60 flex items-center justify-center">
+              <MegaphoneIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
             </div>
-          </motion.button>
-        ))}
+            <p className="text-sm font-medium text-foreground">No announcements yet</p>
+            <p className="text-xs text-muted-foreground max-w-[260px]">
+              Notices published from the Communication module appear here.
+            </p>
+          </div>
+        )}
+        {notices.map((a, i) => {
+          const chip = audienceTone(a.audience)
+          return (
+            <motion.button
+              key={a.id}
+              type="button"
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.06 }}
+              className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 hover:bg-muted/40 transition-colors cursor-pointer text-left focus-ring"
+              onClick={() => onNavigate?.('communication')}
+            >
+              <span className={cn(
+                'inline-flex items-center justify-center h-6 w-6 shrink-0 rounded-md text-[9px] font-bold uppercase tracking-wider',
+                chip.tone,
+              )}>
+                {chip.label.slice(0, 3)}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-foreground truncate">{a.title}</p>
+                <p className="text-[11px] text-muted-foreground line-clamp-1 mt-0.5">{a.message}</p>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  {a.sender} · {new Date(a.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                </p>
+              </div>
+            </motion.button>
+          )
+        })}
       </div>
     </Panel>
   )

@@ -3,15 +3,16 @@
 /**
  * AttendanceModule — Student "My Attendance" (SECOND-GENERATION redesign).
  *
- * READ-ONLY personal attendance record: every number derives from the
- * canonical `student-attendance-store` — the same records the Teacher /
- * Principal attendance UI writes. When staff correct a record, the
- * student sees the updated status here live.
+ * READ-ONLY personal attendance record. 7-b: every number derives from
+ * the REAL server rows — GET /api/student/attendance returns the caller's
+ * own canonical Attendance rows (the same rows the Teacher/Principal
+ * marking flow writes). When staff correct a record, the student sees the
+ * updated status after the next refresh.
  *
  * Resolution chain: canonical session identity (useMyStudentRecord —
- * session user → roster record) → enrollment (class + section, never
- * chosen) → active academic session (school settings) → this student's
- * records only (§41 privacy — the store filter is by student id).
+ * session user → roster record) → hydrate(studentId) replaces the store
+ * with the server rows → this student's records only (§41 privacy — the
+ * store filter is by student id).
  *
  * Percentage policy (the school's existing convention, unchanged):
  *   attended = Present + Late (late counts as attended)
@@ -19,15 +20,20 @@
  *   → holidays, weekends and unrecorded days never reduce attendance,
  *     and "No Record" never silently becomes Absent.
  *
+ * Honest states: loading → skeleton, error → retry, no records → the
+ * honest empty state (never a fabricated percentage).
+ *
  * Reading rhythm (§35): hero summary → calendar + records → trend.
  * LR-1 — no module title: the sidebar + top bar already say
  * "Attendance"; the Snapshot's "Overall · <window>" line is the page's
  * one scope line, so class/section/session never repeat below (§5/§32).
  */
 
-import { useMemo, useState } from 'react'
-import { CalendarOff } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { CalendarOff, RotateCw } from 'lucide-react'
 import { GlassCard, PageTransition } from '@/components/shared/ui'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   useStudentAttendanceStore,
   computeStats,
@@ -60,8 +66,17 @@ export function AttendanceModule() {
   const student = useMyStudentRecord()
   const studentId = student?.id ?? ''
 
-  // ── Canonical data — the same rows Teacher/Principal write ──
+  // ── REAL data — own server rows via /api/student/attendance (7-b) ──
   const allRecords = useStudentAttendanceStore((s) => s.records)
+  const status = useStudentAttendanceStore((s) => s.status)
+  const error = useStudentAttendanceStore((s) => s.error)
+  const hydrate = useStudentAttendanceStore((s) => s.hydrate)
+
+  const [reloadTick, setReloadTick] = useState(0)
+  useEffect(() => {
+    if (studentId) void hydrate(studentId)
+  }, [studentId, hydrate, reloadTick])
+
   const my = useMemo(() => studentRecords(allRecords, studentId), [allRecords, studentId])
   const stats = computeStats(my)
 
@@ -118,6 +133,51 @@ export function AttendanceModule() {
     [my],
   )
 
+  /* ── LOADING — skeleton, never fabricated numbers (§44) ── */
+  if (status === 'idle' || status === 'loading') {
+    return (
+      <PageTransition>
+        <div className="space-y-6 sm:space-y-7" aria-busy="true" aria-label="Loading attendance">
+          <Skeleton className="h-[168px] rounded-2xl" />
+          <div className="grid grid-cols-1 gap-5 sm:gap-6 lg:grid-cols-3">
+            <div className="lg:col-span-2 space-y-4">
+              <Skeleton className="h-[340px] rounded-2xl" />
+            </div>
+            <Skeleton className="h-[340px] rounded-2xl" />
+          </div>
+          <Skeleton className="h-[180px] rounded-2xl" />
+        </div>
+      </PageTransition>
+    )
+  }
+
+  /* ── ERROR — honest message + retry, never a fabricated fallback ── */
+  if (status === 'error') {
+    return (
+      <PageTransition>
+        <div className="space-y-6 sm:space-y-7">
+          <GlassCard hover={false} className="on-card px-6 py-16 text-center">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <CalendarOff className="h-6 w-6" aria-hidden />
+            </div>
+            <p className="text-sm font-semibold">Attendance could not load</p>
+            <p className="mx-auto mt-1.5 max-w-sm text-xs leading-relaxed text-muted-foreground">
+              {error ?? 'Your attendance records are temporarily unavailable.'}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-4 h-8 gap-1.5"
+              onClick={() => setReloadTick((t) => t + 1)}
+            >
+              <RotateCw className="h-3.5 w-3.5" aria-hidden /> Try again
+            </Button>
+          </GlassCard>
+        </div>
+      </PageTransition>
+    )
+  }
+
   /* ── EMPTY STATE — no records, no fabricated numbers (§44) ── */
   if (my.length === 0) {
     return (
@@ -127,10 +187,10 @@ export function AttendanceModule() {
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
               <CalendarOff className="h-6 w-6" aria-hidden />
             </div>
-            <p className="text-sm font-semibold">No attendance records for this period</p>
+            <p className="text-sm font-semibold">No attendance records yet</p>
             <p className="mx-auto mt-1.5 max-w-sm text-xs leading-relaxed text-muted-foreground">
-              Attendance will appear here once the school records your first school day — your percentage,
-              calendar and trend build up automatically.
+              Records appear here once your class teacher marks attendance — your percentage,
+              calendar and trend build up automatically from the real entries.
             </p>
           </GlassCard>
         </div>

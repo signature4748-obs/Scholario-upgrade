@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { school as schoolMock } from '@/lib/mock/school'
 
 export const runtime = 'nodejs'
 
@@ -47,7 +46,7 @@ export async function GET() {
       },
     })
 
-    const schoolName = school?.name ?? schoolMock.name
+    const schoolName = school?.name ?? 'School'
     const siteOrigin = 'http://localhost:3000' // sandbox origin; see layout metadataBase note
     const selfUrl = `${siteOrigin}/api/public/notices/rss`
     const notices = school?.notifications ?? []
@@ -98,7 +97,7 @@ ${items}
     })
   } catch {
     // DB unavailable — serve a valid, empty feed rather than an error document
-    const schoolName = schoolMock.name
+    const schoolName = 'School'
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>

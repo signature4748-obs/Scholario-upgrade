@@ -1,3 +1,11 @@
+// RETIRED (7-b — Mock Data Elimination): the fabricated live-GPS universe
+// below (fake ETA/speed/fuel/temperature, invented driver + attendant
+// phone numbers, per-stop arrival times, trip history and on-time stats)
+// is NO LONGER CONSUMED by any component. The Student Transport module
+// now reads the REAL route assignment from GET /api/student/dashboard
+// and renders an honest "Live bus tracking is not available yet" state.
+// Kept on disk for reference only — do not import from new code.
+
 // Student bus tracking data — for the student's own route
 
 export interface BusStop {

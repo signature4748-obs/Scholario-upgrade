@@ -1,32 +1,30 @@
 'use client'
 
 /**
- * student-attendance-store — canonical student attendance records.
+ * student-attendance-store — the Student "My Attendance" data cache.
  *
- * The single source of truth connecting the MARKING side (Teacher /
- * Principal attendance UI) to the READING side (Student "My Attendance"):
+ * 7-b (Mock Data Elimination): the STU-58 demo seed (25 fabricated days
+ * at 96%) is RETIRED. The store starts EMPTY and is hydrated from the
+ * REAL server rows via GET /api/student/attendance (the canonical
+ * Attendance rows the Teacher/Principal marking flow writes — identity
+ * resolved server-side, so these are always the caller's own records).
  *
- *   Teacher/Principal marks a class  →  records upserted here
- *                                     →  Student Attendance reflects it live
- *                                     →  later edits overwrite the same
- *                                        (studentId, date) row — the student
- *                                        always sees the latest status.
+ *   hydrate(studentId) → fetch /api/student/attendance
+ *                     → records replaced with the real rows
+ *                     → the module's percentage / calendar / trend all
+ *                       re-derive from REAL data (0 records → honest
+ *                       zeros, never a fabricated 96%).
  *
- * Seed: a deterministic window of the last 25 school days (Mon–Fri,
- * holidays skipped via the canonical school calendar) ending today, with
- * a fixed status pattern — 23 present + 1 late + 1 absent = 96% for the
- * demo student STU-58 (matches students-store `attendance: 96` exactly).
- * Dates are derived from the REAL clock at first load so the tenant
- * always has fresh, current data; after the first write the records
- * persist and age like real institutional data.
+ * The store persists as a CACHE of the last server response (survives
+ * tab switches; every mount re-hydrates and overwrites). The legacy
+ * v1 seed was purged via the persist migration below.
  *
- * NO second attendance dataset exists for the student role — the UI
- * derives every number (percentage, present/absent/late counts, trends)
- * from these records.
+ * NO second attendance dataset exists for the student role — every number
+ * the student sees (percentage, present/absent/late counts, trends)
+ * derives from these records or is honestly empty.
  */
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
-import { getHoliday } from '@/lib/mock/school-calendar'
 
 export type AttendanceStatus = 'present' | 'late' | 'absent' | 'leave'
 
@@ -43,125 +41,117 @@ export interface StudentAttendanceRecord {
   markedAt: string
 }
 
+/** One server row (as returned by GET /api/student/attendance). */
+interface AttendanceApiRecord {
+  date: string
+  status: 'present' | 'late' | 'absent' | 'leave'
+  className: string | null
+  note: null
+  markedAt: string
+}
+
+export type AttendanceFetchStatus = 'idle' | 'loading' | 'ready' | 'error'
+
 interface StudentAttendanceStoreState {
   records: StudentAttendanceRecord[]
+  status: AttendanceFetchStatus
+  /** First error message while hydrating (null when none). */
+  error: string | null
   /**
-   * Upsert a batch of records for one class on one date (Teacher/Principal
-   * "Save Attendance"). Existing (studentId, date) rows are UPDATED — the
-   * student sees corrections immediately.
+   * Fetch the caller's own records from the server and replace the store.
+   * In-flight guarded; a 60s freshness window prevents duplicate fetches
+   * when several surfaces mount at once.
    */
-  markClassAttendance: (input: {
-    date: string
-    entries: { studentId: string; status: AttendanceStatus; note?: string }[]
-    markedBy: string
-  }) => number
-  /** Upsert a single student's record. */
-  markStudent: (input: { studentId: string; date: string; status: AttendanceStatus; note?: string; markedBy: string }) => void
-  /** Reset to the deterministic seed (dev/QA helper). */
-  resetToSeed: () => void
+  hydrate: (studentId: string) => Promise<void>
 }
-
-/* ─── Seed derivation ────────────────────────────────────────────────
- * Deterministic: same calendar day → same window + same status pattern.
- * 25 school days: present except #9 (absent) and #20 (late) → 96%.
- * ──────────────────────────────────────────────────────────────────── */
-
-const SEED_STUDENT_ID = 'STU-58'
-const SEED_MARKER = 'Rohan Mehta'
-const ABSENT_INDEX = 8
-const LATE_INDEX = 19
-
-function pad(n: number): string {
-  return n < 10 ? `0${n}` : `${n}`
-}
-
-function isoDate(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-}
-
-/** School day = Mon–Fri (weekday) and not a canonical school holiday. */
-function isSchoolDay(d: Date): boolean {
-  const dow = d.getDay()
-  if (dow === 0 || dow === 6) return false
-  return getHoliday(isoDate(d)) === null
-}
-
-/** Walk backwards from `from` collecting the last `count` school days (inclusive of `from` when it is one). */
-function lastSchoolDays(count: number, from: Date = new Date()): string[] {
-  const days: string[] = []
-  const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate())
-  for (let guard = 0; days.length < count && guard < count * 4 + 40; guard++) {
-    if (isSchoolDay(cursor)) days.push(isoDate(cursor))
-    cursor.setDate(cursor.getDate() - 1)
-  }
-  return days.reverse()
-}
-
-function buildSeed(): StudentAttendanceRecord[] {
-  const days = lastSchoolDays(25)
-  return days.map((date, i) => ({
-    studentId: SEED_STUDENT_ID,
-    date,
-    status: i === ABSENT_INDEX ? 'absent' : i === LATE_INDEX ? 'late' : 'present',
-    markedBy: SEED_MARKER,
-    markedAt: `${date}T09:05:00`,
-  }))
-}
-
-const SEED = buildSeed()
 
 /* ─── Store ─────────────────────────────────────────────────────────── */
 
+const FETCH_FRESH_MS = 60_000
+let inFlight: Promise<void> | null = null
+let lastFetchedFor: string | null = null
+let lastFetchedAt = 0
+
 export const useStudentAttendanceStore = create<StudentAttendanceStoreState>()(
   persist(
-    (set, _get) => ({
-      records: SEED,
+    (set, get) => ({
+      records: [],
+      status: 'idle',
+      error: null,
 
-      markClassAttendance: ({ date, entries, markedBy }) => {
-        const now = new Date().toISOString()
-        let written = 0
-        set((state) => {
-          const byKey = new Map(state.records.map((r) => [`${r.studentId}|${r.date}`, r]))
-          for (const e of entries) {
-            // NOTE: entries carry {studentId, status, note} — the DATE comes
-            // from the outer parameter. Keying on the outer `date` (not
-            // e.date, which does not exist) is what makes a re-save UPDATE
-            // the existing row instead of duplicating it — the student then
-            // always sees the corrected status.
-            const key = `${e.studentId}|${date}`
-            const existing = byKey.get(key)
-            if (existing) {
-              byKey.set(key, { ...existing, status: e.status, note: e.note ?? existing.note, markedBy, markedAt: now })
-            } else {
-              byKey.set(key, { studentId: e.studentId, date, status: e.status, note: e.note, markedBy, markedAt: now })
+      hydrate: async (studentId) => {
+        if (!studentId) return
+        // Fresh enough — the caller is rendering the same data already.
+        const now = Date.now()
+        if (
+          inFlight ||
+          (lastFetchedFor === studentId &&
+            get().status === 'ready' &&
+            now - lastFetchedAt < FETCH_FRESH_MS)
+        ) {
+          return inFlight ?? Promise.resolve()
+        }
+        lastFetchedFor = studentId
+        const job = (async () => {
+          set({ status: 'loading', error: null })
+          try {
+            const r = await fetch('/api/student/attendance', {
+              cache: 'no-store',
+              credentials: 'same-origin',
+            })
+            if (!r.ok) {
+              // 401 etc. — surface a concise, honest error the module can
+              // render with a retry control.
+              let message = `Attendance could not load (${r.status}).`
+              try {
+                const j = await r.json()
+                if (j && typeof j === 'object' && typeof j.error === 'string') {
+                  message = j.error
+                }
+              } catch {
+                /* non-JSON error body — keep the fallback */
+              }
+              throw new Error(message)
             }
-            written++
-          }
-          return { records: [...byKey.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.studentId < b.studentId ? -1 : 1)) }
-        })
-        return written
-      },
-
-      markStudent: ({ studentId, date, status, note, markedBy }) => {
-        const now = new Date().toISOString()
-        set((state) => {
-          const existing = state.records.find((r) => r.studentId === studentId && r.date === date)
-          if (existing) {
-            return {
-              records: state.records.map((r) =>
-                r.studentId === studentId && r.date === date ? { ...r, status, note: note ?? r.note, markedBy, markedAt: now } : r
-              ),
+            const j = await r.json()
+            if (!j || typeof j !== 'object' || j.ok !== true || !('data' in j)) {
+              throw new Error('Unexpected response from the server.')
             }
+            const rows = ((j.data as { records?: AttendanceApiRecord[] }).records ?? []).map(
+              (row): StudentAttendanceRecord => ({
+                studentId,
+                date: row.date,
+                status: row.status,
+                note: row.note ?? undefined,
+                markedAt: row.markedAt,
+              }),
+            )
+            lastFetchedAt = Date.now()
+            set({ records: rows, status: 'ready', error: null })
+          } catch (e) {
+            set({
+              status: 'error',
+              error: e instanceof Error ? e.message : 'Attendance could not load.',
+            })
+          } finally {
+            inFlight = null
           }
-          return { records: [...state.records, { studentId, date, status, note, markedBy, markedAt: now }] }
-        })
+        })()
+        inFlight = job
+        return job
       },
-
-      resetToSeed: () => set({ records: SEED }),
     }),
     {
+      // Same key as the retired seeded store — persisted browsers holding
+      // the STU-58 demo rows (persisted version 0) are PURGED in place by
+      // the v2 migration below (the 7-a same-key + version-bump pattern);
+      // a renamed key would orphan the stale data instead of clearing it.
       name: 'scholario-student-attendance-v1',
       storage: createJSONStorage(() => localStorage),
+      version: 2,
+      // 7-b — purge the retired STU-58 seed (and any stale cache) on
+      // upgrade; the store re-hydrates from the server on next mount.
+      migrate: () => ({ records: [], status: 'idle', error: null }),
       partialize: (state) => ({ records: state.records }) as StudentAttendanceStoreState,
     }
   )
@@ -197,34 +187,8 @@ export function studentRecords(all: StudentAttendanceRecord[], studentId: string
   return all.filter((r) => r.studentId === studentId).sort((a, b) => (a.date < b.date ? -1 : 1))
 }
 
-/** Monthly aggregation → trend points ending at the latest recorded month. */
-export function monthlyTrend(records: StudentAttendanceRecord[], months = 6): { name: string; v: number }[] {
-  if (records.length === 0) return []
-  const byMonth = new Map<string, { attended: number; total: number }>()
-  for (const r of records) {
-    const key = r.date.slice(0, 7)
-    const agg = byMonth.get(key) ?? { attended: 0, total: 0 }
-    agg.total++
-    if (r.status === 'present' || r.status === 'late') agg.attended++
-    byMonth.set(key, agg)
-  }
-  const latest = [...byMonth.keys()].sort().at(-1)!
-  const [y, m] = latest.split('-').map(Number)
-  const points: { name: string; v: number }[] = []
-  for (let i = months - 1; i >= 0; i--) {
-    const d = new Date(y, m - 1 - i, 1)
-    const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
-    const agg = byMonth.get(key)
-    if (agg && agg.total > 0) {
-      points.push({ name: d.toLocaleDateString('en-IN', { month: 'short' }), v: Math.round((agg.attended / agg.total) * 100) })
-    } else if (i === 0) {
-      // Latest month with no records yet → overall window rate keeps the
-      // chart endpoint honest instead of dropping to zero.
-      const overall = computeStats(records)
-      points.push({ name: d.toLocaleDateString('en-IN', { month: 'short' }), v: overall.percent })
-    }
-  }
-  return points
+function pad(n: number): string {
+  return n < 10 ? `0${n}` : `${n}`
 }
 
 /**
@@ -243,7 +207,7 @@ export function weeklyTrend(records: StudentAttendanceRecord[], weeks = 8): { na
     // ISO week start (Monday)
     const dow = (d.getDay() + 6) % 7
     const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow)
-    const key = isoDate(monday)
+    const key = `${monday.getFullYear()}-${pad(monday.getMonth() + 1)}-${pad(monday.getDate())}`
     const agg = byWeek.get(key) ?? { attended: 0, total: 0 }
     agg.total++
     if (r.status === 'present' || r.status === 'late') agg.attended++

@@ -234,16 +234,30 @@ export function SalaryEmployeeAccountsSection() {
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted/40 text-muted-foreground/60 mb-3">
               <Users className="h-5 w-5" />
             </div>
-            <p className="text-sm font-semibold text-muted-foreground">No employees match this view</p>
-            <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">Try a different name or employee ID, or relax the department and status filters.</p>
-            {(search || deptFilter !== 'all' || statusFilter !== 'all') && (
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="mt-3 inline-flex items-center rounded-md border border-border px-2.5 py-1 text-[11px] font-medium hover:bg-muted/60 transition-colors"
-              >
-                Clear filters
-              </button>
+            {/* PHASE 7 — honest copy: an empty school roster is different
+                from over-strict filters (no fabricated staff pool exists). */}
+            {employees.length === 0 ? (
+              <>
+                <p className="text-sm font-semibold text-muted-foreground">No staff on the payroll yet</p>
+                <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">
+                  The payroll list follows the school&apos;s teacher roster — register teachers in the
+                  Teachers module and they will appear here.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-semibold text-muted-foreground">No employees match this view</p>
+                <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">Try a different name or employee ID, or relax the department and status filters.</p>
+                {(search || deptFilter !== 'all' || statusFilter !== 'all') && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="mt-3 inline-flex items-center rounded-md border border-border px-2.5 py-1 text-[11px] font-medium hover:bg-muted/60 transition-colors"
+                  >
+                    Clear filters
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}
@@ -300,8 +314,14 @@ function EmployeeCard({ row, index, onOpen }: { row: AccountRow; index: number; 
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold truncate">{e.name}</p>
-            <p className="text-[10px] text-muted-foreground font-mono truncate">{e.employeeId} · {e.designation}</p>
-            <p className="text-[10px] text-muted-foreground/80 truncate">{e.department} · joined {fmtDayYear(e.joiningDate)}</p>
+            {/* PHASE 7 — honest empties: un-recorded designation / department /
+                joining date never render broken "· ·" fragments. */}
+            <p className="text-[10px] text-muted-foreground font-mono truncate">
+              {[e.employeeId, e.designation].filter(Boolean).join(' · ') || '—'}
+            </p>
+            <p className="text-[10px] text-muted-foreground/80 truncate">
+              {e.joiningDate ? `${e.department ? `${e.department} · ` : ''}joined ${fmtDayYear(e.joiningDate)}` : e.department || 'Joining date not recorded'}
+            </p>
           </div>
         </div>
         <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold shrink-0 mt-0.5', STATUS_TONE[e.status])}>
@@ -309,10 +329,12 @@ function EmployeeCard({ row, index, onOpen }: { row: AccountRow; index: number; 
         </span>
       </div>
 
-      {/* Payroll position — 2×2, mirrors the student card's stat tiles */}
+      {/* Payroll position — 2×2, mirrors the student card's stat tiles.
+          PHASE 7: a "—" means NO salary is configured for this employee
+          yet (never a measured ₹0). */}
       <div className="grid grid-cols-2 gap-2">
-        <CardStat label={row.isSimple ? "Monthly Salary" : "Gross / Month"} value={moneyMy(row.grossMonthly)} />
-        <CardStat label="Payable" value={moneyMy(row.payableCurrent)} sub="this month" />
+        <CardStat label={row.isSimple ? "Monthly Salary" : "Gross / Month"} value={row.grossMonthly > 0 ? moneyMy(row.grossMonthly) : '—'} />
+        <CardStat label="Payable" value={row.payableCurrent > 0 ? moneyMy(row.payableCurrent) : '—'} sub="this month" />
         <CardStat
           label="Paid"
           value={moneyMy(row.paidSession)}

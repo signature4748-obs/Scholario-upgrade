@@ -29,7 +29,7 @@
  * Brief section 14: Real-time conflict detection. Save disabled on conflict.
  */
 import { useMemo, useState } from 'react'
-import { Search, Check, ChevronDown, AlertTriangle, BookLock } from 'lucide-react'
+import { Search, Check, ChevronDown, AlertTriangle, BookLock, UserX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
@@ -81,9 +81,9 @@ export function SlotEditorDialog({
   subjectsConfigured,
   onSave,
 }: SlotEditorDialogProps) {
-  // Real faculty roster (server-backed; mock fallback until it resolves —
-  // the module hydrates slot ids only after the roster settles, so the
-  // current value always resolves).
+  // Real faculty roster (server truth — Phase 7: EMPTY stays empty until
+  // /api/teachers resolves; the module hydrates slot ids only after the
+  // roster settles, so the current value always resolves).
   const roster = useTeacherRosterStore((s) => s.teachers)
   const rosterSource = useTeacherRosterStore((s) => s.source)
   return (
@@ -170,18 +170,31 @@ export function SlotEditorDialog({
               </span>
             }
           >
-            <SearchableField
-              pickerId="slot-teacher"
-              value={form.teacherId}
-              onChange={(v) => setForm((prev) => ({ ...prev, teacherId: v }))}
-              placeholder="Select teacher"
-              options={roster.map((t) => ({
-                id: t.id,
-                label: t.name,
-                avatar: t.avatar,
-                meta: `${t.employeeId} · ${t.department}`,
-              }))}
-            />
+            {roster.length === 0 ? (
+              // PHASE 7 (Task 7-a) — honest empty roster: the server has NO
+              // registered teachers, so there is nobody to assign. Never a
+              // fabricated faculty list.
+              <div className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2.5 flex items-start gap-2 text-[10px] text-muted-foreground">
+                <UserX className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                <span>
+                  No teachers registered yet — slots need a registered teacher.
+                  {' '}<span className="font-semibold text-foreground">Teachers → Add Teacher</span> creates the school&apos;s real staff records.
+                </span>
+              </div>
+            ) : (
+              <SearchableField
+                pickerId="slot-teacher"
+                value={form.teacherId}
+                onChange={(v) => setForm((prev) => ({ ...prev, teacherId: v }))}
+                placeholder="Select teacher"
+                options={roster.map((t) => ({
+                  id: t.id,
+                  label: t.name,
+                  avatar: t.avatar,
+                  meta: [t.employeeId, t.department].filter(Boolean).join(' · '),
+                }))}
+              />
+            )}
           </Field>
 
           {/* Room — shown as read-only context (the class's homeroom) */}

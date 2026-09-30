@@ -22,9 +22,11 @@
  * insufficient data collapse entirely (§44).
  */
 
-import { useMemo, useState } from 'react'
-import { Award, CalendarRange, Users } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Award, CalendarRange, Users, RotateCw } from 'lucide-react'
 import { GlassCard, PageTransition } from '@/components/shared/ui'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   useMyResults,
   useStudentResultsStore,
@@ -35,6 +37,7 @@ import {
   type GradeBand,
   type SubjectMark,
 } from '@/lib/store/student-results-store'
+import { useStudentAttendanceStore } from '@/lib/store/student-attendance-store'
 import { useAcademicSession } from '@/lib/academic-session'
 import { AssessmentSelector } from './assessment-selector'
 import { Hero } from './hero'
@@ -113,6 +116,14 @@ export function ResultsModule() {
   const results = useStudentResultsStore((s) => s.results)
   const gradeScale = ctx.gradeScale as GradeBand[]
 
+  // 7-b — the report card's attendance line reads the REAL attendance
+  // rows; hydrate them alongside the results (in-flight guarded in the
+  // store, so this is one shared fetch with the Attendance module).
+  const hydrateAttendance = useStudentAttendanceStore((s) => s.hydrate)
+  useEffect(() => {
+    if (ctx.studentId) void hydrateAttendance(ctx.studentId)
+  }, [ctx.studentId, hydrateAttendance])
+
   // Selection — the LATEST published result opens by default; the
   // selector/history deep-switch without any page round-trip.
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -162,6 +173,50 @@ export function ResultsModule() {
     admissionNo: ctx.student?.admissionNo ?? '—',
     classSection: `${ctx.className}-${ctx.section}`,
     rollNo: ctx.student?.rollNo ?? '—',
+  }
+
+  /* ── LOADING — skeleton, never fabricated marks (§44 / 7-b) ── */
+  if (ctx.loading) {
+    return (
+      <PageTransition>
+        <div className="space-y-6 sm:space-y-7" aria-busy="true" aria-label="Loading results">
+          <div className="flex flex-wrap items-center gap-2">
+            <Skeleton className="h-6 w-32 rounded-full" />
+            <Skeleton className="h-6 w-24 rounded-full" />
+          </div>
+          <Skeleton className="h-16 rounded-xl" />
+          <Skeleton className="h-[210px] rounded-2xl" />
+          <Skeleton className="h-[240px] rounded-2xl" />
+        </div>
+      </PageTransition>
+    )
+  }
+
+  /* ── ERROR — honest message + retry, never a fabricated fallback ── */
+  if (ctx.error) {
+    return (
+      <PageTransition>
+        <div className="space-y-6 sm:space-y-7">
+          <GlassCard hover={false} className="on-card px-6 py-16 text-center">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <Award className="h-6 w-6" aria-hidden />
+            </div>
+            <p className="text-sm font-semibold">Results could not load</p>
+            <p className="mx-auto mt-1.5 max-w-sm text-xs leading-relaxed text-muted-foreground">
+              {ctx.error}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-4 h-8 gap-1.5"
+              onClick={() => void ctx.reload()}
+            >
+              <RotateCw className="h-3.5 w-3.5" aria-hidden /> Try again
+            </Button>
+          </GlassCard>
+        </div>
+      </PageTransition>
+    )
   }
 
   /* ── EMPTY STATE — nothing published for this session yet (§44) ── */

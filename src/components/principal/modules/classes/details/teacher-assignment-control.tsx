@@ -5,36 +5,42 @@
  *
  * Brief section 1 + 2 + 20: State-driven action logic.
  *
- *   ASSIGNED   → ONLY Archive icon visible (NO pencil, NO replace button)
+ *   ASSIGNED   → ONLY Clear-appointment icon (NO pencil, NO replace button)
  *   VACANT     → Select/Edit dropdown with pencil affordance
  *
- * Brief section 1: "DO NOT show: Assigned teacher + Pencil + Archive.
+ * Brief section 1: "DO NOT show: Assigned teacher + Pencil + Clear.
  *   That is visually redundant."
  *
  * Brief section 2: "Remove that visible action from assigned teacher cards.
- *   For an assigned teacher: ONLY ARCHIVE should be visible."
+ *   For an assigned teacher: ONLY the clear affordance should be visible."
  *
  * Brief section 3: "A vacant slot is not just a teacher with an empty name.
  *   It must be represented as a real assignment state."
  *   The vacant dropdown shows: `[ Select Class Teacher    ✎ ]`
  *
  * Brief section 4: "When assigned: [ Avatar ] Teacher Name + EMP-ID · Department
- *   + Archive. No pencil. No redundant edit button."
+ *   + Clear. No pencil. No redundant edit button."
  *
- * Brief section 5 + 6: Archive uses compact Popover confirmation (NOT a large Dialog).
- *   Archive is reversible (NOT delete). Brief section 6: "Archive is reversible."
+ * Brief section 5 + 6: Clear uses compact Popover confirmation (NOT a large
+ *   Dialog) and changes THIS appointment only — the teacher's staff record
+ *   itself is server data and is never altered from here.
  *
- * Brief section 8: Active teacher picker shows ONLY active (non-archived) teachers.
+ * Brief section 8: the teacher picker shows the school's real roster
+ *   (teacher-roster-store — server Teacher rows; empty until synced).
  *
  * Brief section 17: universal — used for all 4 assignment types
  *   (Class Teacher, Assistant, Section Teacher, Section Assistant).
+ *
+ * PHASE 7 (Task 7-a): the lookup moved from the fabricated mock lifecycle
+ * store to the server-hydrated roster — real teachers only, honest
+ * "vacant" rendering when nobody is appointed.
  */
 import { useState, useMemo } from 'react'
-import { Archive, UserX, Search, Check, Pencil } from 'lucide-react'
+import { UserX, Search, Check, Pencil, Eraser } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { useTeachersMockStore } from '@/lib/store/teachers-mock-store'
+import { useTeacherRosterStore } from '@/lib/store/teacher-roster-store'
 import { EntityCard } from '../../shared/entity-card'
 import type { SearchableSelectOption } from '../../shared/searchable-select'
 
@@ -47,12 +53,12 @@ export interface TeacherAssignmentControlProps {
   editMode: boolean
   /** Stable id for the search Input (prevents cursor bugs). */
   pickerId: string
-  /** Teacher options for the picker (caller pre-filters to exclude archived). */
+  /** Teacher options for the picker (the school's real roster). */
   options: SearchableSelectOption[]
   /** Called when user picks a new teacher from the vacant dropdown. */
   onSelect: (id: string) => void
-  /** Called when user confirms the archive popover. Parent marks slot as pending-archive. */
-  onArchive: () => void
+  /** Called when user confirms the clear popover. Parent stages the slot as vacant. */
+  onClear: () => void
 }
 
 export function TeacherAssignmentControl({
@@ -62,21 +68,27 @@ export function TeacherAssignmentControl({
   pickerId,
   options,
   onSelect,
-  onArchive,
+  onClear,
 }: TeacherAssignmentControlProps) {
-  // Subscribe reactively so archived teachers update display everywhere.
-  const teacher = useTeachersMockStore((s) =>
-    teacherId ? s.teachers.find((t) => t.id === teacherId) : undefined
+  // Subscribe reactively so roster updates reflect everywhere immediately.
+  // Dual-id match (Phase 7): synced class data carries the teacher's USER
+  // id (Class.classTeacherId convention); the picker stages Teacher row ids.
+  const teacher = useTeacherRosterStore((s) =>
+    teacherId ? s.teachers.find((t) => t.id === teacherId || t.userId === teacherId) : undefined
   )
+
+  const meta = teacher
+    ? [teacher.employeeId, teacher.department].filter(Boolean).join(' · ')
+    : label
 
   // ─── READ MODE ───────────────────────────────────────────────────────
   if (!editMode) {
-    if (teacher && !teacher.archived) {
+    if (teacher) {
       return (
         <EntityCard
           leading={teacher.avatar}
           title={teacher.name}
-          metadata={`${teacher.employeeId} · ${teacher.department}`}
+          metadata={meta || label}
           secondary={<span className="text-[10px] text-muted-foreground">{label}</span>}
         />
       )
@@ -94,9 +106,9 @@ export function TeacherAssignmentControl({
   // ─── EDIT MODE ───────────────────────────────────────────────────────
 
   // State-driven action logic (Brief section 1 + 20):
-  //   ASSIGNED   → ONLY Archive icon
+  //   ASSIGNED   → ONLY Clear icon
   //   VACANT     → Select/Edit dropdown with pencil affordance
-  const isAssigned = teacherId && teacher && !teacher.archived
+  const isAssigned = !!(teacherId && teacher)
 
   if (!isAssigned) {
     // VACANT — show Select/Edit dropdown with pencil affordance.
@@ -115,7 +127,7 @@ export function TeacherAssignmentControl({
     )
   }
 
-  // ASSIGNED — show teacher card with ONLY Archive icon.
+  // ASSIGNED — show teacher card with ONLY the Clear icon.
   // Brief section 1 + 2 + 4: NO pencil, NO replace button.
   if (!teacher) return null
 
@@ -125,11 +137,11 @@ export function TeacherAssignmentControl({
       <EntityCard
         leading={teacher.avatar}
         title={teacher.name}
-        metadata={`${teacher.employeeId} · ${teacher.department}`}
+        metadata={meta || label}
         action={
-          <ArchiveButton
+          <ClearButton
             teacherName={teacher.name}
-            onConfirm={onArchive}
+            onConfirm={onClear}
           />
         }
       />
@@ -138,11 +150,12 @@ export function TeacherAssignmentControl({
 }
 
 /* ------------------------------------------------------------------ */
-/* ArchiveButton — restrained orange archive icon that opens a         */
-/*   compact confirmation Popover (NOT a large Dialog).                 */
-/*   Brief section 5 + 6: "small, polished confirmation surface".      */
+/* ClearButton — restrained outline icon that opens a compact          */
+/*   confirmation Popover (NOT a large Dialog). Clearing an            */
+/*   appointment vacates THIS slot only — the teacher's staff record   */
+/*   (server data) is never modified from here.                        */
 /* ------------------------------------------------------------------ */
-function ArchiveButton({ teacherName, onConfirm }: {
+function ClearButton({ teacherName, onConfirm }: {
   teacherName: string
   onConfirm: () => void
 }) {
@@ -153,16 +166,16 @@ function ArchiveButton({ teacherName, onConfirm }: {
       <PopoverTrigger asChild>
         <button
           type="button"
-          title="Archive teacher"
+          title="Clear appointment"
           className="h-7 w-7 rounded-md text-amber-600 hover:bg-amber-500/10 transition-colors inline-flex items-center justify-center shrink-0"
         >
-          <Archive className="h-3.5 w-3.5" />
+          <Eraser className="h-3.5 w-3.5" />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-3" align="end" sideOffset={4}>
-        <p className="text-sm font-semibold text-foreground">Archive teacher?</p>
+        <p className="text-sm font-semibold text-foreground">Clear appointment?</p>
         <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-          {teacherName} will no longer be available for active assignment. The slot becomes vacant and the teacher moves to Archived Teachers.
+          This slot will be saved as vacant. Only the class appointment changes — {teacherName}&apos;s staff record is not affected.
         </p>
         <div className="flex justify-end gap-2 mt-3">
           <Button
@@ -179,7 +192,7 @@ function ArchiveButton({ teacherName, onConfirm }: {
             className="h-7 text-xs text-amber-600 border-amber-500/40 hover:bg-amber-500/10"
             onClick={() => { onConfirm(); setOpen(false) }}
           >
-            Archive
+            Clear
           </Button>
         </div>
       </PopoverContent>
@@ -241,7 +254,9 @@ function VacantSelectDropdown({ pickerId, selectedId, onSelect, placeholder, opt
         </div>
         <div className="max-h-56 overflow-y-auto divide-y divide-border/30">
           {filtered.length === 0 ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground text-center">No teachers found.</p>
+            <p className="px-3 py-4 text-xs text-muted-foreground text-center">
+              {options.length === 0 ? 'No teachers registered at the school yet.' : 'No teachers found.'}
+            </p>
           ) : filtered.slice(0, 50).map((o) => {
             const isSelected = o.id === selectedId
             return (

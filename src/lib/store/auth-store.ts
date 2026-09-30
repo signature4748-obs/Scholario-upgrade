@@ -40,31 +40,15 @@ interface AuthState {
   switchTo: (role: Role) => void
 }
 
+// PHASE 7 — NEUTRAL fallback profiles only. The login flow ALWAYS
+// overrides name/id/email with the SERVER-authenticated identity
+// (payload.data); these placeholders exist solely so a degraded store
+// never renders a fabricated person ("Dr. Ananya Iyer" & co. are
+// retired). The server role remains the routing authority.
 const roleProfiles: Record<Role, SessionUser> = {
-  principal: {
-    role: 'principal',
-    name: 'Dr. Ananya Iyer',
-    avatar: 'AI',
-    id: 'EMP-001',
-    email: 'principal@scholario.in',
-    teacherId: 'T-014',
-  },
-  teacher: {
-    role: 'teacher',
-    name: 'Rohan Mehta',
-    avatar: 'RM',
-    id: 'EMP-014',
-    email: 'rohan.mehta@scholario.in',
-    teacherId: 'T-014',
-  },
-  student: {
-    role: 'student',
-    name: 'Aarav Sharma',
-    avatar: 'AS',
-    id: 'STU-58',
-    email: 'aarav.sharma@greenwood.edu.in',
-    studentId: 'STU-58',
-  },
+  principal: { role: 'principal', name: 'Principal', avatar: 'P', id: '', email: '' },
+  teacher: { role: 'teacher', name: 'Teacher', avatar: 'T', id: '', email: '' },
+  student: { role: 'student', name: 'Student', avatar: 'S', id: '', email: '' },
 }
 
 export const useAuth = create<AuthState>()(

@@ -945,7 +945,10 @@ const YEAR = CURRENT_ACADEMIC_YEAR
 export const useApplicationsStore = create<ApplicationsState>()(
   persist(
     (set, get) => ({
-      applications: seedApplications(),
+      // PHASE 7 — honest-empty contract: application forms start EMPTY
+      // (the seeded "Jaipur Trip consent" demo form universe is retired;
+      // forms created in the builder are real in-session workspace data).
+      applications: [],
       submissions: [],
       audit: [],
 
@@ -1794,7 +1797,7 @@ export const useApplicationsStore = create<ApplicationsState>()(
       // layout is fixed (no editor); pre-choice records default to the
       // classic office document. v8's field-set normalization and the
       // stale-id purge list remain authoritative.
-      version: 9,
+      version: 10,
       storage: createTenantScopedStorage(TENANT_SCOPED_BASES.applications),
       // v4→v5 — (historical) Educational Tour scope rebuild: namespaces were
       // narrowed to Tour forms. v7 SUPERSEDES this — the module is general
@@ -1810,12 +1813,22 @@ export const useApplicationsStore = create<ApplicationsState>()(
       // dropped application, and the companion fee-store v12 migration purges
       // the matching Additional Charges + application-bound payments in the
       // same release so both sides of the linkage stay consistent.
-      migrate: (persisted) => {
+      migrate: (persisted, version) => {
         const st = persisted as {
           applications?: SchoolApplication[]
           submissions?: ApplicationSubmission[]
           audit?: ApplicationAuditEvent[]
         } | undefined
+        // v10 (PHASE 7) — purge the retired demo application universe:
+        // the workspace starts honest-empty on every persisted browser.
+        if (version < 10) {
+          if (st) {
+            st.applications = []
+            st.submissions = []
+            st.audit = []
+          }
+          return st as unknown as SchoolApplication[] & Record<string, unknown>
+        }
         if (st?.applications) {
           // v7 (APPS-IA-1) — the module is GENERAL: keep every category
           // (previously only Tour forms survived this migration). The
@@ -1953,6 +1966,15 @@ function seedApplications(): SchoolApplication[] {
  * repeatedly; only seeds while both collections are empty.
  */
 export function ensureApplicationSeedData(): void {
+  // PHASE 7 — RETIRED (fabricated demo submissions). Kept as an inert
+  // no-op for import compatibility (teacher/principal modules call it on
+  // mount); the workspace now starts honest-empty. See
+  // docs/DATA_SOURCE_MAP.md §Applications for the classification.
+  return
+}
+
+/* eslint-disable @typescript-eslint/no-unused-vars */
+function __retired_ensureApplicationSeedData(): void {
   try {
     const state = useApplicationsStore.getState()
     if (state.submissions.length > 0 || state.audit.length > 0) return

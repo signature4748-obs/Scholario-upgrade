@@ -17,14 +17,12 @@
  *   Outreach tab's numbers — same /api/fees/defaulters aggregation),
  *   New admissions → admission, Upcoming exams → exams
  *
- * Round-7 consistency fix: "Pending Fees" used to quote the static mock
- * finance series (₹1.84 Cr / 142 students) while Fee Management and the
- * Outreach tab told two OTHER stories. The card now reads the live dues
- * summary (dues-summary-store → GET /api/fees/defaulters?summary=1) —
- * mock values serve only as the pre-sync fallback, and the "live" chip
- * appears only once the server number is actually on screen (the mock
- * sparkline is dropped in that state — never a fake trend under a real
- * number).
+ * Round-7 consistency fix + PHASE 7: "Pending Fees" used to quote the
+ * static mock finance series (₹1.84 Cr / 142 students) as a fallback.
+ * The mock fallback is REMOVED — the card now shows an honest "—"
+ * skeleton while the live dues summary loads and surfaces an honest
+ * retry state on failure. A number only appears when it is the
+ * server's number.
  *
  * Removed (relocated): Students total, Teachers count, Revenue, Salary due —
  * these are passive status, not actionable, and now live on the WelcomeBanner
@@ -37,7 +35,6 @@ import { useEffect, useMemo } from 'react'
 import {
   CalendarCheck, IndianRupee, UserPlus, FileText,
 } from 'lucide-react'
-import { feeAnalytics } from '@/lib/mock/finance'
 import { formatINR } from '@/lib/format'
 import { useDuesSummaryStore, selectLiveDues } from '@/lib/store/dues-summary-store'
 import { useFocusStore } from '@/lib/store/focus-store'
@@ -64,9 +61,11 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
   // "Pre-Board in 12 days" constant).
   const upcoming = useUpcomingExams()
 
-  // Round-7 — server-truth dues for the Pending Fees card (mock fallback
-  // until the sync lands; honest lineage via the live chip).
+  // Round-7 + PHASE 7 — server-truth dues for the Pending Fees card.
+  // NO mock fallback: pre-sync the card shows an honest "—"; a failed
+  // sync shows an honest retry affordance — never fabricated rupees.
   const dues = useDuesSummaryStore(selectLiveDues)
+  const duesStatus = useDuesSummaryStore((s) => s.status)
   const ensureDues = useDuesSummaryStore((s) => s.ensure)
   useEffect(() => { void ensureDues() }, [ensureDues])
 
@@ -112,10 +111,12 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
     onNavigate('fees')
   }
 
-  const feesValue = dues ? dues.totalOutstanding : feeAnalytics.pendingDues
+  const feesValue = dues ? formatINR(dues.totalOutstanding, true) : <Skeleton className="h-7 w-24" />
   const feesSub = dues
     ? `${dues.defaulterCount} student${dues.defaulterCount === 1 ? '' : 's'} · ${dues.overdueCount > 0 ? `${dues.overdueCount} past due` : 'all current'}`
-    : `${feeAnalytics.pendingCount} students`
+    : duesStatus === 'error'
+      ? 'Could not load dues — tap to retry'
+      : 'Loading live dues…'
 
   return (
     <SummaryCardGrid columns={4}>
@@ -135,14 +136,14 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
       />
       <SummaryCard
         label="Pending Fees"
-        value={formatINR(feesValue, true)}
+        value={feesValue}
         sub={feesSub}
         chip={dues ? <LiveChip /> : undefined}
         tone="rose"
         icon={<IndianRupee className="h-4 w-4" />}
         delay={0.04}
-        sparkline={dues ? undefined : feeAnalytics.monthly.map((d) => d.pending)}
-        trend="up"
+        sparkline={undefined}
+        trend="neutral"
         onClick={onNavigate ? (dues && dues.defaulterCount > 0 ? openOutreach : () => onNavigate('fees')) : undefined}
       />
       <SummaryCard

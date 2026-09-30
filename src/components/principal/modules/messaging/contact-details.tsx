@@ -26,7 +26,9 @@ import { cn } from '@/lib/utils'
 import {
   useMessagingStore, resolveMemberRefs, type Conversation,
 } from '@/lib/store/messaging-store'
-import { teachers } from '@/lib/mock/teachers'
+// PHASE 7 (Task 7-a) — staff contact details resolve from the HYDRATED
+// teachers-store (real Teacher rows); empty fields render honestly.
+import { useTeachersStore } from '@/lib/store/teachers-store'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { ConversationAvatar } from './shared'
 
@@ -58,9 +60,11 @@ export function ContactDetailsSheet({
     [group],
   )
 
+  // The school's REAL teacher roster (Phase 7 — hydrated from /api/teachers).
+  const teacherRecords = useTeachersStore((s) => s.teachers)
   const teacher = useMemo(
-    () => (conversation?.type === 'staff' && conversation.teacherId ? teachers.find((t) => t.id === conversation!.teacherId) : undefined),
-    [conversation],
+    () => (conversation?.type === 'staff' && conversation.teacherId ? teacherRecords.find((t) => t.id === conversation!.teacherId) : undefined),
+    [conversation, teacherRecords],
   )
   const student = useMemo(
     () => (conversation?.type === 'parent' && conversation.studentName
@@ -115,9 +119,9 @@ export function ContactDetailsSheet({
           {/* Staff details */}
           {convo.type === 'staff' && teacher && (
             <DetailSection>
-              <DetailRow icon={<Briefcase className="h-3.5 w-3.5" />} label="Designation" value={`${teacher.designation} · ${teacher.department}`} />
-              <DetailRow icon={<BookOpen className="h-3.5 w-3.5" />} label="Subjects" value={teacher.subjects.join(', ')} />
-              <DetailRow icon={<GraduationCap className="h-3.5 w-3.5" />} label="Qualification" value={`${teacher.qualification} · ${teacher.experience} yrs`} />
+              <DetailRow icon={<Briefcase className="h-3.5 w-3.5" />} label="Role" value={[teacher.designation, teacher.department].filter(Boolean).join(' · ') || 'Staff'} />
+              <DetailRow icon={<BookOpen className="h-3.5 w-3.5" />} label="Subjects" value={teacher.subjects.join(', ') || '—'} />
+              <DetailRow icon={<GraduationCap className="h-3.5 w-3.5" />} label="Qualification" value={teacher.professionalQualifications.join(', ') || '—'} />
               {teacher.email && <DetailRow icon={<Mail className="h-3.5 w-3.5" />} label="Email" value={teacher.email} mono />}
               {teacher.phone && <DetailRow icon={<Phone className="h-3.5 w-3.5" />} label="Phone" value={teacher.phone} mono />}
             </DetailSection>

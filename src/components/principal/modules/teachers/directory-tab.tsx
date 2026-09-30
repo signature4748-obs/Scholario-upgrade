@@ -39,19 +39,21 @@ interface Props {
  * footer band, with teacher-specific content.
  */
 export function DirectoryTab({
-  filteredTeachers, search, setSearch, dept, setDept, statusFilter, setStatusFilter,
+  teachers, filteredTeachers, search, setSearch, dept, setDept, statusFilter, setStatusFilter,
   totalTeachers, activeTeachersCount, onLeaveCount, avgAttendance, totalSalary,
   relievedCount: _relievedCount, onOpenProfile,
 }: Props) {
   const reduce = useReducedMotion()
   return (
     <div className="space-y-4">
-      {/* Premium summary cards — Admission-style */}
+      {/* Premium summary cards — Admission-style. Honest zeros: with no
+          attendance records or salary data on file the aggregate cards show
+          an em dash instead of pretending a measured 0% / ₹0. */}
       <SummaryCardGrid columns={4}>
         <SummaryCard label="Total Teachers" value={totalTeachers} sub={`${activeTeachersCount} active`} tone="emerald" icon={<Users className="h-4 w-4" />} delay={0} />
         <SummaryCard label="On Leave Today" value={onLeaveCount} sub="Substitutes ready" tone="amber" icon={<CalendarDays className="h-4 w-4" />} delay={0.05} />
-        <SummaryCard label="Avg Attendance" value={avgAttendance} suffix="%" sub="Last 30 days" tone="cyan" icon={<UserCheck className="h-4 w-4" />} delay={0.1} />
-        <SummaryCard label="Monthly Payroll" value={formatINR(totalSalary, true)} sub="Bank transfer" tone="violet" icon={<Wallet className="h-4 w-4" />} delay={0.15} />
+        <SummaryCard label="Avg Attendance" value={avgAttendance > 0 ? avgAttendance : '—'} suffix={avgAttendance > 0 ? '%' : undefined} sub="Last 30 days" tone="cyan" icon={<UserCheck className="h-4 w-4" />} delay={0.1} />
+        <SummaryCard label="Monthly Payroll" value={totalSalary > 0 ? formatINR(totalSalary, true) : '—'} sub="Bank transfer" tone="violet" icon={<Wallet className="h-4 w-4" />} delay={0.15} />
       </SummaryCardGrid>
 
       {/* Inline filter row */}
@@ -91,7 +93,16 @@ export function DirectoryTab({
         </div>
       </div>
 
-      {/* Teacher grid — shared three-band entity cards */}
+      {/* Teacher grid — shared three-band entity cards. Honest empty
+          states: no teachers registered yet vs. no match for the filters. */}
+      {teachers.length === 0 ? (
+        <div className="py-10 text-center">
+          <p className="text-sm font-medium text-foreground">No teachers registered yet</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            The faculty directory lists the school&apos;s registered teacher records — use “Add Teacher” to register the first one.
+          </p>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
         {filteredTeachers.map((t, i) => {
           const pendingPosCount = t.positions.filter((p) => p.status === 'Pending Acceptance').length
@@ -139,10 +150,10 @@ export function DirectoryTab({
                       />
                     )}
                   </div>
-                  <p className="mt-1 truncate text-[11px] text-muted-foreground">{t.designation}</p>
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground">{t.designation || 'Not provided'}</p>
                   <div className="mt-1.5 flex items-center gap-1.5">
                     <Badge variant="secondary" className="bg-muted px-1.5 py-0 text-[10px] leading-4 text-muted-foreground">
-                      {t.department}
+                      {t.department || 'Not provided'}
                     </Badge>
                   </div>
                 </div>
@@ -159,34 +170,35 @@ export function DirectoryTab({
                 </div>
               )}
 
-              {/* ── metric band — Exp / Att. / Salary ── */}
+              {/* ── metric band — Exp / Att. / Salary. A zero means NO data on
+                  file (never a measured 0y / 0% / ₹0) — rendered as an em dash. */}
               <div className="mt-4 grid grid-cols-3 divide-x divide-border border-t border-border pt-3.5">
                 <div className="min-w-0 [&:not(:first-child)]:pl-3">
                   <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Exp</p>
                   <div className="mt-1 flex min-h-[26px] min-w-0 items-center">
-                    <span className="font-display text-lg font-bold leading-none tabular-nums text-foreground">{t.totalExperience}y</span>
+                    <span className="font-display text-lg font-bold leading-none tabular-nums text-foreground">{t.totalExperience > 0 ? `${t.totalExperience}y` : '—'}</span>
                   </div>
                 </div>
                 <div className="min-w-0 [&:not(:first-child)]:pl-3">
                   <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Att.</p>
                   <div className="mt-1 flex min-h-[26px] min-w-0 items-center">
                     <span className={cn('font-display text-lg font-bold leading-none tabular-nums',
-                      t.attendance >= 95 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400')}>
-                      {t.attendance}%
+                      t.attendance >= 95 ? 'text-emerald-600 dark:text-emerald-400' : t.attendance > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
+                      {t.attendance > 0 ? `${t.attendance}%` : '—'}
                     </span>
                   </div>
                 </div>
                 <div className="min-w-0 [&:not(:first-child)]:pl-3">
                   <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Salary</p>
                   <div className="mt-1 flex min-h-[26px] min-w-0 items-center">
-                    <span className="truncate font-display text-lg font-bold leading-none tabular-nums text-foreground">{formatINR(t.salary, true)}</span>
+                    <span className="truncate font-display text-lg font-bold leading-none tabular-nums text-foreground">{t.salary > 0 ? formatINR(t.salary, true) : '—'}</span>
                   </div>
                 </div>
               </div>
 
               {/* ── footer band — employee id + active position / view affordance ── */}
               <div className="mt-3.5 flex items-center justify-between gap-2 border-t border-border pt-3">
-                <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{t.employeeId}</span>
+                <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{t.employeeId || '—'}</span>
                 {activePosition ? (
                   <span className="flex min-w-0 items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                     <Shield className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -203,6 +215,13 @@ export function DirectoryTab({
           )
         })}
       </div>
+      )}
+
+      {teachers.length > 0 && filteredTeachers.length === 0 && (
+        <div className="py-10 text-center">
+          <p className="text-sm text-muted-foreground">No teachers found matching your search.</p>
+        </div>
+      )}
     </div>
   )
 }

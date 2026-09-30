@@ -6,7 +6,6 @@ import Image from 'next/image'
 import { Eye, EyeOff, Info, AlertTriangle } from 'lucide-react'
 import { useAuth, type Role } from '@/lib/store/auth-store'
 import { saveSessionToken } from '@/lib/auth-session-token'
-import { school } from '@/lib/mock/school'
 import { LoadingPhase } from './loading-phase'
 import { credentials, type CredentialCard } from './data'
 
@@ -19,7 +18,53 @@ import { credentials, type CredentialCard } from './data'
 /*    (NO sign-up, NO terms checkbox)                                  */
 /* ------------------------------------------------------------------ */
 
+
+/* ── PHASE 7 — REAL school branding ────────────────────────────────────
+ * The login surface's school identity (name/logo alt/tagline) comes from
+ * the REAL registered school profile (GET /api/schools/public — same
+ * canonical source as the public website), with a NEUTRAL degradation
+ * when the profile is unavailable. The retired `lib/mock/school`
+ * snapshot (Greenwood branding + fabricated "CBSE · Estd. 2020") is no
+ * longer consulted here. */
+interface LoginBranding {
+  name: string
+  shortName: string
+  tagline: string
+  academicYear: string | null
+}
+
+const NEUTRAL_BRANDING: LoginBranding = {
+  name: 'Scholario School',
+  shortName: 'SCHOLARIO',
+  tagline: 'Your school workspace, secured by Scholario',
+  academicYear: null,
+}
+
+function useLoginSchoolBranding(): LoginBranding {
+  const [branding, setBranding] = useState<LoginBranding>(NEUTRAL_BRANDING)
+  useEffect(() => {
+    let alive = true
+    void fetch('/api/schools/public?slug=demo-school', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: { success?: boolean; data?: { name?: string; academicYear?: string } } | null) => {
+        if (!alive || !body?.success || !body.data?.name) return
+        setBranding({
+          name: body.data.name,
+          shortName: body.data.name.split(' ').slice(0, 2).join(' '),
+          tagline: NEUTRAL_BRANDING.tagline,
+          academicYear: body.data.academicYear ?? null,
+        })
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
+  return branding
+}
+
 export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
+  const school = useLoginSchoolBranding()
   const { startAuth, endAuth, login } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -244,6 +289,7 @@ function PlatformAnnouncementBanner() {
 /* ------------------------------------------------------------------ */
 
 function LeftPane({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
+  const school = useLoginSchoolBranding()
   return (
     <section
       className="left-pane relative hidden md:flex md:w-[45%] p-8 md:p-12 flex-col items-center justify-center text-center text-white overflow-hidden"
@@ -329,7 +375,7 @@ function LeftPane({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
           ← Back to Website
         </button>
         <span className="w-px bg-emerald-300/40" />
-        <span>CBSE · Estd. {school.established}</span>
+        {school.academicYear ? <span>Session {school.academicYear}</span> : null}
       </motion.div>
 
       {/* Cloud SVG divider (right edge) */}
@@ -397,6 +443,7 @@ function RightPane({
   onForgotPassword,
 }: RightPaneProps) {
   const [passwordVisible, setPasswordVisible] = useState(false)
+  const school = useLoginSchoolBranding()
   return (
     <section className="relative z-20 flex w-full flex-1 flex-col justify-center overflow-y-auto bg-white p-6 sm:p-8 md:w-[55%] md:p-12 lg:p-16">
       <div className="w-full max-w-md mx-auto">

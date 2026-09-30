@@ -57,48 +57,29 @@ interface LiveAlertState {
   activeCount: () => number
 }
 
-// Initial activity log — simulated hourly alert activity for today (8 AM to now)
-const initialActivityLog: ActivityEvent[] = [
-  { hour: '8 AM', resolved: 2, snoozed: 1, new: 4 },
-  { hour: '9 AM', resolved: 3, snoozed: 0, new: 5 },
-  { hour: '10 AM', resolved: 1, snoozed: 2, new: 3 },
-  { hour: '11 AM', resolved: 4, snoozed: 1, new: 6 },
-  { hour: '12 PM', resolved: 2, snoozed: 0, new: 2 },
-  { hour: '1 PM', resolved: 0, snoozed: 1, new: 1 },
-  { hour: '2 PM', resolved: 3, snoozed: 2, new: 4 },
-  { hour: 'Now', resolved: 0, snoozed: 0, new: 0 },
-]
+// PHASE 7 — REAL DATA CONTRACT: the fabricated seed universe is
+// RETIRED. Alerts start EMPTY: the live list is driven by REAL events
+// only (the LiveFeeAlert rows from the dues store; the platform event
+// stream). The "simulate new alert" demo feature (fabricated alert
+// pool) is likewise retired — no UI may fabricate alert content.
+const initialAlerts: LiveAlert[] = []
+const initialActivityLog: ActivityEvent[] = []
 
-const initialAlerts: LiveAlert[] = [
-  { id: 'a1', severity: 'critical', title: 'Bus TRP-201 delayed by 18 min', desc: 'Sector 14 traffic · 24 students affected', time: '2 min ago', color: 'rose', navKey: 'transport' },
-  { id: 'a2', severity: 'high', title: '3 new admission applications submitted', desc: 'Grade 9 & 10 transfers · awaiting review', time: '12 min ago', color: 'amber', navKey: 'admission' },
-  { id: 'a3', severity: 'high', title: 'Class 7-B teacher absent', desc: 'Mr. Suresh · substitute assigned: Ms. Kavita', time: '28 min ago', color: 'amber', navKey: 'teachers' },
-  { id: 'a4', severity: 'info', title: '₹4.2L fees collected today', desc: '67 transactions · UPI 78%, Card 22%', time: '1 hr ago', color: 'emerald', navKey: 'fees' },
-  { id: 'a5', severity: 'info', title: 'Library: 4 books overdue', desc: 'Class 10-A · auto-reminder sent', time: '2 hr ago', color: 'emerald', navKey: 'library' },
-  { id: 'a6', severity: 'low', title: 'Inventory: Lab reagents low stock', desc: 'Chemistry lab · 3 items below threshold', time: '3 hr ago', color: 'cyan', navKey: 'inventory' },
-]
 
-// Pool of simulated real-time alerts for the "simulate new alert" feature
-const simulatedAlertPool: Omit<LiveAlert, 'id' | 'time' | 'isNew'>[] = [
-  { severity: 'high', title: 'Playground equipment damage reported', desc: 'Slide structure · maintenance team notified', color: 'amber', navKey: 'inventory' },
-  { severity: 'info', title: 'PTM attendance confirmed: 142 parents', desc: '78% response rate · 4 slots remaining', color: 'emerald', navKey: 'communication' },
-  { severity: 'critical', title: 'Water supply disruption in Block C', desc: 'Plumber dispatched · ETA 30 min', color: 'rose', navKey: 'inventory' },
-  { severity: 'low', title: 'New hostel room allocation request', desc: 'Class 11 student · waiting approval', color: 'cyan', navKey: 'hostel' },
-  { severity: 'info', title: 'Sports Day registrations crossed 300', desc: 'Track & field events filling fast', color: 'emerald', navKey: 'events' },
-  { severity: 'high', title: '2 fee defaulters reminder bounced', desc: 'Invalid email addresses · phone fallback sent', color: 'amber', navKey: 'fees' },
-]
-
-let simIndex = 0
-
-export function getNextSimulatedAlert(): LiveAlert {
-  const base = simulatedAlertPool[simIndex % simulatedAlertPool.length]
-  simIndex++
-  return {
-    ...base,
-    id: `sim-${Date.now()}`,
-    time: 'Just now',
-    isNew: true,
+/** PHASE 7 — empty-safe activity bump: rows only exist for THIS
+ * session's real actions (no fabricated hour grid). */
+function bumpLogEntry(
+  log: ActivityEvent[],
+  field: 'resolved' | 'snoozed' | 'new',
+  count: number,
+): ActivityEvent[] {
+  if (log.length === 0) {
+    return [{ hour: 'This session', resolved: 0, snoozed: 0, new: 0, [field]: count }]
   }
+  const nowIdx = log.length - 1
+  const next = [...log]
+  next[nowIdx] = { ...next[nowIdx]!, [field]: (next[nowIdx]![field] ?? 0) + count }
+  return next
 }
 
 export const useLiveAlerts = create<LiveAlertState>()(
@@ -114,19 +95,13 @@ export const useLiveAlerts = create<LiveAlertState>()(
       autoAlertsEnabled: false,
       // Helper to bump the "Now" hour's activity count
       bumpActivity: (field: 'resolved' | 'snoozed' | 'new', count = 1) => {
-        const state = get()
-        const log = [...state.activityLog]
-        const nowIdx = log.length - 1 // last entry is "Now"
-        log[nowIdx] = { ...log[nowIdx], [field]: log[nowIdx][field] + count }
-        set({ activityLog: log })
+        set({ activityLog: bumpLogEntry(get().activityLog, field, count) })
       },
       resolve: (id) => {
         const state = get()
         const alert = state.alerts.find((a) => a.id === id)
         if (!alert) return
-        const log = [...state.activityLog]
-        const nowIdx = log.length - 1
-        log[nowIdx] = { ...log[nowIdx], resolved: log[nowIdx].resolved + 1 }
+        const log = bumpLogEntry(state.activityLog, 'resolved', 1)
         set({
           alerts: state.alerts.filter((a) => a.id !== id),
           dismissed: [...state.dismissed, alert],
@@ -137,9 +112,7 @@ export const useLiveAlerts = create<LiveAlertState>()(
         const state = get()
         if (state.alerts.length === 0) return
         const count = state.alerts.length
-        const log = [...state.activityLog]
-        const nowIdx = log.length - 1
-        log[nowIdx] = { ...log[nowIdx], resolved: log[nowIdx].resolved + count }
+        const log = bumpLogEntry(state.activityLog, 'resolved', count)
         set({
           alerts: [],
           dismissed: [...state.dismissed, ...state.alerts],
@@ -156,9 +129,7 @@ export const useLiveAlerts = create<LiveAlertState>()(
         const until = Date.now() + durationMs
         const snoozedUntil = { ...state.snoozedUntil }
         for (const a of moving) snoozedUntil[a.id] = until
-        const log = [...state.activityLog]
-        const nowIdx = log.length - 1
-        log[nowIdx] = { ...log[nowIdx], snoozed: log[nowIdx].snoozed + moving.length }
+        const log = bumpLogEntry(state.activityLog, 'snoozed', moving.length)
         set({
           alerts: state.alerts.filter((a) => !idSet.has(a.id)),
           snoozed: [...state.snoozed, ...moving.map((a) => ({ ...a, snoozed: true, snoozedUntil: until }))],
@@ -213,9 +184,7 @@ export const useLiveAlerts = create<LiveAlertState>()(
       },
       addAlert: (alert) => {
         const state = get()
-        const log = [...state.activityLog]
-        const nowIdx = log.length - 1
-        log[nowIdx] = { ...log[nowIdx], new: log[nowIdx].new + 1 }
+        const log = bumpLogEntry(state.activityLog, 'new', 1)
         set({
           alerts: [alert, ...state.alerts],
           lastAddedId: alert.id,
@@ -240,6 +209,23 @@ export const useLiveAlerts = create<LiveAlertState>()(
     }),
     {
       name: 'scholario-live-alerts',
+      // v2 (PHASE 7) — purge the retired fabricated seed universe from
+      // persisted browsers: alerts/activityLog start empty on upgrade.
+      version: 2,
+      migrate: (persisted, version) => {
+        if (version < 2) {
+          const state = persisted as { alerts?: unknown[]; activityLog?: unknown[] } | undefined
+          return {
+            ...state,
+            alerts: [],
+            dismissed: [],
+            snoozed: [],
+            snoozedUntil: {},
+            activityLog: [],
+          }
+        }
+        return persisted
+      },
       // Only persist the data arrays, not the filter, functions, or transient flags
       partialize: (state) => ({
         alerts: state.alerts.map((a) => ({ ...a, isNew: false })),

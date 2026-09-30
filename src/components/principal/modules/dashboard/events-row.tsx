@@ -3,30 +3,27 @@
 /**
  * EventsRow — 2 cards: Upcoming Events + Pending Reviews.
  *
- * Redesigned (DASH-1) from 3 cards:
- *   - KEPT: Upcoming Events (now with smaller 28×28 date chips, row click
- *     wired to navigate to the Calendar module)
- *   - DROPPED: Class 2-A Top Performers — was a duplicate of the Exams
- *     module's Session Top Performers section
- *   - REWRITTEN: Pending Reviews — was 2 hardcoded progress bars + a fake
- *     "23" admission applications count. Now flat list of 3 rows with REAL
- *     counts pulled from Zustand stores:
- *       · Admission Applications  → useAdmissionStore (Submitted/Under Review/Need Correction)
- *       · Fee Cash Approvals       → useFeeStore (Pending Principal Acceptance / Collected by Teacher)
- *       · Salary Adjustments       → useSalaryStore (Pending)
- *     Each row: small icon + label + count badge + "Review →" link that
- *     navigates to the relevant module via `onNavigate`.
+ * PHASE 7 — REAL DATA CONTRACT:
+ *   - Upcoming Events reads the canonical SchoolEvent table via
+ *     `GET /api/events?upcoming=1` (was: 5 hardcoded Dec-2025 mock
+ *     events). Loading → skeletons; none → honest empty state.
+ *   - Pending Reviews counts stay store-backed (admission/fee/salary
+ *     queues are in-session workspace data — fee cash approvals and
+ *     salary change requests start honest-empty; admission counts
+ *     follow the admission store's honest-empty contract, see
+ *     docs/DATA_SOURCE_MAP.md for the classification).
  *
  * Both cards use the shared `Panel` (flat `rounded-xl border border-border
  * bg-card`), not the legacy `GlassCard`.
  */
 
 import { motion } from 'framer-motion'
+import { useEffect, useState } from 'react'
 import {
-  ArrowRight, FileText, IndianRupee, Wallet,
+  ArrowRight, FileText, IndianRupee, Wallet, CalendarDays,
 } from 'lucide-react'
 import { Panel } from '../shared/panel'
-import { upcomingEvents } from '@/lib/mock/operations'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useAdmissionStore } from '@/lib/store/admission-store'
 import { useFeeStore } from '@/lib/store/fee-store'
 import { useSalaryStore } from '@/lib/store/salary-store'
@@ -37,11 +34,59 @@ export interface EventsRowProps {
 
 // ─── Upcoming Events ──────────────────────────────────────────────────
 
+interface ServerEvent {
+  id: string
+  title: string
+  type: string
+  startDate: string
+}
+
 function UpcomingEventsCard({ onNavigate }: { onNavigate?: (m: string) => void }) {
+  // PHASE 7 — REAL SchoolEvent rows (GET /api/events?upcoming=1).
+  const [events, setEvents] = useState<ServerEvent[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    void fetch('/api/events?upcoming=1', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: { ok?: boolean; data?: ServerEvent[] } | null) => {
+        if (alive) setEvents(body?.ok && Array.isArray(body.data) ? body.data.slice(0, 5) : [])
+      })
+      .catch(() => {
+        if (alive) setEvents([])
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
   return (
     <Panel title="Upcoming Events" subtitle="School calendar">
       <div className="space-y-1.5">
-        {upcomingEvents.map((e, i) => (
+        {events === null && (
+          <div className="space-y-1.5" aria-busy="true">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-2.5 px-2 py-1.5">
+                <Skeleton className="h-7 w-7 rounded-md shrink-0" />
+                <div className="flex-1 space-y-1">
+                  <Skeleton className="h-3 w-2/3" />
+                  <Skeleton className="h-2.5 w-1/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {events !== null && events.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-6 gap-1.5 text-center">
+            <div className="h-9 w-9 rounded-xl bg-muted/60 flex items-center justify-center">
+              <CalendarDays className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            </div>
+            <p className="text-sm font-medium text-foreground">No upcoming events</p>
+            <p className="text-xs text-muted-foreground max-w-[260px]">
+              Events created in the Calendar module appear here.
+            </p>
+          </div>
+        )}
+        {events?.map((e, i) => (
           <motion.button
             key={e.id}
             type="button"
@@ -54,19 +99,16 @@ function UpcomingEventsCard({ onNavigate }: { onNavigate?: (m: string) => void }
             {/* Small 28×28 date chip */}
             <div className="flex flex-col items-center justify-center h-7 w-7 shrink-0 rounded-md bg-muted/60 text-foreground" aria-hidden="true">
               <span className="text-[11px] font-bold leading-none">
-                {new Date(e.date).getDate()}
+                {new Date(e.startDate).getDate()}
               </span>
               <span className="text-[8px] uppercase tracking-wider leading-none mt-0.5">
-                {new Date(e.date).toLocaleDateString('en-IN', { month: 'short' })}
+                {new Date(e.startDate).toLocaleDateString('en-IN', { month: 'short' })}
               </span>
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium text-foreground truncate">{e.title}</p>
-              <p className="text-[11px] text-muted-foreground">{e.type} · {e.time}</p>
+              <p className="text-[11px] text-muted-foreground">{e.type}</p>
             </div>
-            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground hidden sm:inline-block">
-              {e.type}
-            </span>
           </motion.button>
         ))}
       </div>

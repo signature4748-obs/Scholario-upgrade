@@ -3,6 +3,15 @@
 /**
  * staff-attendance-store — date-keyed staff attendance state.
  *
+ * RETIRED (7-b — Mock Data Elimination): this store has ZERO importers.
+ * The Principal Staff Attendance tab now renders an honest "not
+ * configured" state (no DB model for staff attendance exists) and the
+ * Teacher Personal Attendance module did the same earlier — neither
+ * reads this store. It is kept on disk as a dev reference for the day a
+ * real StaffAttendance model + API lands (the draft/submit state machine
+ * here was sound; only its fabricated record source was not). Do not
+ * import from new code.
+ *
  * Brief §2-§15 (Phase 4): Every date has its own independent attendance
  * record with one of three states:
  *
@@ -34,6 +43,11 @@
  *   e) non-working days get no records.
  * The action only calls set() when something actually changed, so wiring
  * it into a React effect cannot loop.
+ *
+ * NOTE (7-b): the record source `getStaffAttendanceForDate` derives
+ * from the RETIRED STAFF_DEFS roster (now an empty array — see
+ * src/lib/mock/attendance.ts), so any historical call yields honest
+ * empty record lists, never fabricated staff rows.
  */
 
 import { create } from 'zustand'

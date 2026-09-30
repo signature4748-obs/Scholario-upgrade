@@ -1,44 +1,43 @@
 /**
  * Teachers store — persisted-state migration & persistence shaping
- * (Wave 2.3B §10–§12).
+ * (Wave 2.3B §10–§12, extended by Phase 7 Task 7-a).
  *
  * WHY THIS EXISTS
  * ───────────────
- * The store persisted `version: 4` while browsers still held `version: 3`
- * (and older) state. Zustand's persist middleware, on a version mismatch
- * with NO migrate function, logs
+ * Zustand's persist middleware, on a version mismatch with NO migrate
+ * function, logs
  *   "State loaded from storage couldn't be migrated since no migrate
  *    function was provided"
- * and silently DISCARDS the persisted state (fresh seed). This module is
- * the root fix: a real, shape-transforming migration chain.
+ * and silently DISCARDS the persisted state. This module is the real,
+ * shape-transforming migration chain that prevents that.
  *
  * VERSION HISTORY
  * ───────────────
- *  v0/v1 — legacy 2-record mock dataset (pre-canonical roster). The v2
- *          bump intentionally discarded it once and re-seeded the full
- *          faculty (see store.ts history) — the migration honors that
- *          decision instead of resurrecting superseded mock records.
+ *  v0/v1 — legacy 2-record mock dataset (pre-canonical roster).
  *  v2    — canonical 20-member roster persisted shape.
  *  v3    — same shape as v2 (seed-data date fix only).
  *  v4    — appointment letters dropped the fake `qrVerificationId` and
  *          snapshot `teacherAddress` at issue time; photo/signature become
  *          stored media records (Wave 2.3).
  *  v5    — media records no longer persist their base64 `dataUrl` copy:
- *          the server file (db/uploads/teachers/<fileId>) is canonical and
- *          previews render from /api/teachers/upload/<fileId> with normal
- *          HTTP caching. Removes multi-MB strings from localStorage and
- *          from every store write/hydration serialization.
+ *          the server file (db/uploads/teachers/<fileId>) is canonical.
+ *  v6    — PHASE 7 (Task 7-a): the fabricated seed faculty is RETIRED.
+ *          The migration clears persisted seeded teacher rows and their
+ *          audit logs from every browser; the roster now hydrates from
+ *          GET /api/teachers (server-sync.ts). Seed data is NEVER
+ *          re-injected by any migration path — an uninterpretable or
+ *          pre-v6 state simply starts EMPTY and waits for the sync.
  *
  * GUARANTEES
  * ──────────
- *  · Valid teacher data SURVIVES migrations (records are transformed, not
- *    re-seeded, for v2+ states).
+ *  · Valid teacher data from v6+ states SURVIVES migrations (records are
+ *    transformed, not re-seeded).
  *  · No fake teacher records, names, letters or media are ever created.
  *  · Malformed per-teacher entries are dropped individually with a dev
  *    diagnostic; the rest of the roster is kept.
  *  · A state that is impossible to interpret (not an object, teachers not
  *    an array) is discarded as a whole — ONLY this store's persisted slice
- *    re-seeds; unrelated stores are untouched.
+ *    resets to the (empty) initial data; unrelated stores are untouched.
  *  · Development diagnostics use console.warn (visible, greppable);
  *    production stays quiet and simply recovers.
  */
@@ -52,16 +51,16 @@ import type {
   TeacherRecord,
   TeachersStoreState,
 } from './types'
-import { SEED_TEACHERS, INITIAL_AUDIT_LOGS } from './seed-data'
 import { DEFAULT_POSITIONS } from './constants'
 
-/** Only data slices are persisted — actions live on the store instance. */
+/** Only data slices are persisted — actions live on the store instance.
+ *  `syncStatus` is per-session lineage and is never persisted. */
 export type TeachersPersistedState = Pick<
   TeachersStoreState,
   'teachers' | 'positionsList' | 'auditLogs'
 >
 
-export const CURRENT_TEACHERS_STORE_VERSION = 5
+export const CURRENT_TEACHERS_STORE_VERSION = 6
 
 const devWarn = (...args: unknown[]) => {
   if (process.env.NODE_ENV !== 'production') {
@@ -281,35 +280,35 @@ function normalizeAuditLog(v: unknown): AuditLogItem | null {
  * Transform a persisted teachers-store state of ANY known version into the
  * current persisted shape.
  *
- * Discard paths (legacy superseded dataset, or malformed beyond repair)
- * return the same seed snapshot the store would hydrate from scratch —
- * runtime-equivalent to zustand's "migrate returned undefined → keep the
- * current (initial) state", but fully typed. Only THIS store's persisted
- * slice is affected; unrelated stores are untouched.
+ * PHASE 7 (v6): every discard path — the legacy pre-v6 seed era and any
+ * malformed state — resolves to an EMPTY roster (never a re-seed). The
+ * canonical faculty list arrives from GET /api/teachers via
+ * server-sync.ts. Only THIS store's persisted slice is affected.
  */
 export function migrateTeachersStore(
   persisted: unknown,
   version: number
 ): TeachersPersistedState {
-  // ── v0/v1: the legacy 2-record mock dataset was superseded by the
-  // canonical roster at v2 (documented bump intent). Re-seed once.
-  if (version < 2) {
+  // ── v0–v5: the fabricated seed faculty era. Purge the seeded rows (and
+  // their fabricated audit trail) once — the store starts empty and the
+  // principal-session server sync hydrates the real roster.
+  if (version < 6) {
     devWarn(
-      `persisted version ${version} predates the canonical faculty roster — ` +
-        're-seeding (matches the documented v2 bump behavior)'
+      `persisted version ${version} predates the server-hydrated faculty roster — ` +
+        'clearing seeded rows (Phase 7; the roster syncs from /api/teachers)'
     )
-    return seedSnapshot()
+    return emptySnapshot()
   }
 
   if (!isPlainObject(persisted)) {
-    devWarn('persisted state is not an object — discarding and re-seeding')
-    return seedSnapshot()
+    devWarn('persisted state is not an object — discarding (empty until server sync)')
+    return emptySnapshot()
   }
 
   const rawTeachers = persisted.teachers
   if (!Array.isArray(rawTeachers)) {
-    devWarn('persisted state has no valid teachers array — discarding and re-seeding')
-    return seedSnapshot()
+    devWarn('persisted state has no valid teachers array — discarding (empty until server sync)')
+    return emptySnapshot()
   }
 
   // ── Per-record normalization: keep every valid teacher, drop only the
@@ -325,8 +324,8 @@ export function migrateTeachersStore(
     devWarn(`${dropped} malformed teacher record(s) could not be interpreted and were skipped`)
   }
   if (teachers.length === 0) {
-    devWarn('no interpretable teacher records survived — re-seeding')
-    return seedSnapshot()
+    devWarn('no interpretable teacher records survived — starting empty (server sync will hydrate)')
+    return emptySnapshot()
   }
 
   const result: TeachersPersistedState = {
@@ -334,7 +333,7 @@ export function migrateTeachersStore(
     // A missing/invalid persisted slice falls back to the exact values the
     // store's initial state would have provided (merge-equivalent).
     positionsList: DEFAULT_POSITIONS,
-    auditLogs: INITIAL_AUDIT_LOGS,
+    auditLogs: [],
   }
 
   const rawPositions = persisted.positionsList
@@ -343,7 +342,7 @@ export function migrateTeachersStore(
       .map(normalizePositionDefinition)
       .filter((p): p is PositionDefinition => p !== null)
     if (positionsList.length > 0) result.positionsList = positionsList
-    else devWarn('persisted positionsList was empty/invalid — keeping the seed position catalogue')
+    else devWarn('persisted positionsList was empty/invalid — keeping the default position catalogue')
   }
 
   const rawLogs = persisted.auditLogs
@@ -357,12 +356,13 @@ export function migrateTeachersStore(
   return result
 }
 
-/** Fresh-seed snapshot — identical to the store's initial data slices. */
-function seedSnapshot(): TeachersPersistedState {
+/** Empty snapshot — the store's initial (un-hydrated) data slices. The
+ *  roster arrives from the server; NOTHING is seeded here (Phase 7). */
+function emptySnapshot(): TeachersPersistedState {
   return {
-    teachers: SEED_TEACHERS,
+    teachers: [],
     positionsList: DEFAULT_POSITIONS,
-    auditLogs: INITIAL_AUDIT_LOGS,
+    auditLogs: [],
   }
 }
 

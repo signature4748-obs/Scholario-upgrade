@@ -3,7 +3,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { TeachersStoreState } from './types'
-import { SEED_TEACHERS } from './seed-data'
 import { DEFAULT_POSITIONS } from './constants'
 import { createAuditSlice } from './slices/audit-slice'
 import { createLifecycleSlice } from './slices/lifecycle-slice'
@@ -22,13 +21,21 @@ import {
   type TeachersPersistedState,
 } from './migrate'
 
+// PHASE 7 (Task 7-a) — the store starts EMPTY. The fabricated 20-member
+// seed faculty (SEED_TEACHERS — retired, see ./seed-data.ts) is no longer
+// imported at runtime: the canonical roster is hydrated from
+// GET /api/teachers by src/lib/store/teachers-store/server-sync.ts on the
+// principal panel mount. A failed sync keeps whatever real data the store
+// already holds — seed rows are never re-injected.
+
 migrateLegacyScopedStore(TENANT_SCOPED_BASES.teachers, DEFAULT_TENANT_ID)
 
 export const useTeachersStore = create<TeachersStoreState>()(
   persist<TeachersStoreState, [], [], TeachersPersistedState>(
     (...a) => ({
-      teachers: SEED_TEACHERS,
+      teachers: [],
       positionsList: DEFAULT_POSITIONS,
+      syncStatus: 'idle',
       ...createAuditSlice(...a),
       ...createLifecycleSlice(...a),
       ...createPositionsSlice(...a),
@@ -51,6 +58,11 @@ export const useTeachersStore = create<TeachersStoreState>()(
       //   v5 — media records stop persisting the base64 dataUrl preview
       //        copy (server file is canonical); explicit partialize keeps
       //        only data slices (W2.3B).
+      //   v6 — PHASE 7: the seeded faculty universe is RETIRED. The v6
+      //        migration purges persisted seed teacher rows + their audit
+      //        logs; the store hydrates from GET /api/teachers instead
+      //        (server-sync.ts). Positions/letters/media recorded against
+      //        ids that still exist on the server survive.
       version: CURRENT_TEACHERS_STORE_VERSION,
       migrate: migrateTeachersStore,
       partialize: teachersStorePartialize,

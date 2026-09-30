@@ -22,7 +22,9 @@ import { generateSeatingPlan, roomOccupancy, buildExamSlots } from '@/lib/exams/
 import { SeatingMap } from './seating-map'
 import { generateSeatingPlanPDF, generateBatchAdmitCardPDF } from '@/lib/exams/pdf'
 import { useStudentsStore } from '@/lib/store/students-store'
-import { useTeachersMockStore } from '@/lib/store/teachers-mock-store'
+// PHASE 7 — invigilator picks come from the school's real teacher roster
+// (server Teacher rows; honest empty picker until the roster syncs).
+import { useTeacherRosterStore } from '@/lib/store/teacher-roster-store'
 import { useSchoolContext } from '@/lib/exams/use-pdf-context'
 import { useAdmitCardConfig } from '@/lib/exams/use-exam-settings'
 import { formatDateLong } from '@/lib/exams/format-helpers'
@@ -58,7 +60,10 @@ export function SeatingSection({ exam }: Props) {
   const [invigilators, setInvigilators] = useState<InvigilationAssignment[]>([])
 
   const allStudents = useStudentsStore((s) => s.students)
-  const allTeachers = useTeachersMockStore((s) => s.teachers)
+  const allTeachers = useTeacherRosterStore((s) => s.teachers)
+  const ensureRoster = useTeacherRosterStore((s) => s.ensure)
+  // Hydrate the roster once (idempotent, in-flight-guarded).
+  useEffect(() => { void ensureRoster() }, [ensureRoster])
 
   // Build exam slots from schedule.
   const examSlots = useMemo(() => buildExamSlots(exam), [exam])

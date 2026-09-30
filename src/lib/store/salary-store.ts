@@ -24,7 +24,12 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { useMemo } from 'react'
-import { teachers } from '@/lib/mock/teachers'
+// PHASE 7 (Task 7-a) — the fabricated staff universe is RETIRED. The
+// employee roster derives from the hydrated teachers-store (server
+// truth: GET /api/teachers); payments/adjustments/receipts/audit start
+// EMPTY and only ever contain real actions recorded in this store.
+import { useTeachersStore, type TeacherRecord } from '@/lib/store/teachers-store'
+import { useAuth } from '@/lib/store/auth-store'
 // SaaS-STAGE-2A — tenant-scoped persistence (per-school payroll dataset).
 import { migrateLegacyScopedStore, createTenantScopedStorage, TENANT_SCOPED_BASES } from '@/lib/tenant/tenant-storage'
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
@@ -54,7 +59,8 @@ export interface Employee {
   attendance: number
   bloodGroup: string
   address: string
-  gender: 'Male' | 'Female'
+  /** 'Other' = not recorded in the school records (never guessed). */
+  gender: 'Male' | 'Female' | 'Other'
   bankAccount?: string
   bankIfsc?: string
 }
@@ -394,7 +400,16 @@ export function buildSessionPayrollSnapshot(
 
 // ─── Constants ───────────────────────────────────────────────────────
 
-export const PRINCIPAL = 'Dr. Ananya Iyer'
+/** The acting principal's REAL name, resolved from the signed-in session
+ *  (Phase 7: the fabricated "Dr. Ananya Iyer" persona is retired — new
+ *  payments / audit entries are attributed to the actual signed-in
+ *  principal). Falls back to the role label when the session is not
+ *  resolvable. */
+function principalActor(): string {
+  const user = useAuth.getState().user
+  return user?.name?.trim() || 'Principal'
+}
+
 export const EDIT_WINDOW_MS = 3 * 60 * 60 * 1000 // 3 hours
 export const CURRENT_SESSION = { id: '2026-27', label: 'Session 2026–27' }
 
@@ -456,103 +471,47 @@ const SEED_STRUCTURES: SalaryStructureTemplate[] = [
   },
 ]
 
-// ─── Staff placements (scale + monthly salary) ────────────────────────
-// SIMPLE monthly salary per employee — one fixed amount, effective from
-// the start of the session (1 Apr 2026). The demo follows the school's
-// simple-salary workflow; a detailed structure is only ever shown when
-// the Principal explicitly configures one.
-//   Primary (Nursery–Class 5)  ₹6,000 – ₹8,000
-//   Middle school (Class 6–9)  ₹9,000 – ₹13,500
-//   Senior / HOD (Class 9–12)  ₹16,800 – ₹28,400
+// ─── Employees (derived from the hydrated teachers-store) ──────────
 
-interface Placement { structureId: string; net: number }
-
-const PLACEMENTS: Record<string, Placement> = {
-  // Leadership
-  'T-001': { structureId: 'STR-04', net: 35000 }, // Dr. Ananya Iyer — Principal
-
-  // Primary teaching (Nursery–Class 5)
-  'T-002': { structureId: 'STR-01', net: 7500 }, // Priya Nair — Senior Teacher, English, Nursery (12y)
-  'T-005': { structureId: 'STR-01', net: 6200 }, // Meera Krishnan — Teacher, Hindi, LKG (8y)
-  'T-008': { structureId: 'STR-01', net: 6800 }, // Sunita Rao — Teacher, Mathematics, UKG (10y)
-  'T-011': { structureId: 'STR-01', net: 7800 }, // Kavita Joshi — Senior Teacher, Science/EVS, Class 1 (15y)
-  'T-014': { structureId: 'STR-03', net: 25000 }, // Rohan Mehta — Senior Maths Teacher, Grades 6–12 (spec example: ₹25,000/month from 1 Apr 2026)
-  'T-017': { structureId: 'STR-01', net: 6500 }, // Amit Verma — Teacher, Physics/Maths, Class 3 (7y)
-  'T-020': { structureId: 'STR-01', net: 7600 }, // Deepa Menon — Senior Teacher, English/SST, Class 4 (18y)
-  'T-023': { structureId: 'STR-01', net: 6700 }, // Vikram Singh — Teacher, SST/History, Class 5 (11y)
-  'T-050': { structureId: 'STR-01', net: 6400 }, // Lakshmi Venkat — Music Teacher, Classes 3–5 (10y)
-  'T-053': { structureId: 'STR-01', net: 5900 }, // Faisal Ahmed — Art Teacher, Classes 1–3 (8y)
-
-  // Middle school (Class 6–9)
-  'T-026': { structureId: 'STR-02', net: 9200 },  // Neha Gupta — Teacher, Chemistry/Biology, Class 6 (6y)
-  'T-029': { structureId: 'STR-02', net: 13500 }, // Suresh Pillai — Senior Teacher, Geography/Economics, Class 7 (14y)
-  'T-032': { structureId: 'STR-02', net: 11800 }, // Anjali Desai — Teacher, Mathematics/Statistics, Class 8 (9y)
-  'T-047': { structureId: 'STR-02', net: 13200 }, // Sanjay Reddy — Sports Director (13y)
-
-  // HOD & senior secondary (Class 9–12)
-  'T-035': { structureId: 'STR-03', net: 16800 }, // Rajesh Khanna — HOD Mathematics, Class 9 (21y)
-  'T-038': { structureId: 'STR-03', net: 26500 }, // Pooja Bhatt — HOD Physics, Class 10 (19y)
-  'T-041': { structureId: 'STR-03', net: 28400 }, // Arjun Kapoor — HOD Computer Science, Classes 11–12 (16y)
-  'T-044': { structureId: 'STR-03', net: 25800 }, // Shalini Agarwal — HOD Commerce, Classes 11–12 (17y)
-
-  // Office & administration
-  'T-056': { structureId: 'STR-05', net: 9400 },   // Geeta Sharma — Librarian (12y)
-  'STF-001': { structureId: 'STR-05', net: 17500 }, // Ramesh Kumar — Accountant (16y)
-  'STF-002': { structureId: 'STR-05', net: 14800 }, // Sunita Devi — Office Manager (18y)
-  'STF-003': { structureId: 'STR-05', net: 8900 },  // Mohan Lal — Store In-charge (13y)
-  'STF-005': { structureId: 'STR-05', net: 8400 },  // Rekha Chauhan — Receptionist (9y)
-  'STF-008': { structureId: 'STR-05', net: 12500 }, // Lakshmi Iyer — Counselor (10y)
-
-  // Support & transport
-  'STF-006': { structureId: 'STR-06', net: 8200 }, // Anil Gupta — Lab Assistant (12y)
-  'STF-007': { structureId: 'STR-06', net: 8600 }, // Ramesh Singh — Security In-charge (14y)
-  'STF-004': { structureId: 'STR-07', net: 9600 }, // Kamlesh Yadav — Bus Driver (11y)
+/** Map one hydrated TeacherRecord onto the payroll Employee shape.
+ *  Fields with no source in the teacher's record map to EMPTY values —
+ *  bank details are NEVER fabricated (Phase 7). */
+export function employeeFromTeacher(t: TeacherRecord): Employee {
+  const status: EmployeeStatus =
+    t.status === 'On Leave' ? 'On Leave'
+    : t.status === 'Suspended' ? 'Suspended'
+    : t.status === 'Relieved' ? 'Inactive'
+    : 'Active'
+  return {
+    id: t.id, // canonical DB teacher id — same universe as the Teachers module
+    employeeId: t.employeeId,
+    name: t.name,
+    avatar: t.avatar,
+    designation: t.designation,
+    department: t.department,
+    employeeType: 'Teaching',
+    email: t.email,
+    phone: t.phone,
+    joiningDate: t.joiningDate,
+    status,
+    salary: t.salary,
+    attendance: t.attendance,
+    bloodGroup: t.bloodGroup,
+    address: t.currentAddress,
+    gender: t.gender === 'Male' ? 'Male' : t.gender === 'Female' ? 'Female' : 'Other',
+    // No bank details on file — recorded only when the principal enters them.
+    bankAccount: undefined,
+    bankIfsc: undefined,
+  }
 }
 
-// ─── Employees ───────────────────────────────────────────────────────
-
-function buildEmployees(): Employee[] {
-  const teacherEmployees: Employee[] = teachers.map((t) => {
-    const p = PLACEMENTS[t.id]
-    return {
-      id: t.id,
-      employeeId: t.employeeId,
-      name: t.name,
-      avatar: t.avatar,
-      designation: t.designation,
-      department: t.department,
-      employeeType: 'Teaching' as EmployeeType,
-      email: t.email,
-      phone: t.phone,
-      joiningDate: t.joiningDate,
-      status: t.status === 'On Leave' ? ('On Leave' as EmployeeStatus) : ('Active' as EmployeeStatus),
-      salary: p?.net ?? Math.min(t.salary, 8000),
-      attendance: t.attendance,
-      bloodGroup: t.bloodGroup,
-      address: t.address,
-      gender: t.gender,
-      bankAccount: `****${(t.id.charCodeAt(2) * 137) % 9000 + 1000}`,
-      bankIfsc: ['HDFC0000123', 'ICIC0000456', 'SBIN0000789'][t.id.charCodeAt(2) % 3],
-    }
-  })
-
-  const adminStaff: Employee[] = [
-    { id: 'STF-001', employeeId: 'EMP-101', name: 'Ramesh Kumar', avatar: 'RK', designation: 'Accountant', department: 'Finance', employeeType: 'Finance', email: 'ramesh.k@greenwood.edu.in', phone: '+91 98100 99001', joiningDate: '2010-04-01', status: 'Active', salary: 17500, attendance: 97, bloodGroup: 'O+', address: 'Sector 14, Gurugram', gender: 'Male', bankAccount: '****4521', bankIfsc: 'HDFC0000123' },
-    { id: 'STF-002', employeeId: 'EMP-102', name: 'Sunita Devi', avatar: 'SD', designation: 'Office Manager', department: 'Administration', employeeType: 'Administration', email: 'sunita.d@greenwood.edu.in', phone: '+91 98200 99002', joiningDate: '2008-06-15', status: 'Active', salary: 14800, attendance: 99, bloodGroup: 'A+', address: 'Sector 22, Gurugram', gender: 'Female', bankAccount: '****8890', bankIfsc: 'ICIC0000456' },
-    { id: 'STF-003', employeeId: 'EMP-103', name: 'Mohan Lal', avatar: 'ML', designation: 'Store In-charge', department: 'Administration', employeeType: 'Administration', email: 'mohan.l@greenwood.edu.in', phone: '+91 98300 99003', joiningDate: '2013-07-20', status: 'Active', salary: 8900, attendance: 96, bloodGroup: 'B+', address: 'Sector 31, Gurugram', gender: 'Male', bankAccount: '****2231', bankIfsc: 'SBIN0000789' },
-    { id: 'STF-004', employeeId: 'EMP-104', name: 'Kamlesh Yadav', avatar: 'KY', designation: 'Bus Driver', department: 'Transport', employeeType: 'Transport', email: 'kamlesh.y@greenwood.edu.in', phone: '+91 98400 99004', joiningDate: '2015-08-10', status: 'Active', salary: 9600, attendance: 95, bloodGroup: 'O-', address: 'Sector 9, Gurugram', gender: 'Male', bankAccount: '****7765', bankIfsc: 'HDFC0000123' },
-    { id: 'STF-005', employeeId: 'EMP-105', name: 'Rekha Chauhan', avatar: 'RC', designation: 'Receptionist', department: 'Administration', employeeType: 'Administration', email: 'rekha.c@greenwood.edu.in', phone: '+91 98500 99005', joiningDate: '2017-04-05', status: 'Active', salary: 8400, attendance: 98, bloodGroup: 'AB+', address: 'Sector 17, Gurugram', gender: 'Female', bankAccount: '****5567', bankIfsc: 'ICIC0000456' },
-    { id: 'STF-006', employeeId: 'EMP-106', name: 'Anil Gupta', avatar: 'AG', designation: 'Lab Assistant', department: 'Science', employeeType: 'Support', email: 'anil.g@greenwood.edu.in', phone: '+91 98600 99006', joiningDate: '2014-06-12', status: 'Active', salary: 8200, attendance: 94, bloodGroup: 'A-', address: 'Sector 28, Gurugram', gender: 'Male', bankAccount: '****9982', bankIfsc: 'SBIN0000789' },
-    { id: 'STF-007', employeeId: 'EMP-107', name: 'Ramesh Singh', avatar: 'RS', designation: 'Security In-charge', department: 'Administration', employeeType: 'Support', email: 'ramesh.s@greenwood.edu.in', phone: '+91 98700 99007', joiningDate: '2012-03-15', status: 'Active', salary: 8600, attendance: 99, bloodGroup: 'B-', address: 'Sector 40, Gurugram', gender: 'Male', bankAccount: '****3344', bankIfsc: 'HDFC0000123' },
-    { id: 'STF-008', employeeId: 'EMP-108', name: 'Lakshmi Iyer', avatar: 'LI', designation: 'Counselor', department: 'Administration', employeeType: 'Administration', email: 'lakshmi.i@greenwood.edu.in', phone: '+91 98800 99008', joiningDate: '2016-09-01', status: 'Active', salary: 12500, attendance: 97, bloodGroup: 'O+', address: 'Sector 56, Gurugram', gender: 'Female', bankAccount: '****1122', bankIfsc: 'ICIC0000456' },
-  ]
-
-  return [...teacherEmployees, ...adminStaff]
+function employeesFromTeachers(teachers: TeacherRecord[]): Employee[] {
+  return teachers
+    .filter((t) => t.status !== 'Relieved') // relieved staff are off the payroll pool
+    .map(employeeFromTeacher)
 }
 
-export const SEED_EMPLOYEES = buildEmployees()
-
-// ─── Apply a scale ───────────────────────────────────────────────────
+// ─── Apply a scale ──────────────────────────────────────────────────
 
 function buildSession(template: SalaryStructureTemplate, base: number, effectiveFrom: string, exactNet?: number): SessionSalary {
   const mode = template.mode ?? 'detailed'
@@ -621,29 +580,6 @@ export function applyStructureToNet(template: SalaryStructureTemplate, targetNet
   return buildSession(template, base, effectiveFrom, targetNet)
 }
 
-function buildSalaries(): Record<string, EmployeeSalaryState> {
-  const out: Record<string, EmployeeSalaryState> = {}
-  for (const emp of SEED_EMPLOYEES) {
-    if (emp.status !== 'Active' && emp.status !== 'On Leave') continue
-    const placement = PLACEMENTS[emp.id] ?? { structureId: 'STR-01', net: 6000 }
-    const template = SEED_STRUCTURES.find((s) => s.id === placement.structureId) ?? SEED_STRUCTURES[0]
-    const history: SalaryHistoryEntry[] = [
-      { id: `H-${emp.id}-1`, date: '2026-04-01', toNet: placement.net, note: 'Session salary set', by: PRINCIPAL },
-    ]
-    // Amit Verma accepted an increment during the session.
-    if (emp.id === 'T-017') {
-      history.unshift({ id: 'H-T-017-2', date: '2026-07-01', fromNet: 6200, toNet: 6500, note: 'Annual increment', by: emp.name })
-    }
-    out[emp.id] = {
-      employeeId: emp.id,
-      session: CURRENT_SESSION.id,
-      salary: applyStructureToNet(template, placement.net, '2026-04-01'),
-      history,
-    }
-  }
-  return out
-}
-
 // ─── Time helpers ────────────────────────────────────────────────────
 
 export function currentPeriodKey(now = new Date()): string {
@@ -683,154 +619,6 @@ export function nextCashReference(existingReferences: Array<string | undefined>,
 }
 
 const inr = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`
-
-// ─── Seed payments & audit ───────────────────────────────────────────
-
-function buildSeedData() {
-  const salaries = buildSalaries()
-  const net = (id: string) => salaries[id]?.salary.netBase ?? 0
-
-  const NOW = new Date()
-  const CUR = currentPeriodKey(NOW)
-  const PREV = currentPeriodKey(new Date(NOW.getFullYear(), NOW.getMonth() - 1, 1))
-  const NEXT = new Date(NOW.getFullYear(), NOW.getMonth() + 1, 1)
-  const dISO = (daysAgo: number) => new Date(NOW.getTime() - daysAgo * 86400000).toISOString()
-  const dDate = (daysAgo: number) => dISO(daysAgo).slice(0, 10)
-  const hoursAfter = (iso: string, h: number) => new Date(new Date(iso).getTime() + h * 3600000).toISOString()
-
-  // Deepa Menon's payable is reduced by an advance recovery this session.
-  const DEEPA_RECOVERY = 600
-  const KAVITA_BONUS = 3000
-
-  const adjustments: MonthlyAdjustment[] = [
-    { id: 'ADJ-01', employeeId: 'T-020', employeeName: 'Deepa Menon', periodKey: CUR, label: 'Advance Recovery', amount: -DEEPA_RECOVERY, createdAt: dISO(6), createdBy: PRINCIPAL },
-    { id: 'ADJ-02', employeeId: 'T-020', employeeName: 'Deepa Menon', periodKey: PREV, label: 'Advance Recovery', amount: -DEEPA_RECOVERY, createdAt: dISO(36), createdBy: PRINCIPAL },
-    { id: 'ADJ-03', employeeId: 'T-011', employeeName: 'Kavita Joshi', periodKey: CUR, label: 'Festival Bonus', amount: KAVITA_BONUS, createdAt: dISO(5), createdBy: PRINCIPAL },
-  ]
-
-  const payableFor = (id: string, periodKey: string) =>
-    net(id) + adjustments.filter((a) => a.employeeId === id && a.periodKey === periodKey).reduce((s, a) => s + a.amount, 0)
-
-  const payments: SalaryPayment[] = []
-  const receipts: PaymentReceipt[] = []
-  const audit: AuditEntry[] = []
-  let receiptSeq = 100
-  const nextReceipt = () => {
-    receiptSeq += 1
-    return `RCP-${CUR.slice(2, 4)}${CUR.slice(5)}-${receiptSeq.toString().padStart(4, '0')}`
-  }
-  let auditSeq = 0
-  const log = (action: AuditAction, title: string, detail: string, actor: string, timestamp: string) => {
-    auditSeq += 1
-    audit.push({ id: `AUD-${auditSeq.toString().padStart(4, '0')}`, action, title, detail, actor, timestamp })
-  }
-
-  interface SeedPay {
-    employeeId: string; periodKey: string; amount: number; date: string; method: PaymentMethod
-    reference?: string; status: PaymentStatus; recordedAt: string
-    confirmedAt?: string; rejectedAt?: string; rejectionReason?: string
-    reversedAt?: string; reversalReason?: string
-  }
-
-  const seeds: SeedPay[] = [
-    // ── Current month: awaiting employee confirmation
-    { employeeId: 'T-020', periodKey: CUR, amount: net('T-020') - DEEPA_RECOVERY, date: dDate(2), method: 'Bank Transfer', reference: 'NEFT-88341', status: 'Pending Receipt', recordedAt: dISO(2) },
-    { employeeId: 'T-014', periodKey: CUR, amount: net('T-014'), date: dDate(1), method: 'UPI', reference: 'UPI-77213', status: 'Pending Receipt', recordedAt: dISO(1) },
-    { employeeId: 'T-002', periodKey: CUR, amount: net('T-002'), date: dDate(1), method: 'Bank Transfer', reference: 'NEFT-88290', status: 'Pending Receipt', recordedAt: dISO(1) },
-    // ── Current month: confirmed by the employee (receipts issued)
-    { employeeId: 'T-038', periodKey: CUR, amount: net('T-038'), date: dDate(3), method: 'Bank Transfer', reference: 'NEFT-88120', status: 'Confirmed', recordedAt: dISO(3), confirmedAt: hoursAfter(dISO(3), 5) },
-    { employeeId: 'T-011', periodKey: CUR, amount: net('T-011') + KAVITA_BONUS, date: dDate(3), method: 'Bank Transfer', reference: 'NEFT-88101', status: 'Confirmed', recordedAt: dISO(3), confirmedAt: hoursAfter(dISO(3), 6) },
-    { employeeId: 'T-035', periodKey: CUR, amount: net('T-035'), date: dDate(4), method: 'Cheque', reference: 'CHQ-5521', status: 'Confirmed', recordedAt: dISO(4), confirmedAt: hoursAfter(dISO(4), 9) },
-    { employeeId: 'STF-001', periodKey: CUR, amount: net('STF-001'), date: dDate(4), method: 'Bank Transfer', reference: 'NEFT-88054', status: 'Confirmed', recordedAt: dISO(4), confirmedAt: hoursAfter(dISO(4), 3) },
-    { employeeId: 'STF-002', periodKey: CUR, amount: net('STF-002'), date: dDate(5), method: 'Bank Transfer', reference: 'NEFT-88088', status: 'Confirmed', recordedAt: dISO(5), confirmedAt: hoursAfter(dISO(5), 4) },
-    // ── Current month: reversed duplicate entry
-    { employeeId: 'STF-006', periodKey: CUR, amount: 800, date: dDate(5), method: 'Cash', status: 'Reversed', recordedAt: dISO(5), reversedAt: hoursAfter(dISO(5), 2), reversalReason: 'Duplicate entry' },
-    // ── Previous month: confirmed history
-    { employeeId: 'T-020', periodKey: PREV, amount: net('T-020') - DEEPA_RECOVERY, date: dDate(32), method: 'Bank Transfer', reference: 'NEFT-87012', status: 'Confirmed', recordedAt: dISO(32), confirmedAt: hoursAfter(dISO(32), 4) },
-    { employeeId: 'T-014', periodKey: PREV, amount: net('T-014'), date: dDate(31), method: 'UPI', reference: 'UPI-71002', status: 'Confirmed', recordedAt: dISO(31), confirmedAt: hoursAfter(dISO(31), 7) },
-    { employeeId: 'T-056', periodKey: PREV, amount: net('T-056'), date: dDate(30), method: 'Bank Transfer', reference: 'NEFT-87045', status: 'Confirmed', recordedAt: dISO(30), confirmedAt: hoursAfter(dISO(30), 5) },
-    // ── Previous month: reported not received — awaiting follow-up
-    { employeeId: 'STF-004', periodKey: PREV, amount: net('STF-004'), date: dDate(28), method: 'Cash', status: 'Not Received', recordedAt: dISO(28), rejectedAt: hoursAfter(dISO(28), 8), rejectionReason: 'Amount not credited to my account' },
-  ]
-
-  for (let i = 0; i < seeds.length; i++) {
-    const s = seeds[i]
-    const emp = SEED_EMPLOYEES.find((e) => e.id === s.employeeId)!
-    const p: SalaryPayment = {
-      id: `PAY-${(i + 1).toString().padStart(4, '0')}`,
-      employeeId: s.employeeId,
-      employeeName: emp.name,
-      periodKey: s.periodKey,
-      monthLabel: periodLabel(s.periodKey),
-      netPayable: payableFor(s.employeeId, s.periodKey),
-      amount: s.amount,
-      date: s.date,
-      method: s.method,
-      reference: s.reference,
-      bankAccount: s.method === 'Bank Transfer' ? emp.bankAccount : undefined,
-      status: s.status,
-      recordedBy: PRINCIPAL,
-      recordedAt: s.recordedAt,
-      confirmedAt: s.confirmedAt,
-      confirmedBy: s.confirmedAt ? emp.name : undefined,
-      rejectedAt: s.rejectedAt,
-      rejectedBy: s.rejectedAt ? emp.name : undefined,
-      rejectionReason: s.rejectionReason,
-      reversedAt: s.reversedAt,
-      reversalReason: s.reversalReason,
-    }
-    if (s.status === 'Confirmed') {
-      const receiptNo = nextReceipt()
-      p.receiptNo = receiptNo
-      receipts.push({
-        receiptNo, paymentId: p.id, employeeId: p.employeeId, employeeName: emp.name,
-        monthLabel: p.monthLabel, amount: p.amount, method: p.method, date: p.date,
-        confirmedAt: s.confirmedAt!, reference: p.reference,
-      })
-    }
-    payments.push(p)
-
-    log('payment.recorded', 'Payment recorded', `${emp.name} · ${inr(s.amount)} · ${p.monthLabel}`, PRINCIPAL, s.recordedAt)
-    if (s.status === 'Confirmed') log('payment.confirmed', 'Payment confirmed', `${emp.name} · ${inr(s.amount)}`, emp.name, s.confirmedAt!)
-    if (s.status === 'Not Received') log('payment.not_received', 'Payment not received', `${emp.name} · ${inr(s.amount)} — ${s.rejectionReason}`, emp.name, s.rejectedAt!)
-    if (s.status === 'Reversed') log('payment.reversed', 'Payment reversed', `${emp.name} · ${inr(s.amount)} — ${s.reversalReason}`, PRINCIPAL, s.reversedAt!)
-  }
-
-  // Salary changes during the session.
-  const amit = SEED_EMPLOYEES.find((e) => e.id === 'T-017')!
-  const priya = SEED_EMPLOYEES.find((e) => e.id === 'T-002')!
-  log('salary.change_requested', 'Salary change sent', `${amit.name} · ${inr(6200)} → ${inr(6500)}`, PRINCIPAL, dISO(60))
-  log('salary.change_accepted', 'Salary change accepted', `${amit.name} · ${inr(6200)} → ${inr(6500)}`, amit.name, dISO(59))
-
-  // Structure + editing activity.
-  log('structure.created', 'Structure created', 'HOD & Senior Teaching · Teaching', PRINCIPAL, '2026-04-01T09:10:00.000Z')
-  log('structure.archived', 'Structure archived', 'Legacy 2019 Scale', PRINCIPAL, '2026-04-02T10:00:00.000Z')
-  log('editing.enabled', 'Editing enabled', '3-hour window', PRINCIPAL, dISO(9))
-
-  audit.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-
-  // One pending change request awaiting the employee's decision.
-  const changeRequests: SalaryChangeRequest[] = [
-    {
-      id: 'CR-001', employeeId: 'T-002', employeeName: priya.name,
-      currentNet: net('T-002'), proposedNet: net('T-002') + 700,
-      structureName: 'Primary Teaching', effectiveFrom: `${NEXT.getFullYear()}-${String(NEXT.getMonth() + 1).padStart(2, '0')}-01`,
-      note: 'Annual increment', status: 'Pending',
-      requestedBy: PRINCIPAL, requestedAt: dISO(1),
-    },
-    {
-      id: 'CR-000', employeeId: 'T-017', employeeName: amit.name,
-      currentNet: 6200, proposedNet: 6500,
-      structureName: 'Primary Teaching', effectiveFrom: '2026-07-01',
-      note: 'Annual increment', status: 'Accepted',
-      requestedBy: PRINCIPAL, requestedAt: dISO(60), respondedAt: dISO(59), respondedBy: amit.name,
-    },
-  ]
-
-  return { salaries, adjustments, payments, receipts, audit, changeRequests }
-}
-
-const SEED = buildSeedData()
 
 // ─── Store ───────────────────────────────────────────────────────────
 
@@ -903,8 +691,90 @@ interface SalaryState {
 // (before store creation / hydration).
 migrateLegacyScopedStore(TENANT_SCOPED_BASES.salary, DEFAULT_TENANT_ID)
 
+/* ------------------------------------------------------------------ */
+/*  Persisted-state migration (Phase 7, Task 7-a)                      */
+/* ------------------------------------------------------------------ */
+
+/** The persisted payroll slice (see partialize below). */
+type SalaryPersistedState = Pick<
+  SalaryState,
+  | 'structures' | 'salaries' | 'changeRequests' | 'adjustments' | 'payments'
+  | 'receipts' | 'audit' | 'editPermission' | 'settings' | 'receiptSeq' | 'archives'
+>
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * v0 (the un-versioned seeded era) → v1: purge the FABRICATED payroll —
+ * seeded employees' salaries, the NEFT/UPI payment history, festival
+ * bonuses, advance recoveries, receipts, change requests, the seed audit
+ * trail and the frozen session archives built on top of them. Structure
+ * templates and payment settings are school CONFIGURATION (not
+ * identities) and survive. The employee list is never persisted — it
+ * derives from the hydrated teachers-store, so real tenant staff appear
+ * as soon as the roster syncs.
+ */
+function migrateSalaryStore(persisted: unknown): SalaryPersistedState {
+  const devWarn = (...args: unknown[]) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[salary-store migrate]', ...args)
+    }
+  }
+
+  // Fabricated slices are purged regardless of shape — only the config
+  // slices (structures / settings) are even attempted.
+  if (!isPlainObject(persisted)) {
+    devWarn('persisted state is not an object — starting the honest (empty) payroll')
+    return emptyPayrollSnapshot()
+  }
+  devWarn(
+    'purging the seeded payroll (employees/salaries/payments/receipts/audit) — ' +
+      'the employee list now derives from the server teacher roster'
+  )
+
+  const snapshot = emptyPayrollSnapshot()
+
+  const rawStructures = persisted.structures
+  if (Array.isArray(rawStructures)) {
+    const structures = rawStructures.filter(
+      (s): s is SalaryStructureTemplate => isPlainObject(s) && typeof s.id === 'string' && typeof s.name === 'string'
+    )
+    if (structures.length > 0) snapshot.structures = structures
+  }
+  const rawSettings = persisted.settings
+  if (isPlainObject(rawSettings) && typeof rawSettings.defaultMethod === 'string' && isPlainObject(rawSettings.referenceRequired)) {
+    const referenceRequired = rawSettings.referenceRequired as Record<string, unknown>
+    if (METHODS.every((m) => typeof referenceRequired[m] === 'boolean')) {
+      snapshot.settings = rawSettings as unknown as PaymentSettings
+    }
+  }
+  // editPermission is always reset OFF (an expired/unversioned window must
+  // never survive the purge); payment history starts empty.
+  return snapshot
+}
+
+function emptyPayrollSnapshot(): SalaryPersistedState {
+  return {
+    structures: SEED_STRUCTURES,
+    salaries: {},
+    changeRequests: [],
+    adjustments: [],
+    payments: [],
+    receipts: [],
+    audit: [],
+    editPermission: { enabled: false, expiresAt: null },
+    settings: {
+      defaultMethod: 'Bank Transfer',
+      referenceRequired: { 'Bank Transfer': true, UPI: false, Cash: false, Cheque: true },
+    },
+    receiptSeq: 0,
+    archives: [],
+  }
+}
+
 export const useSalaryStore = create<SalaryState>()(
-  persist(
+  persist<SalaryState, [], [], SalaryPersistedState>(
     (set, get) => {
       const log = (action: AuditAction, title: string, detail: string, actor: string) =>
         set((st) => ({ audit: [{ id: `AUD-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, action, title, detail, actor, timestamp: new Date().toISOString() }, ...st.audit] }))
@@ -923,15 +793,18 @@ export const useSalaryStore = create<SalaryState>()(
       }
 
       return {
-        employees: SEED_EMPLOYEES,
+        // PHASE 7 — employees derive from the hydrated teachers-store (the
+        // bridge below keeps them in sync); payments/adjustments/receipts/
+        // audit start EMPTY and only ever hold real recorded actions.
+        employees: employeesFromTeachers(useTeachersStore.getState().teachers),
         structures: SEED_STRUCTURES,
-        salaries: SEED.salaries,
-        changeRequests: SEED.changeRequests,
-        adjustments: SEED.adjustments,
-        payments: SEED.payments,
-        receipts: SEED.receipts,
-        audit: SEED.audit,
-        receiptSeq: 200,
+        salaries: {},
+        changeRequests: [],
+        adjustments: [],
+        payments: [],
+        receipts: [],
+        audit: [],
+        receiptSeq: 0,
         editPermission: { enabled: false, expiresAt: null },
         archives: [],
         settings: {
@@ -972,11 +845,11 @@ export const useSalaryStore = create<SalaryState>()(
             reference,
             bankAccount: input.method === 'Bank Transfer' ? (input.bankAccount || emp.bankAccount) : undefined,
             status: 'Pending Receipt',
-            recordedBy: PRINCIPAL,
+            recordedBy: principalActor(),
             recordedAt: new Date().toISOString(),
           }
           set((st) => ({ payments: [payment, ...st.payments] }))
-          log('payment.recorded', 'Payment recorded', `${emp.name} · ${inr(input.amount)} · ${payment.monthLabel}`, PRINCIPAL)
+          log('payment.recorded', 'Payment recorded', `${emp.name} · ${inr(input.amount)} · ${payment.monthLabel}`, principalActor())
           return payment
         },
 
@@ -1027,7 +900,7 @@ export const useSalaryStore = create<SalaryState>()(
               : x),
             receipts: st.receipts.filter((r) => r.paymentId !== paymentId),
           })
-          log('payment.reversed', 'Payment reversed', `${p.employeeName} · ${inr(p.amount)} — ${reason.trim()}`, PRINCIPAL)
+          log('payment.reversed', 'Payment reversed', `${p.employeeName} · ${inr(p.amount)} — ${reason.trim()}`, principalActor())
         },
 
         markFollowedUp: (paymentId) => {
@@ -1035,7 +908,7 @@ export const useSalaryStore = create<SalaryState>()(
           const p = st.payments.find((x) => x.id === paymentId)
           if (!p || (p.status !== 'Not Received' && p.status !== 'Pending Receipt')) return
           set({ payments: st.payments.map((x) => x.id === paymentId ? { ...x, followedUpAt: new Date().toISOString() } : x) })
-          log('payment.followed_up', 'Follow-up recorded', `${p.employeeName} · ${inr(p.amount)}`, PRINCIPAL)
+          log('payment.followed_up', 'Follow-up recorded', `${p.employeeName} · ${inr(p.amount)}`, principalActor())
         },
 
         // ── Salary changes (employee approval) ──
@@ -1059,11 +932,11 @@ export const useSalaryStore = create<SalaryState>()(
             effectiveFrom: input.effectiveFrom,
             note: input.note?.trim() || undefined,
             status: 'Pending',
-            requestedBy: PRINCIPAL,
+            requestedBy: principalActor(),
             requestedAt: new Date().toISOString(),
           }
           set({ changeRequests: [req, ...st.changeRequests] })
-          log('salary.change_requested', 'Salary change sent', `${emp.name} · ${inr(current.salary.netBase)} → ${inr(input.proposedNet)}`, PRINCIPAL)
+          log('salary.change_requested', 'Salary change sent', `${emp.name} · ${inr(current.salary.netBase)} → ${inr(input.proposedNet)}`, principalActor())
         },
 
         respondToChangeRequest: (requestId, accept, reason) => {
@@ -1137,11 +1010,11 @@ export const useSalaryStore = create<SalaryState>()(
             label: input.label.trim(),
             amount: input.amount,
             createdAt: new Date().toISOString(),
-            createdBy: PRINCIPAL,
+            createdBy: principalActor(),
           }
           set({ adjustments: [adj, ...st.adjustments] })
           const sign = input.amount > 0 ? '+' : '−'
-          log('adjustment.added', 'Adjustment added', `${emp.name} · ${input.label.trim()} ${sign}${inr(Math.abs(input.amount))} · ${periodLabel(input.periodKey)}`, PRINCIPAL)
+          log('adjustment.added', 'Adjustment added', `${emp.name} · ${input.label.trim()} ${sign}${inr(Math.abs(input.amount))} · ${periodLabel(input.periodKey)}`, principalActor())
         },
 
         // ── Structure templates ──
@@ -1154,14 +1027,14 @@ export const useSalaryStore = create<SalaryState>()(
             createdAt: new Date().toISOString(),
           }
           set({ structures: [...st.structures, structure] })
-          log('structure.created', 'Structure created', `${structure.name} · ${structure.applicableTo}`, PRINCIPAL)
+          log('structure.created', 'Structure created', `${structure.name} · ${structure.applicableTo}`, principalActor())
         },
 
         updateStructure: (id, patch) => {
           const st = get()
           const old = st.structures.find((s) => s.id === id)
           set({ structures: st.structures.map((s) => s.id === id ? { ...s, ...patch } : s) })
-          if (old) log('structure.updated', 'Structure updated', old.name, PRINCIPAL)
+          if (old) log('structure.updated', 'Structure updated', old.name, principalActor())
         },
 
         duplicateStructure: (id) => {
@@ -1176,14 +1049,14 @@ export const useSalaryStore = create<SalaryState>()(
             createdAt: new Date().toISOString(),
           }
           set({ structures: [...st.structures, copy] })
-          log('structure.created', 'Structure duplicated', `${src.name} → ${copy.name}`, PRINCIPAL)
+          log('structure.created', 'Structure duplicated', `${src.name} → ${copy.name}`, principalActor())
         },
 
         setStructureStatus: (id, status) => {
           const st = get()
           const src = st.structures.find((s) => s.id === id)
           set({ structures: st.structures.map((s) => s.id === id ? { ...s, status } : s) })
-          if (src) log(status === 'Archived' ? 'structure.archived' : 'structure.restored', status === 'Archived' ? 'Structure archived' : 'Structure restored', src.name, PRINCIPAL)
+          if (src) log(status === 'Archived' ? 'structure.archived' : 'structure.restored', status === 'Archived' ? 'Structure archived' : 'Structure restored', src.name, principalActor())
         },
 
         // ── Editing window ──
@@ -1193,12 +1066,12 @@ export const useSalaryStore = create<SalaryState>()(
             editPermission: {
               enabled: true,
               expiresAt: now + EDIT_WINDOW_MS,
-              enabledBy: PRINCIPAL,
+              enabledBy: principalActor(),
               enabledAt: new Date().toISOString(),
             },
           })
           const hours = Math.floor(EDIT_WINDOW_MS / 3600000)
-          log('editing.enabled', 'Editing enabled', `${hours}-hour window`, PRINCIPAL)
+          log('editing.enabled', 'Editing enabled', `${hours}-hour window`, principalActor())
         },
 
         normalizeEditPermission: () => {
@@ -1211,7 +1084,7 @@ export const useSalaryStore = create<SalaryState>()(
 
         updateSettings: (patch) => {
           set((st) => ({ settings: { ...st.settings, ...patch } }))
-          log('settings.updated', 'Preferences updated', 'Salary & Payroll', PRINCIPAL)
+          log('settings.updated', 'Preferences updated', 'Salary & Payroll', principalActor())
         },
 
         // ── Session archive ──
@@ -1230,10 +1103,10 @@ export const useSalaryStore = create<SalaryState>()(
           const archive: SessionPayrollArchive = {
             ...snapshot,
             archivedAt: new Date().toISOString(),
-            archivedBy: actor ?? PRINCIPAL,
+            archivedBy: actor ?? principalActor(),
           }
           set({ archives: [archive, ...st.archives] })
-          log('session.archived', 'Session archived', `${archive.sessionLabel} · ${snapshot.summary.employees} employees · ${snapshot.summary.paymentsCount} payments`, actor ?? PRINCIPAL)
+          log('session.archived', 'Session archived', `${archive.sessionLabel} · ${snapshot.summary.employees} employees · ${snapshot.summary.paymentsCount} payments`, actor ?? principalActor())
           return archive
         },
       }
@@ -1242,6 +1115,14 @@ export const useSalaryStore = create<SalaryState>()(
       name: 'scholario-salary-v4',
       // SaaS-STAGE-2A — tenant-scoped: each school has its own payroll
       // dataset (structures, salaries, payments, receipts, audit).
+      // PHASE 7 (Task 7-a) — v1: persisted browsers held the fabricated
+      // seed payroll (employees with fake bank accounts, NEFT payment
+      // history, bonuses, seed audit). The migration purges every seeded
+      // slice; structure templates + settings (school configuration, not
+      // identities) survive. Employees are never persisted — they derive
+      // from the hydrated teachers-store.
+      version: 1,
+      migrate: migrateSalaryStore,
       storage: createTenantScopedStorage(TENANT_SCOPED_BASES.salary),
       partialize: (st) => ({
         structures: st.structures,
@@ -1263,6 +1144,27 @@ export const useSalaryStore = create<SalaryState>()(
     },
   ),
 )
+
+/* ------------------------------------------------------------------ */
+/*  Employees bridge (Phase 7) — the payroll staff list follows the    */
+/*  canonical faculty roster. Whenever the teachers-store's roster     */
+/*  changes (server sync, add-teacher wizard, termination), the        */
+/*  salary-store's employee list is re-derived from it. Empty roster   */
+/*  ⇒ empty employee list — never a fabricated staff universe.        */
+/* ------------------------------------------------------------------ */
+
+function applyTeachersToEmployees(teachers: TeacherRecord[]): void {
+  useSalaryStore.setState({ employees: employeesFromTeachers(teachers) })
+}
+
+if (typeof window !== 'undefined') {
+  // Present-state reconciliation (initial import / persisted hydration).
+  applyTeachersToEmployees(useTeachersStore.getState().teachers)
+  // Reactive follow — one universe, kept live.
+  useTeachersStore.subscribe((state, prev) => {
+    if (state.teachers !== prev.teachers) applyTeachersToEmployees(state.teachers)
+  })
+}
 
 // ─── Derived helpers ─────────────────────────────────────────────────
 
