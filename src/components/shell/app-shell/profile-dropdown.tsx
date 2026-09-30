@@ -39,7 +39,10 @@ export function ProfileDropdownTrigger({
   buttonRef?: React.Ref<HTMLButtonElement>
 }) {
   const serverAvatar = useCurrentUser((s) => s.me?.avatarUrl)
-  const displayName = user?.name || 'Dr. Ramesh Varma'
+  // Neutral fallbacks only — a momentary null user never renders another
+  // person's name/email (Phase 7 neutral-identity policy).
+  const displayName = user?.name || 'Account'
+  const displayEmail = user?.email || ''
   return (
     <button
       ref={buttonRef}
@@ -52,7 +55,7 @@ export function ProfileDropdownTrigger({
     >
       <div className="text-right hidden sm:block">
         <p className="text-xs font-semibold text-foreground leading-none group-hover:text-primary transition-colors">{displayName}</p>
-        <p className="text-[10px] text-muted-foreground mt-1">{user?.email || 'principal@scholario.edu'}</p>
+        {displayEmail && <p className="text-[10px] text-muted-foreground mt-1">{displayEmail}</p>}
       </div>
       <div className="w-8 h-8 rounded-full bg-muted text-foreground font-bold border border-border flex items-center justify-center text-xs shrink-0 overflow-hidden group-hover:border-primary transition-colors">
         {serverAvatar ? (
@@ -102,8 +105,8 @@ export function ProfileDropdown({
             className="absolute right-0 mt-2 w-64 rounded-xl bg-card border border-border shadow-xl p-2 z-50 text-card-foreground"
           >
             <div className="p-3 border-b border-border bg-muted/40 rounded-lg mb-1">
-              <p className="font-bold text-xs text-foreground">{user?.name || 'Dr. Ramesh Varma'}</p>
-              <p className="text-[11px] text-muted-foreground truncate">{user?.email || 'principal@scholario.edu'}</p>
+              <p className="font-bold text-xs text-foreground">{user?.name || 'Account'}</p>
+              <p className="text-[11px] text-muted-foreground truncate">{user?.email || '—'}</p>
               <div className="flex items-center gap-1.5 mt-1.5">
                 <span className="inline-block text-[9px] font-extrabold px-2 py-0.5 rounded bg-primary/15 text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
                   {role}

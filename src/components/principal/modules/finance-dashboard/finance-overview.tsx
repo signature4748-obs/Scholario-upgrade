@@ -177,7 +177,7 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
           icon={<Landmark className="h-4 w-4" />}
           label="Cash in Bank"
           value={formatINRCompact(data.cashAvailable)}
-          sub={`${data.reserveCoverage} months of costs in reserve`}
+          sub={`Illustrative · ${data.reserveCoverage} months reserve estimate`}
           tone="violet"
           delay={0.15}
           onClick={() => onNavigate('statements')}
@@ -220,7 +220,10 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
           </OpenChartSection>
         </div>
 
-        <FinancePanel title="This Month" subtitle="money in and out, last 30 days">
+        {/* Label honesty: the two series use DIFFERENT windows — fees are a
+            rolling 30-day collection total (fee-store monthCollection), payroll
+            is the current calendar month's confirmed total. State both. */}
+        <FinancePanel title="This Month" subtitle="fees: last 30 days · payroll: this month">
           <div className="space-y-3">
             <div className="grid grid-cols-3 gap-2">
               <FinanceStat label="Money In" value={`+${formatINR(analytics.monthCollection, true)}`} accent="emerald" />
@@ -240,7 +243,9 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
             </div>
             <div className="flex items-center justify-between text-[10px] px-0.5">
               <span className="text-muted-foreground flex items-center gap-1">
-                <Landmark className="h-3 w-3" /> Bank covers {data.reserveCoverage} months of costs
+                {/* Illustrative — reserve coverage derives from the projected
+                    balance sheet (see Cash in Bank KPI + Statements banner). */}
+                <Landmark className="h-3 w-3" /> Bank covers {data.reserveCoverage} months of costs · illustrative
               </span>
               <button
                 onClick={() => onNavigate('statements')}
@@ -297,7 +302,10 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
           )}
         </FinancePanel>
 
-        <FinancePanel title="Coming Up" subtitle="scheduled obligations">
+        {/* Only the payroll line is live (unpaid portion or forward monthly
+            payroll); vendor/utility/loan lines are projected amounts from the
+            illustrative books — the total is therefore an estimate too. */}
+        <FinancePanel title="Coming Up" subtitle="scheduled obligations · only payroll is live">
           <div className="space-y-1">
             {data.upcomingObligations.map((o) => (
               <div key={o.id} className="flex items-center justify-between rounded-md hover:bg-muted/30 px-1.5 py-1.5 transition-colors">
@@ -327,7 +335,7 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <FinancePanel
           title="Where Money Goes"
-          subtitle="annual operating spend · salaries live"
+          subtitle="annual operating spend · payroll line live (annualized), other lines illustrative"
           action={<Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1" onClick={() => onNavigate('reports')}>Reports <ArrowRight className="h-3 w-3" /></Button>}
         >
           <HorizontalBars data={expenseBars} formatValue={(n) => formatINR(n, true)} />

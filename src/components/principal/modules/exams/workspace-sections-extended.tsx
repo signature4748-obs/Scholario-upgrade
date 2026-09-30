@@ -28,6 +28,7 @@ import {
 import { useApplyGraceMock } from '@/lib/exams/use-marks-mock'
 import { useMockMarksStore } from '@/lib/exams/mock-marks-data'
 import { useMockOutcomesStore, type Outcome } from '@/lib/exams/mock-outcomes-data'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { useRoleGate } from '@/lib/exams/use-role-gate'
 import { generateSeatingPlanPDF, generateBatchAdmitCardPDF } from '@/lib/exams/pdf'
@@ -395,12 +396,16 @@ export function OutcomesSection({ examId, exam }: SectionProps) {
   const gate = useRoleGate()
 
   // Auto-init outcomes for completed/ongoing exams.
+  // FINAL-GATE (EG-9F/R6) — outcome seeding derives from the demo-tier
+  // marks corpus; only the demo tenant auto-inits. A real tenant computes
+  // outcomes explicitly from its own (real) entered marks.
+  const isDemo = useIsDemoTenant()
   const [initialized, setInitialized] = useState(false)
   useEffect(() => {
-    if (!exam || initialized) return
+    if (!isDemo || !exam || initialized) return
     outcomesStore.initOutcomes(exam)
     setInitialized(true)
-  }, [exam, initialized, outcomesStore])
+  }, [isDemo, exam, initialized, outcomesStore])
 
   const handleCompute = () => {
     if (!classId) return

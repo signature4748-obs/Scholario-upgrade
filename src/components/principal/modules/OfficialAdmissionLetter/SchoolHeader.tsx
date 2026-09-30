@@ -1,36 +1,42 @@
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 import { formatDate } from '@/lib/format'
 import type { AdmissionLetterData } from './types'
 
 /** Diagonal subtle watermark of the school short name. */
 export function Watermark() {
+  const profile = useSchoolProfile()
   return (
     <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-[0.03] select-none rotate-[-30deg]">
       <span className="text-7xl font-black font-display uppercase tracking-widest text-slate-900">
-        {school.shortName}
+        {profile.shortName}
       </span>
     </div>
   )
 }
 
-/** School header — logo, name, affiliation, contact, ref/date/session sidebar. */
+/** School header — logo, name, affiliation, contact, ref/date/session sidebar.
+ * Letterhead identity follows the sanctioned school-profile cascade
+ * (server identity → settings → neutral) — never a hardcoded demo school. */
 export function SchoolHeader({ data }: { data: AdmissionLetterData }) {
+  const profile = useSchoolProfile()
   return (
     <div className="border-b-2 border-slate-900 pb-6 mb-6">
       <div className="flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4 text-center sm:text-left">
         <div className="flex items-center gap-4">
           <div className="h-16 w-16 rounded-xl bg-slate-900 text-white flex items-center justify-center font-black text-2xl font-display shadow-md">
-            {school.logo}
+            {profile.shortName.charAt(0)}
           </div>
           <div>
             <h1 className="text-xl sm:text-2xl font-extrabold font-display tracking-tight text-slate-900 uppercase">
-              {school.name}
+              {profile.name}
             </h1>
             <p className="text-xs font-bold text-emerald-800 tracking-wide uppercase mt-0.5">
-              {school.affiliation}
+              {profile.affiliation || '—'}
             </p>
             <p className="text-[11px] text-slate-600 mt-1 max-w-md">
-              {school.address} · Tel: {school.phone} · Email: {school.email}
+              {[profile.address, profile.phone ? `Tel: ${profile.phone}` : null, profile.email ? `Email: ${profile.email}` : null]
+                .filter(Boolean)
+                .join(' · ') || '—'}
             </p>
           </div>
         </div>

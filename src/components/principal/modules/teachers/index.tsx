@@ -8,7 +8,8 @@ import {
 import { PageTransition } from '@/components/shared/ui'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { departments, school } from '@/lib/mock/school'
+import { departments } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 import { toast } from 'sonner'
 // PHASE 7 (Task 7-a) — canonical faculty hydration (server truth) + the
 // honest retry affordance when the sync fails.
@@ -46,6 +47,7 @@ export function TeachersModule() {
   const s = useTeachersState()
   const actions = useTeachersActions(s)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const schoolProfile = useSchoolProfile()
 
   // Canonical roster hydration (Phase 7): the faculty list follows the
   // school's REAL Teacher records. The once-per-session promise guard in
@@ -149,7 +151,7 @@ export function TeachersModule() {
       ) : (
         <>
           <ModuleHeader
-        meta={[`${s.totalTeachers} faculty`, `${departments.length} depts`, `AY ${school.academicYear}`]}
+        meta={[`${s.totalTeachers} faculty`, `${departments.length} depts`, `AY ${schoolProfile.academicYear || '—'}`]}
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => setIsSettingsOpen(true)} className="text-xs gap-1.5 h-8">

@@ -12,6 +12,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { useMemo } from 'react'
+import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 import { migrateLegacyScopedStore, createTenantScopedStorage } from '@/lib/tenant/tenant-storage'
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
 
@@ -87,6 +88,10 @@ interface InventoryState {
   categoryFilter: string
   locationFilter: string
   statusFilter: string
+  /** FINAL-GATE (EG-9F/R4) — set once the demo seed has been applied. */
+  demoSeeded?: boolean
+  /** FINAL-GATE (EG-9F/R4) — one-shot demo-tier seeder (module root). */
+  ensureDemoSeed: () => void
 
   setSearch: (q: string) => void
   setCategoryFilter: (c: string) => void
@@ -109,12 +114,18 @@ function calcStatus(qty: number, min: number): ItemStatus {
 export const useInventoryStore = create<InventoryState>()(
   persist(
     (set, get) => ({
-  items: SEED_ITEMS,
-  movements: SEED_MOVEMENTS,
+  // FINAL-GATE (EG-9F/R4) — the seed corpus above is the sanctioned DEMO
+  // TIER content (School.isDemo): the store boots EMPTY and the Inventory
+  // module root applies it once per session via `ensureDemoSeed`. A real
+  // production tenant keeps the honest empty state; persisted tenant-
+  // scoped state always wins over re-seeding.
+  items: [],
+  movements: [],
   search: '',
   categoryFilter: 'all',
   locationFilter: 'all',
   statusFilter: 'all',
+  ensureDemoSeed: () => ensureInventoryDemoSeed(),
 
   setSearch: (q) => set({ search: q }),
   setCategoryFilter: (c) => set({ categoryFilter: c }),
@@ -227,6 +238,19 @@ export const useInventoryStore = create<InventoryState>()(
     },
   ),
 )
+
+// ─── FINAL-GATE (EG-9F/R4) demo-tier seeder ──────────────────────────
+// Built lazily on first call (the store exists by then). Applies the
+// sanctioned demo corpus at most once, never over non-pristine state —
+// see makeDemoSeedApplier guard rules.
+let _ensureInventoryDemoSeed: (() => void) | null = null
+function ensureInventoryDemoSeed(): void {
+  _ensureInventoryDemoSeed ??= makeDemoSeedApplier(useInventoryStore, {
+    items: SEED_ITEMS,
+    movements: SEED_MOVEMENTS,
+  })
+  _ensureInventoryDemoSeed()
+}
 
 export function useInventoryData() {
   const items = useInventoryStore((s) => s.items)

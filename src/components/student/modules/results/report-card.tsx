@@ -26,7 +26,9 @@ import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { downloadHTMLFile, safeFileName } from '@/lib/download-file'
-import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+// Report-card letterhead — the sanctioned identity cascade (server
+// identity → settings → neutral); never a demo-school fallback.
+import { getSchoolProfile } from '@/lib/school-profile'
 import { getActiveAcademicSessionLabel, SESSION_NOT_SET_LABEL } from '@/lib/academic-session'
 import {
   useStudentAttendanceStore,
@@ -43,7 +45,6 @@ import {
   type GradeBand,
   type ClassStanding,
 } from '@/lib/store/student-results-store'
-import { school as schoolFallback } from '@/lib/mock/school'
 import { useState } from 'react'
 
 function esc(v: string): string {
@@ -69,11 +70,11 @@ function fullDate(iso: string): string {
 /** Build the institutional document — every value derives from real records. */
 function buildReportCardHTML(input: ReportCardInput): string {
   const { assessment, result, gradeScale, standings, showRank, reportCardConfig, identity } = input
-  const general = useSchoolSettingsStore.getState().general
-  const schoolName = general?.schoolName || schoolFallback.name
-  const affiliation = general?.affiliation || schoolFallback.affiliation
-  const address = general?.address || schoolFallback.address
-  const principal = general?.principalName || schoolFallback.principal
+  const profile = getSchoolProfile()
+  const schoolName = profile.name
+  const affiliation = profile.affiliation || '—'
+  const address = profile.address || '—'
+  const principal = profile.principal || 'Principal'
 
   const t = totalsOf(result)
   const overallGrade = gradeFor(t.pct, gradeScale)

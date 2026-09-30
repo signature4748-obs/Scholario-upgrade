@@ -25,6 +25,7 @@ export type UnifiedTab = 'overview' | 'directory' | 'classes' | 'archived'
 export function StudentsClassesModule({ initialTab = 'overview' }: { initialTab?: UnifiedTab }) {
   const [activeTab, setActiveTab] = useState<UnifiedTab>(initialTab)
   const store = useStudentsStore()
+  const schoolProfile = useSchoolProfile()
   const [selectedClass, setSelectedClass] = useState<ClassRecord | null>(null)
   const [showAddClass, setShowAddClass] = useState(false)
   const [profileStudent, setProfileStudent] = useState<StudentRecord | null>(null)
@@ -204,7 +205,7 @@ export function StudentsClassesModule({ initialTab = 'overview' }: { initialTab?
   return (
     <PageTransition className="space-y-4">
       <ModuleHeader
-        meta={[`${formatNumber(totalStudents)} students`, `${store.classes.length} classes`, `AY ${school.academicYear}`]}
+        meta={[`${formatNumber(totalStudents)} students`, `${store.classes.length} classes`, `AY ${schoolProfile.academicYear || '—'}`]}
         actions={
           <SegmentedTabs
             tabs={[
@@ -247,5 +248,5 @@ export function StudentsClassesModule({ initialTab = 'overview' }: { initialTab?
 
 // Late imports to avoid circular deps
 import { useStudentsStore } from '@/lib/store/students-store'
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 import { formatNumber } from '@/lib/format'

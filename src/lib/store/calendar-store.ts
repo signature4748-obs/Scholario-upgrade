@@ -1,8 +1,7 @@
 /**
  * calendar-store — Unified school calendar events source.
  *
- * Combines three event sources into a single CalendarEvent[] so the Calendar
- * module shows REAL data instead of a static 9-item December 2025 mock:
+ * Combines event sources into a single CalendarEvent[]:
  *
  *   1. School events   — `calendarEvents` static array (`@/lib/mock/operations`)
  *                        minus any Holiday entries (those come from #2 below,
@@ -17,6 +16,15 @@
  *                        "Begins" / "Ends" markers on startDate/endDate.
  *   4. User events     — added at runtime via `addEvent` mutation (these
  *                        now persist across reloads, tenant-scoped).
+ *
+ * FINAL-GATE (EG-9F/R4+R6) — sources #1–#3 are ILLUSTRATIVE demo-tier
+ * corpora (R4 register: mock/operations events + mock/school-calendar
+ * holidays; R6: mock exams). `getUnifiedEvents` therefore takes an
+ * `includeSeedCalendar` option: the shared Calendar module root passes
+ * it ONLY for the demo tenant (School.isDemo) — a real production tenant
+ * sees its real user events and an honest empty calendar, never the
+ * fabricated school/holiday/exam seeds. Exams additionally self-gate:
+ * the mock-exams store boots empty for non-demo tenants.
  *
  * QA-FIX-B — TENANT-SCOPED PERSISTENCE: ONLY the user-events slice is
  * persisted (per-school namespace) so added/removed events survive reload.
@@ -226,11 +234,24 @@ function getSchoolEvents(): CalendarEvent[] {
  * Pure function — re-runs whenever year/month/exams/userEvents change.
  * Returns events for ALL months (so the upcoming panel can show future
  * events); callers filter to the visible month for the grid.
+ *
+ * FINAL-GATE (EG-9F) — `opts.includeSeedCalendar` (default true for
+ * backwards compatibility) gates the ILLUSTRATIVE school-events +
+ * holidays corpora: the shared Calendar module root passes `true` only
+ * for the demo tenant. Exam events arrive via the (demo-gated) mock
+ * exams store; user events are always the tenant's own real records.
  */
-export function getUnifiedEvents(year: number, month0: number, exams: ExamDTO[], userEvents: CalendarEvent[]): CalendarEvent[] {
+export function getUnifiedEvents(
+  year: number,
+  month0: number,
+  exams: ExamDTO[],
+  userEvents: CalendarEvent[],
+  opts: { includeSeedCalendar?: boolean } = {},
+): CalendarEvent[] {
+  const includeSeed = opts.includeSeedCalendar !== false
   return [
-    ...getSchoolEvents(),
-    ...getHolidaysForMonth(year, month0),
+    ...(includeSeed ? getSchoolEvents() : []),
+    ...(includeSeed ? getHolidaysForMonth(year, month0) : []),
     ...getExamEventsForMonth(year, month0, exams),
     ...userEvents,
   ]

@@ -8,7 +8,7 @@
  * and can preview / download them — no generation or admin controls.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Award, Eye, Download, FileText, X } from 'lucide-react'
 import { GlassCard, StatusBadge } from '@/components/shared/ui'
@@ -17,9 +17,13 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog'
 import { useCertificatesStore } from '@/lib/store/certificates-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import type { GeneratedDocument } from '@/lib/store/certificates-store'
 import { useMyStudentRecord } from '@/lib/store/students-store'
-import { school } from '@/lib/mock/school'
+// Certificate letterhead — the identity cascade (server → settings →
+// neutral); the session line is the school's real academic year, never
+// `new Date().getFullYear()` guessing.
+import { useSchoolProfile, getSchoolProfile } from '@/lib/school-profile'
 import { formatDate } from '@/lib/format'
 import { toast } from 'sonner'
 
@@ -33,7 +37,9 @@ function statusVariant(status: string): 'success' | 'primary' | 'neutral' {
 }
 
 function docHtml(doc: GeneratedDocument): string {
+  const school = getSchoolProfile()
   const purpose = typeof doc.data?.purpose === 'string' && doc.data.purpose !== '—' ? doc.data.purpose : ''
+  const sessionLine = school.academicYear ? `Session ${school.academicYear}` : ''
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -54,8 +60,8 @@ function docHtml(doc: GeneratedDocument): string {
 <body>
   <div class="head">
     <h1>${school.name}</h1>
-    <p>${school.address || ''} ${school.phone ? '· ' + school.phone : ''}</p>
-    <p>${school.affiliation ? school.affiliation + ' · ' : ''}Session ${new Date().getFullYear()}</p>
+    <p>${[school.address, school.phone ? 'Ph: ' + school.phone : ''].filter(Boolean).join(' · ') || '—'}</p>
+    <p>${[school.affiliation, sessionLine].filter(Boolean).join(' · ') || '—'}</p>
   </div>
   <div class="type">${doc.docType}</div>
   <div class="no">Certificate No. ${doc.docNumber}</div>
@@ -73,7 +79,15 @@ function docHtml(doc: GeneratedDocument): string {
 
 export function MyCertificatesModule() {
   const documents = useCertificatesStore((s) => s.documents)
+
+  // FINAL-GATE (EG-9F/R4) — apply the demo tenant's sanctioned seed history
+  // once (module root); a real tenant keeps the honest empty view (its own
+  // certificates appear as the principal generates them).
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useCertificatesStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
   const [previewDoc, setPreviewDoc] = useState<GeneratedDocument | null>(null)
+  const school = useSchoolProfile()
 
   // Canonical identity — the session user's own roster record.
   const me = useMyStudentRecord()
@@ -186,9 +200,9 @@ export function MyCertificatesModule() {
                 <div className="border-b-[3px] border-double border-teal-700 pb-3 text-center">
                   <h1 className="text-xl font-bold tracking-wide text-teal-800">{school.name}</h1>
                   <p className="text-[10px] text-slate-500 mt-1">
-                    {school.address}{school.phone ? ` · ${school.phone}` : ''}
+                    {school.address || '—'}{school.phone ? ` · ${school.phone}` : ''}
                   </p>
-                  <p className="text-[10px] text-slate-500">{school.affiliation}</p>
+                  <p className="text-[10px] text-slate-500">{school.affiliation || '—'}</p>
                 </div>
                 <p className="mt-6 text-center text-sm font-bold uppercase tracking-[0.2em]">{previewDoc.docType}</p>
                 <p className="mt-1 text-center text-[10px] text-slate-500">Certificate No. {previewDoc.docNumber}</p>

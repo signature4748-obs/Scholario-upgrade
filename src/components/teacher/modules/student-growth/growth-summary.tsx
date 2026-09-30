@@ -204,8 +204,12 @@ export function GrowthDimensions({
 // ── the 8-week trend (§12 — a clean lightweight chart) ───────────────────
 
 export function GrowthTrendCard({ trend, title = 'Growth Trend' }: { trend: GrowthTrendPoint[]; title?: string }) {
+  // FINAL-GATE (EG-4B) — only weeks with a REAL score are plotted. The old
+  // `p.value ?? 0` mapping turned an interior null week (a week with no
+  // attendance and no exam records) into a fabricated plunge to 0 —
+  // zeros-as-data. Null weeks are now simply absent from the curve and the
+  // header chip says how many of the window's weeks actually carry a score.
   const points = trend.filter((p) => p.value != null) as { label: string; value: number }[]
-  const firstIdx = trend.findIndex((p) => p.value != null)
   const last = points[points.length - 1]?.value ?? null
   const first = points[0]?.value ?? null
   const overallDelta = last != null && first != null ? last - first : null
@@ -215,13 +219,17 @@ export function GrowthTrendCard({ trend, title = 'Growth Trend' }: { trend: Grow
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">{title}</h3>
         <span className="text-[10px] text-muted-foreground">
-          {points.length > 0 ? 'last 8 weeks' : 'no score history yet'}
+          {points.length === 0
+            ? 'no score history yet'
+            : points.length === trend.length
+              ? 'last 8 weeks'
+              : `${points.length} of ${trend.length} weeks scored`}
         </span>
       </div>
       {points.length >= 2 ? (
         <>
           <AreaTrendChart
-            data={trend.slice(firstIdx).map((p) => ({ label: p.label, primary: p.value ?? 0 }))}
+            data={points.map((p) => ({ label: p.label, primary: p.value }))}
             height={120}
             formatValue={(n) => `${Math.round(n)}`}
             showArea

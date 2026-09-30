@@ -62,11 +62,12 @@ export interface AdmissionApplication {
   rejectionRetentionDays?: number
   rejectedAt?: string
   auditTrail: AuditLogEntry[]
-  generatedCredentials?: {
-    loginId: string
-    tempPassword: string
-    portalUrl: string
-  }
+  /**
+   * FINAL-GATE honesty: completion claims nothing that did not happen.
+   * `generatedCredentials` (fabricated loginId/tempPassword/portalUrl)
+   * is RETIRED — portal accounts are provisioned by the real Students &
+   * Classes enrolment flow (which surfaces a one-time password once).
+   */
   notificationsSent?: {
     sms: boolean
     email: boolean

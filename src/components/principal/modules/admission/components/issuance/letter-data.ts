@@ -2,6 +2,7 @@ import { AdmissionLetterData } from '../../../OfficialAdmissionLetter'
 import { computeFeeSnapshot } from '../../../FeeStructureStep/fee-snapshot'
 import { defaultFeeDataState } from '../../../FeeStructureStep/types'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+import { getSchoolProfile } from '@/lib/school-profile'
 import type { AdmissionApplication } from '@/lib/store/admission-store'
 
 export interface IssuanceArtifacts {
@@ -9,8 +10,6 @@ export interface IssuanceArtifacts {
   studentId: string
   rollNo: string
   regNo: string
-  loginId: string
-  tempPassword: string
   letterData: AdmissionLetterData
 }
 
@@ -46,14 +45,11 @@ export function buildIssuanceArtifacts(app: AdmissionApplication): IssuanceArtif
       ? app.regNo
       : `REG-${year}-${randId(6)}`
 
-  const loginId =
-    isCompleted && app.generatedCredentials
-      ? app.generatedCredentials.loginId
-      : `${formData.firstName.toUpperCase()}_2026`
-  const tempPassword =
-    isCompleted && app.generatedCredentials
-      ? app.generatedCredentials.tempPassword
-      : `Scholario@${Math.floor(Math.random() * 9000 + 1000)}`
+  // FINAL-GATE honesty: no fabricated portal login/password artifacts —
+  // the student's portal account is provisioned by the REAL enrolment
+  // flow (Students & Classes), which surfaces a one-time password once.
+  // The Student Portal issuance tab documents that path instead of
+  // printing credentials that were never created.
 
   // REAL fee numbers — derived from the applicant's own fee state through
   // the same configuration the Fee step reads (Fee Management). Transport /
@@ -71,7 +67,7 @@ export function buildIssuanceArtifacts(app: AdmissionApplication): IssuanceArtif
     studentId,
     regNo,
     admissionDate: isCompleted ? app.submittedDate : new Date().toISOString().split('T')[0],
-    academicSession: app.academicSession || '2025–2026',
+    academicSession: app.academicSession || getSchoolProfile().academicYear || '—',
     // Official Documents print policy (Admission Settings → Official
     // Documents): parent contact numbers print only while explicitly ON.
     // Independent of what the digital form collects.
@@ -128,8 +124,6 @@ export function buildIssuanceArtifacts(app: AdmissionApplication): IssuanceArtif
     studentId,
     rollNo,
     regNo,
-    loginId,
-    tempPassword,
     letterData,
   }
 }

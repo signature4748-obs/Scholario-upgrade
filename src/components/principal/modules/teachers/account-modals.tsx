@@ -14,7 +14,8 @@ import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { formatINR } from '@/lib/format'
-import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+// Slip letterhead — the identity cascade (server → settings → neutral).
+import { useSchoolProfile } from '@/lib/school-profile'
 import type { TeacherRecord } from '@/lib/store/teachers-store'
 import type { TeacherCredentials } from './use-teachers-state'
 
@@ -85,7 +86,7 @@ export function CredentialsSlipModal({ credentials, open, onClose }: Credentials
    * the slip is re-opened or a different teacher's credentials are displayed.
    */
   const [passcodeRevealed, setPasscodeRevealed] = useState(false)
-  const general = useSchoolSettingsStore((s) => s.general)
+  const schoolProfile = useSchoolProfile()
 
   useEffect(() => {
     setPasscodeRevealed(false)
@@ -102,7 +103,7 @@ export function CredentialsSlipModal({ credentials, open, onClose }: Credentials
               Scholario
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {general.schoolName.trim() || 'Scholario'}
+              {schoolProfile.name}
             </p>
           </div>
           <Separator className="mt-4" />

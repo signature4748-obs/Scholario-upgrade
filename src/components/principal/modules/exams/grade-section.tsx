@@ -579,26 +579,34 @@ export function GradeSection({ exam }: { exam: ExamDTO }) {
       }
       let totalObtained = 0
       let totalMax = 0
-      let isAbsentInAll = true
+      let hasAbsentRow = false
       for (const subj of exam.subjects.filter((s: any) => s.classId === studentMarks[0]?.classId)) {
         // Apply subject filter for per-subject distribution.
         if (filterSubject !== 'all' && subj.subjectId !== filterSubject) continue
         const mark = studentMarks.find((m) => m.subjectId === subj.subjectId)
-        if (mark?.status === 'ABSENT' || mark?.marksObtained === null) {
+        if (mark?.status === 'ABSENT') {
+          hasAbsentRow = true
+          continue
+        }
+        if (mark?.marksObtained === null) {
           // Absent or missing — don't add to totals.
           continue
         }
-        isAbsentInAll = false
-        totalObtained += mark!.marksObtained ?? 0
+        totalObtained += mark?.marksObtained ?? 0
         totalMax += subj.maxMarks
       }
-      if (totalMax === 0) continue
-      totalStudents++
-      const pct = Math.round((totalObtained / totalMax) * 100 * 100) / 100
-      if (isAbsentInAll) {
-        absentCount++
+      if (totalMax === 0) {
+        // FINAL-GATE: a student with NO countable marks and at least one
+        // ABSENT row was silently dropped here — the "Absent" stat could
+        // never be non-zero. Count genuinely-absent students; students whose
+        // marks are simply un-entered (no ABSENT rows) stay dropped, not
+        // mislabelled. Either way they stay out of totalStudents so the
+        // donut's grade fractions remain honest.
+        if (hasAbsentRow) absentCount++
         continue
       }
+      totalStudents++
+      const pct = Math.round((totalObtained / totalMax) * 100 * 100) / 100
       highestPct = Math.max(highestPct, pct)
       lowestPct = Math.min(lowestPct, pct)
       pctSum += pct

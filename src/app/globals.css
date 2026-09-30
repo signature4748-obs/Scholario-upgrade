@@ -503,6 +503,23 @@
   body.printing-id-card { background: white !important; }
 }
 
+/* ============================================================
+   DOCUMENT PRINTING (print-isolate) — in-app official documents that
+   print via window.print() (admission letter, welcome letter, fee
+   receipt tab, credentials sheet…) print ALONE: lib/print-isolate.ts
+   clones the document into a #print-root at body level and toggles
+   `document-printing` on <body> for the duration of the print — every
+   other top-level element (app shell, dialogs, portals, toasts) is
+   display:none while the sheet prints. Mirrors the salary-printing /
+   id-card patterns already established below/above.
+   ============================================================ */
+#print-root { display: none; }
+@media print {
+  body.document-printing > *:not(#print-root) { display: none !important; }
+  body.document-printing #print-root { display: block !important; }
+  body.document-printing { background: #fff !important; }
+}
+
 /* Premium focus ring — unified across all interactive elements */
 .focus-ring:focus-visible {
   outline: none;

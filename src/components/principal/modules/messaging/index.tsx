@@ -27,6 +27,7 @@ import { PenSquare } from 'lucide-react'
 import { PageTransition } from '@/components/shared/ui'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { useMessagingStore } from '@/lib/store/messaging-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { useFocusStore } from '@/lib/store/focus-store'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { toast } from 'sonner'
@@ -44,6 +45,14 @@ export function MessagingModule() {
   const activeFolder = useMessagingStore((s) => s.activeFolder)
   const conversations = useMessagingStore((s) => s.conversations)
   const openConversation = useMessagingStore((s) => s.openConversation)
+
+  // FINAL-GATE (EG-9F/R4) — the demo tenant's sanctioned seed corpus is
+  // applied ONCE here (module root); a real tenant keeps the honest empty
+  // state. Guarded inside the applier: at-most-once, never over
+  // non-pristine (server-hydrated / user-mutated) state.
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useMessagingStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
 
   const isMobile = useIsMobile()
   const [mobileView, setMobileView] = useState<'list' | 'thread'>('list')

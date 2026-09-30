@@ -107,15 +107,24 @@ export function Insights({ snapshot, overallDelta, previousName, classPosition, 
     })
   }
   if (classPosition && classPosition.classSize > 1) {
+    // FINAL-GATE (EG-4B) — "Top X%" is only an honest claim in the top half
+    // (the hero and class-standings already gate it at ≤ 50%); a bottom-half
+    // rank must not read as a gold-medal achievement ("Top 93%" with a
+    // trophy). Value = the plain rank; the medal tone only for top-half.
     const topPct = Math.max(1, Math.round((classPosition.rank / classPosition.classSize) * 100))
+    const topHalf = topPct <= 50
     tiles.push({
       key: 'position',
       icon: Trophy,
       label: 'Class position',
-      value: `Top ${topPct}%`,
-      sub: `#${classPosition.rank} of ${classPosition.classSize}`,
-      // Rank is achievement → gold/amber (the same medal language as the hero).
-      tone: { surface: 'border-amber-400/40 bg-amber-400/[0.09] dark:bg-amber-400/[0.13]', text: 'text-amber-700 dark:text-amber-400' },
+      value: `#${classPosition.rank}`,
+      sub: topHalf
+        ? `of ${classPosition.classSize} · top ${topPct}%`
+        : `of ${classPosition.classSize} students`,
+      tone: topHalf
+        ? // Rank is achievement → gold/amber (the same medal language as the hero).
+          { surface: 'border-amber-400/40 bg-amber-400/[0.09] dark:bg-amber-400/[0.13]', text: 'text-amber-700 dark:text-amber-400' }
+        : { surface: 'border-border/80 bg-muted/40', text: 'text-foreground' },
     })
   }
 

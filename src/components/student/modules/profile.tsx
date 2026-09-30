@@ -21,7 +21,7 @@
  * sidebar already say where you are (one WHERE-AM-I, never two).
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   User, Phone, Mail, Calendar, Droplet, Crown, GraduationCap,
@@ -36,6 +36,7 @@ import type { StudentRecord } from '@/lib/store/students-store'
 import { useStudentAttendanceStore, computeStats, studentRecords } from '@/lib/store/student-attendance-store'
 import { useFeeStore } from '@/lib/store/fee-store'
 import { useCertificatesStore } from '@/lib/store/certificates-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { POSITION_DEFS, filterActivePositions } from '@/lib/student-positions'
 import { useAcademicSession, SESSION_NOT_SET_LABEL } from '@/lib/academic-session'
 import { useMyResults, fmtPct } from '@/lib/store/student-results-store'
@@ -53,6 +54,13 @@ type TabKey = (typeof TABS)[number]['key']
 export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => void }) {
   const [activeTab, setActiveTab] = useState<TabKey>('personal')
   const [idOpen, setIdOpen] = useState(false)
+
+  // FINAL-GATE (EG-9F/R4) — apply the demo tenant's sanctioned certificates
+  // seed once (module root reads the documents slice); a real tenant keeps
+  // the honest "no documents yet" records tab.
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useCertificatesStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
 
   // ── Canonical identity (session user → roster record — one universe) ──
   const student = useMyStudentRecord()

@@ -387,7 +387,9 @@ describe('PHASE 7.5 · dashboard values are DB-derived (never fabricated)', () =
       db.teacher.count({ where: { schoolId: schoolB.id } }),
       db.class.count({ where: { schoolId: schoolB.id } }),
       db.fee.aggregate({ where: { schoolId: schoolB.id }, _sum: { amount: true } }),
-      db.fee.aggregate({ where: { schoolId: schoolB.id, status: 'PAID' }, _sum: { paid: true } }),
+      // FINAL-GATE mirror: feesPaid sums Fee.paid across ALL rows (partial
+      // payments on PARTIALLY_PAID rows count — billed = collected + outstanding).
+      db.fee.aggregate({ where: { schoolId: schoolB.id }, _sum: { paid: true } }),
       db.fee.count({ where: { schoolId: schoolB.id, status: { in: ['UNPAID', 'OVERDUE'] } } }),
     ])
     expect(stats.students).toBe(students)
@@ -401,9 +403,10 @@ describe('PHASE 7.5 · dashboard values are DB-derived (never fabricated)', () =
     expect(stats.attendanceRate).toBeLessThanOrEqual(100)
 
     // Empty payment history ⇒ empty trend (no invented months/amounts).
+    // FINAL-GATE mirror: only SUCCESSFUL payments are recorded collections.
     const trend: Array<{ month: string; amount: number }> = body.data.trend ?? []
     const payments = await db.payment.findMany({
-      where: { fee: { schoolId: schoolB.id } },
+      where: { fee: { schoolId: schoolB.id }, status: 'SUCCESS' },
       select: { amount: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -429,7 +432,8 @@ describe('PHASE 7.5 · fee aggregation correctness', () => {
 
     const [feesTotal, feesPaid, overdue, students] = await Promise.all([
       db.fee.aggregate({ where: { schoolId: schoolA.id }, _sum: { amount: true } }),
-      db.fee.aggregate({ where: { schoolId: schoolA.id, status: 'PAID' }, _sum: { paid: true } }),
+      // FINAL-GATE mirror: all-rows paid sum (see School B mirror above).
+      db.fee.aggregate({ where: { schoolId: schoolA.id }, _sum: { paid: true } }),
       db.fee.count({ where: { schoolId: schoolA.id, status: { in: ['UNPAID', 'OVERDUE'] } } }),
       db.student.count({ where: { schoolId: schoolA.id } }),
     ])
@@ -441,8 +445,9 @@ describe('PHASE 7.5 · fee aggregation correctness', () => {
     expect(stats.feesPaid).toBeLessThanOrEqual(stats.feesTotal)
 
     // trend: identical aggregation over the same window
+    // (FINAL-GATE mirror: SUCCESS-only, matching the route's fix)
     const payments = await db.payment.findMany({
-      where: { fee: { schoolId: schoolA.id } },
+      where: { fee: { schoolId: schoolA.id }, status: 'SUCCESS' },
       select: { amount: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
       take: 200,

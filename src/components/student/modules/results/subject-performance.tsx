@@ -76,9 +76,12 @@ export function SubjectPerformance({ subjects, gradeFor }: SubjectPerformancePro
                   </span>
                   <span className="mt-1.5 flex items-center gap-2.5">
                     <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted" aria-hidden>
+                      {/* FINAL-GATE (EG-4B) — honest zero: a genuine 0% mark
+                          renders an empty track, not a 2% sliver that reads
+                          as a non-zero score. */}
                       <span
                         className={cn('block h-full rounded-full bg-gradient-to-r', color.gradient)}
-                        style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
+                        style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
                       />
                     </span>
                     <span className="shrink-0 text-[11px] font-semibold tabular-nums text-foreground/80">{fmtPct(pct)}%</span>
@@ -128,7 +131,7 @@ export function SubjectPerformance({ subjects, gradeFor }: SubjectPerformancePro
                                 <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted" aria-hidden>
                                   <span
                                     className={cn('block h-full rounded-full bg-gradient-to-r', color.gradient)}
-                                    style={{ width: `${Math.max(2, Math.min(100, cpct))}%` }}
+                                    style={{ width: `${Math.min(100, Math.max(0, cpct))}%` }}
                                   />
                                 </span>
                                 <span className="shrink-0 text-[11px] font-semibold tabular-nums text-foreground/80">

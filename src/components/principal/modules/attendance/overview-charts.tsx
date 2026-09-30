@@ -33,12 +33,23 @@ interface OverviewChartsProps {
   late: number
   leave: number
   total: number
-  weeklyTrend: { day: string; present: number; rate: number }[]
+  weeklyTrend: { day: string; date?: string; present: number; rate: number }[]
   monthlyTrend: { month: string; rate: number }[]
 }
 
+/* FINAL-GATE — honest no-data placeholder. A school with zero attendance
+ * rows must not render "0%" composition bars and empty chart frames that
+ * look like real measurements. */
+function ChartEmptyNote({ message }: { message: string }) {
+  return (
+    <p className="flex min-h-[96px] items-center justify-center rounded-lg border border-dashed border-border/60 text-xs text-muted-foreground">
+      {message}
+    </p>
+  )
+}
+
 export function OverviewCharts({
-  todaysRate, present, absent, late, leave, total: _total,
+  todaysRate, present, absent, late, leave, total,
   weeklyTrend, monthlyTrend,
 }: OverviewChartsProps) {
   const weeklyInsight = deriveTrendInsight(weeklyTrend.map((d) => d.rate))
@@ -46,6 +57,12 @@ export function OverviewCharts({
 
   const monthlyAvg = monthlyTrend.reduce((s, m) => s + m.rate, 0) / Math.max(monthlyTrend.length, 1)
   const latestMonthly = monthlyTrend[monthlyTrend.length - 1]?.rate ?? 0
+
+  // FINAL-GATE label honesty: say the window the data ACTUALLY covers —
+  // "last 6" when fewer were recorded is a false claim. Day labels carry
+  // the day-of-month so two "Tue"s from different weeks are distinct.
+  const weeklyWindow = Math.min(6, weeklyTrend.length)
+  const monthlyWindow = Math.min(6, monthlyTrend.length)
 
   const breakdownData = [
     { name: 'Present', value: present, color: ATTENDANCE_PALETTE.present },
@@ -70,11 +87,15 @@ export function OverviewCharts({
               </p>
             </div>
           </div>
-          <TodayBreakdownStack
-            data={breakdownData}
-            centerValue={`${todaysRate}%`}
-            centerLabel="Present"
-          />
+          {total > 0 ? (
+            <TodayBreakdownStack
+              data={breakdownData}
+              centerValue={`${todaysRate}%`}
+              centerLabel="Attendance"
+            />
+          ) : (
+            <ChartEmptyNote message="No attendance recorded yet — today's composition appears here." />
+          )}
         </section>
 
         {/* Weekly Trend — thin divider on the left for lg+, no card */}
@@ -85,19 +106,25 @@ export function OverviewCharts({
                 Weekly Trend
               </h3>
               <p className="text-[10px] text-muted-foreground/80 mt-0.5">
-                Attendance rate · last 6 working days
+                Attendance rate · last {weeklyWindow} recorded {weeklyWindow === 1 ? 'day' : 'days'}
               </p>
             </div>
-            <InsightBadge insight={weeklyInsight} />
+            {weeklyTrend.length > 0 && <InsightBadge insight={weeklyInsight} />}
           </div>
-          <TrendLine
-            data={weeklyTrend.map((d) => ({ name: d.day, value: d.rate }))}
-            xKey="name"
-            yKey="value"
-            color={ATTENDANCE_PALETTE.trend}
-            height={170}
-            yDomain={[80, 100]}
-          />
+          {weeklyTrend.length > 0 ? (
+            <TrendLine
+              data={weeklyTrend.map((d) => ({
+                name: d.date ? `${d.day} ${parseInt(d.date.slice(8, 10), 10)}` : d.day,
+                value: d.rate,
+              }))}
+              xKey="name"
+              yKey="value"
+              color={ATTENDANCE_PALETTE.trend}
+              height={170}
+            />
+          ) : (
+            <ChartEmptyNote message="No attendance recorded yet — the daily trend appears here." />
+          )}
         </section>
       </div>
 
@@ -112,32 +139,37 @@ export function OverviewCharts({
               Monthly Trend
             </h3>
             <p className="text-[10px] text-muted-foreground/80 mt-0.5">
-              6-month attendance rate · long-term direction
+              Attendance rate · last {monthlyWindow} recorded {monthlyWindow === 1 ? 'month' : 'months'} · long-term direction
             </p>
           </div>
-          <div className="flex items-baseline gap-3 text-[10px] text-muted-foreground">
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-mono">6-mo avg</span>
-              <span className="font-display font-bold tabular-nums text-foreground">{monthlyAvg.toFixed(1)}%</span>
+          {monthlyTrend.length > 0 && (
+            <div className="flex items-baseline gap-3 text-[10px] text-muted-foreground">
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono">6-mo avg</span>
+                <span className="font-display font-bold tabular-nums text-foreground">{monthlyAvg.toFixed(1)}%</span>
+              </div>
+              <span className="text-muted-foreground/40">·</span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono">Latest</span>
+                <span className="font-display font-bold tabular-nums text-foreground">{latestMonthly}%</span>
+              </div>
+              <span className="text-muted-foreground/40">·</span>
+              <InsightBadge insight={monthlyInsight} />
             </div>
-            <span className="text-muted-foreground/40">·</span>
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-mono">Latest</span>
-              <span className="font-display font-bold tabular-nums text-foreground">{latestMonthly}%</span>
-            </div>
-            <span className="text-muted-foreground/40">·</span>
-            <InsightBadge insight={monthlyInsight} />
-          </div>
+          )}
         </div>
-        <TrendLine
-          data={monthlyTrend.map((m) => ({ name: m.month, value: m.rate }))}
-          xKey="name"
-          yKey="value"
-          color={ATTENDANCE_PALETTE.monthly}
-          height={160}
-          yDomain={[88, 100]}
-          averageValue={monthlyAvg}
-        />
+        {monthlyTrend.length > 0 ? (
+          <TrendLine
+            data={monthlyTrend.map((m) => ({ name: m.month, value: m.rate }))}
+            xKey="name"
+            yKey="value"
+            color={ATTENDANCE_PALETTE.monthly}
+            height={160}
+            averageValue={monthlyAvg}
+          />
+        ) : (
+          <ChartEmptyNote message="Not enough history yet — the monthly trend appears after a few recorded weeks." />
+        )}
       </section>
     </>
   )

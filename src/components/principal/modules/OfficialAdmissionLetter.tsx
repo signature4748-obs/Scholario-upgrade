@@ -2,9 +2,10 @@
 
 import { useRef } from 'react'
 import { toast } from 'sonner'
-import { school } from '@/lib/mock/school'
 import { useSchoolProfile } from '@/lib/school-profile'
 import { downloadHTMLFile, safeFileName } from '@/lib/download-file'
+// Print isolation — the letter sheet prints ALONE (no app shell).
+import { printIsolated } from '@/lib/print-isolate'
 import { TopActionBar } from './OfficialAdmissionLetter/TopActionBar'
 import { Watermark, SchoolHeader } from './OfficialAdmissionLetter/SchoolHeader'
 import { StudentProfileGrid } from './OfficialAdmissionLetter/StudentProfileGrid'
@@ -20,7 +21,9 @@ export function OfficialAdmissionLetter({ data, onClose }: Props) {
   const profile = useSchoolProfile()
 
   const handlePrint = () => {
-    window.print()
+    // Prints ONLY the letter sheet — the app shell never leaks onto the
+    // page (clone-to-#print-root isolation, see lib/print-isolate.ts).
+    printIsolated(printRef.current)
   }
 
   const fullName = `${data.student.firstName} ${data.student.lastName}`
@@ -43,7 +46,9 @@ export function OfficialAdmissionLetter({ data, onClose }: Props) {
     }
   }
 
-  const principalName = profile.principal || school.principal || 'Principal'
+  // Signatory follows the identity cascade; a school that never recorded
+  // a principal signs as the neutral role, never a demo person.
+  const principalName = profile.principal || 'Principal'
 
   return (
     <div className="space-y-6">

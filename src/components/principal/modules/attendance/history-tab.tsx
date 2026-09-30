@@ -33,6 +33,7 @@ import {
   getHistoryForDateClass,
   type AttendanceHistoryRecord,
 } from '@/lib/mock/attendance'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { formatNumber } from '@/lib/format'
 import { toast } from 'sonner'
 import { ATTENDANCE_PALETTE } from './attendance-charts'
@@ -76,8 +77,22 @@ interface AttendanceHistoryTabProps {
 
 type ExportKind = 'student' | 'staff' | null
 
+// FINAL-GATE (EG-9F/R7) — stable empty fallbacks so the demo-conditional
+// corpora keep referential identity across renders.
+const NO_SECTIONS: typeof classSections = []
+const NO_HISTORY: typeof attendanceHistory = []
+
 export function AttendanceHistoryTab({ initialDate, initialClassId }: AttendanceHistoryTabProps) {
   const reduce = useReducedMotion()
+
+  // FINAL-GATE (EG-9F/R7) — the classSections + attendanceHistory corpora
+  // are deterministic DEMO fabrications (rosters, rates, teacher names).
+  // They render ONLY for the demo tenant; a real production tenant sees
+  // the tab's honest empty state ("No attendance records found…") and its
+  // class filter stays on All Classes until real class data exists.
+  const isDemo = useIsDemoTenant()
+  const sections = isDemo ? classSections : NO_SECTIONS
+  const historyRecords = isDemo ? attendanceHistory : NO_HISTORY
   // Brief PART 31: single month selector (replaces arbitrary date range).
   const [selectedMonth, setSelectedMonth] = useState<string>('2025-12')
   const [classFilter, setClassFilter] = useState<string>(initialClassId ?? 'all')
@@ -104,7 +119,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
   // separate from the monthly EXPORT, which is always the full month).
   const filtered = useMemo(() => {
     const [_year, _month] = selectedMonth.split('-').map(Number)
-    return attendanceHistory.filter((r) => {
+    return historyRecords.filter((r) => {
       const rMonth = r.date.substring(0, 7)  // "2025-12"
       if (rMonth !== selectedMonth) return false
       if (classFilter !== 'all' && r.classId !== classFilter) return false
@@ -115,7 +130,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
       }
       return true
     })
-  }, [selectedMonth, classFilter, statusFilter, search])
+  }, [selectedMonth, classFilter, statusFilter, search, historyRecords])
 
   // Brief PART 30: Get the selected month label for export naming.
   const selectedMonthLabel = useMemo(() => {
@@ -125,14 +140,23 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
 
   // Brief PART 43-44: Export Student Attendance → REAL PDF (Brief PART 14-20).
   // Brief PART 11 + 36: accepts a classId ('all' or specific) for class-wise export.
+  // FINAL-GATE (EG-9F/R7) — the monthly PDFs derive from the same demo
+  // corpus; a real tenant gets an honest "nothing to export yet" notice
+  // instead of a fabricated report.
   const handleExportStudent = (classId: string = 'all') => {
     if (exporting) return
+    if (!isDemo) {
+      toast.info('No attendance records to export yet', {
+        description: 'Monthly reports appear once class attendance records are synced.',
+      })
+      return
+    }
     setExporting('student')
     setExported(null)
     try {
       const { filename } = generateStudentMonthlyPDF(selectedMonth, classId)
       setExporting(null)
-      const cls = classSections.find((c) => c.id === classId)
+      const cls = sections.find((c) => c.id === classId)
       const label = cls
         ? `${selectedMonthLabel} — ${cls.name} Attendance Report`
         : `${selectedMonthLabel} — Class Attendance Report`
@@ -150,8 +174,15 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
 
   // Brief PART 43-44: Export Staff Attendance → REAL PDF (Brief PART 14-20).
   // Brief PART 29: completely separate from student report.
+  // FINAL-GATE (EG-9F/R7) — same demo-only gate as the student export.
   const handleExportStaff = () => {
     if (exporting) return
+    if (!isDemo) {
+      toast.info('No attendance records to export yet', {
+        description: 'Monthly reports appear once staff attendance records are synced.',
+      })
+      return
+    }
     setExporting('staff')
     setExported(null)
     try {
@@ -194,7 +225,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Classes</SelectItem>
-            {classSections.map((c) => (
+            {sections.map((c) => (
               <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
             ))}
           </SelectContent>
@@ -251,7 +282,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
             <DropdownMenuItem onClick={() => handleExportStudent('all')} className="text-xs gap-2">
               <FileText className="h-3.5 w-3.5" /> All Classes
             </DropdownMenuItem>
-            {classSections.map((c) => (
+            {sections.map((c) => (
               <DropdownMenuItem key={c.id} onClick={() => handleExportStudent(c.id)} className="text-xs gap-2">
                 <FileText className="h-3.5 w-3.5" /> {c.name}
               </DropdownMenuItem>

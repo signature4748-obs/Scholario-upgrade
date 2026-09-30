@@ -4,8 +4,14 @@
  * AttendanceInsights — Best/Needs/Average cards + Live Class Snapshot.
  *
  * Brief §11 (Phase 2): Live Class Snapshot behavior is context-aware:
- *   - All Classes selected → LIVE CLASS OVERVIEW (top 4-6 class summaries)
- *   - Specific class selected → LIVE CLASS SNAPSHOT for that class's roster
+ *   - All Classes selected → CLASS OVERVIEW (top 4-6 grade-group
+ *     summaries, REAL data from GET /api/attendance/overview byClass —
+ *     FINAL-GATE: previously this card fabricated per-class rates from the
+ *     mock classSections store, contradicting the real Class-wise Report
+ *     rendered on the same screen)
+ *   - Specific class selected → LIVE CLASS SNAPSHOT for that class's
+ *     roster (per-class roster workstream — still the seeded section
+ *     store until a per-class roster API exists)
  *
  * Brief §12: snapshot shows real-time status counts at the top, then grid.
  */
@@ -21,6 +27,7 @@ import {
 import { formatNumber } from '@/lib/format'
 import { ATTENDANCE_PALETTE } from './attendance-charts'
 import { STATUS_META } from './attendance-status'
+import type { ClassReportRow } from './class-report'
 
 /** attendance-overview-real — the three headline insight cards, derived at
  *  the call site from GET /api/attendance/overview (best / needs-attention
@@ -42,11 +49,15 @@ export function AttendanceInsights({
   classFilter,
   insights,
   onViewAllClasses,
+  schoolRows,
 }: {
   classFilter: string
   /** REAL headline insights (see AttendanceInsightsData). */
   insights?: AttendanceInsightsData
   onViewAllClasses?: () => void
+  /** REAL grade-group rows from GET /api/attendance/overview `byClass` —
+   *  drives the All-Classes overview card (FINAL-GATE: no mock rates). */
+  schoolRows?: ClassReportRow[]
 }) {
   // attendance-overview-real — derive the three cards from the canonical
   // overview; honest placeholders when a figure isn't available.
@@ -87,7 +98,7 @@ export function AttendanceInsights({
 
       {/* Live Class Snapshot — context-aware (Brief §11) */}
       {classFilter === 'all' ? (
-        <LiveClassOverview sections={classSections} onViewAll={onViewAllClasses} />
+        <ClassGroupOverview rows={schoolRows ?? []} onViewAll={onViewAllClasses} />
       ) : (
         <LiveClassRoster section={classSections.find((c) => c.id === classFilter) ?? null} />
       )}
@@ -134,18 +145,35 @@ function InsightCard({
 }
 
 /* ──────────────────────────────────────────────────────────
-   LiveClassOverview — Brief §11: when "All Classes" is selected
-   show top 4-6 class summaries, then "View all classes →" CTA.
+   ClassGroupOverview — Brief §11: when "All Classes" is selected show
+   top 4-6 grade-group summaries, then "View all classes →" CTA.
+   FINAL-GATE: rows are the REAL per-grade-group aggregates (rate over all
+   recorded sessions) from /api/attendance/overview — the exact numbers the
+   Class-wise Report shows. No mock rates on this screen anymore.
    ────────────────────────────────────────────────────────── */
-function LiveClassOverview({
-  sections, onViewAll,
+function ClassGroupOverview({
+  rows, onViewAll,
 }: {
-  sections: ClassSection[]
+  rows: ClassReportRow[]
   onViewAll?: () => void
 }) {
   const reduce = useReducedMotion()
   // Sort by rate desc, show top 6
-  const topSections = [...sections].sort((a, b) => b.rate - a.rate).slice(0, 6)
+  const top = [...rows].sort((a, b) => b.rate - a.rate).slice(0, 6)
+
+  if (top.length === 0) {
+    return (
+      <GlassCard className="p-3 sm:p-4 lg:p-5">
+        <h3 className="font-semibold text-sm flex items-center gap-2">
+          <UserCheck className="h-4 w-4 text-primary shrink-0" />
+          Class Overview
+        </h3>
+        <p className="text-xs text-muted-foreground text-center py-6">
+          No attendance recorded yet — class summaries will appear here.
+        </p>
+      </GlassCard>
+    )
+  }
 
   return (
     <GlassCard className="p-3 sm:p-4 lg:p-5">
@@ -153,10 +181,10 @@ function LiveClassOverview({
         <div className="min-w-0">
           <h3 className="font-semibold text-sm flex items-center gap-2">
             <UserCheck className="h-4 w-4 text-primary shrink-0" />
-            Live Class Overview
+            Class Overview
           </h3>
           <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
-            Top {topSections.length} classes by attendance rate · {sections.length} total
+            Top {top.length} grade groups by attendance rate · {rows.length} total · all recorded sessions
           </p>
         </div>
         {onViewAll && (
@@ -171,9 +199,9 @@ function LiveClassOverview({
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-        {topSections.map((s, i) => (
+        {top.map((s, i) => (
           <motion.div
-            key={s.id}
+            key={s.class}
             initial={reduce ? false : { opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: Math.min(i * 0.05, 0.3), duration: 0.3 }}
@@ -181,8 +209,8 @@ function LiveClassOverview({
           >
             <div className="flex items-center justify-between gap-2 mb-2">
               <div className="min-w-0">
-                <p className="text-xs font-semibold text-foreground truncate">{s.name}</p>
-                <p className="text-[10px] text-muted-foreground truncate">{s.teacher}</p>
+                <p className="text-xs font-semibold text-foreground truncate">{s.class}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{formatNumber(s.total)} students</p>
               </div>
               <span className="font-display text-sm font-bold tabular-nums" style={{
                 color: s.rate >= 95 ? ATTENDANCE_PALETTE.present
@@ -195,7 +223,7 @@ function LiveClassOverview({
             <div className="h-1 rounded-full bg-muted/60 overflow-hidden mb-2">
               <motion.div
                 initial={reduce ? false : { width: 0 }}
-                animate={{ width: `${s.rate}%` }}
+                animate={{ width: `${Math.min(100, s.rate)}%` }}
                 transition={{ duration: 0.6, delay: Math.min(i * 0.05, 0.3) + 0.1 }}
                 className="h-full rounded-full"
                 style={{
@@ -206,7 +234,7 @@ function LiveClassOverview({
               />
             </div>
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span><span className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{s.present}</span> present</span>
+              <span><span className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatNumber(s.present)}</span> present</span>
               <span className="text-muted-foreground/40">·</span>
               <span><span className="font-semibold text-amber-600 dark:text-amber-400 tabular-nums">{s.late}</span> late</span>
               <span className="text-muted-foreground/40">·</span>

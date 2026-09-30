@@ -45,8 +45,10 @@ import { Button } from '@/components/ui/button'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '../shared/segmented-tabs'
 import {
+  useTransportStore,
   useTransportData,
 } from '@/lib/store/transport-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import type { TransportAssignment } from '@/lib/store/transport-store'
 import {
   TPT_GLOBAL_STYLES,
@@ -79,6 +81,12 @@ export function TransportModule() {
   const [removeOpen, setRemoveOpen] = useState(false)
   const [changeRouteTarget, setChangeRouteTarget] = useState<TransportAssignment | null>(null)
   const [removeTarget, setRemoveTarget] = useState<TransportAssignment | null>(null)
+
+  // FINAL-GATE (EG-9F/R4) — apply the demo tenant's sanctioned seed corpus
+  // once (module root); a real tenant keeps the honest empty state.
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useTransportStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
 
   const data = useTransportData()
   const { analytics } = data

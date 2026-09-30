@@ -49,7 +49,10 @@ import { useEffect, useRef, useState } from 'react'
 import { Printer, Download, X, Receipt as ReceiptIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { school } from '@/lib/mock/school'
+// Receipt letterhead identity: the sanctioned school-profile cascade
+// (server identity → school settings → neutral) — never a hardcoded demo
+// school on another tenant's financial documents.
+import { useSchoolProfile, getSchoolProfile } from '@/lib/school-profile'
 import { formatINR, amountInWordsINR } from '@/lib/format'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { useFeeStore, getStudentBalanceDue, type FeeTransaction, type ReceiptSettings } from '@/lib/store/fee-store'
@@ -297,6 +300,7 @@ function ReceiptCopy({
 }) {
   const ref = paymentRef(t)
   const md = modeDetail(t)
+  const school = useSchoolProfile()
   const official = t.status === 'Success'
   const balance = ctx.balanceDue
   const tier = TIER[fitTier(lines.length)]
@@ -323,13 +327,12 @@ function ReceiptCopy({
       <div style={{ textAlign: 'center', borderBottom: '1.2px solid #0f172a', paddingBottom: '4px' }}>
         <div className="flex items-center justify-between">
           <div className="text-left font-semibold text-slate-600" style={{ fontSize: '7.5px', lineHeight: 1.25 }}>
-            <p>{school.affiliation}</p>
-            <p style={{ marginTop: '1px' }}>Code: {school.code}</p>
+            <p>{school.affiliation || '—'}</p>
           </div>
           <div>
             <p className="font-black uppercase" style={{ fontSize: '14px', letterSpacing: '0.04em', lineHeight: 1.1 }}>{school.name}</p>
             <p className="font-medium text-slate-600" style={{ fontSize: '8px', marginTop: '1.5px' }}>
-              {school.address} • Ph: {school.phone}
+              {school.address || '—'}{school.phone ? ` • Ph: ${school.phone}` : ''}
             </p>
           </div>
           <div className="text-right">
@@ -482,6 +485,7 @@ function receiptCopyHTML(
   ctx: ReceiptContext,
   data: CopyData,
 ): string {
+  const school = getSchoolProfile()
   const ref = paymentRef(t)
   const md = modeDetail(t)
   const official = t.status === 'Success'
@@ -499,12 +503,11 @@ function receiptCopyHTML(
       <div class="copy">
         <div class="hdr">
           <div class="hdr-l">
-            <p>${esc(school.affiliation)}</p>
-            <p>Code: ${esc(school.code)}</p>
+            <p>${esc(school.affiliation || '—')}</p>
           </div>
           <div class="hdr-c">
             <h2>${esc(school.name)}</h2>
-            <p>${esc(school.address)} &bull; Ph: ${esc(school.phone)}</p>
+            <p>${esc(school.address || '—')}${school.phone ? ' &bull; Ph: ' + esc(school.phone) : ''}</p>
           </div>
           <div class="hdr-r"><span class="pill">${esc(data.designation)}</span></div>
         </div>

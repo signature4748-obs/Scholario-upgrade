@@ -1,23 +1,34 @@
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 
-/** Page 1 of the A4 application form — header, banner, and Sections A–D. */
+/** Standard Indian admission category checkboxes (blank form furniture,
+ * not school data — the applicant ticks one). */
+const ADMISSION_CATEGORIES = ['General', 'OBC', 'SC', 'ST', 'EWS']
+
+/** Page 1 of the A4 application form — header, banner, and Sections A–D.
+ * Letterhead identity follows the school-profile cascade (server →
+ * settings → neutral); unconfigured fields print honestly. */
 export function ApplicationFormPage1({ academicSession }: { academicSession: string }) {
+  const school = useSchoolProfile()
   return (
     <div className="space-y-6">
       {/* Header / School Info */}
       <div className="border-b-2 border-slate-900 pb-4 flex items-start justify-between gap-4">
         <div className="flex items-center gap-4">
           <div className="h-16 w-16 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-2xl shrink-0">
-            {school.logo}
+            {school.shortName.charAt(0)}
           </div>
           <div>
             <h1 className="text-lg sm:text-xl font-extrabold uppercase tracking-tight text-slate-900">
               {school.name}
             </h1>
-            <p className="text-[11px] font-semibold text-slate-700">{school.affiliation}</p>
-            <p className="text-[10px] text-slate-600 mt-0.5">{school.address}</p>
+            <p className="text-[11px] font-semibold text-slate-700">{school.affiliation || '—'}</p>
+            {school.address && <p className="text-[10px] text-slate-600 mt-0.5">{school.address}</p>}
             <p className="text-[10px] text-slate-600">
-              Phone: {school.phone} · Email: {school.email} · Website: {school.website}
+              {[
+                school.phone ? `Phone: ${school.phone}` : null,
+                school.email,
+                school.website,
+              ].filter(Boolean).join(' · ') || '—'}
             </p>
           </div>
         </div>
@@ -35,7 +46,7 @@ export function ApplicationFormPage1({ academicSession }: { academicSession: str
       <div className="bg-slate-900 text-white text-center py-2 px-4 rounded font-bold tracking-wider uppercase text-xs flex items-center justify-between">
         <span>ACADEMIC SESSION: {academicSession}</span>
         <span>STUDENT ADMISSION APPLICATION FORM</span>
-        <span>FORM NO: ADM-2025/_______</span>
+        <span>FORM NO: ADM-{academicSession !== '—' ? academicSession.slice(0, 4) : '____'}/_______</span>
       </div>
 
       {/* SECTION A: CANDIDATE PERSONAL INFORMATION */}
@@ -72,7 +83,7 @@ export function ApplicationFormPage1({ academicSession }: { academicSession: str
           <div className="flex items-center gap-2">
             <span className="font-bold text-[11px] min-w-[90px]">5. Category:</span>
             <div className="flex flex-wrap items-center gap-2 text-[10px]">
-              {(school.categories || ['General', 'OBC', 'SC', 'ST', 'EWS']).map((cat) => (
+              {ADMISSION_CATEGORIES.map((cat) => (
                 <span key={cat} className="flex items-center gap-1">
                   <span className="inline-block h-3 w-3 border border-slate-600 rounded-sm"></span> {cat}
                 </span>

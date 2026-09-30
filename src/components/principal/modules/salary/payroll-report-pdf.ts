@@ -20,7 +20,7 @@
 
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { school } from '@/lib/mock/school'
+import { getSchoolProfile } from '@/lib/school-profile'
 import type { ArchivedEmployeeRecord, SalaryPayment } from '@/lib/store/salary-store'
 
 export interface PayrollReportInput {
@@ -62,6 +62,9 @@ const paymentNotes = (p: SalaryPayment): string =>
   p.rejectionReason ? `Not received: ${p.rejectionReason}` : p.reversalReason ? `Reversed: ${p.reversalReason}` : ''
 
 export function downloadPayrollReport(input: PayrollReportInput): void {
+  // Report letterhead — the identity cascade (server → settings →
+  // neutral); the sub-line prefers the tagline, else city · session.
+  const school = getSchoolProfile()
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
@@ -79,7 +82,10 @@ export function downloadPayrollReport(input: PayrollReportInput): void {
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
     doc.setTextColor(100, 116, 139)
-    doc.text(`${school.tagline}`, marginX, 60)
+    doc.text(
+      school.tagline || [school.city, school.academicYear ? `Session ${school.academicYear}` : ''].filter(Boolean).join(' · ') || '—',
+      marginX, 60,
+    )
 
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(11)

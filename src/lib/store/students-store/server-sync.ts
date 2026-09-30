@@ -35,6 +35,7 @@ import type { SubjectDef } from '@/lib/mock/academic'
 import { streamKeyFromDbValue } from '@/lib/mock/academic'
 import { useStudentsStore } from './store'
 import { useAuth as useAuthStore } from '@/lib/store/auth-store'
+import { readIsDemoTenant } from '@/lib/store/demo-tenant'
 
 // ── payload types (mirror /api/students/roster) ─────────────────────
 
@@ -310,7 +311,11 @@ let syncPromise: Promise<boolean> | null = null
 /**
  * Fetch the canonical roster and replace the store's students / classes /
  * subject registry. Runs at most once per browser session (module-level
- * promise); failures keep the existing store content and log honestly.
+ * promise, guard reset on failure so a later mount can retry); failures
+ * keep the existing store content ONLY for the demo tenant (stale demo
+ * roster until a successful sync) — a real production tenant never keeps
+ * the fabricated seed universe as a fallback: it is purged so every
+ * consumer renders its honest empty state (EG-9F/R8).
  */
 export function syncStudentsFromServer(): Promise<boolean> {
   if (syncPromise) return syncPromise
@@ -350,7 +355,27 @@ export function syncStudentsFromServer(): Promise<boolean> {
       }
       return true
     } catch (e) {
-      console.warn('[students-store] roster sync failed — keeping existing store data:', e)
+      console.warn('[students-store] roster sync failed:', e)
+      // FINAL-GATE (EG-9F/R8) — demo tenants may keep the visible stale
+      // roster (stale-while-revalidate is fine for the demo tier).
+      if (readIsDemoTenant()) return false
+      // Real production tenant: NEVER keep the fabricated seed universe
+      // as a failure fallback. Purge it so the honest empty states render
+      // (canonical roster data that was already synced/persisted stays —
+      // only the STU-xxx seed universe is evicted), and clear the
+      // once-per-session guard so a later mount can retry the sync.
+      const st = useStudentsStore.getState()
+      const isSeedRoster =
+        st.students.length > 0 && st.students.every((s) => s.id.startsWith('STU-'))
+      if (isSeedRoster) {
+        useStudentsStore.setState({
+          students: [],
+          classes: [],
+          academicSubjects: [],
+          studentPositions: [],
+        })
+      }
+      syncPromise = null
       return false
     }
   })()

@@ -55,6 +55,8 @@ export interface MeUser {
     logoUrl: string | null
     academicYear: string
     plan: string
+    /** FINAL-GATE — demo-tenant flag (gates illustrative client seeds). */
+    isDemo: boolean
   } | null
 }
 

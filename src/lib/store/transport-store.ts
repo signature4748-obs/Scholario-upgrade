@@ -14,6 +14,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { useMemo } from 'react'
 import { useStudentsStore } from '@/lib/store/students-store'
+import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 import { migrateLegacyScopedStore, createTenantScopedStorage } from '@/lib/tenant/tenant-storage'
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
 
@@ -171,6 +172,10 @@ interface TransportState {
   maintenance: MaintenanceRecord[]
   search: string
   routeChange: RouteChangeNotice | null
+  /** FINAL-GATE (EG-9F/R4) — set once the demo seed has been applied. */
+  demoSeeded?: boolean
+  /** FINAL-GATE (EG-9F/R4) — one-shot demo-tier seeder (module root). */
+  ensureDemoSeed: () => void
 
   setSearch: (q: string) => void
   assignStudent: (studentId: string, routeId: string, stop: string) => { success: boolean; error?: string }
@@ -183,13 +188,19 @@ interface TransportState {
 export const useTransportStore = create<TransportState>()(
   persist(
     (set, get) => ({
-  vehicles: SEED_VEHICLES,
-  routes: SEED_ROUTES,
-  drivers: SEED_DRIVERS,
-  assignments: buildAssignments(),
-  maintenance: SEED_MAINTENANCE,
+  // FINAL-GATE (EG-9F/R4) — the seed corpus above is the sanctioned DEMO
+  // TIER content (School.isDemo): the store boots EMPTY and the Transport
+  // module root applies it once per session via `ensureDemoSeed`. A real
+  // production tenant keeps the honest empty state; persisted tenant-
+  // scoped state always wins over re-seeding.
+  vehicles: [],
+  routes: [],
+  drivers: [],
+  assignments: [],
+  maintenance: [],
   search: '',
   routeChange: null,
+  ensureDemoSeed: () => ensureTransportDemoSeed(),
 
   setSearch: (q) => set({ search: q }),
 
@@ -306,6 +317,24 @@ export const useTransportStore = create<TransportState>()(
     },
   ),
 )
+
+// ─── FINAL-GATE (EG-9F/R4) demo-tier seeder ──────────────────────────
+// Built lazily on first call (the store exists by then). Applies the
+// sanctioned demo corpus at most once, never over non-pristine state —
+// see makeDemoSeedApplier guard rules. Assignments are built at APPLY
+// time (not module-load time) so they derive from whichever roster the
+// demo session has (post-sync canonical roster when available).
+let _ensureTransportDemoSeed: (() => void) | null = null
+function ensureTransportDemoSeed(): void {
+  _ensureTransportDemoSeed ??= makeDemoSeedApplier(useTransportStore, {
+    vehicles: SEED_VEHICLES,
+    routes: SEED_ROUTES,
+    drivers: SEED_DRIVERS,
+    assignments: buildAssignments(),
+    maintenance: SEED_MAINTENANCE,
+  })
+  _ensureTransportDemoSeed()
+}
 
 export function useTransportData() {
   const vehicles = useTransportStore((s) => s.vehicles)

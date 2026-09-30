@@ -17,7 +17,7 @@ import {
   Wallet, Camera, FileText, Pencil, ChevronDown,
   CheckCircle2, AlertCircle, MinusCircle, ImageIcon,
 } from 'lucide-react'
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 import { formatDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useAdmissionFeatureFlags, useAdmissionDocumentPolicy } from '../lib/admission-utils'
@@ -69,6 +69,8 @@ export function ReviewStep({
 }) {
   const [viewMode, setViewMode] = useState<'summary' | 'official'>('summary')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  // Official-preview letterhead — the identity cascade, never a demo school.
+  const school = useSchoolProfile()
   const documentPolicy = useAdmissionDocumentPolicy()
   const toggleSection = (id: string) => {
     setCollapsed((prev) => {
@@ -212,7 +214,7 @@ export function ReviewStep({
             <div className="flex-1 min-w-0">
               <h3 className="font-bold text-lg text-foreground truncate">{fullName || 'Unnamed applicant'}</h3>
               <p className="text-xs text-muted-foreground truncate">
-                {data.className} {data.section ? `— ${data.section}` : ''} · {data.previousYear || school.academicYear}
+                {data.className} {data.section ? `— ${data.section}` : ''} · {data.previousYear || school.academicYear || '—'}
               </p>
             </div>
             {flags.enableStudentPhoto && (
@@ -328,15 +330,15 @@ export function ReviewStep({
         <div className="rounded-2xl border-2 border-border bg-card p-6 space-y-4 shadow-sm">
           <div className="flex items-start justify-between border-b-2 border-foreground/20 pb-3 flex-wrap gap-3">
             <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-foreground text-background font-display text-xl font-black">{school.logo}</div>
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-foreground text-background font-display text-xl font-black">{school.shortName.charAt(0)}</div>
               <div>
                 <h2 className="font-bold text-base uppercase tracking-wide">{school.name}</h2>
-                <p className="text-[10px] text-muted-foreground">{school.affiliation}</p>
+                <p className="text-[10px] text-muted-foreground">{school.affiliation || '—'}</p>
               </div>
             </div>
             <div className="text-right text-[10px]">
-              <p className="font-bold text-primary">FORM NO: ADM-{school.session}</p>
-              <p className="text-muted-foreground">{school.academicYear}</p>
+              <p className="font-bold text-primary">FORM NO: ADM-{school.academicYear || '____'}</p>
+              <p className="text-muted-foreground">{school.academicYear || '—'}</p>
             </div>
           </div>
 

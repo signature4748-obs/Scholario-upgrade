@@ -145,6 +145,13 @@ export async function GET() {
     }
 
     const schoolId = schoolScoped(user)
+    // FINAL-GATE fix (collected semantics): `feesPaid` now sums Fee.paid across
+    // ALL rows. The previous `status: 'PAID'` filter silently dropped the paid
+    // portion of PARTIALLY_PAID rows, understating collections and breaking the
+    // identity billed = collected + outstanding (the donut's Outstanding segment
+    // is billed − collected, and the defaulters API computes outstanding as
+    // Σ(amount − paid) over non-PAID rows — with the all-rows sum the two
+    // systems agree by algebra instead of drifting).
     const [students, teachers, classes, subjects, exams, vehicles, routes, books, notifications, feesTotal, feesPaid, overdue] = await Promise.all([
       db.student.count({ where: { schoolId } }),
       db.teacher.count({ where: { schoolId } }),
@@ -156,7 +163,7 @@ export async function GET() {
       db.libraryBook.count({ where: { schoolId } }),
       db.notification.count({ where: { schoolId } }),
       db.fee.aggregate({ where: { schoolId }, _sum: { amount: true } }),
-      db.fee.aggregate({ where: { schoolId, status: 'PAID' }, _sum: { paid: true } }),
+      db.fee.aggregate({ where: { schoolId }, _sum: { paid: true } }),
       db.fee.count({ where: { schoolId, status: { in: ['UNPAID', 'OVERDUE'] } } }),
     ])
 
@@ -174,8 +181,12 @@ export async function GET() {
     const attendanceRate = students ? Math.round((present / Math.max(1, present + absent + late)) * 100) : 0
 
     // fee collection trend (last 6 months from payments)
+    // FINAL-GATE fix: only SUCCESSFUL payments are recorded collections —
+    // FAILED/PENDING gateway rows must not inflate the trend (the platform
+    // branch above already filtered status: 'SUCCESS'; the school branch now
+    // matches it).
     const payments = await db.payment.findMany({
-      where: { fee: { schoolId } },
+      where: { fee: { schoolId }, status: 'SUCCESS' },
       select: { amount: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
       take: 200,

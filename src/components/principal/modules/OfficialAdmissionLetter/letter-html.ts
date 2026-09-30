@@ -35,10 +35,12 @@ export function buildAdmissionLetterHTML(data: AdmissionLetterData, profile: Sch
     profileRow('Student Name', fullName),
     profileRow('Admission No', data.admissionNo),
     profileRow('Admitted Class &amp; Section', `${data.academic.className} — Section ${data.academic.section}`),
-    profileRow('Academic Session', data.academicSession || '2025–2026'),
+    // Session comes from the letter data; an unknown session prints an
+    // honest em-dash placeholder, never a fabricated year.
+    profileRow('Academic Session', data.academicSession || '—'),
     profileRow('Date of Admission', formatDate(data.admissionDate)),
     profileRow('Date of Birth', formatDate(data.student.dob)),
-    profileRow('Assigned Roll Number', data.academic.rollNo || '01'),
+    profileRow('Assigned Roll Number', data.academic.rollNo || '—'),
     ...(data.studentId ? [profileRow('Student ID', data.studentId)] : []),
     ...(data.regNo ? [profileRow('Registration No', data.regNo)] : []),
     // Official Documents policy: parent contact numbers are sensitive and

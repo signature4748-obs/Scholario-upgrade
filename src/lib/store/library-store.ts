@@ -16,6 +16,7 @@ import { persist } from 'zustand/middleware'
 import { useMemo } from 'react'
 import { useStudentsStore } from '@/lib/store/students-store'
 import { teachers } from '@/lib/mock/teachers'
+import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 import { migrateLegacyScopedStore, createTenantScopedStorage } from '@/lib/tenant/tenant-storage'
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
 
@@ -139,6 +140,10 @@ interface LibraryState {
   search: string
   categoryFilter: string
   availabilityFilter: string
+  /** FINAL-GATE (EG-9F/R4) — set once the demo seed has been applied. */
+  demoSeeded?: boolean
+  /** FINAL-GATE (EG-9F/R4) — one-shot demo-tier seeder (module root). */
+  ensureDemoSeed: () => void
 
   setSearch: (q: string) => void
   setCategoryFilter: (c: string) => void
@@ -156,12 +161,18 @@ interface LibraryState {
 export const useLibraryStore = create<LibraryState>()(
   persist(
     (set, get) => ({
-  books: SEED_BOOKS,
-  issues: [...SESSION_BORROWER_ISSUES, ...SEED_ISSUES],
-  reservations: SEED_RESERVATIONS,
+  // FINAL-GATE (EG-9F/R4) — the seed corpus above is the sanctioned DEMO
+  // TIER content (School.isDemo): the store boots EMPTY and the Library
+  // module roots apply it once per session via `ensureDemoSeed`. A real
+  // production tenant keeps the honest empty state; persisted tenant-
+  // scoped state always wins over re-seeding.
+  books: [],
+  issues: [],
+  reservations: [],
   search: '',
   categoryFilter: 'all',
   availabilityFilter: 'all',
+  ensureDemoSeed: () => ensureLibraryDemoSeed(),
 
   setSearch: (q) => set({ search: q }),
   setCategoryFilter: (c) => set({ categoryFilter: c }),
@@ -271,8 +282,11 @@ export const useLibraryStore = create<LibraryState>()(
 
   waiveFine: (issueId) => {
     const state = get()
+    // The fine AMOUNT is a recorded fact — waiving forgives collection, it
+    // must not erase the incurred amount (payFine keeps it too). Zeroing it
+    // here made every "Waived ₹" figure in the Fines summary read ₹0.
     set({
-      issues: state.issues.map((i) => i.id === issueId ? { ...i, fineStatus: 'Waived', fine: 0 } : i),
+      issues: state.issues.map((i) => i.id === issueId ? { ...i, fineStatus: 'Waived' } : i),
     })
   },
 
@@ -321,6 +335,20 @@ export const useLibraryStore = create<LibraryState>()(
     },
   ),
 )
+
+// ─── FINAL-GATE (EG-9F/R4) demo-tier seeder ──────────────────────────
+// Built lazily on first call (the store exists by then). Applies the
+// sanctioned demo corpus at most once, never over non-pristine state —
+// see makeDemoSeedApplier guard rules.
+let _ensureLibraryDemoSeed: (() => void) | null = null
+function ensureLibraryDemoSeed(): void {
+  _ensureLibraryDemoSeed ??= makeDemoSeedApplier(useLibraryStore, {
+    books: SEED_BOOKS,
+    issues: [...SESSION_BORROWER_ISSUES, ...SEED_ISSUES],
+    reservations: SEED_RESERVATIONS,
+  })
+  _ensureLibraryDemoSeed()
+}
 
 // ─── Hook: Library Analytics ─────────────────────────────────────────
 

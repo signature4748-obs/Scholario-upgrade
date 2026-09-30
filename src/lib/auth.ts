@@ -273,6 +273,10 @@ export type AuthUser = {
     plan: string
     /** Tenant lifecycle status — the access-policy input (PHASE 7.5). */
     status: string
+    /** FINAL-GATE — demo-tenant flag: the sanctioned signal that gates
+     * illustrative client-side seed content to the showcase tenant only
+     * (real production tenants must start honest-empty). */
+    isDemo: boolean
   } | null
 }
 
@@ -312,6 +316,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
           academicYear: u.school.academicYear ?? '',
           plan: u.school.plan,
           status: u.school.status,
+          isDemo: u.school.isDemo,
         }
       : null,
   }

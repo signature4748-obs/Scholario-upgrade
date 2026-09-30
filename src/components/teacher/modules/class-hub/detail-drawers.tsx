@@ -183,7 +183,15 @@ function AttendanceReport({ detail }: { detail: HubDetailPayload | null }) {
                   <div
                     className={cn(
                       'w-full max-w-8 rounded-t-md',
-                      (m.ratePct ?? 0) >= 90 ? 'bg-emerald-500' : (m.ratePct ?? 0) >= 75 ? 'bg-amber-500' : 'bg-rose-500',
+                      // FINAL-GATE (EG-4B) — a month with NO records is
+                      // neutral, never the rose "attention" color.
+                      m.ratePct == null
+                        ? 'bg-muted'
+                        : m.ratePct >= 90
+                          ? 'bg-emerald-500'
+                          : m.ratePct >= 75
+                            ? 'bg-amber-500'
+                            : 'bg-rose-500',
                     )}
                     style={{ height: `${Math.max(m.ratePct ?? 4, 4)}%` }}
                   />
@@ -206,7 +214,15 @@ function AttendanceReport({ detail }: { detail: HubDetailPayload | null }) {
                   <span
                     className={cn(
                       'block h-full rounded-full',
-                      (w.ratePct ?? 0) >= 90 ? 'bg-emerald-500' : (w.ratePct ?? 0) >= 75 ? 'bg-amber-500' : 'bg-rose-500',
+                      // FINAL-GATE (EG-4B) — no-record weeks stay neutral
+                      // (they render an honest 0-width bar with a "—" value).
+                      w.ratePct == null
+                        ? 'bg-muted'
+                        : w.ratePct >= 90
+                          ? 'bg-emerald-500'
+                          : w.ratePct >= 75
+                            ? 'bg-amber-500'
+                            : 'bg-rose-500',
                     )}
                     style={{ width: `${Math.min(100, w.ratePct ?? 0)}%` }}
                   />

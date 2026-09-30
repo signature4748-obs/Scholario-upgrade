@@ -4,7 +4,7 @@
  * fines-summary — Fines management + Reports.
  *
  * Fines Section:
- *   - Compact summary strip (Outstanding / Collected / Avg days overdue / Pending count)
+ *   - Compact summary strip (Outstanding / Collected / Waived / Pending count)
  *   - Filterable fines table (All / Pending / Paid / Waived)
  *   - Pay + Waive actions per row (store mutations)
  *
@@ -49,12 +49,16 @@ export function FinesSummary() {
   const data = useLibraryData()
   const [filter, setFilter] = useState<'all' | FineStatus>('all')
 
-  // Only issues with a fine > 0 OR fineStatus !== 'Pending' (so paid/waived historical fines show)
-  const finesRows = issues.filter((i) => i.fine > 0 || i.fineStatus !== 'Pending')
+  // A fine row is a REAL incurred fine (amount > 0), whatever its status —
+  // paid/waived history included. Records with fine === 0 (on-time returns
+  // or zeroed legacy rows) are not fine records and stay out of the ledger.
+  const finesRows = issues.filter((i) => i.fine > 0)
   const filtered = finesRows.filter((i) => filter === 'all' ? true : i.fineStatus === filter)
 
   const outstanding = data.analytics.totalFines
   const collected = data.analytics.collectedFines
+  // Waived total — real incurred amounts that were forgiven (waiveFine
+  // keeps the amount; only the status flips).
   const waived = issues.filter((i) => i.fineStatus === 'Waived').reduce((s, i) => s + i.fine, 0)
   const pendingCount = finesRows.filter((i) => i.fineStatus === 'Pending').length
 
@@ -270,7 +274,10 @@ export function LibraryReports() {
   const data = useLibraryData()
   const analytics = data.analytics
 
-  const maxIssued = Math.max(1, ...analytics.mostIssued.map((b) => b.issued))
+  // Only books actually issued at least once rank — an untouched catalogue
+  // renders the honest "No issues yet" empty state instead of five 0-bars.
+  const issuedRanking = analytics.mostIssued.filter((b) => b.issued > 0)
+  const maxIssued = Math.max(1, ...issuedRanking.map((b) => b.issued))
   const totalBooksForBars = analytics.byCategory.reduce((s, c) => s + c.value, 0)
 
   const issuedRatio = analytics.totalBooks > 0
@@ -314,7 +321,7 @@ export function LibraryReports() {
           action={<BarChart3 className="h-4 w-4 text-muted-foreground" />}
         >
           <div className="space-y-2">
-            {analytics.mostIssued.map((b, i) => {
+            {issuedRanking.map((b, i) => {
               const pct = Math.round((b.issued / maxIssued) * 100)
               return (
                 <motion.div
@@ -342,7 +349,7 @@ export function LibraryReports() {
                 </motion.div>
               )
             })}
-            {analytics.mostIssued.length === 0 && (
+            {issuedRanking.length === 0 && (
               <LibEmptyState icon={<TrendingUp className="h-5 w-5" />} title="No issues yet" description="Issued books will rank here." />
             )}
           </div>
@@ -438,7 +445,7 @@ export function LibraryReports() {
                 <div className="flex-1 min-w-0 h-1.5 rounded-full bg-muted/40 overflow-hidden">
                   <div
                     className="h-full rounded-full bg-cyan-500/80 transition-all"
-                    style={{ width: `${m.count === 0 ? 0 : Math.max(6, Math.round((m.count / maxMonthly) * 100))}%` }}
+                    style={{ width: `${Math.round((m.count / maxMonthly) * 100)}%` }}
                   />
                 </div>
                 <span className="w-5 text-right text-[10px] font-bold tabular-nums text-foreground/70 shrink-0">{m.count}</span>

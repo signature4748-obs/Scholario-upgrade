@@ -1,10 +1,12 @@
 'use client'
 
+import { useRef } from 'react'
 import { Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GlassCard } from '@/components/shared/ui'
 import { formatDate, formatINR } from '@/lib/format'
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
+import { printIsolated } from '@/lib/print-isolate'
 import { computeFeeSnapshot } from '../../../FeeStructureStep/fee-snapshot'
 import { defaultFeeDataState } from '../../../FeeStructureStep/types'
 import type { AdmissionApplication } from '@/lib/store/admission-store'
@@ -22,6 +24,8 @@ interface FeeReceiptTabProps {
  * receipt numbers: the receipt number derives from the admission number.
  */
 export function FeeReceiptTab({ app, artifacts }: FeeReceiptTabProps) {
+  const school = useSchoolProfile()
+  const sheetRef = useRef<HTMLDivElement>(null)
   const { admissionNo } = artifacts
   const formData = app.formData
 
@@ -50,7 +54,7 @@ export function FeeReceiptTab({ app, artifacts }: FeeReceiptTabProps) {
   if (snap.otherHeadsTotal > 0) rows.push({ label: 'Other Fee Heads', amount: snap.otherHeadsTotal })
 
   return (
-    <GlassCard className="p-6 max-w-2xl mx-auto space-y-6 border">
+    <GlassCard ref={sheetRef} className="p-6 max-w-2xl mx-auto space-y-6 border">
       <div className="flex justify-between items-start border-b pb-4">
         <div>
           <h3 className="font-extrabold text-lg">Fee Receipt</h3>
@@ -110,8 +114,8 @@ export function FeeReceiptTab({ app, artifacts }: FeeReceiptTabProps) {
         </div>
       </div>
 
-      <div className="pt-2 flex justify-end gap-2">
-        <Button size="sm" variant="outline" onClick={() => window.print()} className="text-xs">
+      <div className="pt-2 flex justify-end gap-2 print:hidden">
+        <Button size="sm" variant="outline" onClick={() => printIsolated(sheetRef.current)} className="text-xs">
           <Printer className="h-3.5 w-3.5 mr-1" />
           Print Receipt
         </Button>

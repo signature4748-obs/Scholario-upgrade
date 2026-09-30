@@ -45,6 +45,7 @@ import { Button } from '@/components/ui/button'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '../shared/segmented-tabs'
 import { useLibraryStore, useLibraryData } from '@/lib/store/library-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { formatINR, formatDate } from '@/lib/format'
 import { toast } from 'sonner'
 import type { Book, IssueRecord } from '@/lib/store/library-store'
@@ -67,6 +68,12 @@ export function LibraryModule() {
   const [issueOpen, setIssueOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [preselectBook, setPreselectBook] = useState<Book | null>(null)
+
+  // FINAL-GATE (EG-9F/R4) — apply the demo tenant's sanctioned seed corpus
+  // once (module root); a real tenant keeps the honest empty state.
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useLibraryStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
 
   const returnBook = useLibraryStore((s) => s.returnBook)
   const sendReminder = useLibraryStore((s) => s.sendReminder)

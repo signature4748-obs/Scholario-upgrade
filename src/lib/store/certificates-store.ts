@@ -20,6 +20,7 @@
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 // Connected seed — history records reference REAL roster students so every
 // preview / regeneration / download is traceable to the same student the
 // rest of the school modules use (single connected dataset).
@@ -327,6 +328,10 @@ export interface CertificatesState {
   templates: DocumentTemplate[]
   documents: GeneratedDocument[]
   counters: Record<string, number> // prefix → last seq number used
+  /** FINAL-GATE (EG-9F/R4) — set once the demo seed has been applied. */
+  demoSeeded?: boolean
+  /** FINAL-GATE (EG-9F/R4) — one-shot demo-tier seeder (module root). */
+  ensureDemoSeed: () => void
 
   // Queries
   getTemplatesForType: (docType: DocType) => DocumentTemplate[]
@@ -398,9 +403,18 @@ for (const d of SEED_DOCS) {
 export const useCertificatesStore = create<CertificatesState>()(
   persist(
     (set, get) => ({
+  // FINAL-GATE (EG-9F/R4) — the generated-document seed log above is the
+  // sanctioned DEMO TIER content (School.isDemo): the store boots with an
+  // EMPTY history + counters and the certificates module roots apply the
+  // seed once per session via `ensureDemoSeed`. The template catalogue
+  // stays unseeded-gated — it is product configuration (per-doc-type
+  // layouts every school starts from), not operational data. A real
+  // production tenant keeps the honest empty history; persisted tenant-
+  // scoped state always wins over re-seeding.
   templates: DEFAULT_TEMPLATES,
-  documents: SEED_DOCS,
-  counters: SEED_COUNTERS,
+  documents: [],
+  counters: {},
+  ensureDemoSeed: () => ensureCertificatesDemoSeed(),
 
   getTemplatesForType: (docType) =>
     get().templates.filter((t) => t.docType === docType),
@@ -554,3 +568,16 @@ export const useCertificatesStore = create<CertificatesState>()(
     },
   ),
 )
+
+// ─── FINAL-GATE (EG-9F/R4) demo-tier seeder ──────────────────────────
+// Built lazily on first call (the store exists by then). Applies the
+// sanctioned demo history at most once, never over non-pristine state —
+// see makeDemoSeedApplier guard rules.
+let _ensureCertificatesDemoSeed: (() => void) | null = null
+function ensureCertificatesDemoSeed(): void {
+  _ensureCertificatesDemoSeed ??= makeDemoSeedApplier(useCertificatesStore, {
+    documents: SEED_DOCS,
+    counters: SEED_COUNTERS,
+  })
+  _ensureCertificatesDemoSeed()
+}

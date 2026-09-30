@@ -59,9 +59,9 @@ export function ApplicationRow({
             {app.rejectionRetentionDays || 60}d retention
           </span>
         )}
-        {app.status === 'Completed' && app.generatedCredentials && (
+        {app.status === 'Completed' && app.admissionNo && !app.admissionNo.startsWith('DRAFT-') && (
           <span className="text-[9px] text-teal-600 dark:text-teal-400 block font-mono">
-            {app.generatedCredentials.loginId}
+            {app.admissionNo}
           </span>
         )}
       </div>

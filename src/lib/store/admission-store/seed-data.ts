@@ -353,16 +353,14 @@ export const initialApplications: AdmissionApplication[] = [
       { id: 'a11', timestamp: '2026-07-15 10:00 AM', action: 'Submitted', actor: 'Parent', notes: 'Submitted' },
       { id: 'a12', timestamp: '2026-07-18 02:00 PM', action: 'Admission Completed & Enrolled', actor: 'Admission Desk', notes: 'Official credentials & letter issued' },
     ],
-    generatedCredentials: {
-      loginId: 'ANANYA_2026',
-      tempPassword: 'Scholario@2026',
-      portalUrl: 'https://portal.scholario.app',
-    },
+    // FINAL-GATE: generatedCredentials (fabricated portal login) retired
+    // from the seed record — portal accounts are provisioned by the real
+    // Students & Classes enrolment flow. Dispatch flags stay false: the
+    // seed records no notification dispatch (nothing was ever sent).
     notificationsSent: {
-      sms: true,
-      email: true,
-      whatsapp: true,
-      dispatchedAt: '2026-07-18 02:05 PM',
+      sms: false,
+      email: false,
+      whatsapp: false,
     },
   },
   {

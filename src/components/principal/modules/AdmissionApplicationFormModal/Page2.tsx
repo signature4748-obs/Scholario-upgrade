@@ -1,7 +1,8 @@
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 
 /** Page 2 of the A4 application form — mini header and Sections E–H. */
 export function ApplicationFormPage2({ academicSession }: { academicSession: string }) {
+  const school = useSchoolProfile()
   return (
     <div className="space-y-6">
       {/* Header Mini Banner */}
@@ -156,7 +157,7 @@ export function ApplicationFormPage2({ academicSession }: { academicSession: str
               [ School Seal Stamp ]
             </div>
             <span className="font-bold text-[10px] block mt-2">Principal Signature & Stamp</span>
-            <span className="text-[9px] text-slate-500">{school.principal}</span>
+            <span className="text-[9px] text-slate-500">{school.principal || 'Principal'}</span>
           </div>
         </div>
       </div>

@@ -44,6 +44,7 @@ import { Button } from '@/components/ui/button'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '../shared/segmented-tabs'
 import { useInventoryStore, useInventoryData } from '@/lib/store/inventory-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import type { InventoryItem } from '@/lib/store/inventory-store'
 import { formatINR } from '@/lib/format'
 import { INV_GLOBAL_STYLES, InvKpiCard, type InvTab } from './inventory-shared'
@@ -65,6 +66,12 @@ export function InventoryModule() {
   const [actionOpen, setActionOpen] = useState(false)
   const [actionKind, setActionKind] = useState<ActionKind>('add')
   const [actionItem, setActionItem] = useState<InventoryItem | null>(null)
+
+  // FINAL-GATE (EG-9F/R4) — apply the demo tenant's sanctioned seed corpus
+  // once (module root); a real tenant keeps the honest empty state.
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useInventoryStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
 
   const data = useInventoryData()
   const { analytics } = data

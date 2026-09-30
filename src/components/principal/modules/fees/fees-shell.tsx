@@ -26,9 +26,13 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs, type SegmentedTab } from '../shared/segmented-tabs'
-import { useFeeData } from '@/lib/store/fee-store'
+import { useFeeData, CURRENT_ACADEMIC_YEAR } from '@/lib/store/fee-store'
 import { useFocusStore } from '@/lib/store/focus-store'
-import { school } from '@/lib/mock/school'
+// Session for the fee analytics year filter — the identity cascade's
+// academic year (server session) with the fee ledger's canonical year as
+// the fallback; the old mock snapshot carried an EN-dash year that never
+// matched the ledger's hyphenated keys.
+import { useSchoolProfile } from '@/lib/school-profile'
 // SaaS-STAGE-2A (Task 7-b) — tenant-aware feature gating: the tab list is
 // FILTERED by the ACTIVE school's sub-feature configuration. Overview /
 // Payments / Student Accounts are always present (core operations); the
@@ -50,7 +54,8 @@ export function FeesShell({ onNavigate }: { onNavigate?: (moduleKey: string) => 
   const [collectOpen, setCollectOpen] = useState(false)
   const [preselectStudentId, setPreselectStudentId] = useState<string | undefined>(undefined)
   const [feeFocusStudent, setFeeFocusStudent] = useState<{ name: string; ts: number } | null>(null)
-  const data = useFeeData(school.academicYear)
+  const profile = useSchoolProfile()
+  const data = useFeeData(profile.academicYear || CURRENT_ACADEMIC_YEAR)
 
   // Deep-link: command palette fee results jump to the Student Accounts tab
   // and open the fee account workspace for the student named in the result

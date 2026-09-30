@@ -26,9 +26,6 @@ export const createCompletionSlice: StateCreator<
     const finalRollNo = issuanceDetails?.rollNo || (app.rollNo !== '—' ? app.rollNo : '01')
     const finalRegNo = issuanceDetails?.regNo || `REG-${year}-${randId(6)}`
 
-    const loginId = `${app.formData.firstName.toUpperCase()}_2026`
-    const tempPassword = `Scholario@${Math.floor(Math.random() * 9000 + 1000)}`
-
     const updatedApps = state.applications.map((item) =>
       item.id === appId
         ? {
@@ -39,17 +36,15 @@ export const createCompletionSlice: StateCreator<
             rollNo: finalRollNo,
             regNo: finalRegNo,
             lastUpdatedDate: now,
-            generatedCredentials: {
-              loginId,
-              tempPassword,
-              portalUrl: 'https://portal.scholario.app',
-            },
-            notificationsSent: {
-              sms: true,
-              email: true,
-              whatsapp: true,
-              dispatchedAt: `${now} ${nowTime}`,
-            },
+            // FINAL-GATE honesty fix: completion used to fabricate portal
+            // credentials (loginId/tempPassword/portal.scholario.app) and
+            // claim SMS/email/WhatsApp dispatch — none of which happens in
+            // this flow (no messaging integration is wired, no account is
+            // provisioned here). The record now claims NOTHING that did not
+            // happen; the Student Portal tab guides the office through the
+            // real provisioning path (Students & Classes enrolment creates
+            // the account with a one-time password).
+            notificationsSent: { sms: false, email: false, whatsapp: false },
             auditTrail: [
               ...item.auditTrail,
               {
@@ -57,7 +52,7 @@ export const createCompletionSlice: StateCreator<
                 timestamp: `${now} ${nowTime}`,
                 action: 'Admission Completed & Issued',
                 actor: 'Admission Office',
-                notes: `Admission Issued (${finalAdmissionNo}). Student account activated.`,
+                notes: `Admission Issued (${finalAdmissionNo}). Student enrolled into the roster.`,
               },
             ],
           }
@@ -66,7 +61,12 @@ export const createCompletionSlice: StateCreator<
 
     set({ applications: updatedApps })
 
-    // Generate student object to return
+    // Generate student object to return. FINAL-GATE honesty: a newly
+    // admitted student has NO payments recorded, NO attendance history and
+    // fees are PENDING — the previous hardcoded `feeStatus: 'Paid',
+    // feePaid: 86000, attendance: 100` told the principal payment and
+    // attendance existed when neither did (matches the roster's own honest
+    // defaults in students-store addStudent).
     const newStudent: Student = {
       id: finalStudentId,
       admissionNo: finalAdmissionNo,
@@ -86,10 +86,10 @@ export const createCompletionSlice: StateCreator<
       admissionDate: now,
       previousSchool: app.formData.previousSchool || 'N/A',
       status: 'Active',
-      attendance: 100,
-      feeStatus: 'Paid',
-      feePaid: 86000,
-      feeTotal: 86000,
+      attendance: 0,
+      feeStatus: 'Pending',
+      feePaid: 0,
+      feeTotal: 0,
       transport: app.formData.transportRequired,
       hostel: app.formData.hostelRequired,
       scholarship: 0,

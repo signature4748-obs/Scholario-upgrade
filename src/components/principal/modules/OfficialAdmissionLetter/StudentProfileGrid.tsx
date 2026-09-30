@@ -39,7 +39,7 @@ export function StudentProfileGrid({ data, fullName }: { data: AdmissionLetterDa
         </div>
         <div>
           <span className="text-[10px] font-bold text-slate-500 uppercase block">Academic Session</span>
-          <span className="font-mono font-bold text-slate-900">{data.academicSession || '2025–2026'}</span>
+          <span className="font-mono font-bold text-slate-900">{data.academicSession || '—'}</span>
         </div>
 
         <div>
@@ -52,7 +52,7 @@ export function StudentProfileGrid({ data, fullName }: { data: AdmissionLetterDa
         </div>
         <div>
           <span className="text-[10px] font-bold text-slate-500 uppercase block">Assigned Roll Number</span>
-          <span className="font-mono font-bold text-slate-900">{data.academic.rollNo || '01'}</span>
+          <span className="font-mono font-bold text-slate-900">{data.academic.rollNo || '—'}</span>
         </div>
 
         {data.studentId && (

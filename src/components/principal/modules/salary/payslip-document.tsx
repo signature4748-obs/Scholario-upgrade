@@ -20,7 +20,7 @@
 
 import { Check } from 'lucide-react'
 
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 import { amountInWordsINR } from '@/lib/format'
 import type {
   Employee, MonthlyAdjustment, SalaryPayment, SessionSalary,
@@ -98,6 +98,9 @@ export interface PayslipDocumentProps {
 export function PayslipDocument({
   employee, session, periodKey, adjustments, payments, payable,
 }: PayslipDocumentProps) {
+  // Letterhead identity — the sanctioned school-profile cascade (server
+  // identity → settings → neutral), never a hardcoded demo school.
+  const school = useSchoolProfile()
   // Structure components + month adjustments = the full slip line items.
   const earningLines = [
     ...session.earnings,
@@ -123,14 +126,16 @@ export function PayslipDocument({
       {/* ── School header (small, professional) ── */}
       <div className="px-5 pt-5 pb-3.5 flex items-start gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-[1.5px] border-slate-800 text-[13px] font-bold leading-none">
-          {school.logo}
+          {school.shortName.charAt(0)}
         </div>
         <div className="min-w-0">
           <p className="text-[12.5px] font-bold tracking-[0.08em] uppercase leading-snug break-words">{school.name}</p>
-          <p className="text-[9px] text-slate-500 mt-0.5 leading-snug">{school.address}</p>
-          <p className="text-[9px] text-slate-500">
-            Ph {school.phone} · {school.email}
-          </p>
+          {school.address && <p className="text-[9px] text-slate-500 mt-0.5 leading-snug">{school.address}</p>}
+          {(school.phone || school.email) && (
+            <p className="text-[9px] text-slate-500">
+              {[school.phone ? `Ph ${school.phone}` : null, school.email].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </div>
         <div className="ml-auto text-right shrink-0">
           <p className="text-[10px] font-bold tracking-[0.22em] uppercase text-slate-700">Salary Slip</p>

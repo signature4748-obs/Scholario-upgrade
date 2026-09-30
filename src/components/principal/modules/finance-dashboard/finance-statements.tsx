@@ -9,7 +9,7 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Wallet, Banknote, FileText, Download,
+  Wallet, Banknote, FileText, Download, Info,
   ArrowUpRight, ArrowDownRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -62,13 +62,33 @@ export function FinanceStatementsSection({ data }: { data: ReturnType<typeof use
         ['Summary', 'Closing Cash Balance', data.closingCash, ''],
       )
     }
-    const filename = safeFileName(`${tab}-statement-${data.period.id}`, 'csv')
+    const filename = safeFileName(`${tab}-statement-illustrative-${data.period.id}`, 'csv')
     downloadCSVFile(toCsv(headers, rows), filename)
-    toast.success('Statement exported', { description: filename })
+    toast.success('Illustrative statement exported', { description: filename })
   }
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
+      {/* FINAL-GATE honesty banner — these statements are ILLUSTRATIVE
+          projections: fee revenue and payroll inputs flow from their live
+          modules, but operating expenses, assets, liabilities and
+          cash-flow lines have no recorded ledger behind them (an
+          expense/ledger model is planned). A production principal must
+          never read them as recorded accounts. */}
+      <div
+        className="flex items-start gap-2.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.07] px-3.5 py-2.5"
+        role="note"
+        aria-label="Illustrative statements notice"
+      >
+        <Info className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" aria-hidden="true" />
+        <p className="text-xs leading-relaxed text-foreground">
+          <strong className="font-semibold">Illustrative statements.</strong> Fee revenue and
+          payroll figures flow from their live modules; operating expenses, assets and cash-flow
+          lines are projections — no expense ledger is recorded yet. Do not read these as
+          recorded accounts; they become fully live once the ledger model lands.
+        </p>
+      </div>
+
       {/* Statement tabs */}
       <div className="flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 w-max">
         {[

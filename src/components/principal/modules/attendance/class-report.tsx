@@ -20,6 +20,7 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { FileSpreadsheet } from 'lucide-react'
 import { GlassCard } from '@/components/shared/ui'
 import { classSections } from '@/lib/mock/attendance'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table'
 
 /** attendance-overview-real — school-wide per grade-group rows derived from
@@ -42,6 +43,11 @@ export function ClassReport({ onExport: _onExport, classFilter = 'all', schoolRo
   /** REAL grade-group rows for the All-Classes view (latest-record rates). */
   schoolRows?: ClassReportRow[]
 }) {
+  // FINAL-GATE (EG-9F/R7) — the per-class branch's classSections corpus is
+  // demo-only fabrication; a real tenant's per-class lookup yields no row
+  // (honest empty table). The All-Classes branch is REAL data (parent).
+  const isDemo = useIsDemoTenant()
+
   // Build the rows based on classFilter
   let rows: ClassReportRow[]
   if (classFilter === 'all') {
@@ -58,7 +64,7 @@ export function ClassReport({ onExport: _onExport, classFilter = 'all', schoolRo
     }))
   } else {
     // Filter: show only the selected class section
-    const section = classSections.find((c) => c.id === classFilter)
+    const section = isDemo ? classSections.find((c) => c.id === classFilter) : undefined
     rows = section ? [{
       class: section.name,
       rate: section.rate,
@@ -79,7 +85,13 @@ export function ClassReport({ onExport: _onExport, classFilter = 'all', schoolRo
             Class-wise Attendance Report
           </h3>
           <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
-            Today's attendance by class · sorted by rate
+            {/* FINAL-GATE label honesty: the All-Classes rows are per
+                grade-group rates over ALL recorded attendance rows (sorted
+                by grade) — not "today's" figures. The single-class branch
+                shows that section's snapshot. */}
+            {classFilter === 'all'
+              ? 'Grade-group rate · all recorded sessions · sorted by grade'
+              : 'Section snapshot · today’s roster'}
           </p>
         </div>
       </div>

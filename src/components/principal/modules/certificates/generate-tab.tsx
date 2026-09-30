@@ -37,6 +37,7 @@ import { useFeeStore } from '@/lib/store/fee-store'
 import type { FeeTransaction } from '@/lib/store/fee-store'
 import { useMockExamsStore } from '@/lib/exams/mock-exams-data'
 import { useMockMarksStore } from '@/lib/exams/mock-marks-data'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import {
   useCertificatesStore,
   type DocType, type DocumentTemplate,
@@ -70,6 +71,14 @@ export function GenerateTab() {
   const templates = useCertificatesStore((s) => s.templates)
   const generateDocument = useCertificatesStore((s) => s.generateDocument)
 
+  // FINAL-GATE (EG-9F/R6) — the exam picker's corpus is the demo-tier
+  // mock-exams seed: apply it once (tab root), only for the demo tenant.
+  // A real tenant's marksheet flow starts honest-empty (no fabricated
+  // exams → no fabricated marks → no fabricated marksheet data).
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useMockExamsStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
+
   // ─── Derived data ──────────────────────────────────────────────────
   const meta = docType ? DOC_TYPE_BY_LABEL[docType] : null
 
@@ -95,8 +104,11 @@ export function GenerateTab() {
   // Auto-init marks for the selected exam when a class is picked (so the
   // marksheet preview has data even before the user opens the exam in the
   // Examinations module).
+  // FINAL-GATE (EG-9F/R6) — the demo states (LOCKED/VERIFIED/SUBMITTED
+  // random marks) are sanctioned DEMO content only; a real tenant's marks
+  // must come from the real marks pipeline, never fabricated here.
   useEffect(() => {
-    if (!exam || !classId) return
+    if (!isDemo || !exam || !classId) return
     const hasMarks = marks.some((m) => m.examId === exam.id && m.classId === classId)
     if (hasMarks) return
     const classStudents = students
@@ -105,7 +117,7 @@ export function GenerateTab() {
     if (classStudents.length > 0) {
       initMarks(exam, classStudents)
     }
-  }, [exam, classId, students, marks, initMarks])
+  }, [isDemo, exam, classId, students, marks, initMarks])
 
   // Filter students by class for marksheet selection
   const classStudents = useMemo(() => {

@@ -29,7 +29,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 import {
   useCertificatesStore,
   type DocType, type DocumentTemplate,
@@ -435,6 +435,7 @@ function MiniPreview({ template }: { template: DocumentTemplate }) {
 
 function PreviewModal({ template, onClose }: { template: DocumentTemplate; onClose: () => void }) {
   useDismissOnEscape(onClose)
+  const school = useSchoolProfile()
   const students = useStudentsStore((s) => s.students)
   const transactions = useFeeStore((s) => s.transactions)
   // Sample student powering the live preview — a REAL roster student, so

@@ -39,6 +39,7 @@ import {
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '../shared/segmented-tabs'
 import { useDownloadsStore, type DownloadDocument, type CategoryTab } from '@/lib/store/downloads-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { useCertificatesStore } from '@/lib/store/certificates-store'
 import { useDownloadsActions } from './downloads-actions'
 import {
@@ -65,6 +66,14 @@ export function DownloadsModule() {
   // Selected document ID — the drawer re-resolves the LIVE record from the
   // store, so regenerated / updated / re-opened documents never go stale.
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
+
+  // FINAL-GATE (EG-9F/R4) — apply the demo tenant's sanctioned static
+  // library once (module root); a real tenant sees only its real generated
+  // documents plus the honest empty state.
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useDownloadsStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
+
   // Shared REAL action implementations (download produces a real file).
   const { handleDownload } = useDownloadsActions()
 
@@ -84,16 +93,20 @@ export function DownloadsModule() {
 
   // Subscribe to cert store so generated documents update live
   const certDocs = useCertificatesStore((s) => s.documents)
+  // FINAL-GATE (EG-9F/R4) — subscribe to the static catalogue slice too:
+  // the demo seed is applied AFTER mount (once /me resolves), and the
+  // derived memos below must re-run when it lands.
+  const staticDocs = useDownloadsStore((s) => s.staticDocs)
 
   // Re-derive counts whenever cert docs change (array identity — catches
   // delete+add sequences that keep the count equal).
-  const counts = useMemo(() => getCountsByTab(), [getCountsByTab, certDocs])
+  const counts = useMemo(() => getCountsByTab(), [getCountsByTab, certDocs, staticDocs])
   // Re-derive filtered list whenever any filter or the cert docs change
   const filtered = useMemo(
     () => getFilteredDocuments(),
-    [getFilteredDocuments, certDocs, query, categoryFilter, categoryTab, sortBy],
+    [getFilteredDocuments, certDocs, query, categoryFilter, categoryTab, sortBy, staticDocs],
   )
-  const quickAccess = useMemo(() => getQuickAccess(), [getQuickAccess, certDocs])
+  const quickAccess = useMemo(() => getQuickAccess(), [getQuickAccess, certDocs, staticDocs])
 
   // Keyboard shortcut: "/" focuses search
   useEffect(() => {

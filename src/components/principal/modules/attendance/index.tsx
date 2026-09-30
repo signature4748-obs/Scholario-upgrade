@@ -19,6 +19,7 @@ import { useState, useCallback } from 'react'
 import { PageTransition } from '@/components/shared/ui'
 import { toast } from 'sonner'
 import { classSections } from '@/lib/mock/attendance'
+import { readIsDemoTenant } from '@/lib/store/demo-tenant'
 import { downloadCSVFile, safeFileName } from '@/lib/download-file'
 import { toCsv } from '@/lib/csv'
 import { AttendanceTabs, type AttendanceTab } from './attendance-tabs'
@@ -51,7 +52,12 @@ export function AttendanceModule() {
         rows.push([r.class, r.students, r.present, r.absent, r.late, r.leave, r.rate, statusFor(Math.round(r.rate))])
       })
     } else {
-      const section = classSections.find((c) => c.id === classFilter)
+      // FINAL-GATE (EG-9F/R7) — per-class CSV rows derive from the demo-only
+      // classSections corpus; a real tenant exports the real (possibly
+      // empty) grade-group summary instead of a fabricated section row.
+      const section = readIsDemoTenant()
+        ? classSections.find((c) => c.id === classFilter)
+        : undefined
       if (section) {
         rows.push([
           section.name, section.total, section.present, section.absent,
@@ -69,7 +75,7 @@ export function AttendanceModule() {
     )
     const scope = classFilter === 'all'
       ? 'All Classes'
-      : classSections.find((c) => c.id === classFilter)?.name ?? classFilter
+      : (readIsDemoTenant() ? classSections.find((c) => c.id === classFilter)?.name : undefined) ?? classFilter
     toast.success('Attendance report exported', {
       description: `${filename} · ${rows.length} class summar${rows.length === 1 ? 'y' : 'ies'} · ${scope}`,
     })

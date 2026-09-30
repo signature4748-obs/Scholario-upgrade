@@ -1,70 +1,121 @@
 'use client'
 
-import { Copy, Printer, ShieldCheck } from 'lucide-react'
+import { useRef } from 'react'
+import { Printer, KeyRound, GraduationCap, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { printIsolated } from '@/lib/print-isolate'
+import { useSchoolProfile } from '@/lib/school-profile'
 import type { IssuanceArtifacts } from './letter-data'
 
 interface CredentialsTabProps {
   artifacts: IssuanceArtifacts
-  onCopy: () => void
+  guardianEmail?: string | null
 }
 
 /**
- * Student Portal Welcome / Credential Sheet — a SEPARATE secure document,
- * deliberately NOT part of the official admission letter. Print this and
- * hand it to the parent directly (or send via a private channel).
+ * Student Portal Onboarding sheet — FINAL-GATE honesty redesign.
+ *
+ * This tab used to print a FABRICATED portal login (loginId +
+ * tempPassword + "portal.scholario.app") for credentials that were never
+ * created: no account is provisioned by the admission completion, and no
+ * such portal host exists. The sheet now documents the REAL provisioning
+ * path — the school office enrols the student (Students & Classes) with
+ * the guardian's email, and the platform creates the account and
+ * surfaces a one-time password exactly once — plus the admission
+ * references the office needs at hand. It prints cleanly on its own.
  */
-export function CredentialsTab({ artifacts, onCopy }: CredentialsTabProps) {
-  const { loginId, tempPassword } = artifacts
+export function CredentialsTab({ artifacts, guardianEmail }: CredentialsTabProps) {
+  const sheetRef = useRef<HTMLDivElement>(null)
+  const school = useSchoolProfile()
 
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
-      <div className="bg-white text-slate-900 rounded-2xl border border-slate-200 shadow-sm p-8 space-y-5">
+      <div
+        ref={sheetRef}
+        className="bg-white text-slate-900 rounded-2xl border border-slate-200 shadow-sm p-8 space-y-5 print:shadow-none print:rounded-none"
+      >
         {/* Letterhead */}
         <div className="border-b-2 border-slate-200 pb-3">
           <h2 className="font-bold text-base uppercase tracking-wide text-slate-900">
-            Student Portal — Welcome &amp; Login Details
+            Student Portal — Onboarding Guide
           </h2>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            Keep this sheet confidential. Change the password at first login.
+            {school.name} · Admission {artifacts.admissionNo}
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
-            <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Portal Address</span>
-            <span className="font-mono font-bold text-slate-900">portal.scholario.app</span>
-          </div>
-          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
-            <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Login ID</span>
-            <span className="font-mono font-bold text-slate-900 break-all">{loginId}</span>
-          </div>
-          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
-            <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Temporary Password</span>
-            <span className="font-mono font-bold text-slate-900">{tempPassword}</span>
-          </div>
+        {/* Admission references */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          {[
+            { label: 'Admission No.', value: artifacts.admissionNo },
+            { label: 'Student ID', value: artifacts.studentId },
+            { label: 'Roll No.', value: artifacts.rollNo },
+            { label: 'Registration No.', value: artifacts.regNo },
+          ].map(({ label, value }) => (
+            <div key={label} className="p-3 rounded-lg border border-slate-200 bg-slate-50">
+              <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">{label}</span>
+              <span className="font-mono font-bold text-slate-900 break-all">{value}</span>
+            </div>
+          ))}
         </div>
 
-        <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 p-3 rounded-lg text-[11px] text-amber-900">
-          <ShieldCheck className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-          <p>
-            <strong className="font-bold">Security notice:</strong> log in at portal.scholario.app
-            and change this temporary password immediately. Do not share these details with anyone
-            except the student&apos;s parents/guardians.
-          </p>
+        {/* The real provisioning path */}
+        <div className="space-y-3">
+          <h3 className="text-xs font-bold uppercase tracking-wide text-slate-700 flex items-center gap-1.5">
+            <KeyRound className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+            How the portal account is created
+          </h3>
+          <ol className="space-y-2 text-[11.5px] text-slate-700 leading-relaxed list-decimal list-inside">
+            <li className="flex items-start gap-2">
+              <span className="pt-0.5">
+                The office enrolls the student from{' '}
+                <strong className="font-semibold">Students &amp; Classes → Add Student</strong>, using the
+                guardian&rsquo;s email below as the login ID.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="pt-0.5">
+                The platform creates the account and{' '}
+                <strong className="font-semibold">shows a one-time temporary password</strong> at that
+                moment — copy it and hand it to the parents securely.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <GraduationCap className="h-3.5 w-3.5 text-slate-400 shrink-0 mt-0.5" aria-hidden="true" />
+              <span className="pt-0.5 flex-1">
+                The student signs in at this school&rsquo;s login page and changes the password at first
+                sign-in.
+              </span>
+            </li>
+          </ol>
+        </div>
+
+        {/* Guardian email on file */}
+        <div className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50">
+          <Mail className="h-4 w-4 text-slate-500 shrink-0" aria-hidden="true" />
+          <div className="min-w-0 text-xs">
+            <span className="text-[10px] font-bold text-slate-500 uppercase block">
+              Login ID to use (guardian email on file)
+            </span>
+            <span className="font-mono font-bold text-slate-900 break-all">
+              {guardianEmail?.trim() || '— not provided on the admission form —'}
+            </span>
+          </div>
         </div>
 
         <p className="text-[9px] text-slate-400 text-center font-mono">
-          Credential sheet for Admission {artifacts.admissionNo} · Generated {new Date().toLocaleDateString('en-IN')}
+          Onboarding sheet for Admission {artifacts.admissionNo} · Generated{' '}
+          {new Date().toLocaleDateString('en-IN')}
         </p>
       </div>
 
       <div className="flex items-center gap-2 print:hidden">
-        <Button size="sm" onClick={onCopy} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5">
-          <Copy className="h-3.5 w-3.5" />
-          Copy Credentials
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => window.print()} className="text-xs gap-1.5">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => printIsolated(sheetRef.current)}
+          className="text-xs gap-1.5"
+        >
           <Printer className="h-3.5 w-3.5" />
           Print Sheet
         </Button>

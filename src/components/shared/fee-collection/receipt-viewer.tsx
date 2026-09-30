@@ -88,6 +88,8 @@ export function FeeReceiptViewer({ txnId, open, onOpenChange, autoPrint = false 
   const [data, setData] = useState<ReceiptPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  // Retry affordance — bumps to force a real refetch of the same txn.
+  const [retryTick, setRetryTick] = useState(0)
   const autoPrintDone = useRef(false)
 
   useEffect(() => {
@@ -117,7 +119,7 @@ export function FeeReceiptViewer({ txnId, open, onOpenChange, autoPrint = false 
       .catch((e: Error) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [open, txnId, autoPrint])
+  }, [open, txnId, autoPrint, retryTick])
 
   const t = data?.txn
   const isVerified = t?.status === 'SUCCESS'
@@ -161,6 +163,14 @@ export function FeeReceiptViewer({ txnId, open, onOpenChange, autoPrint = false 
         {error && (
           <div className="p-5">
             <p className="text-sm text-destructive">{error}</p>
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                The receipt is on the school server — a retry usually resolves this.
+              </p>
+              <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setRetryTick((t) => t + 1)}>
+                Try again
+              </Button>
+            </div>
           </div>
         )}
         {data && t && (

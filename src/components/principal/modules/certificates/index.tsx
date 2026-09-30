@@ -24,6 +24,8 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '../shared/segmented-tabs'
+import { useCertificatesStore } from '@/lib/store/certificates-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { CERT_PRINT_STYLES } from './cert-shared'
 import { GenerateTab } from './generate-tab'
 import { TemplatesTab } from './templates-tab'
@@ -39,6 +41,12 @@ const TABS = [
 
 export function CertificatesModule() {
   const [tab, setTab] = useState<Tab>('generate')
+
+  // FINAL-GATE (EG-9F/R4) — apply the demo tenant's sanctioned seed history
+  // once (module root); a real tenant keeps the honest empty history.
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useCertificatesStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
 
   // Keyboard shortcuts: 1-3 switch tabs
   useEffect(() => {

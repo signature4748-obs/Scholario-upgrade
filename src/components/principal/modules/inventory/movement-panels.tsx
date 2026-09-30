@@ -149,7 +149,9 @@ export function LowStockAlerts({ onAddStock }: LowStockAlertsProps) {
   const outOfStock = data.analytics.outOfStock
   const all = [...outOfStock, ...lowStock]
 
-  // Suggested reorder = min(2 × minStock, 50) — practical heuristic.
+  // Suggested reorder = at least 2× the item's minimum stock, never fewer
+  // than 10 units (matches the Math.max below; the old "min(2×min, 50)"
+  // comment described a different heuristic than the code ran).
   const suggested = (it: InventoryItem) => Math.max(it.minStock * 2, 10)
 
   return (

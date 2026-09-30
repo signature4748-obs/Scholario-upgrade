@@ -15,7 +15,7 @@
 
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { school } from '@/lib/mock/school'
+import { getSchoolProfile } from '@/lib/school-profile'
 import {
   classSections,
   STAFF_DEFS,
@@ -101,6 +101,9 @@ export function generateStudentMonthlyPDF(
   monthValue: string,
   classFilter: string = 'all'
 ): { filename: string } {
+  // Report letterhead — the identity cascade (server → settings →
+  // neutral), never a hardcoded demo school.
+  const school = getSchoolProfile()
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
   const monthLabel = formatMonthLabel(monthValue)
   const [year, month] = monthValue.split('-').map(Number)
@@ -243,6 +246,8 @@ export function generateStudentMonthlyPDF(
    Brief PART 36-37: Staff Monthly PDF — Excel-style
    ────────────────────────────────────────────────────────── */
 export function generateStaffMonthlyPDF(monthValue: string): { filename: string } {
+  // Report letterhead — the identity cascade (server → settings → neutral).
+  const school = getSchoolProfile()
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
   const monthLabel = formatMonthLabel(monthValue)
   const [year, month] = monthValue.split('-').map(Number)

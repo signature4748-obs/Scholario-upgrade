@@ -34,6 +34,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { teachers } from '@/lib/mock/teachers'
 import { useStudentsStore } from '@/lib/store/students-store'
+import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 import { migrateLegacyScopedStore, createTenantScopedStorage } from '@/lib/tenant/tenant-storage'
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
 
@@ -390,6 +391,10 @@ interface MessagingState {
   activeFolder: Folder
   activeLabel: Label | null
   searchQuery: string
+  /** FINAL-GATE (EG-9F/R4) — set once the demo seed has been applied. */
+  demoSeeded?: boolean
+  /** FINAL-GATE (EG-9F/R4) — one-shot demo-tier seeder (module root). */
+  ensureDemoSeed: () => void
 
   // actions
   setActiveFolder: (folder: Folder) => void
@@ -425,14 +430,20 @@ interface MessagingState {
 export const useMessagingStore = create<MessagingState>()(
   persist(
     (set, get) => ({
-  conversations: SEED_CONVERSATIONS,
-  messages: SEED_MESSAGES,
-  drafts: SEED_DRAFTS,
-  groups: SEED_GROUPS,
-  activeConversationId: 'C01',
+  // FINAL-GATE (EG-9F/R4) — the seed corpus above is the sanctioned DEMO
+  // TIER content (School.isDemo): the store now boots EMPTY and the
+  // Messages module root applies it once per session via `ensureDemoSeed`.
+  // A real production tenant keeps this honest empty state; persisted
+  // tenant-scoped state always wins over re-seeding.
+  conversations: [],
+  messages: {},
+  drafts: [],
+  groups: [],
+  activeConversationId: null,
   activeFolder: 'inbox',
   activeLabel: null,
   searchQuery: '',
+  ensureDemoSeed: () => ensureMessagingDemoSeed(),
 
   setActiveFolder: (folder) => set({ activeFolder: folder, activeLabel: null }),
   setActiveLabel: (label) => set({ activeLabel: label }),
@@ -869,6 +880,23 @@ export const useMessagingStore = create<MessagingState>()(
     },
   ),
 )
+
+// ─── FINAL-GATE (EG-9F/R4) demo-tier seeder ──────────────────────────
+// Built lazily on first call (the store exists by then). Applies the
+// sanctioned demo corpus at most once, never over non-pristine state —
+// see makeDemoSeedApplier guard rules.
+let _ensureMessagingDemoSeed: (() => void) | null = null
+function ensureMessagingDemoSeed(): void {
+  _ensureMessagingDemoSeed ??= makeDemoSeedApplier(useMessagingStore, {
+    conversations: SEED_CONVERSATIONS,
+    messages: SEED_MESSAGES,
+    drafts: SEED_DRAFTS,
+    groups: SEED_GROUPS,
+    // Pre-open the flagship thread (C01) exactly as the seed era did.
+    activeConversationId: 'C01',
+  })
+  _ensureMessagingDemoSeed()
+}
 
 // ─── Recipient options (for Compose) ────────────────────────────────
 

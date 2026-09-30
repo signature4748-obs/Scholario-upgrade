@@ -21,6 +21,7 @@
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 import {
   useCertificatesStore,
   type GeneratedDocument as CertGeneratedDocument,
@@ -79,6 +80,13 @@ export interface DownloadDocument {
 }
 
 interface DownloadsState {
+  // FINAL-GATE (EG-9F/R4) — the static document library (official forms /
+  // office templates / canned report shells). This is the sanctioned DEMO
+  // TIER catalogue: it starts EMPTY and the Downloads module root applies
+  // it once per session via `ensureDemoSeed`. Generated documents always
+  // come live from the certificates store.
+  staticDocs: DownloadDocument[]
+
   // Filters / search
   query: string
   categoryFilter: 'All' | DocCategory
@@ -90,6 +98,11 @@ interface DownloadsState {
   lastAccessedAt: Record<string, string>
   // Pinned documents (favourites) — reflected by the star action.
   favourites: Record<string, boolean>
+
+  /** FINAL-GATE (EG-9F/R4) — set once the demo seed has been applied. */
+  demoSeeded?: boolean
+  /** FINAL-GATE (EG-9F/R4) — one-shot demo-tier seeder (module root). */
+  ensureDemoSeed: () => void
 
   // Search + filter actions
   setQuery: (q: string) => void
@@ -165,6 +178,25 @@ const CERT_SIZE: Record<CertDocType, string> = {
   'Marksheet': '124 KB',
 }
 
+// ─── FINAL-GATE (EG-9F/R4) demo usage seeds ────────────────────────
+// Illustrative download/access counts for the demo library (fabricated
+// dates/sizes/usage the EG-9 audit flagged) — applied ONLY to the demo
+// tenant alongside the static catalogue, never to a real tenant.
+const SEED_DOWNLOAD_COUNTS: Record<string, number> = {
+  'doc-form-admission': 12,
+  'doc-tpl-fee-receipt': 9,
+  'doc-form-medical': 7,
+  'doc-rpt-fee-monthly': 6,
+  'doc-tpl-id-card': 5,
+}
+const SEED_LAST_ACCESSED_AT: Record<string, string> = {
+  'doc-form-admission': daysAgo(1),
+  'doc-tpl-fee-receipt': daysAgo(2),
+  'doc-form-medical': daysAgo(3),
+  'doc-rpt-fee-monthly': daysAgo(4),
+  'doc-tpl-id-card': daysAgo(5),
+}
+
 function certToDownloadDoc(cert: CertGeneratedDocument): DownloadDocument {
   return {
     id: `doc-gen-${cert.id}`,
@@ -212,25 +244,19 @@ const STATIC_BY_ID: Record<string, DownloadDocument> = STATIC_DOCS.reduce(
 export const useDownloadsStore = create<DownloadsState>()(
   persist(
     (set, get) => ({
+  // FINAL-GATE (EG-9F/R4) — boots honest-empty: no fabricated static
+  // library and no fabricated usage stats. The Downloads module root
+  // applies the demo catalogue once per session for the demo tenant only;
+  // persisted tenant-scoped usage state always wins over re-seeding.
+  staticDocs: [],
   query: '',
   categoryFilter: 'All',
   categoryTab: 'All',
   sortBy: 'recent',
   favourites: {},
-  downloadsCount: {
-    'doc-form-admission': 12,
-    'doc-tpl-fee-receipt': 9,
-    'doc-form-medical': 7,
-    'doc-rpt-fee-monthly': 6,
-    'doc-tpl-id-card': 5,
-  },
-  lastAccessedAt: {
-    'doc-form-admission': daysAgo(1),
-    'doc-tpl-fee-receipt': daysAgo(2),
-    'doc-form-medical': daysAgo(3),
-    'doc-rpt-fee-monthly': daysAgo(4),
-    'doc-tpl-id-card': daysAgo(5),
-  },
+  downloadsCount: {},
+  lastAccessedAt: {},
+  ensureDemoSeed: () => ensureDownloadsDemoSeed(),
 
   setQuery: (q) => set({ query: q }),
   search: (q) => set({ query: q }),
@@ -243,7 +269,7 @@ export const useDownloadsStore = create<DownloadsState>()(
   getAllDocuments: () => {
     const certDocs = useCertificatesStore.getState().documents.map(certToDownloadDoc)
     // Static docs carry their renderable content (attached in STATIC_BY_ID).
-    const staticWithContent = Object.values(STATIC_BY_ID)
+    const staticWithContent = get().staticDocs
     // Newest first by default
     const all = [...staticWithContent, ...certDocs]
     return all.sort(byDateDesc)
@@ -251,11 +277,12 @@ export const useDownloadsStore = create<DownloadsState>()(
 
   getCountsByTab: () => {
     const certDocs = useCertificatesStore.getState().documents.map(certToDownloadDoc)
-    const forms = staticWithCount('Official Form')
-    const templates = staticWithCount('Template')
-    const reports = staticWithCount('Report')
+    const staticDocs = get().staticDocs
+    const forms = staticWithCount(staticDocs, 'Official Form')
+    const templates = staticWithCount(staticDocs, 'Template')
+    const reports = staticWithCount(staticDocs, 'Report')
     const generated = certDocs.length
-    const all = STATIC_DOCS.length + generated
+    const all = staticDocs.length + generated
     return {
       All: all,
       Recent: all,
@@ -384,9 +411,37 @@ export const useDownloadsStore = create<DownloadsState>()(
   ),
 )
 
-// Count helper over the static catalogue (kept private).
-function staticWithCount(source: DownloadDocument['source']): number {
-  return STATIC_DOCS.filter((d) => d.source === source).length
+// ─── FINAL-GATE (EG-9F/R4) demo-tier seeder ──────────────────────────
+// Built lazily on first call (the store exists by then). The static
+// catalogue applies at most once, never over non-pristine state — see
+// makeDemoSeedApplier guard rules.
+//
+// The usage stats (downloadsCount / lastAccessedAt) are PERSISTED slices:
+// a returning demo session may already hold (possibly evolved) usage —
+// persisted state always wins. They are filled ONLY when still empty
+// (fresh demo session) so Quick Access renders out of the box.
+let _ensureDownloadsDemoSeed: (() => void) | null = null
+function ensureDownloadsDemoSeed(): void {
+  _ensureDownloadsDemoSeed ??= makeDemoSeedApplier(useDownloadsStore, {
+    staticDocs: Object.values(STATIC_BY_ID),
+  })
+  _ensureDownloadsDemoSeed()
+  const st = useDownloadsStore.getState()
+  if (
+    st.staticDocs.length > 0 &&
+    Object.keys(st.downloadsCount).length === 0 &&
+    Object.keys(st.lastAccessedAt).length === 0
+  ) {
+    useDownloadsStore.setState({
+      downloadsCount: { ...SEED_DOWNLOAD_COUNTS },
+      lastAccessedAt: { ...SEED_LAST_ACCESSED_AT },
+    })
+  }
+}
+
+// Count helper over a static catalogue slice (kept private).
+function staticWithCount(docs: DownloadDocument[], source: DownloadDocument['source']): number {
+  return docs.filter((d) => d.source === source).length
 }
 
 // Re-export for components that need the underlying cert record

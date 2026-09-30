@@ -55,7 +55,11 @@ export function AttendanceTooltip({
   active, payload, label, valueSuffix = '%', valueLabel = 'Attendance', extra,
 }: AttendanceTooltipProps) {
   if (!active || !payload || payload.length === 0) return null
-  const entry = payload[0]
+  // FINAL-GATE: payload[0] can be the dashed AVERAGE reference line (a Line
+  // series rendered alongside the Area) — reporting the average as the
+  // hovered month's value is a tooltip-correctness defect. Pick the real
+  // data series first; the reference line is never a tooltip source.
+  const entry = payload.find((p) => p.dataKey !== '__avg' && p.name !== '__avg') ?? payload[0]
   const v = typeof entry.value === 'number' ? entry.value.toLocaleString() : entry.value
   const color = entry.color || ATTENDANCE_PALETTE.trend
 
@@ -105,7 +109,10 @@ interface TrendLineProps {
   yKey: string
   color?: string
   height?: number
-  /** Domain for Y-axis (defaults to [80, 100] for attendance %). */
+  /** Domain for Y-axis. Omit to derive an honest domain from the data
+   *  (default for % trends — see `derivedYDomain`): a multiple-of-5 floor
+   *  with headroom BELOW the data minimum and a 100% ceiling, so no point
+   *  is ever clipped and the visible axis ticks disclose the baseline. */
   yDomain?: [number, number] | 'auto'
   /** Optional average reference line value. */
   averageValue?: number
@@ -113,17 +120,44 @@ interface TrendLineProps {
   valueSuffix?: string
 }
 
+/** FINAL-GATE — honest Y domain for a non-negative %-bounded series.
+ *  A FIXED truncated window ([80,100] / [88,100]) silently CLIPS any value
+ *  below its floor (a 75% school's line simply vanishes off the bottom)
+ *  and amplifies ±1pt wobble into full-height swings. Instead, derive from
+ *  the data: floor = greatest multiple of 5 with ≥5pt headroom under the
+ *  minimum (never above 0), top = 100 for a % series (niceCeil otherwise).
+ *  The floor is never hidden — the Y ticks print it. */
+function derivedYDomain(data: any[], yKey: string): [number, number] {
+  const values = data
+    .map((d) => Number(d[yKey]))
+    .filter((v) => Number.isFinite(v))
+  if (values.length === 0) return [0, 100]
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const bounded = max <= 100 && min >= 0
+  const top = bounded ? 100 : Math.ceil(max / 5) * 5
+  const floor = bounded
+    ? Math.max(0, Math.min(95, Math.floor((min - 5) / 5) * 5))
+    : Math.max(0, Math.floor((min - 5) / 5) * 5)
+  // Safety: the domain must always contain the data (never clip).
+  return [Math.min(floor, min), Math.max(top, max)]
+}
+
 export function TrendLine({
   data, xKey, yKey,
   color = ATTENDANCE_PALETTE.trend,
   height = 220,
-  yDomain = [80, 100],
+  yDomain,
   averageValue,
   valueSuffix = '%',
 }: TrendLineProps) {
   const uid = useId().replace(/:/g, '')
   const gid = `trend-${uid}`
   const reduce = useReducedMotion()
+  const domain = yDomain === undefined ? derivedYDomain(data, yKey) : yDomain
+  // A 1–2 point series renders no visible stroke (a line needs two points)
+  // — draw real dots so a brand-new dataset is still readable.
+  const showDots = data.length > 0 && data.length <= 2
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -146,7 +180,7 @@ export function TrendLine({
           dy={6}
         />
         <YAxis
-          domain={yDomain === 'auto' ? ['auto', 'auto'] : yDomain}
+          domain={domain === 'auto' ? ['auto', 'auto'] : domain}
           tick={{ fontSize: 9, fill: 'var(--muted-foreground)', opacity: 0.7 }}
           axisLine={false}
           tickLine={false}
@@ -159,20 +193,6 @@ export function TrendLine({
           cursor={{ stroke: color, strokeOpacity: 0.25, strokeWidth: 1, strokeDasharray: '3 3' }}
           isAnimationActive={false}
         />
-        {/* Average reference line — even more subtle */}
-        {averageValue != null && (
-          <Line
-            type="monotone"
-            dataKey={() => averageValue}
-            stroke="var(--muted-foreground)"
-            strokeWidth={1}
-            strokeDasharray="4 4"
-            strokeOpacity={0.4}
-            dot={false}
-            isAnimationActive={false}
-            name="__avg"
-          />
-        )}
         <Area
           type="monotone"
           dataKey={yKey}
@@ -188,8 +208,24 @@ export function TrendLine({
             strokeWidth: 2,
             fill: 'var(--popover)',
           }}
-          dot={false}
+          dot={showDots ? { r: 3, fill: color, strokeWidth: 0 } : false}
         />
+        {/* Average reference line — rendered AFTER the data series so it
+            never hijacks the tooltip's payload[0]; it stays a quiet dashed
+            guide above the area fill. */}
+        {averageValue != null && (
+          <Line
+            type="monotone"
+            dataKey={() => averageValue}
+            stroke="var(--muted-foreground)"
+            strokeWidth={1}
+            strokeDasharray="4 4"
+            strokeOpacity={0.4}
+            dot={false}
+            isAnimationActive={false}
+            name="__avg"
+          />
+        )}
       </AreaChart>
     </ResponsiveContainer>
   )

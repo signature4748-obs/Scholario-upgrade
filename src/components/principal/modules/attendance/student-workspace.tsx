@@ -27,6 +27,7 @@ import {
   getClassWeeklyTrend,
   getClassMonthlyTrend,
 } from '@/lib/mock/attendance'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { formatNumber } from '@/lib/format'
 import { ModuleHeader } from '../shared/module-header'
 import { OverviewCharts } from './overview-charts'
@@ -52,23 +53,31 @@ export function StudentWorkspace({
   const { data } = useAttendanceOverview()
   const [selectedDay, setSelectedDay] = useState<number | null>(10)
 
+  // FINAL-GATE (EG-9F/R7) — the per-class branch (section snapshot, weekly /
+  // monthly trends, filter options) reads the demo-only classSections
+  // corpus: for a real production tenant the corpus is withheld (real
+  // canonical data only — the All-Classes path — and an honest filter that
+  // offers no fabricated classes).
+  const isDemo = useIsDemoTenant()
+
   // Brief §10: derive ALL metrics from classFilter
   const isAllClasses = classFilter === 'all'
-  const section = getClassSection(classFilter)
+  const section = isDemo ? getClassSection(classFilter) : null
 
-  // Per-class weekly + monthly trends (All-Classes = real recorded series).
+  // Per-class weekly + monthly trends (All-Classes = real recorded series;
+  // non-demo tenants always take the real series — no fabricated trends).
   // Hooks stay unconditional — the loading early-return below comes after.
   const weeklyTrend = useMemo(
-    () => (isAllClasses
-      ? (data?.weekTrend ?? []).map((d) => ({ day: d.day, present: d.present, rate: d.rate }))
+    () => (isAllClasses || !isDemo
+      ? (data?.weekTrend ?? []).map((d) => ({ day: d.day, date: d.date, present: d.present, rate: d.rate }))
       : getClassWeeklyTrend(classFilter)),
-    [isAllClasses, classFilter, data],
+    [isAllClasses, classFilter, data, isDemo],
   )
   const monthlyTrend = useMemo(
-    () => (isAllClasses
+    () => (isAllClasses || !isDemo
       ? (data?.monthly ?? []).map((m) => ({ month: m.month, rate: m.rate }))
       : getClassMonthlyTrend(classFilter)),
-    [isAllClasses, classFilter, data],
+    [isAllClasses, classFilter, data, isDemo],
   )
 
   // attendance-overview-real — the real "today" of the dataset (latest
@@ -179,7 +188,7 @@ export function StudentWorkspace({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Classes</SelectItem>
-              {classSections.map((c) => (
+              {isDemo && classSections.map((c) => (
                 <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
               ))}
             </SelectContent>
@@ -246,6 +255,7 @@ export function StudentWorkspace({
       <AttendanceInsights
         classFilter={classFilter}
         insights={insightsData}
+        schoolRows={schoolRows}
         onViewAllClasses={() => {
           // Brief §11: View all classes → currently no full screen modal,
           // could navigate to a dedicated page later. For now, switch filter

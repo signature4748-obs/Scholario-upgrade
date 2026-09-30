@@ -672,8 +672,7 @@ export function RadialProgress({
 // ─── AreaTrendChart ──────────────────────────────────────────────────
 
 // Format a Y-axis value compactly (₹1Cr, ₹2L, 50%, etc.)
-// Sign-aware: valMin can dip below zero (5% range padding), and negatives
-// previously fell through every ≥ branch and rendered as raw "-4320".
+// Sign-aware: valMin can dip below zero for genuinely-negative series.
 function formatYAxisValue(n: number): string {
   const sign = n < 0 ? '-' : ''
   const v = Math.abs(n)
@@ -681,6 +680,21 @@ function formatYAxisValue(n: number): string {
   if (v >= 100000) return `${sign}₹${(v / 100000).toFixed(0)}L`
   if (v >= 1000) return `${sign}₹${(v / 1000).toFixed(0)}K`
   return `${sign}${Math.round(v)}`
+}
+
+/**
+ * Nice ceiling for a non-negative domain top (1 / 1.2 / 1.5 / 2 / 2.5 / 3 /
+ * 4 / 5 / 8 / 10 × 10^k): the top gridline reads as a clean round value
+ * (₹12L, not ₹11.88L) while the curve keeps headroom below it.
+ */
+function niceCeilValue(v: number): number {
+  if (v <= 0) return 1
+  const exp = Math.floor(Math.log10(v))
+  const base = Math.pow(10, exp)
+  const frac = v / base
+  const nice = frac <= 1 ? 1 : frac <= 1.2 ? 1.2 : frac <= 1.5 ? 1.5 : frac <= 2 ? 2
+    : frac <= 2.5 ? 2.5 : frac <= 3 ? 3 : frac <= 4 ? 4 : frac <= 5 ? 5 : frac <= 8 ? 8 : 10
+  return nice * base
 }
 
 export function AreaTrendChart({
@@ -709,11 +723,19 @@ export function AreaTrendChart({
   const padX = 6
   const padY = 18
 
-  const maxVal = Math.max(...data.flatMap((d) => [d[primaryKey] ?? 0, d[secondaryKey] ?? 0]), 1)
-  const minVal = Math.min(...data.flatMap((d) => [d[primaryKey] ?? 0, d[secondaryKey] ?? 0]), 0)
-  // Add 10% headroom to the range so the curve doesn't touch the edges
-  const valRange = (maxVal - minVal) * 1.1 || 1
-  const valMin = minVal - (maxVal - minVal) * 0.05
+  // FINAL-GATE — zero-baseline domain. A recorded-payments / attendance /
+  // count series cannot be negative, so its Y domain MUST start at 0: padding
+  // below zero drew a bottom tick of e.g. "-₹56K" on a chart of payments and
+  // visually implied negative collections. A negative domain is used ONLY
+  // when the data genuinely contains negative values (then 5% bottom padding).
+  // The top of a non-negative domain is a nice rounded ceiling so the top
+  // gridline is a clean value with headroom for the curve.
+  const rawMax = Math.max(...data.flatMap((d) => [d[primaryKey] ?? 0, d[secondaryKey] ?? 0]), 1)
+  const rawMin = Math.min(...data.flatMap((d) => [d[primaryKey] ?? 0, d[secondaryKey] ?? 0]), 0)
+  const hasNegative = rawMin < 0
+  const valMin = hasNegative ? rawMin - (rawMax - rawMin) * 0.05 : 0
+  const valMax = hasNegative ? rawMax + (rawMax - rawMin) * 0.05 : niceCeilValue(rawMax)
+  const valRange = (valMax - valMin) || 1
 
   // Build a MONOTONE cubic interpolation path (no overshoot).
   // Catmull-Rom can overshoot when data points vary dramatically, creating
@@ -813,6 +835,11 @@ export function AreaTrendChart({
           <line key={frac} x1={0} y1={padY + frac * (h - 2 * padY)} x2={w} y2={padY + frac * (h - 2 * padY)}
             stroke="currentColor" strokeOpacity={0.08} strokeDasharray="2 6" vectorEffect="non-scaling-stroke" />
         ))}
+        {/* Zero baseline (solid) — anchors the plot. For non-negative series
+            this is the ₹0 / 0% line; the curve's bottom, area fill and hover
+            guide all terminate on it. Slightly stronger than the gridlines. */}
+        <line x1={0} y1={h - padY} x2={w} y2={h - padY}
+          stroke="currentColor" strokeOpacity={0.22} vectorEffect="non-scaling-stroke" />
         {/* Secondary area + line (drawn first) */}
         {data.some((d) => d[secondaryKey] !== undefined) && (
           <>
@@ -888,9 +915,12 @@ export function AreaTrendChart({
         </motion.div>
       )}
       </div>{/* /plot wrapper */}
-      {/* Y-axis labels — own gutter at the left, never over the plot */}
+      {/* Y-axis labels — own gutter at the left, never over the plot.
+          FINAL-GATE: labels state the ACTUAL domain (top/mid/bottom), so a
+          non-negative series reads 0 at the baseline — never a padded
+          negative like "-₹56K". */}
       <div className="absolute left-0 top-0 bottom-4 w-10 pr-1 flex flex-col justify-between py-1 text-[8px] text-muted-foreground pointer-events-none tabular-nums leading-none text-right">
-        <span>{formatYAxisValue(maxVal)}</span>
+        <span>{formatYAxisValue(valMax)}</span>
         <span>{formatYAxisValue(valMin + valRange * 0.5)}</span>
         <span>{formatYAxisValue(valMin)}</span>
       </div>

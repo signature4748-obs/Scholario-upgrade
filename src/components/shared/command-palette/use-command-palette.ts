@@ -123,20 +123,30 @@ export function useCommandPalette({
   }, [query, open])
 
   // Real-time search: merge instant local matches with DB-backed results.
-  // When the server responds, DB-backed entity types (student, teacher, fee,
-  // notice, parent) are replaced by authoritative DB rows — but only when the
-  // server actually returned results of that type. Mock-only notices (which
-  // never reach the DB) would otherwise vanish from search entirely.
+  // FINAL-GATE honesty fix (DATA_SOURCE_MAP R5/R20): the server response is
+  // AUTHORITATIVE for entity types — an empty server result for a type
+  // means NO matches in the DB, not "keep the fabricated local corpus
+  // visible". The old per-type merge let mock people/classes/rooms
+  // surface in production search whenever the DB had no rows of that
+  // type (or during the debounce window). Local results that are NOT
+  // entities — module/feature navigation built from the role's real nav
+  // registry — always remain: they are UI affordances, not data.
   const searchResults = useMemo(() => {
     const local = searchEntities(query, role, groups)
-    if (remoteResults === null) return local
-    const DB_TYPES = new Set(['student', 'teacher', 'fee', 'notice', 'parent'])
-    const remoteTypes = new Set(remoteResults.map((r) => r.type))
-    // DB-backed locals are superseded by server rows of the same type;
-    // locals of types the server did NOT return survive, so mock-only
-    // notices stay searchable even while /api/search is authoritative.
-    const localKept = local.filter((i) => !DB_TYPES.has(i.type) || !remoteTypes.has(i.type))
-    return [...remoteResults, ...localKept]
+    const ENTITY_TYPES = new Set([
+      'student', 'teacher', 'fee', 'notice', 'parent', 'class', 'subject',
+      'exam', 'room', 'material', 'deck', 'group',
+    ])
+    const localNav = local.filter((i) => !ENTITY_TYPES.has(i.type))
+    if (remoteResults === null) {
+      // Idle, in-flight or failed: while a query is active the local
+      // entity corpora never render (the debounced server fetch is the
+      // entity source of truth); real navigation stays useful.
+      return localNav
+    }
+    // Server responded: its rows are the entity truth (including "no
+    // rows of that type" = no matches), local navigation complements.
+    return [...remoteResults, ...localNav]
   }, [query, role, groups, remoteResults])
 
   // Group search results by category

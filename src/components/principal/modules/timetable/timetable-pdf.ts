@@ -21,7 +21,9 @@
 import type { TimetableSlot } from './data'
 import type { TimetableRow } from './schedule-grid'
 import { teacherNameById } from '@/lib/store/teacher-roster-store'
-import { school } from '@/lib/mock/school'
+// Export letterhead — the identity cascade (server → settings → neutral),
+// never a hardcoded demo school on another tenant's timetables.
+import { getSchoolProfile } from '@/lib/school-profile'
 import { DAYS } from './data'
 
 export interface ExportResult {
@@ -162,6 +164,7 @@ function buildGridHTML(opts: BuildGridOpts): string {
   const isMaster = contextLabel === 'all'
   const periodColWidth = isMaster ? 110 : 120
   const cellMinWidth = isMaster ? 150 : 220
+  const school = getSchoolProfile()
 
   return wrapHTML({
     title,
@@ -170,11 +173,11 @@ function buildGridHTML(opts: BuildGridOpts): string {
       <header class="doc-header">
         <div class="doc-school">
           <div class="school-name">${escapeHtml(school.name)}</div>
-          <div class="school-aff">${escapeHtml(school.affiliation)}</div>
+          <div class="school-aff">${escapeHtml(school.affiliation || '—')}</div>
         </div>
         <div class="doc-title-block">
           <h1>${escapeHtml(title)}</h1>
-          <p class="doc-sub">${escapeHtml(dayLabel)}${contextLabel === 'all' ? '' : ' · ' + escapeHtml(contextLabel)} · Session ${escapeHtml(school.session)}</p>
+          <p class="doc-sub">${escapeHtml(dayLabel)}${contextLabel === 'all' ? '' : ' · ' + escapeHtml(contextLabel)} · Session ${escapeHtml(school.academicYear || '—')}</p>
         </div>
       </header>
       <table class="tt-grid ${isMaster ? 'master' : 'single'}">
@@ -244,6 +247,7 @@ interface BuildTeacherOpts {
 
 function buildTeacherHTML(opts: BuildTeacherOpts): string {
   const { teacherSlots, rows, title, teacherName, columns, orientation } = opts
+  const school = getSchoolProfile()
 
   // Group teacher slots by day so we can render one block per day.
   const dayGroups = DAYS.map((day) => ({
@@ -281,11 +285,11 @@ function buildTeacherHTML(opts: BuildTeacherOpts): string {
       <header class="doc-header">
         <div class="doc-school">
           <div class="school-name">${escapeHtml(school.name)}</div>
-          <div class="school-aff">${escapeHtml(school.affiliation)}</div>
+          <div class="school-aff">${escapeHtml(school.affiliation || '—')}</div>
         </div>
         <div class="doc-title-block">
           <h1>${escapeHtml(title)}</h1>
-          <p class="doc-sub">${escapeHtml(teacherName)} · Session ${escapeHtml(school.session)}</p>
+          <p class="doc-sub">${escapeHtml(teacherName)} · Session ${escapeHtml(school.academicYear || '—')}</p>
         </div>
       </header>
       <div class="teacher-body">

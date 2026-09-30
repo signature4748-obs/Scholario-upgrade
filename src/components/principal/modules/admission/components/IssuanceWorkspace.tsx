@@ -45,7 +45,7 @@ export function IssuanceWorkspace({
   const artifacts = buildIssuanceArtifacts(app)
 
   const handleCompleteAndEnroll = () => {
-    const _newStudent = store.completeAdmission(app.id, {
+    store.completeAdmission(app.id, {
       admissionNo: artifacts.admissionNo,
       studentId: artifacts.studentId,
       rollNo: artifacts.rollNo,
@@ -56,11 +56,6 @@ export function IssuanceWorkspace({
       `Admission Issued! ${formData.firstName} ${formData.lastName} enrolled into ${formData.className} (${artifacts.rollNo}).`
     )
     onCompleted()
-  }
-
-  const handleCopyCredentials = () => {
-    navigator.clipboard.writeText(`Portal URL: https://portal.scholario.app\nLogin ID: ${artifacts.loginId}\nTemp Password: ${artifacts.tempPassword}`)
-    toast.success('Credentials copied to clipboard!')
   }
 
   return (
@@ -91,7 +86,10 @@ export function IssuanceWorkspace({
 
       {/* Tab 3: Credentials */}
       {activeTab === 'credentials' && (
-        <CredentialsTab artifacts={artifacts} onCopy={handleCopyCredentials} />
+        <CredentialsTab
+          artifacts={artifacts}
+          guardianEmail={formData.fatherEmail || formData.motherEmail || null}
+        />
       )}
 
       {/* Tab 4: Welcome Letter */}

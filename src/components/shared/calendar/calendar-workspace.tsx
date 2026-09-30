@@ -30,7 +30,7 @@
  * Scholario-OS is showing.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CalendarDays, ChevronLeft, ChevronRight, EyeOff, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -38,6 +38,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/
 import { PageTransition, SectionHeading, StatusBadge } from '@/components/shared/ui'
 import { getUnifiedEvents, useCalendarStore, type CalendarEvent } from '@/lib/store/calendar-store'
 import { useMockExamsStore } from '@/lib/exams/mock-exams-data'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { cn } from '@/lib/utils'
 import {
   ALL_TYPES,
@@ -79,6 +80,15 @@ export function CalendarWorkspace({ canCreate, showHeading = false }: CalendarWo
   const exams = useMockExamsStore((s) => s.exams)
   const userEvents = useCalendarStore((s) => s.userEvents)
 
+  // FINAL-GATE (EG-9F/R4+R6) — demo-tier gating for this module root:
+  //   · the mock-exams seed corpus applies once, only for the demo tenant;
+  //   · the illustrative school-events/holidays corpora render only for
+  //     the demo tenant (a real tenant sees its own user events + an
+  //     honest empty calendar).
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useMockExamsStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
+
   /**
    * Rolling window: visible month + today's month + the next two.
    * Deduped by id (school + user events are month-independent and are
@@ -93,12 +103,12 @@ export function CalendarWorkspace({ canCreate, showHeading = false }: CalendarWo
     const byId = new Map<string, CalendarEvent>()
     for (const key of keys) {
       const [y, m] = key.split('-').map(Number)
-      for (const e of getUnifiedEvents(y, m, exams, userEvents)) {
+      for (const e of getUnifiedEvents(y, m, exams, userEvents, { includeSeedCalendar: isDemo })) {
         byId.set(e.id, e)
       }
     }
     return [...byId.values()]
-  }, [year, month, exams, userEvents])
+  }, [year, month, exams, userEvents, isDemo])
 
   // Type-filtered view of everything.
   const visibleEvents = useMemo(

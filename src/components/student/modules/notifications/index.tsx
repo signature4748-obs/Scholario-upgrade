@@ -28,7 +28,7 @@
  * Notices tab bar above says where you are; this opens straight into a
  * compact toolbar + the scannable feed.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import {
   Award, IndianRupee, Library, MessageCircle,
@@ -39,6 +39,7 @@ import { cn } from '@/lib/utils'
 import { formatRelativeTime, formatDate, formatINR } from '@/lib/format'
 import { useMyStudentRecord, type StudentRecord } from '@/lib/store/students-store'
 import { useLibraryStore, type IssueRecord } from '@/lib/store/library-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import {
   useStudentMessagingStore, countUnreadConversations, isConversationUnread,
   type StudentConversation,
@@ -215,6 +216,15 @@ const KIND_META: Record<StudentNotificationKind, { icon: typeof Bell; tone: stri
 export function StudentNotificationsModule({ onNavigate }: { onNavigate?: (key: string) => void }) {
   const student = useMyStudentRecord()
   const issues = useLibraryStore((s) => s.issues)
+
+  // FINAL-GATE (EG-9F/R4) — the demo feed's library-due items come from the
+  // library store's sanctioned demo seed; apply it once here (module root).
+  // A real tenant keeps the honest empty library slice (feed shows only
+  // real server notices/messages).
+  const isDemo = useIsDemoTenant()
+  const ensureDemoSeed = useLibraryStore((s) => s.ensureDemoSeed)
+  useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
+
   const publications = useTimetableStore((s) => s.publications)
   const conversations = useStudentMessagingStore((s) => s.conversations)
   const seenAt = useStudentMessagingStore((s) => s.seenAt)

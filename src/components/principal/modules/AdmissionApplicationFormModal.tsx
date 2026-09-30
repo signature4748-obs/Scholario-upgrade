@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion'
 import { getSchoolSettings } from '@/lib/school-settings'
-import { school } from '@/lib/mock/school'
+import { useSchoolProfile } from '@/lib/school-profile'
 import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
 import { ApplicationFormPrintStyles } from './AdmissionApplicationFormModal/PrintStyles'
 import { ModalTopBar } from './AdmissionApplicationFormModal/ModalTopBar'
@@ -12,10 +12,14 @@ import type { AdmissionApplicationFormModalProps } from './AdmissionApplicationF
 
 export function AdmissionApplicationFormModal({ open, onClose }: AdmissionApplicationFormModalProps) {
   useDismissOnEscape(onClose, open)
+  // Form session — the canonical identity cascade (server academic year
+  // first), then the admissions engine's configured session; a school
+  // with neither prints an honest em-dash, never a stale year.
+  const profile = useSchoolProfile()
   if (!open) return null
 
   const schoolSettings = getSchoolSettings()
-  const academicSession = schoolSettings.defaultAcademicSession || school.academicYear
+  const academicSession = profile.academicYear || schoolSettings.defaultAcademicSession || '—'
 
   const handlePrint = () => {
     window.print()

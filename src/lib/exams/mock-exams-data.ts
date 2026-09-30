@@ -7,6 +7,12 @@
  * store so that exams created via the Create Exam form persist for the
  * session (until page reload).
  *
+ * FINAL-GATE (EG-9F/R6) — the sample exams are the sanctioned DEMO TIER
+ * corpus: the store boots EMPTY and is seeded only for the demo tenant
+ * (School.isDemo) by the consuming module roots (shared Calendar +
+ * certificates generate-tab) via `ensureDemoSeed`. A real production
+ * tenant starts honest-empty.
+ *
  * The academic classes + subjects come from the SHARED mock academic
  * source (`@/lib/mock/academic`) — the same source Students & Classes uses.
  * There is NO duplicate subject/class catalogue here.
@@ -19,6 +25,7 @@ import { create } from 'zustand'
 import type { ExamDTO, CreateExamInput, ExamClassDTO, ExamSubjectConfigDTO, ScheduleItemDTO } from './types'
 import { buildSeedClassesAndSubjects, buildSeedSchedule, SEED_CLASS_DEFS } from './seed-helpers'
 import { createExaminationFormApplication } from '@/lib/store/applications-store'
+import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 // SaaS-STAGE-2A — exam seeds are TENANT-AWARE: each school's namespace
 // boots with its own exam list (schoolId + pattern-flavored names). No
 // duplicate store — one builder, per-tenant output.
@@ -85,17 +92,27 @@ const SEED_EXAMS: ExamDTO[] = (() => {
   ]
 })()
 
-// ─── Mock exams store (in-memory, persists for the browser session) ─────
+// ─── Mock exams store (in-memory, persists for the browser session) ────
 
 interface MockExamsState {
   exams: ExamDTO[]
+  /** FINAL-GATE (EG-9F/R6) — set once the demo seed has been applied. */
+  demoSeeded?: boolean
+  /** FINAL-GATE (EG-9F/R6) — one-shot demo-tier seeder (module root). */
+  ensureDemoSeed: () => void
   createExam: (input: CreateExamInput) => ExamDTO
   deleteExam: (id: string) => void
   getExam: (id: string) => ExamDTO | undefined
 }
 
 export const useMockExamsStore = create<MockExamsState>()((set, get) => ({
-  exams: SEED_EXAMS.map((e) => ({ ...e })),
+  // FINAL-GATE (EG-9F/R6) — the sample exams above are the sanctioned
+  // DEMO TIER corpus (School.isDemo): the store boots EMPTY and the
+  // consuming module roots (shared Calendar, certificates generate-tab)
+  // apply it once per session via `ensureDemoSeed`. A real production
+  // tenant starts honest-empty (exams live in the DB / real Exams module).
+  exams: [],
+  ensureDemoSeed: () => ensureMockExamsDemoSeed(),
   createExam: (input) => {
     const id = `exam-mock-${Date.now()}`
     const now = new Date().toISOString()
@@ -203,6 +220,18 @@ export const useMockExamsStore = create<MockExamsState>()((set, get) => ({
   deleteExam: (id) => set((state) => ({ exams: state.exams.filter((e) => e.id !== id) })),
   getExam: (id) => get().exams.find((e) => e.id === id),
 }))
+
+// ─── FINAL-GATE (EG-9F/R6) demo-tier seeder ──────────────────────────
+// Built lazily on first call (the store exists by then). Applies the
+// sanctioned demo exams at most once, never over non-pristine state —
+// see makeDemoSeedApplier guard rules.
+let _ensureMockExamsDemoSeed: (() => void) | null = null
+function ensureMockExamsDemoSeed(): void {
+  _ensureMockExamsDemoSeed ??= makeDemoSeedApplier(useMockExamsStore, {
+    exams: SEED_EXAMS.map((e) => ({ ...e })),
+  })
+  _ensureMockExamsDemoSeed()
+}
 
 /** Academic year for the seeded exam dataset. */
 export const MOCK_ACADEMIC_YEAR = '2025-2026'
