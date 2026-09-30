@@ -105,10 +105,18 @@ jobs:
           rm -f ci.db
           bunx prisma migrate deploy
           bun run db:seed
+          bun run db:seed-website-cms
           bun run db:seed-tenant-isolation
         env:
           DATABASE_URL: file:/home/runner/work/${{ github.event.repository.name }}/ci.db
           NODE_ENV: development
+
+      # NOTE (pre-Phase-8 verification, 2026-09-30): the website-cms seed was
+      # added because the phase75 product suite asserts the demo tenant's
+      # seeded editorial document (hero/gallery/identity); without it two
+      # tests fail on a fresh database. The tenant-isolation fixtures seed
+      # now also provisions the School-A probe rows (room/grade-scale/exam
+      # type) the cross-tenant matrix reads.
 
       # ── Gate 5-8: the test hierarchy ─────────────────────────────────
       - name: Start dev server for live suites

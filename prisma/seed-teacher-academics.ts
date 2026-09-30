@@ -234,14 +234,14 @@ async function main() {
           stream: cfg.stream,
           capacity: 40,
           room: homeroom,
-          classTeacherId: teacherOf(cfg.classTeacher).id,
+          classTeacherId: teacherOf(cfg.classTeacher).userId,
         },
       }))
     if (existing) {
       await db.class.update({
         where: { id: existing.id },
         data: {
-          classTeacherId: teacherOf(cfg.classTeacher).id,
+          classTeacherId: teacherOf(cfg.classTeacher).userId,
           stream: cfg.stream ?? existing.stream,
           // Homeroom normalisation — heals legacy labels ("101", "201")
           // so every class follows the one scheme.

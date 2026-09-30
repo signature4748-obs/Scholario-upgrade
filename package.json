@@ -15,6 +15,7 @@
     "db:audit": "bun prisma/audit-db-integrity.ts",
     "db:reset": "bun scripts/db-reset-guard.ts",
     "db:seed": "bun prisma/seed.ts",
+    "db:seed-website-cms": "bun prisma/seed-website-cms.ts",
     "db:seed-roster": "bun prisma/seed-roster-150.ts",
     "db:seed-study-materials": "bun prisma/seed-study-materials.ts",
     "db:seed-learning": "bun prisma/seed-learning.ts",

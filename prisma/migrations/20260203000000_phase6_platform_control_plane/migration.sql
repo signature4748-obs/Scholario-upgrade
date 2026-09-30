@@ -90,33 +90,17 @@ CREATE TABLE "new_PlatformSetting" (
 INSERT INTO "new_PlatformSetting" ("id", "showDemoSchool", "updatedAt") SELECT "id", "showDemoSchool", "updatedAt" FROM "PlatformSetting";
 DROP TABLE "PlatformSetting";
 ALTER TABLE "new_PlatformSetting" RENAME TO "PlatformSetting";
-CREATE TABLE "new_School" (
-    "id" TEXT NOT NULL PRIMARY KEY,
-    "name" TEXT NOT NULL,
-    "slug" TEXT NOT NULL,
-    "code" TEXT NOT NULL,
-    "domain" TEXT,
-    "address" TEXT,
-    "city" TEXT,
-    "phone" TEXT,
-    "email" TEXT,
-    "themeColor" TEXT NOT NULL DEFAULT '#0f766e',
-    "accentColor" TEXT NOT NULL DEFAULT '#f59e0b',
-    "logoUrl" TEXT,
-    "plan" TEXT NOT NULL DEFAULT 'STANDARD',
-    "status" TEXT NOT NULL DEFAULT 'ACTIVE',
-    "academicYear" TEXT,
-    "board" TEXT NOT NULL DEFAULT 'CBSE',
-    "isDemo" BOOLEAN NOT NULL DEFAULT false,
-    "featureFlags" TEXT NOT NULL DEFAULT '{}',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
-);
-INSERT INTO "new_School" ("academicYear", "accentColor", "address", "board", "city", "code", "createdAt", "domain", "email", "id", "isDemo", "logoUrl", "name", "phone", "plan", "slug", "status", "themeColor", "updatedAt") SELECT "academicYear", "accentColor", "address", "board", "city", "code", "createdAt", "domain", "email", "id", "isDemo", "logoUrl", "name", "phone", "plan", "slug", "status", "themeColor", "updatedAt" FROM "School";
-DROP TABLE "School";
-ALTER TABLE "new_School" RENAME TO "School";
-CREATE UNIQUE INDEX "School_slug_key" ON "School"("slug");
-CREATE UNIQUE INDEX "School_code_key" ON "School"("code");
+-- School: featureFlags — ADDITIVE (no table rebuild).
+-- The original table-rebuild (CREATE new_School → INSERT SELECT → DROP TABLE
+-- "School" → RENAME) is retired: on a fresh `migrate deploy`, SQLite's
+-- ALTER TABLE … RENAME re-parses every trigger in the schema, and the
+-- db_level_guards/observability tenant-guard triggers (tg_guard_*_ins/upd,
+-- which reference "School") fail to resolve while the table is mid-swap:
+--   error in trigger tg_guard_JobRun_ins: no such table: main.School  (P3009)
+-- The additive form reaches the identical end state: 0_init already defines
+-- the School_slug_key / School_code_key unique indexes, so the only real
+-- delta of this migration is the featureFlags column.
+ALTER TABLE "School" ADD COLUMN "featureFlags" TEXT NOT NULL DEFAULT '{}';
 PRAGMA foreign_keys=ON;
 PRAGMA defer_foreign_keys=OFF;
 

@@ -351,6 +351,44 @@ async function main() {
     console.log(`[tenant-fixtures] School B homework probe ${hwB.id}`)
   }
 
+  // School A probe rows the cross-tenant matrix reads (rooms / grade scale /
+  // exam type). Historically these existed only via the iq3000 data
+  // migration + live exam-settings usage — a fresh canonical seed (db:seed
+  // + this file, exactly what CI provisions) must also carry them, or the
+  // tenant-isolation suite's `?? ''` fixture fallbacks make
+  // `not.toContain('')` assertions fail on empty ids. Values mirror the
+  // exam settings-service defaults (src/lib/exams/types.ts) so the demo
+  // tenant's configuration stays coherent.
+  let roomA = await db.room.findFirst({ where: { schoolId: aid, name: 'Room 101' } })
+  if (!roomA) {
+    roomA = await db.room.create({
+      data: { schoolId: aid, name: 'Room 101', code: 'RM-101', capacity: 40, type: 'Classroom', active: true },
+    })
+    console.log(`[tenant-fixtures] School A probe room ${roomA.id}`)
+  }
+  const gradeA1 = await db.gradeScale.findFirst({ where: { schoolId: aid, grade: 'A1' } })
+  if (!gradeA1) {
+    await db.gradeScale.createMany({
+      data: [
+        { schoolId: aid, grade: 'A1', minPct: 90, maxPct: 100, sortOrder: 1 },
+        { schoolId: aid, grade: 'A2', minPct: 80, maxPct: 89.99, sortOrder: 2 },
+        { schoolId: aid, grade: 'B1', minPct: 70, maxPct: 79.99, sortOrder: 3 },
+        { schoolId: aid, grade: 'B2', minPct: 60, maxPct: 69.99, sortOrder: 4 },
+        { schoolId: aid, grade: 'C1', minPct: 50, maxPct: 59.99, sortOrder: 5 },
+        { schoolId: aid, grade: 'C2', minPct: 33, maxPct: 49.99, sortOrder: 6 },
+        { schoolId: aid, grade: 'E', minPct: 0, maxPct: 32.99, sortOrder: 7 },
+      ],
+    })
+    console.log('[tenant-fixtures] School A default grade scale seeded (7 boundaries)')
+  }
+  let examTypeRowA = await db.examTypeConfig.findFirst({ where: { schoolId: aid, name: 'Unit Test' } })
+  if (!examTypeRowA) {
+    examTypeRowA = await db.examTypeConfig.create({
+      data: { schoolId: aid, name: 'Unit Test', code: 'UT', enabled: true, sortOrder: 1 },
+    })
+    console.log(`[tenant-fixtures] School A exam type ${examTypeRowA.id}`)
+  }
+
   console.log(`[tenant-fixtures] School A users ready (password ${SCHOOL_A_PASSWORD}): principal=${principalA.email} teacher=${teacherAUser.email} student=${studentAUser.email} parent=${parentAUser.email} superadmin=tenant.superadmin@scholario.test`)
 }
 

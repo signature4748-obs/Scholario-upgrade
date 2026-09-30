@@ -15,15 +15,21 @@ ALTER TABLE "School" ADD COLUMN "settings" TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE "School" ADD COLUMN "websiteContent" TEXT NOT NULL DEFAULT '{}';
 
 -- 3. Announcement lifecycle (editorial state + image + audit trail)
--- SQLite cannot ALTER ADD a column with a non-constant default, so the
--- @updatedAt column lands with a constant epoch default + immediate
--- backfill; the Prisma client always writes the real value thereafter.
+-- Columns mirror the schema exactly: Prisma's @updatedAt keeps NO DB-side
+-- default (the client always writes the value). SQLite permits ADD COLUMN
+-- NOT NULL without a default only while the table is empty — true on every
+-- fresh `migrate deploy` (the only apply path for this lineage; data-bearing
+-- sandboxes evolve via `db push`), so no epoch-default + backfill is needed
+-- (the previous epoch DEFAULT here was the Gate-3b schema-drift source).
+-- (schoolId, createdAt) is declared by the schema but already created by the
+-- integrity_constraints migration, so nothing to add here. The old
+-- (schoolId, status) index is retired: the schema does not declare it (it
+-- existed only in this hand-authored migration, never in a db-push-built
+-- database).
 ALTER TABLE "Notification" ADD COLUMN "status" TEXT NOT NULL DEFAULT 'PUBLISHED';
 ALTER TABLE "Notification" ADD COLUMN "imageId" TEXT;
 ALTER TABLE "Notification" ADD COLUMN "updatedById" TEXT;
-ALTER TABLE "Notification" ADD COLUMN "updatedAt" DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00';
-UPDATE "Notification" SET "updatedAt" = CURRENT_TIMESTAMP;
-CREATE INDEX "Notification_schoolId_status_idx" ON "Notification"("schoolId", "status");
+ALTER TABLE "Notification" ADD COLUMN "updatedAt" DATETIME NOT NULL;
 
 -- 4. Website gallery (albums + images, tenant-scoped)
 CREATE TABLE "GalleryAlbum" (
