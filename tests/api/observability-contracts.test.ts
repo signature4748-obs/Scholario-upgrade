@@ -28,6 +28,7 @@ import { describe, test, expect, beforeAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
 
@@ -39,7 +40,7 @@ const T = 45000 // generous: first-hit dev compilation
 // per-IP login bucket fresh for re-runs) ──────────────────────────────────
 
 const RUN_IP = `10.244.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
-const PW = 'ScholarioTest2026'
+const PW = TENANT_FIXTURE_PASSWORD
 const tokens: Record<string, string> = {}
 
 async function login(email: string): Promise<string> {

@@ -8,15 +8,16 @@ import { useAuth, type Role } from '@/lib/store/auth-store'
 import { saveSessionToken } from '@/lib/auth-session-token'
 import { isValidHexColor } from '@/lib/branding-contrast'
 import { LoadingPhase } from './loading-phase'
-import { credentials, type CredentialCard } from './data'
 
 /* ------------------------------------------------------------------ */
 /*  LoginPage — split-pane design adapted from the "Spacer" reference  */
 /*  • Left pane: animated emerald→teal gradient with school logo,     */
 /*    name, tagline, cloud SVG divider on the right edge              */
 /*  • Right pane: clean white form panel with underline inputs,        */
-/*    one-tap demo account chips, Sign In + Forgot Password only       */
-/*    (NO sign-up, NO terms checkbox)                                  */
+/*    Sign In + Forgot Password only (NO sign-up, NO terms checkbox,  */
+/*    NO demo-access shortcuts — Phase 8A credential-exposure         */
+/*    cleanup removed the one-tap demo chips + their hardcoded        */
+/*    credential values from this surface entirely)                   */
 /* ------------------------------------------------------------------ */
 
 
@@ -134,20 +135,12 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
   const { startAuth, endAuth, login } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [selectedRole, setSelectedRole] = useState<Role | null>(null)
   const [phase, setPhase] = useState<'form' | 'loading'>('form')
   const [forgotOpen, setForgotOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
-  const fillCredential = (cred: CredentialCard) => {
-    setSelectedRole(cred.role)
-    setEmail(cred.email)
-    setPassword(cred.password)
-    setError('')
-  }
-
-  const handleLogin = async (roleOverride?: Role) => {
+  const handleLogin = async () => {
     // 1) Validate BEFORE any network work — a doomed request must never
     //    fire before the user sees the empty-fields error.
     if (!email.trim() || !password) {
@@ -191,7 +184,7 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       const role: Role =
         serverRole === 'principal' || serverRole === 'teacher' || serverRole === 'student'
           ? serverRole
-          : roleOverride ?? selectedRole ?? 'principal'
+          : 'principal'
 
       // Persist the session token BEFORE the panel mounts. In embedded
       // contexts (the cross-site preview iframe) the browser drops the
@@ -249,19 +242,17 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
               school={school}
               email={email}
               password={password}
-              selectedRole={selectedRole}
               submitting={submitting}
               error={error}
               onEmailChange={(v) => { setEmail(v); setError('') }}
               onPasswordChange={(v) => { setPassword(v); setError('') }}
-              onSelectCredential={fillCredential}
               onLogin={() => handleLogin()}
               onForgotPassword={() => setForgotOpen(true)}
             />
           </motion.main>
         ) : (
           <div className="flex h-full w-full items-center justify-center">
-            <LoadingPhase selectedRole={selectedRole} />
+            <LoadingPhase selectedRole={null} />
           </div>
         )}
       </AnimatePresence>
@@ -515,12 +506,10 @@ interface RightPaneProps {
   school: LoginBranding
   email: string
   password: string
-  selectedRole: Role | null
   submitting: boolean
   error: string
   onEmailChange: (v: string) => void
   onPasswordChange: (v: string) => void
-  onSelectCredential: (cred: CredentialCard) => void
   onLogin: () => void
   onForgotPassword: () => void
 }
@@ -529,12 +518,10 @@ function RightPane({
   school,
   email,
   password,
-  selectedRole,
   submitting,
   error,
   onEmailChange,
   onPasswordChange,
-  onSelectCredential,
   onLogin,
   onForgotPassword,
 }: RightPaneProps) {
@@ -732,54 +719,6 @@ function RightPane({
             </motion.button>
           </motion.div>
         </form>
-
-        {/* One-tap demo accounts — BELOW the primary form so the
-            institutional sign-in flow leads and the keyboard tab order
-            runs email → password → forgot → Sign In → demo chips.
-            (dev/preview only — gated out of production builds via
-            login-page/data.tsx; school roles only, never super-admin) */}
-        {credentials.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.55, ease: [0.16, 1, 0.3, 1] }}
-            className="mt-8"
-          >
-            <p className="text-xs font-medium text-muted-foreground mb-2.5 uppercase tracking-wide">
-              Quick demo access — one tap to fill
-            </p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-              {credentials.map((cred) => {
-                const active = selectedRole === cred.role
-                return (
-                  <motion.button
-                    key={cred.role}
-                    type="button"
-                    onClick={() => onSelectCredential(cred)}
-                    aria-pressed={active}
-                    whileHover={{ y: -2 }}
-                    whileTap={{ scale: 0.97 }}
-                    className={`group relative flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border p-3 text-center transition-all focus-ring ${
-                      active
-                        ? 'school-brand-chip shadow-md'
-                        : 'border-border bg-card demo-chip-hover'
-                    }`}
-                  >
-                    <div
-                      className={`flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br ${cred.gradient} text-white shadow-md`}
-                    >
-                      {cred.icon}
-                    </div>
-                    <p className="text-[11px] font-semibold text-foreground">{cred.title}</p>
-                  </motion.button>
-                )
-              })}
-            </div>
-            <p className="text-center text-[11px] text-muted-foreground mt-3">
-              Demo accounts · development preview only
-            </p>
-          </motion.div>
-        )}
       </div>
 
       <style jsx>{`
@@ -840,11 +779,6 @@ function RightPane({
         }
         .peer:focus ~ .input-check-icon {
           opacity: 1;
-        }
-        /* Un-selected demo chip hover — brand-tinted (fallback emerald). */
-        .demo-chip-hover:hover {
-          border-color: color-mix(in srgb, var(--school-primary, #10b981) 40%, transparent);
-          background-color: color-mix(in srgb, var(--school-primary, #10b981) 6%, white);
         }
       `}</style>
     </section>
@@ -932,7 +866,7 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
                 autoFocus
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@greenwood.edu.in"
+                placeholder="you@school.edu"
                 aria-label="Registered email address"
                 className="w-full px-4 py-3 rounded-xl border border-border bg-card/60 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 outline-none transition-all"
               />

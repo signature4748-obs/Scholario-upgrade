@@ -26,13 +26,14 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
 import { resetLoginBuckets } from '../helpers/login-buckets'
+import { TENANT_FIXTURE_PASSWORD, DEMO_PRINCIPAL_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
 const T = 45_000
 
 const RUN_IP = `10.236.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
-const PW = 'ScholarioTest2026'
+const PW = TENANT_FIXTURE_PASSWORD
 const SUNRISE_PRINCIPAL = 'principal@sunriseacademy.edu'
 const GV_PRINCIPAL = 'principal.b@greenvalley.test'
 
@@ -127,7 +128,7 @@ beforeAll(async () => {
   if (!prefix) throw new Error('no uniquely-prefix-matching student found — corpus state unexpected')
 
   // Real logins (both tenants) — the searches below ride these sessions.
-  await login(SUNRISE_PRINCIPAL, 'password123')
+  await login(SUNRISE_PRINCIPAL, DEMO_PRINCIPAL_PASSWORD)
   await login(GV_PRINCIPAL, PW)
 }, 60_000)
 

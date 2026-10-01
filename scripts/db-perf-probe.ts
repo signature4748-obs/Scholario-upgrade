@@ -28,10 +28,12 @@
  */
 import { createHash } from 'node:crypto'
 import { assertNotProductionDatabase, connectOpsClient, prismaDatasourceUrl, utcSlug } from './db-conn'
+import { SEED_DEMO_PASSWORD } from '../prisma/seed-credentials'
 
 const BASE = process.env.PROBE_BASE ?? 'http://localhost:3000'
 const TEACHER_EMAIL = 'teacher1@sunriseacademy.edu'
-const TEACHER_PW = 'password123'
+// Env-driven demo credential (prisma/seed-credentials.ts convention).
+const TEACHER_PW = SEED_DEMO_PASSWORD
 
 // ── timing helpers ───────────────────────────────────────────────────────
 

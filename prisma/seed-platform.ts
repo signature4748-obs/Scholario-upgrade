@@ -17,23 +17,32 @@
  *
  * Idempotent: safe to re-run (upserts).
  *
- * Seeded identities (DEV PREVIEW ONLY):
- *   root  admin@scholario.cloud / admin123   (migrated legacy super admin)
- *   ops   ops@scholario.io / ops12345        (limited: no billing/provision/admins/settings)
+ * Seeded identities (DEV PREVIEW ONLY — env-driven values from
+ * prisma/seed-credentials.ts; passwords are intentionally NOT printed
+ * by this script's output):
+ *   root  admin@scholario.cloud   (migrated legacy super admin)
+ *   ops   ops@scholario.io        (limited: no billing/provision/admins/settings)
  */
 import { PrismaClient } from '@prisma/client'
 import { assertSeedable } from './seed-guard'
+import {
+  SEED_PLATFORM_OPS_PASSWORD,
+  SEED_PLATFORM_OPS_TOTP_SECRET,
+  SEED_PLATFORM_ROOT_PASSWORD,
+  SEED_PLATFORM_ROOT_TOTP_SECRET,
+} from './seed-credentials'
 
 const db = new PrismaClient()
 
 const ROOT_EMAIL = 'admin@scholario.cloud'
 const OPS_EMAIL = 'ops@scholario.io'
 
-// Dev-preview TOTP secrets (base32). Fixed so the demo authenticator on
-// /platform/login and tests/security/platform-isolation.test.ts can
-// compute the current code. NEVER used for production admins.
-const DEMO_ROOT_TOTP = 'JBSWY3DPEHPK3PXP'
-const DEMO_OPS_TOTP = 'KRSXG5CTMVRXEZLU'
+// Dev-preview TOTP secrets — env-driven via prisma/seed-credentials so the
+// demo authenticator on /platform/login and
+// tests/security/platform-isolation.test.ts can compute the current code
+// (same source, no drift). NEVER used for production admins.
+const DEMO_ROOT_TOTP = SEED_PLATFORM_ROOT_TOTP_SECRET
+const DEMO_OPS_TOTP = SEED_PLATFORM_OPS_TOTP_SECRET
 
 async function upsertAdmin(opts: {
   email: string
@@ -128,14 +137,14 @@ async function main() {
     totpSecret: DEMO_ROOT_TOTP,
   })
   // The root password must exist even on a totally fresh DB: seed the
-  // demo password (scrypt 'admin123') when no hash was migrated.
+  // env-driven demo password when no hash was migrated.
   const root = await db.platformAdmin.findUnique({ where: { id: rootId } })
   if (root && (!root.passwordHash || root.passwordHash.length < 10)) {
     const { scryptSync, randomBytes } = await import('crypto')
     const salt = randomBytes(16).toString('hex')
-    const hash = scryptSync('admin123', salt, 64).toString('hex')
+    const hash = scryptSync(SEED_PLATFORM_ROOT_PASSWORD, salt, 64).toString('hex')
     await db.platformAdmin.update({ where: { id: rootId }, data: { passwordHash: `${salt}:${hash}` } })
-    console.log('[seed-platform] seeded root demo password (admin123)')
+    console.log('[seed-platform] seeded root demo password (env-driven, not printed)')
   }
 
   // ── 3. Ops admin (limited capabilities) ──────────────────────────────
@@ -150,9 +159,9 @@ async function main() {
   if (!ops || !ops.passwordHash || ops.passwordHash.length < 10) {
     const { scryptSync, randomBytes } = await import('crypto')
     const salt = randomBytes(16).toString('hex')
-    const hash = scryptSync('ops12345', salt, 64).toString('hex')
+    const hash = scryptSync(SEED_PLATFORM_OPS_PASSWORD, salt, 64).toString('hex')
     await db.platformAdmin.update({ where: { id: opsId }, data: { passwordHash: `${salt}:${hash}` } })
-    console.log('[seed-platform] seeded ops demo password (ops12345)')
+    console.log('[seed-platform] seeded ops demo password (env-driven, not printed)')
   }
   await grant(opsId, [
     'schools.read',

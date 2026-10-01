@@ -1,5 +1,12 @@
 import { assertSeedable } from './seed-guard'
 import { CLEAN_SCHOOL_SLUG, DEMO_SCHOOL_CODE, DEMO_SCHOOL_DOMAIN, DEMO_SCHOOL_SLUG } from './seed-identity'
+import {
+  SEED_DEMO_PASSWORD,
+  SEED_SHOWCASE_PRINCIPAL_PASSWORD,
+  SEED_SHOWCASE_STUDENT_PASSWORD,
+  SEED_SHOWCASE_TEACHER_PASSWORD,
+  SEED_SUPERADMIN_PASSWORD,
+} from './seed-credentials'
 import { db } from '../src/lib/db'
 import { hashPassword } from '../src/lib/auth'
 import { mintReceiptNo } from '../src/lib/fee-workflow'
@@ -9,8 +16,8 @@ async function main() {
   assertSeedable('seed')
   // PIH-4a — production hard gate (kept: belt & braces alongside the
   // shared guard): this seed DELETES every demo-tenant table and plants
-  // demo credentials (principal@sunriseacademy.edu / password123 …).
-  // It must never run against a production environment.
+  // demo credentials for the dev/QA tenant. It must never run against a
+  // production environment.
   if (process.env.NODE_ENV === 'production') {
     console.error(
       '[seed] Refusing to run: NODE_ENV=production. The seed suite wipes all data and installs demo credentials.',
@@ -86,7 +93,7 @@ async function main() {
   const _superAdmin = await db.user.create({
     data: {
       email: 'admin@erpsuite.io',
-      passwordHash: hashPassword('admin123'),
+      passwordHash: hashPassword(SEED_SUPERADMIN_PASSWORD),
       name: 'Platform Super Admin',
       role: 'SUPER_ADMIN',
       phone: '+91 90000 00000',
@@ -120,7 +127,7 @@ async function main() {
       data: {
         schoolId,
         email,
-        passwordHash: hashPassword('password123'),
+        passwordHash: hashPassword(SEED_DEMO_PASSWORD),
         name,
         role,
         phone: phone || '+91 98765 43210',
@@ -324,17 +331,19 @@ async function main() {
   // Activity Log
   await db.activityLog.create({ data: { schoolId: demoSchool.id, userId: demoPrincipal.id, action: 'SCHOOL_SETUP', detail: 'Sunrise Academy configured for demonstration.' } })
 
-  // ---------------- SCHOLARIO-OS DEMO LOGIN USERS ----------------
-  // These match the credentials exposed on the public login page (login-page.tsx).
-  // They are additional to the @sunriseacademy.edu accounts above so the demo role
-  // cards work end-to-end with the real auth API.
+  // ---------------- SCHOLARIO-OS SHOWCASE USERS ----------------
+  // Acceptance-testing identities for the demo tenant (env-driven
+  // passwords from prisma/seed-credentials.ts). Phase 8A cleanup note:
+  // these are NO longer surfaced on the login page — the quick-access
+  // demo chips were removed from the public login surface; the accounts
+  // remain for controlled development/acceptance testing.
   // (Phase 8A rebrand: the legacy Greenwood showcase identity is now Sunrise.)
   await db.user.upsert({
     where: { email: 'admin@scholario.cloud' },
     update: {},
     create: {
       email: 'admin@scholario.cloud',
-      passwordHash: hashPassword('admin123'),
+      passwordHash: hashPassword(SEED_SUPERADMIN_PASSWORD),
       name: 'Arjun Malhotra',
       role: 'SUPER_ADMIN',
       phone: '+91 90000 00001',
@@ -348,7 +357,7 @@ async function main() {
     create: {
       schoolId: demoSchool.id,
       email: 'ananya.iyer@sunriseacademy.edu',
-      passwordHash: hashPassword('principal123'),
+      passwordHash: hashPassword(SEED_SHOWCASE_PRINCIPAL_PASSWORD),
       name: 'Dr. Ananya Iyer',
       role: 'PRINCIPAL',
       phone: '+91 98100 10001',
@@ -362,7 +371,7 @@ async function main() {
     create: {
       schoolId: demoSchool.id,
       email: 'rohan.mehta@sunriseacademy.edu',
-      passwordHash: hashPassword('teacher123'),
+      passwordHash: hashPassword(SEED_SHOWCASE_TEACHER_PASSWORD),
       name: 'Rohan Mehta',
       role: 'TEACHER',
       phone: '+91 98100 10002',
@@ -388,7 +397,7 @@ async function main() {
     create: {
       schoolId: demoSchool.id,
       email: 'aarav.sharma@sunriseacademy.edu',
-      passwordHash: hashPassword('student123'),
+      passwordHash: hashPassword(SEED_SHOWCASE_STUDENT_PASSWORD),
       name: 'Aarav Sharma',
       role: 'STUDENT',
       phone: '+91 98100 10003',
@@ -424,14 +433,10 @@ async function main() {
   })
 
   console.log('✅ Seed complete!')
-  console.log('   Super Admin (legacy): admin@erpsuite.io / admin123')
-  console.log('   Super Admin (showcase): admin@scholario.cloud / admin123')
-  console.log('   Demo Principal: principal@sunriseacademy.edu / password123')
-  console.log('   Demo Student1: student1@sunriseacademy.edu / password123')
-  console.log('   Demo Teacher1: teacher1@sunriseacademy.edu / password123')
-  console.log('   Showcase Principal: ananya.iyer@sunriseacademy.edu / principal123')
-  console.log('   Showcase Teacher: rohan.mehta@sunriseacademy.edu / teacher123')
-  console.log('   Showcase Student: aarav.sharma@sunriseacademy.edu / student123')
+  console.log('   Demo tenant: Sunrise Academy (isDemo) + platform/school identities planted.')
+  console.log('   Demo & fixture credentials are env-driven (prisma/seed-credentials.ts;')
+  console.log('   override via SEED_* vars — see .env.example). Values are intentionally')
+  console.log('   NOT printed here: seed output must never disclose credentials.')
 }
 
 main()

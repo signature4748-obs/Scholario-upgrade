@@ -36,9 +36,10 @@ import { unlink } from 'fs/promises'
 import path from 'path'
 import { evaluateSchoolAccess, planAllows } from '@/lib/access-policy'
 import { hashSessionToken } from '@/lib/auth'
+import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const PW = 'ScholarioTest2026'
+const PW = TENANT_FIXTURE_PASSWORD
 
 // ─── fixtures ──────────────────────────────────────────────────────────────
 

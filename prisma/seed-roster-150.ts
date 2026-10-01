@@ -29,6 +29,7 @@
 
 import { assertSeedable } from './seed-guard'
 import { DEMO_SCHOOL_SLUG } from './seed-identity'
+import { SEED_DEMO_PASSWORD } from './seed-credentials'
 import { db } from '../src/lib/db'
 import { hashPassword } from '../src/lib/auth'
 
@@ -269,7 +270,7 @@ async function main() {
           data: {
             schoolId: school.id,
             email: parentEmail,
-            passwordHash: hashPassword('password123'),
+            passwordHash: hashPassword(SEED_DEMO_PASSWORD),
             name: `Mr. ${father}`,
             role: 'PARENT',
             phone: `+91 9${pickI(rnd, 100000000, 899999999)}`,
@@ -282,7 +283,7 @@ async function main() {
           data: {
             schoolId: school.id,
             email: studentEmail,
-            passwordHash: hashPassword('password123'),
+            passwordHash: hashPassword(SEED_DEMO_PASSWORD),
             name,
             role: 'STUDENT',
             phone: null,

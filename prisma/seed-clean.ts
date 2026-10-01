@@ -18,9 +18,10 @@
  *     ExamTypeConfig ('Unit Test'), Room 101
  *   · Users: principal@greenvalley.test + the b@ tenant-fixture users
  *     (principal.b/teacher.b/student.b/parent.b@greenvalley.test) — the
- *     cross-tenant test identities, password ScholarioTest2026 (the
- *     fixture convention). NO Teacher/Student rows — accounts exist,
- *     staff/student directories stay honest-empty.
+ *     cross-tenant test identities, env-driven fixture password (the
+ *     fixture convention, prisma/seed-credentials.ts). NO
+ *     Teacher/Student rows — accounts exist, staff/student directories
+ *     stay honest-empty.
  *
  * This is the ONLY seed allowed near production (it is purely additive —
  * it never deletes anything), but it is STILL GUARDED: seed-guard refuses
@@ -36,11 +37,12 @@ import { PrismaClient } from '@prisma/client'
 import { scryptSync, randomBytes } from 'crypto'
 import { assertSeedable } from './seed-guard'
 import { CLEAN_SCHOOL_CODE, CLEAN_SCHOOL_NAME, CLEAN_SCHOOL_SLUG } from './seed-identity'
+import { SEED_TENANT_FIXTURE_PASSWORD } from './seed-credentials'
 
 const db = new PrismaClient()
 
-/** Fixed test-credential convention (shared with the tenant fixtures). */
-const CLEAN_PASSWORD = 'ScholarioTest2026'
+/** Fixed test-credential convention (env-driven, shared with the tenant fixtures). */
+const CLEAN_PASSWORD = SEED_TENANT_FIXTURE_PASSWORD
 
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex')
@@ -212,7 +214,7 @@ async function main() {
 
   const users = await db.user.findMany({ where: { schoolId }, select: { email: true, role: true } })
   console.log(`[seed-clean] users: ${users.map((u) => `${u.email} (${u.role.toLowerCase()})`).join(', ')}`)
-  console.log(`[seed-clean] fixture password (all users): ${CLEAN_PASSWORD}`)
+  console.log('[seed-clean] fixture password: env-driven (prisma/seed-credentials.ts — value not printed)')
 }
 
 if (import.meta.main) {

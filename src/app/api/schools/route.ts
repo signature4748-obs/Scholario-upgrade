@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
 
       const principalName = String(body.principalName || '').trim() || 'Principal'
       const principalEmail = String(body.principalEmail || '').trim().toLowerCase() || `principal@${slug}.edu`
-      // Task 4-d (audit 3-a fix #13): NO shared 'password123' default —
+      // Task 4-d (audit 3-a fix #13): NO shared hardcoded default —
       // random temp password (returned below so the operator can hand it
       // over) or the SCHOLARIO_DEFAULT_PASSWORD dev override (non-prod).
       const { password: principalPassword, generated } = resolveProvisionedPassword(body.principalPassword)

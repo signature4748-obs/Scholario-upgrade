@@ -37,6 +37,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
 import { resetLoginBuckets } from '../helpers/login-buckets'
+import { DEMO_PRINCIPAL_EMAIL, DEMO_PRINCIPAL_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -44,8 +45,8 @@ const T = 45_000
 
 const MARKER = randomBytes(4).toString('hex')
 const RUN_IP = `10.238.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
-const DEMO_PW = 'password123'
-const PRINCIPAL_EMAIL = 'principal@sunriseacademy.edu'
+const DEMO_PW = DEMO_PRINCIPAL_PASSWORD
+const PRINCIPAL_EMAIL = DEMO_PRINCIPAL_EMAIL
 const TEACHER_EMAIL = 'teacher1@sunriseacademy.edu'
 
 const STUDENT_NAME = `Paise Probe ${MARKER}`

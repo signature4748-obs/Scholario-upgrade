@@ -41,6 +41,7 @@ import { describe, test, expect, beforeAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -83,7 +84,7 @@ interface Fixtures {
   }
 }
 
-const PW = 'ScholarioTest2026'
+const PW = TENANT_FIXTURE_PASSWORD
 let fx: Fixtures
 const tokens: Record<string, string> = {}
 

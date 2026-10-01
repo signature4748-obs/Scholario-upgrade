@@ -87,11 +87,11 @@
 
 - Dev-only but committed: `keepalive.mjs`, `warm-chunks.mjs`, `spawn-detached.mjs`, `Caddyfile`, `mini-services/*`, `examples/*`, custom `lazy-compilation` backend (referenced from `next.config.ts`), sandbox hostnames in `allowedDevOrigins` (`*.space-z.ai`, `*.chatglm.cn`, `*.z.ai`), absolute `ROOT='/home/z/my-project'` paths, `dev.log`/`server.log` tee pipelines in npm scripts.
 - Production-gated (env detection, currently inert): Razorpay provider + webhook secret, `PAYMENTS_SANDBOX` mode.
-- Dev bypasses in the product: demo credential cards on the login screen (no feature flag); session-token-in-response-body always enabled (not gated by `NODE_ENV`).
+- Dev bypasses in the product: session-token-in-response-body always enabled (not gated by `NODE_ENV`). (Historic note: the login-screen demo credential cards were REMOVED in the Phase 8A credential-exposure cleanup — no demo shortcut exists on any login surface.)
 
 ### A.10 Super Admin implementation (verified)
 
-- **Accounts**: 2 real `SUPER_ADMIN` rows (`admin@erpsuite.io` from `prisma/seed.ts` with `hashPassword('admin123')`, and `admin@scholario.cloud` used by the login quick-access card), both `schoolId: null`.
+- **Accounts**: 2 real `SUPER_ADMIN` rows (`admin@erpsuite.io` from `prisma/seed.ts` with an env-driven seeded password, and `admin@scholario.cloud` — the migrated showcase admin), both `schoolId: null`. Phase 8A cleanup: no credential is surfaced on the login UI; seed values are env-driven (`prisma/seed-credentials.ts`).
 - **Server surfaces (real data)**: `/api/superadmin/activity` (merged ActivityLog+Payment+Session feed, last 30, provenance labels, no tokens/IPs leaked), `/api/superadmin/settings` (single global `PlatformSetting.showDemoSchool` toggle, `SUPER_ADMIN`-gated POST), platform-wide branch of `/api/dashboard`.
 - **Client surfaces (mock data)**: `superadmin-panel.tsx` + `modules/` (overview, schools, school-control, platform-controls, activity-feed, tenant-badges — 1397 lines). The Schools "Control Center" reads the **client tenant store**, not the DB; Platform Controls shows adapter seams (mock email outbox in `localStorage`) and a "Supabase Engine" marketing block on `platform-landing.tsx`.
 - **Gaps**: no MFA, no per-superadmin audit trail (ActivityLog rows are school-scoped; platform actions like `showDemoSchool` changes are not logged), no school provisioning API (schools cannot be created/managed server-side), no billing.
@@ -284,7 +284,7 @@ Committed runtime DB with PII; SQLite + absolute-path committed `.env`; anonymou
 - K-5 Mock identity profiles in `auth-store.ts` (EMP-001, STU-58, T-014) still back the shell for edge cases.
 - K-6 `platform-subscription.ts` — fake licensing engine with hardcoded UPI + fabricated transaction ref (`UPI/504912903481/OKICICI`).
 - K-7 Mock email adapter with localStorage outbox presented on the Super Admin "Platform Controls" screen.
-- K-8 Seeds define the canonical demo world (Greenwood + legacy Demo School users now re-pointed to Greenwood; `admin@erpsuite.io`/`admin123` super admin; `password123` for the demo school family) — credentials live in `prisma/seed.ts`, `worklog.md`, and the login UI simultaneously.
+- K-8 Seeds define the canonical demo world (Greenwood + legacy Demo School users now re-pointed to Greenwood; super admin + demo-school family passwords are env-driven defaults) — credentials live in `prisma/seed-credentials.ts` (server/test-side only; the login UI no longer carries any credential).
 
 ---
 

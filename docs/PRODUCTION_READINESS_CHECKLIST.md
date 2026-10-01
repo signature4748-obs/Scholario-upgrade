@@ -114,7 +114,7 @@ Companion to `docs/PRODUCTION_READINESS_BASELINE.md`. Frozen-repo inventory of e
 | SA-4 | Control-plane UI reflects real data | ⚠️ PARTIAL | Schools/Control Center read client mock tenant store (1 hardcoded tenant) | `src/components/superadmin/**` | HIGH | component read |
 | SA-5 | Platform action audit log | ❌ FAIL | superadmin settings POST not logged; ActivityLog is school-scoped | `src/app/api/superadmin/settings/route.ts` | MEDIUM | code read |
 | SA-6 | MFA / elevated session policy | ❌ FAIL | none | auth stack | MEDIUM | code read |
-| SA-7 | Super admin credentials rotated | ❌ FAIL | seed super admin `admin@erpsuite.io`/`admin123` live in committed DB; second account password also documented | `prisma/seed.ts`, `db/custom.db`, `worklog.md` | HIGH | DB query + seed read |
+| SA-7 | Super admin credentials rotated | ❌ FAIL | seed super admin `admin@erpsuite.io` uses the env-driven dev default (rotatable via `SEED_SUPERADMIN_PASSWORD`); second account password follows the same mechanism — rotate before cutover | `prisma/seed-credentials.ts`, `db/custom.db` | HIGH | DB query + seed read |
 
 ## 9. Observability
 

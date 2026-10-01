@@ -103,8 +103,9 @@ async function main() {
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
   console.log(`\n✅ seed-demo complete — ${PIPELINE.length} steps in ${seconds}s.`)
   console.log('   Demo tenant: sunrise-academy (full corpus). Clean tenant: green-valley (untouched).')
-  console.log('   Demo logins: principal@sunriseacademy.edu / password123 · student1@sunriseacademy.edu / password123 · teacher1@sunriseacademy.edu / password123')
-  console.log('   Fixture logins: tenant.*@sunrise.test / ScholarioTest2026 · principal.b@greenvalley.test / ScholarioTest2026')
+  console.log('   Demo & fixture credentials are env-driven (prisma/seed-credentials.ts,')
+  console.log('   overridable via SEED_* vars — see .env.example) and are intentionally')
+  console.log('   NOT printed: seed output must never disclose credentials.')
 }
 
 main()

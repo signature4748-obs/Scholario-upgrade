@@ -13,7 +13,8 @@
  *                      identities + probe targets INSIDE School A:
  *
  *   Users     : tenant.principal/teacher/student/parent.a@sunrise.test
- *               (roles per account, password ScholarioTest2026) +
+ *               (roles per account, env-driven fixture password from
+ *               prisma/seed-credentials.ts) +
  *               tenant.superadmin@sunrise.test (schoolless) +
  *               tenant.student.probe@sunrise.test ('Aarav Mehta' — the
  *               probe student, equivalent of the legacy Bluebell 'Ira Rao'
@@ -27,8 +28,9 @@
  *               (both A + B labels) — all owned by School A so cross-tenant
  *               test targets still exist while School B stays honest-zero.
  *
- * Passwords are FIXED test credentials (they never appear in the client
- * bundle; this file is server/test infrastructure only).
+ * Passwords are FIXED test credentials (env-driven via
+ * prisma/seed-credentials.ts; they never appear in the client bundle —
+ * this file is server/test infrastructure only).
  *
  * Idempotent: re-running refreshes fixture hygiene (password/role/status)
  * and only creates rows that are missing, so canonical test state
@@ -40,11 +42,12 @@ import { PrismaClient } from '@prisma/client'
 import { scryptSync, randomBytes } from 'crypto'
 import { assertSeedable } from './seed-guard'
 import { DEMO_SCHOOL_SLUG, PROBE_MATERIAL_TITLE, PROBE_SUBJECT_CODE } from './seed-identity'
+import { SEED_TENANT_FIXTURE_PASSWORD } from './seed-credentials'
 import { ensureCleanSchool } from './seed-clean'
 
 const db = new PrismaClient()
 
-const TEST_PASSWORD = 'ScholarioTest2026'
+const TEST_PASSWORD = SEED_TENANT_FIXTURE_PASSWORD
 
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex')
@@ -380,7 +383,7 @@ async function main() {
   console.log('[tenant-fixtures] School A probe targets:')
   for (const [k, v] of Object.entries(probes)) console.log(`  ${k}: ${v.id}`)
   console.log(`[tenant-fixtures] users: principal=${principalA.email} teacher=${teacherAUser.email} student=${studentAUser.email} parent=${parentAUser.email} probeStudent=${probeStudentUser.email}`)
-  console.log('[tenant-fixtures] password for all fixture users:', TEST_PASSWORD)
+  console.log('[tenant-fixtures] fixture password: env-driven (prisma/seed-credentials.ts — value not printed)')
   console.log('[tenant-fixtures] clean tenant (green-valley) users: principal@greenvalley.test + principal.b/teacher.b/student.b/parent.b@greenvalley.test')
 }
 

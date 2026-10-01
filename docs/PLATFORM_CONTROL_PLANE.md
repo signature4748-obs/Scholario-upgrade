@@ -144,10 +144,15 @@ Step-up = TOTP re-verification within the last **10 minutes** (a fresh login MFA
 
 `bun run db:seed-platform` (idempotent):
 
-| Admin | Email / password | Capabilities | TOTP |
+| Admin | Email | Capabilities | TOTP |
 |---|---|---|---|
-| Root (migrated legacy super admin) | `admin@scholario.cloud` / `admin123` | all | demo secret `JBSWY3DPEHPK3PXP` |
-| Ops (limited) | `ops@scholario.io` / `ops12345` | schools.read/manage, announcements, audit, support — **no** billing/provision/settings/admins | demo secret `KRSXG5CTMVRXEZLU` |
+| Root (migrated legacy super admin) | `admin@scholario.cloud` | all | env-driven demo secret (`prisma/seed-credentials.ts`) |
+| Ops (limited) | `ops@scholario.io` | schools.read/manage, announcements, audit, support — **no** billing/provision/settings/admins | env-driven demo secret (`prisma/seed-credentials.ts`) |
+
+Passwords and TOTP secrets for the seeded dev-preview admins are
+env-driven (`SEED_PLATFORM_*` vars; defaults in
+`prisma/seed-credentials.ts`) and are never printed by seed output nor
+surfaced in any UI.
 
 Production enrollment: `POST /api/platform/admins` generates a **random** TOTP secret and returns a one-time enrollment payload (`totpSecret` + `otpauth://` URL for QR provisioning) — never stored client-side, never re-served, and production admins are never `isDemo`.
 

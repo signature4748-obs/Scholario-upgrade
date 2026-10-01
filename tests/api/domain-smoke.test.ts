@@ -3,9 +3,9 @@ import { db } from '../helpers/db'
  * PHASE 4 (item 10) — API DOMAIN SMOKE tests (prioritized domains).
  *
  * One or two golden-path checks per domain against the LIVE dev server,
- * all through REAL logins (demo principal principal@sunriseacademy.edu /
- * password123 from the seed:demo pipeline + the tenant fixtures from
- * prisma/seed-tenant-isolation.ts).
+ * all through REAL logins (env-driven demo/fixture credentials from
+ * tests/helpers/credentials.ts — same source the seeds plant, so the
+ * harness and corpus can never drift).
  *
  * Domains: auth (login → me → logout), admissions (public inquiry form),
  * fees, payments (transactions/catalogue), attendance, exams, timetable,
@@ -21,14 +21,15 @@ import { describe, test, expect, afterAll, beforeAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { DEMO_PRINCIPAL_EMAIL, DEMO_PRINCIPAL_PASSWORD, TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
 
 const T = 45000 // generous: first-hit dev compilation
 
 const RUN_IP = `10.231.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
-const FIXTURE_PW = 'ScholarioTest2026'
-const DEMO_PRINCIPAL = { email: 'principal@sunriseacademy.edu', password: 'password123' }
+const FIXTURE_PW = TENANT_FIXTURE_PASSWORD
+const DEMO_PRINCIPAL = { email: DEMO_PRINCIPAL_EMAIL, password: DEMO_PRINCIPAL_PASSWORD }
 const tokens: Record<string, string> = {}
 
 // ── auth helpers (login with rate-limit fallback, tenant-isolation pattern) ──

@@ -21,9 +21,10 @@ import { db } from '../helpers/db'
  *
  * LIVE HTTP integration suite against the dev server
  * (http://localhost:3000) with REAL sessions — same style as the
- * Phase-2 tenant-isolation suite. Platform credentials:
- *   root: admin@scholario.cloud / admin123      (seed-platform.ts)
- *   ops:  ops@scholario.io / ops12345           (limited grants)
+ * Phase-2 tenant-isolation suite. Platform credentials are env-driven
+ * via tests/helpers/credentials.ts (same source as seed-platform.ts):
+ *   root: admin@scholario.cloud   (seed-platform.ts)
+ *   ops:  ops@scholario.io        (limited grants)
  * TOTP codes are computed with the SAME server library
  * (src/lib/platform/totp.ts) against the seeded demo secrets — the
  * code path under test is the real one, not a mock.
@@ -43,17 +44,25 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
 import { resetLoginBuckets } from '../helpers/login-buckets'
+import {
+  PLATFORM_OPS_PASSWORD,
+  PLATFORM_OPS_TOTP_SECRET,
+  PLATFORM_ROOT_PASSWORD,
+  PLATFORM_ROOT_TOTP_SECRET,
+  TENANT_FIXTURE_PASSWORD,
+} from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
-// Seeded demo TOTP secrets (prisma/seed-platform.ts — DEV PREVIEW ONLY).
+// Env-driven platform admin credentials (prisma/seed-credentials.ts —
+// same values seed-platform.ts plants; DEV PREVIEW ONLY).
 const ROOT_EMAIL = 'admin@scholario.cloud'
-const ROOT_PASSWORD = 'admin123'
-const ROOT_TOTP_SECRET = 'JBSWY3DPEHPK3PXP'
+const ROOT_PASSWORD = PLATFORM_ROOT_PASSWORD
+const ROOT_TOTP_SECRET = PLATFORM_ROOT_TOTP_SECRET
 const OPS_EMAIL = 'ops@scholario.io'
-const OPS_PASSWORD = 'ops12345'
+const OPS_PASSWORD = PLATFORM_OPS_PASSWORD
 
-const SCHOOL_PW = 'ScholarioTest2026' // tenant-isolation fixture password
+const SCHOOL_PW = TENANT_FIXTURE_PASSWORD // tenant-isolation fixture password
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -247,7 +256,7 @@ beforeAll(async () => {
 
   // Platform sessions (full MFA).
   rootToken = await rateSafePlatformLogin()
-  opsToken = await platformLogin(OPS_EMAIL, OPS_PASSWORD, 'KRSXG5CTMVRXEZLU')
+  opsToken = await platformLogin(OPS_EMAIL, OPS_PASSWORD, PLATFORM_OPS_TOTP_SECRET)
 }, 120_000)
 
 afterAll(async () => {
@@ -915,7 +924,7 @@ describe('PHASE 6 · platform session lifecycle', () => {
     const loginRes = await fetch(`${BASE}/api/platform/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
-      body: JSON.stringify({ email: OPS_EMAIL, password: OPS_PASSWORD, totpCode: await totpNow('KRSXG5CTMVRXEZLU') }),
+      body: JSON.stringify({ email: OPS_EMAIL, password: OPS_PASSWORD, totpCode: await totpNow(PLATFORM_OPS_TOTP_SECRET) }),
     })
     expect([401, 429]).toContain(loginRes.status)
     // Restore (asserted — state leakage is what this test guards against).
@@ -925,6 +934,6 @@ describe('PHASE 6 · platform session lifecycle', () => {
     expect(reactivate.status).toBe(200)
     const restored = await db.platformAdmin.findUnique({ where: { id: ops!.id }, select: { status: true } })
     expect(restored?.status).toBe('ACTIVE')
-    opsToken = await platformLogin(OPS_EMAIL, OPS_PASSWORD, 'KRSXG5CTMVRXEZLU')
+    opsToken = await platformLogin(OPS_EMAIL, OPS_PASSWORD, PLATFORM_OPS_TOTP_SECRET)
   }, T)
 })

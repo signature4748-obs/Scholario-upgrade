@@ -26,13 +26,14 @@ import { describe, test, expect, beforeAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { DEMO_PRINCIPAL_EMAIL, DEMO_PRINCIPAL_PASSWORD, TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.E2E_BASE_URL ?? 'http://localhost:3000'
 
 const T = 45000 // generous: first-hit dev compilation
 
 const RUN_IP = `10.222.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
-const FIXTURE_PW = 'ScholarioTest2026'
+const FIXTURE_PW = TENANT_FIXTURE_PASSWORD
 
 interface Journey {
   cookie: string
@@ -98,13 +99,13 @@ beforeAll(async () => {
 
 describe('E2E Journey 1 · principal (login → modules → logout, one session)', () => {
   test('demo principal completes the full module chain', async () => {
-    const j = await loginJourney('principal@sunriseacademy.edu', 'password123')
+    const j = await loginJourney(DEMO_PRINCIPAL_EMAIL, DEMO_PRINCIPAL_PASSWORD)
 
     // identity
     const me = await step(j, '/api/auth/me')
     const meBody = await expectOkData(me, 'me')
     const user = (meBody.data as { user: { email: string; role: string } }).user
-    expect(user.email).toBe('principal@sunriseacademy.edu')
+    expect(user.email).toBe(DEMO_PRINCIPAL_EMAIL)
     expect(user.role).toBe('PRINCIPAL')
 
     // home dashboard

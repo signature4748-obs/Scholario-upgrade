@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
       if (!name || !email) throw new Error('Name and email are required')
       const exists = await db.user.findUnique({ where: { email } })
       if (exists) throw new Error('Email already in use')
-      // Task 4-d (audit 3-a fix #3): NO shared 'password123' default. A
+      // Task 4-d (audit 3-a fix #3): NO shared hardcoded default password. A
       // supplied password must pass the Phase-1 policy; an absent one gets
       // a random 12-char temp password (surfaced once below) — or the
       // SCHOLARIO_DEFAULT_PASSWORD dev override (non-production only).

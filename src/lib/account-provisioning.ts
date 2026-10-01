@@ -3,7 +3,7 @@
  * (students, teachers, school principals created through the admin APIs).
  *
  * Task 4-d (audit 3-a fix #3 / #13): the old create flows defaulted every
- * new account to the shared literal 'password123' — a credential-stuffing
+ * new account to a shared hardcoded literal default — a credential-stuffing
  * gift. This module centralizes the replacement policy:
  *
  *   1. If the caller SUPPLIED a password, it must satisfy the Phase-1

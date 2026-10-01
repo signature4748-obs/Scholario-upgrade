@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       if (!name || !email) throw new Error('Name and email are required')
       const exists = await db.user.findUnique({ where: { email } })
       if (exists) throw new Error('Email already in use')
-      // Task 4-d (audit 3-a fix #3): NO shared 'password123' default — see
+      // Task 4-d (audit 3-a fix #3): NO shared hardcoded default — see
       // students POST and src/lib/account-provisioning.ts.
       const { password, generated } = resolveProvisionedPassword(body.password)
       const empId = String(body.employeeId || `EMP-${Date.now()}`)

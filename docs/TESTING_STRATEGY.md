@@ -98,10 +98,12 @@ seeded DB (`bun run db:seed`, `bun run db:seed-tenant-isolation`).
 - **NEVER weaken security to pass a test.** The rate-limit fallback exists to
   keep suites runnable, not to make a security posture invisible — security
   failures (lockouts, 401/403/404 semantics) are asserted as failures.
-- **Fixture credentials:** demo principal `principal@demoschool.edu` /
-  `password123` (`prisma/seed.ts`); School A/B tenant fixtures
-  `tenant.{principal,teacher,student,parent}.a@scholario.test` /
-  `ScholarioTest2026` (`prisma/seed-tenant-isolation.ts`, idempotent).
+- **Fixture credentials:** env-driven via `prisma/seed-credentials.ts`
+  (re-exported by `tests/helpers/credentials.ts` — the same source the seed
+  pipeline plants; overridable through the `SEED_*` env vars). School A/B
+  tenant fixtures
+  `tenant.{principal,teacher,student,parent}.a@sunrise.test`
+  (`prisma/seed-tenant-isolation.ts`, idempotent).
 
 ## 5. Writing new tests — where they go, what to copy
 

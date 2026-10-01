@@ -29,6 +29,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
 import { resetLoginBuckets } from '../helpers/login-buckets'
+import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
 
@@ -36,7 +37,7 @@ const T = 45_000
 
 const RUN_IP = `10.239.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 const GV_PRINCIPAL = 'principal.b@greenvalley.test'
-const PW = 'ScholarioTest2026'
+const PW = TENANT_FIXTURE_PASSWORD
 const MARKER = randomBytes(4).toString('hex')
 
 const teacherEmail = `first.teacher.${MARKER}@greenvalley.test`
