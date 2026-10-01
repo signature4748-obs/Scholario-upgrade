@@ -413,9 +413,9 @@ export async function listHomework(
   if (filters.teacherId && filters.teacherId !== 'all') where.teacherId = filters.teacherId
   if (filters.search) {
     where.OR = [
-      { title: { contains: filters.search } },
-      { description: { contains: filters.search } },
-      { teacherName: { contains: filters.search } },
+      { title: { contains: filters.search, mode: 'insensitive' as const } },
+      { description: { contains: filters.search, mode: 'insensitive' as const } },
+      { teacherName: { contains: filters.search, mode: 'insensitive' as const } },
     ]
   }
   const homework = await db.homework.findMany({

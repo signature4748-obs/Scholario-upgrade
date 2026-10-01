@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
           schoolId,
           ...(classId ? { classId } : {}),
           ...(q
-            ? { OR: [{ user: { name: { contains: q } } }, { admissionNo: { contains: q } }] }
+            ? { OR: [{ user: { name: { contains: q, mode: 'insensitive' as const } } }, { admissionNo: { contains: q, mode: 'insensitive' as const } }] }
             : {}),
         },
         include: { class: true, user: { select: { name: true, email: true, phone: true } }, route: true },

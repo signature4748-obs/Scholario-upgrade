@@ -1,6 +1,7 @@
 import { assertModuleEnabled } from '@/lib/platform/module-flags'
 import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -35,6 +36,11 @@ export async function GET() {
         include: { user: { select: { name: true, email: true, phone: true } }, vehicles: true },
       }),
     ])
-    return { vehicles, routes, drivers }
+    // Phase 8A: Route.fare is Prisma.Decimal — emit a JSON number.
+    return {
+      vehicles,
+      routes: routes.map((r) => ({ ...r, fare: num(r.fare) })),
+      drivers,
+    }
   })
 }

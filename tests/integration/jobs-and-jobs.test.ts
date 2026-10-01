@@ -293,7 +293,7 @@ describe('runJob · job-tracking failure tolerance', () => {
     expect(line!.level).toBe('error')
   }, 30000)
 
-  test('db.jobRun.create with a foreign schoolId is rejected by the tenant guard (P2003)', async () => {
+  test('db.jobRun.create with a foreign schoolId is rejected by the tenant guard (P2003 / PG guard P0001)', async () => {
     let code = ''
     try {
       await db.jobRun.create({
@@ -301,9 +301,14 @@ describe('runJob · job-tracking failure tolerance', () => {
       })
       throw new Error('expected tenant-guard rejection')
     } catch (e) {
-      code = (e as { code?: string }).code ?? ''
+      // Phase 8A (PG): the tenant-guard RAISE EXCEPTION surfaces as a
+      // PrismaClientUnknownRequestError carrying PostgresError code P0001
+      // (SQLite mapped the same trigger ABORT to P2003). Both prove the
+      // guard rejected the write.
+      const err = e as { code?: string; message?: string }
+      code = err.code ?? String(err.message ?? '').match(/PostgresError \{[^}]*code: "(P0001)"/)?.[1] ?? ''
     }
-    expect(code).toBe('P2003')
+    expect(['P2003', 'P0001']).toContain(code)
   }, 30000)
 
   test('a real schoolId is accepted by the guard', async () => {

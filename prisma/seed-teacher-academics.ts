@@ -1,7 +1,7 @@
 /**
  * seed-teacher-academics — v3: the PRINCIPAL-CONFIGURED academic setup for
- * the Demo School, session 2026-27, feeding the Teacher academics modules
- * (Lesson Planner / Class Attendance / Marks Entry).
+ * the Demo School (Sunrise Academy), session 2026-27, feeding the Teacher
+ * academics modules (Lesson Planner / Class Attendance / Marks Entry).
  *
  * ═══ WHAT THIS SEED ESTABLISHES (the config → planner chain) ═══
  *
@@ -34,6 +34,8 @@
  */
 
 import { PrismaClient } from '@prisma/client'
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG, PROBE_SUBJECT_CODE } from './seed-identity'
 import { HOLIDAY_SEED } from './holiday-data'
 import {
   computeSchedule,
@@ -50,7 +52,7 @@ import {
 
 const db = new PrismaClient()
 
-const SCHOOL_SLUG = 'demo-school'
+const SCHOOL_SLUG = DEMO_SCHOOL_SLUG
 const PERIOD_TIMES: { period: number; start: string; end: string }[] = [
   { period: 1, start: '08:30', end: '09:15' },
   { period: 2, start: '09:15', end: '10:00' },
@@ -66,12 +68,12 @@ const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'
 // Order = scheduling priority: secondary + senior-secondary place their
 // cells first, middle school fills the teachers' remaining free slots.
 
-/** Teacher emails → the faculty of the demo school. */
+/** Teacher emails → the faculty of the demo school (Sunrise Academy). */
 const TEACHERS = {
-  rohan: 'rohan.mehta@greenwood.edu.in',
-  kavita: 'teacher1@demoschool.edu',
-  arjun: 'teacher2@demoschool.edu',
-  priya: 'teacher3@demoschool.edu',
+  rohan: 'rohan.mehta@sunriseacademy.edu',
+  kavita: 'teacher1@sunriseacademy.edu',
+  arjun: 'teacher2@sunriseacademy.edu',
+  priya: 'teacher3@sunriseacademy.edu',
 } as const
 
 interface ClassConfig {
@@ -185,6 +187,9 @@ const CONFIG: ClassConfig[] = [
 ]
 
 async function main() {
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-teacher-academics')
+
   const registryIssues = validateRegistry()
   if (registryIssues.length > 0) {
     throw new Error(`Curriculum registry invalid — refusing to seed: ${JSON.stringify(registryIssues.slice(0, 5))}`)
@@ -258,6 +263,14 @@ async function main() {
   }
 
   // ── 2. Subjects + ClassSubjectAssignments (the permission layer) ──────
+  // Phase 8A carve-out: the tenant-isolation probe appointment (subject
+  // SR-MATH, planted by seed-tenant-isolation) is TEST INFRASTRUCTURE, not
+  // principal-configured academics — the matrix rebuild below preserves it
+  // so the canonical pipeline (tenant fixtures → this seed) stays
+  // deterministic across re-runs.
+  await db.classSubjectAssignment.deleteMany({
+    where: { schoolId: school.id, subject: { OR: [{ code: { not: PROBE_SUBJECT_CODE } }, { code: null }] } },
+  })
   const subjectByKey = new Map<string, { id: string; name: string }>()
   for (const cfg of CONFIG) {
     for (const subj of cfg.subjects) {
@@ -280,7 +293,6 @@ async function main() {
     }
   }
 
-  await db.classSubjectAssignment.deleteMany({ where: { schoolId: school.id } })
   let csaOrder = 0
   for (const cfg of CONFIG) {
     const cls = classByName.get(cfg.name)!

@@ -1,6 +1,7 @@
 // ============================================================
 // seed-study-materials — RB-1 demo seed for the Study Materials
-// repository (Demo School of Scholario). L2D-1 update: rows now carry
+// repository (Sunrise Academy — the Phase-8A demo tenant). L2D-1 update:
+// rows now carry
 // the publication lifecycle (status=published + publishedAt) and target
 // the REAL class label of the demo student (resolved at runtime from the
 // DB — never a hardcoded class string, so targeting can never drift from
@@ -8,20 +9,22 @@
 //
 // Creates 10 REALISTIC materials (worksheets, notes, syllabus, sample
 // papers, revision packs) for the demo school — mostly the demo student's
-// class plus a couple of whole-school items — and writes REAL, tiny, valid
-// files into db/uploads/study-materials (hand-built minimal PDFs with
-// correct xref tables + plain-text sheets; total well under 200 KB).
-// Idempotent: rows + files for the demo school are replaced on every run.
+// class plus a couple of whole-school items — and stores REAL, tiny, valid
+// files in Supabase Storage (PRIVATE 'school-media' bucket, deterministic
+// study-materials/<schoolId>/<fileName> paths; hand-built minimal PDFs
+// with correct xref tables + plain-text sheets; total well under 200 KB).
+// Phase 8A (8A-C9b): bytes leave the local disk — the seed writes objects
+// via the storage wrapper (x-upsert, idempotent).
+// Idempotent: rows + objects for the demo school are replaced on every run.
 //
 // Run: bun run db:seed-study-materials   (or: bun prisma/seed-study-materials.ts)
 // ============================================================
 
 import { randomBytes } from 'crypto'
-import { mkdir, rm, writeFile } from 'fs/promises'
-import path from 'path'
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG, PROBE_MATERIAL_TITLE } from './seed-identity'
 import { db } from '../src/lib/db'
-
-const UPLOAD_DIR = path.join(process.cwd(), 'db', 'uploads', 'study-materials')
+import { storageDelete, storageUpload, storedObjectLocation } from '../src/lib/storage/supabase'
 
 // ─── Minimal VALID PDF builder (correct xref byte offsets) ──────────
 
@@ -273,10 +276,13 @@ const SEED: SeedMaterial[] = [
 // ─── Seed runner ─────────────────────────────────────────────────────
 
 async function main() {
-  const school = await db.school.findFirst({ where: { slug: 'demo-school' } })
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-study-materials')
+
+  const school = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
     ?? await db.school.findFirst({ where: { isDemo: true } })
   if (!school) {
-    throw new Error('Demo school not found — run prisma/seed.ts first.')
+    throw new Error('Demo school (sunrise-academy) not found — run prisma/seed.ts first.')
   }
 
   // Resolve the demo school's real subjects (plain string FKs).
@@ -295,23 +301,30 @@ async function main() {
   // demo login chip authenticates). Class targeting must match the exact
   // label the authorization predicate compares against (Class.name).
   const demoStudentUser = await db.user.findUnique({
-    where: { email: 'student1@demoschool.edu' },
+    where: { email: 'student1@sunriseacademy.edu' },
     include: { student: { include: { class: { select: { name: true } } } } },
   })
   const demoClassLabel = demoStudentUser?.student?.class?.name ?? null
   const targetClass = (raw: string | null): string | null =>
     raw === 'MY-CLASS' ? demoClassLabel : raw
 
-  // Idempotency — drop this school's existing rows AND their bytes.
-  const existing = await db.studyMaterial.findMany({ where: { schoolId: school.id } })
+  // Idempotency — drop this school's existing rows AND their objects.
+  // Phase 8A carve-out: the tenant-isolation probe material (title match,
+  // planted by seed-tenant-isolation) is TEST INFRASTRUCTURE — it survives
+  // this wipe so the canonical pipeline (tenant fixtures → … → this seed)
+  // stays deterministic across re-runs.
+  const existing = await db.studyMaterial.findMany({
+    where: { schoolId: school.id, title: { not: PROBE_MATERIAL_TITLE } },
+  })
   for (const m of existing) {
     if (/^[a-z0-9]+\.[a-z0-9]{1,8}$/.test(m.fileName)) {
-      await rm(path.join(UPLOAD_DIR, m.fileName), { force: true })
+      const loc = storedObjectLocation('study-materials', m.schoolId, m.fileName)
+      await storageDelete(loc.bucket, loc.path).catch(() => {}) // missing = ok
     }
   }
-  await db.studyMaterial.deleteMany({ where: { schoolId: school.id } })
-
-  await mkdir(UPLOAD_DIR, { recursive: true })
+  await db.studyMaterial.deleteMany({
+    where: { schoolId: school.id, title: { not: PROBE_MATERIAL_TITLE } },
+  })
 
   let totalBytes = 0
   for (const item of SEED) {
@@ -327,7 +340,9 @@ async function main() {
         : Buffer.from(item.body.join('\n') + '\n', 'utf8')
     totalBytes += bytes.byteLength
 
-    await writeFile(path.join(UPLOAD_DIR, fileName), bytes)
+    // Phase 8A: bytes go to Supabase Storage (PRIVATE 'school-media',
+    // x-upsert, deterministic path from the row being created below).
+    await storageUpload('study-materials', fileName, bytes, mimeType, school.id)
 
     // ASCII-safe, header-friendly download name (title minus exotic chars).
     const safeTitle = item.title.replace(/[^A-Za-z0-9 ,&()'.-]+/g, ' ').replace(/\s+/g, ' ').trim()
@@ -359,7 +374,7 @@ async function main() {
 
   const count = await db.studyMaterial.count({ where: { schoolId: school.id } })
   console.log(`✅ Seeded ${count} study materials for ${school.name} (id ${school.id}).`)
-  console.log(`   Files written to db/uploads/study-materials — total ${(totalBytes / 1024).toFixed(1)} KB.`)
+  console.log(`   Objects stored in Supabase Storage (school-media: study-materials/${school.id}/<fileName>) — total ${(totalBytes / 1024).toFixed(1)} KB.`)
   if (demoClassLabel) console.log(`   Class-targeted materials aim at the demo student's class: "${demoClassLabel}".`)
   else console.log('   ⚠️ Demo student not found / has no class — class targeting is NULL (whole school).')
 }

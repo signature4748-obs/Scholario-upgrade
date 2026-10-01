@@ -1,8 +1,10 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
+import { createHash } from 'crypto'
 import {
   hashPassword,
   verifyPassword,
   generateToken,
+  hashSessionToken,
   sessionCookieOptions,
   isDevSessionBearerEnabled,
   isCrossOriginRequest,
@@ -43,6 +45,15 @@ describe('session token + cookie policy', () => {
       expect(t).toMatch(/^[a-f0-9]{64}$/)
     }
     expect(generateToken()).not.toBe(generateToken())
+  })
+
+  test('PHASE 8A · at-rest form is sha256 hex (the platform-plane convention), never the raw token', () => {
+    const t = generateToken()
+    const h = hashSessionToken(t)
+    expect(h).toMatch(/^[a-f0-9]{64}$/) // sha256 digest, hex
+    expect(h).toBe(createHash('sha256').update(t).digest('hex')) // exact convention (platform hashToken twin)
+    expect(hashSessionToken(t)).toBe(h) // deterministic — it is a lookup key
+    expect(h).not.toBe(t) // the stored form is never the wire token
   })
 
   test('cookie is HttpOnly + SameSite=Lax always; secure ONLY in production', () => {

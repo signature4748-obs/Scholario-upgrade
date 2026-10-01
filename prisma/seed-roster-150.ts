@@ -27,6 +27,8 @@
  * Run: bun run db:seed-roster   (package.json script)
  */
 
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG } from './seed-identity'
 import { db } from '../src/lib/db'
 import { hashPassword } from '../src/lib/auth'
 
@@ -114,8 +116,11 @@ const FEE_CYCLE = [
 // MAIN
 // ---------------------------------------------------------------------------
 async function main() {
-  const school = await db.school.findUnique({ where: { slug: 'demo-school' } })
-  if (!school) throw new Error('demo-school not found — run `bun run db:seed` first')
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-roster-150')
+
+  const school = await db.school.findUnique({ where: { slug: DEMO_SCHOOL_SLUG } })
+  if (!school) throw new Error(`${DEMO_SCHOOL_SLUG} not found — run \`bun run db:seed\` first`)
 
   console.log('🌱 seed-roster-150: canonical roster → ~150 connected students…')
 
@@ -125,10 +130,10 @@ async function main() {
     orderBy: { createdAt: 'asc' },
   })
   if (teachers.length < 3) throw new Error('Need ≥3 teachers — run base + teacher-academics seeds first')
-  const rohan = teachers.find((t) => t.email === 'rohan.mehta@greenwood.edu.in') ?? teachers[0]
+  const rohan = teachers.find((t) => t.email === 'rohan.mehta@sunriseacademy.edu') ?? teachers[0]
   const rotation = teachers.filter((t) => t.id !== rohan.id) // Rohan keeps ONLY 9-A (scope integrity)
   const principal = await db.user.findFirst({
-    where: { role: 'PRINCIPAL', schoolId: school.id, email: 'principal@greenwood.edu.in' },
+    where: { role: 'PRINCIPAL', schoolId: school.id, email: 'ananya.iyer@sunriseacademy.edu' },
   })
   // PIH-4b: class-teacher display names for the canonical attendance
   // provenance (markedBy) — resolved once, used by Phase 4.
@@ -225,7 +230,7 @@ async function main() {
     const cls = await db.class.findUnique({ where: { id: target.classId } })
     const classTeacherId = cls?.classTeacherId ?? rohan.id
     for (let i = 0; i < 7; i++) {
-      const admissionNo = `GWS2026${seq}`
+      const admissionNo = `SRA2026${seq}`
       const num = seq
       const rnd = sr(num * 7919) // per-student determinism
 
@@ -256,7 +261,7 @@ async function main() {
         return email
       }
       const parentEmail = mkUniqueEmail(`${fatherFirst}.${last}`, 'gmail.com')
-      const studentEmail = mkUniqueEmail(`${first}.${last}`, 'greenwood.edu.in')
+      const studentEmail = mkUniqueEmail(`${first}.${last}`, 'sunriseacademy.edu')
 
       const parentUser =
         (await db.user.findUnique({ where: { email: parentEmail } })) ??
@@ -535,8 +540,11 @@ async function main() {
           where: { studentId: st.id, status: { in: ['UNPAID', 'PARTIAL', 'PENDING'] } },
           orderBy: { createdAt: 'asc' },
         })
-        if (!openFee || openFee.amount - openFee.paid <= 0) continue
-        const ctAmount = Math.min(5000, openFee.amount - openFee.paid)
+        // Phase 8A PG-compat: Fee.amount/paid are Prisma Decimal on
+        // postgres — convert to Number before arithmetic (8A-R1 census §7).
+        const openOutstanding = openFee ? Number(openFee.amount) - Number(openFee.paid) : 0
+        if (!openFee || openOutstanding <= 0) continue
+        const ctAmount = Math.min(5000, openOutstanding)
         await db.feeTransaction.create({
           data: {
             schoolId: school.id,

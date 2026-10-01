@@ -223,7 +223,50 @@ export function brandingPatchFrom(body: Record<string, unknown>): Partial<School
  * stored document). Bounded: max 30 keys, 16 KB serialized, values must
  * be JSON primitives/arrays/objects (no undefined tricks) — the merge is
  * shallow at the top level, deep one level (slice → object merge).
+ *
+ * Phase 8A — money-bearing JSON paths (feeHeads[].defaultAmount,
+ * examFeeConfig.{unitTestFee,termExamFee,customGroupsFee},
+ * booksMaster[].price, discountRules[].value) get bounded numeric
+ * validation (0..500000). Additive: only these known money fields are
+ * checked; every finite number in range keeps passing untouched.
  */
+const SETTINGS_MONEY_MIN = 0
+const SETTINGS_MONEY_MAX = 500000
+
+function assertSettingsMoney(scope: string, v: unknown): void {
+  if (v === undefined || v === null) return // field absent in this fragment
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < SETTINGS_MONEY_MIN || v > SETTINGS_MONEY_MAX) {
+    throw new Error(`${scope} must be a number between ${SETTINGS_MONEY_MIN} and ${SETTINGS_MONEY_MAX}`)
+  }
+}
+
+function validateSettingsMoney(key: string, value: unknown): void {
+  if (key === 'feeHeads' && Array.isArray(value)) {
+    value.forEach((h, i) => {
+      if (h && typeof h === 'object' && !Array.isArray(h)) {
+        assertSettingsMoney(`settings.feeHeads[${i}].defaultAmount`, (h as Record<string, unknown>).defaultAmount)
+      }
+    })
+  } else if (key === 'booksMaster' && Array.isArray(value)) {
+    value.forEach((b, i) => {
+      if (b && typeof b === 'object' && !Array.isArray(b)) {
+        assertSettingsMoney(`settings.booksMaster[${i}].price`, (b as Record<string, unknown>).price)
+      }
+    })
+  } else if (key === 'discountRules' && Array.isArray(value)) {
+    value.forEach((r, i) => {
+      if (r && typeof r === 'object' && !Array.isArray(r)) {
+        assertSettingsMoney(`settings.discountRules[${i}].value`, (r as Record<string, unknown>).value)
+      }
+    })
+  } else if (key === 'examFeeConfig' && value && typeof value === 'object' && !Array.isArray(value)) {
+    const cfg = value as Record<string, unknown>
+    assertSettingsMoney('settings.examFeeConfig.unitTestFee', cfg.unitTestFee)
+    assertSettingsMoney('settings.examFeeConfig.termExamFee', cfg.termExamFee)
+    assertSettingsMoney('settings.examFeeConfig.customGroupsFee', cfg.customGroupsFee)
+  }
+}
+
 export function settingsPatchFrom(body: Record<string, unknown>): Record<string, unknown> | null {
   const frag = body.settings
   if (frag === undefined || frag === null) return null
@@ -238,6 +281,7 @@ export function settingsPatchFrom(body: Record<string, unknown>): Record<string,
     if (serialized.length > 16_000) {
       throw new Error(`settings.${key} is too large (max 16 KB per slice)`)
     }
+    validateSettingsMoney(key, value)
     cleaned[key] = value
   }
   if (!Object.keys(cleaned).length) return null

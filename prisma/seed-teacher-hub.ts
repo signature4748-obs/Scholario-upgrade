@@ -13,6 +13,8 @@
  * Run: bun run db:seed-teacher-hub
  */
 
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG } from './seed-identity'
 import { db } from '../src/lib/db'
 
 const daysAgo = (n: number, h = 10, m = 0): Date => {
@@ -24,19 +26,24 @@ const daysAgo = (n: number, h = 10, m = 0): Date => {
 const daysAhead = (n: number, h = 10, m = 0): Date => daysAgo(-n, h, m)
 
 async function main() {
-  const school = await db.school.findFirst({ where: { slug: 'demo-school' } })
-  if (!school) throw new Error('demo-school not found')
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-teacher-hub')
 
-  const teacherUser = await db.user.findFirst({ where: { email: 'rohan.mehta@greenwood.edu.in' } })
-  if (!teacherUser) throw new Error('Demo teacher user (rohan.mehta@greenwood.edu.in) not found')
+  const school = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
+  if (!school) throw new Error(`${DEMO_SCHOOL_SLUG} not found`)
+
+  const teacherUser = await db.user.findFirst({ where: { email: 'rohan.mehta@sunriseacademy.edu' } })
+  if (!teacherUser) throw new Error('Demo teacher user (rohan.mehta@sunriseacademy.edu) not found')
   const teacher = await db.teacher.findUnique({ where: { userId: teacherUser.id } })
   if (!teacher) throw new Error('Teacher profile row not found for demo teacher')
 
-  const kavitaUser = await db.user.findFirst({ where: { email: 'teacher1@demoschool.edu' } })
+  const kavitaUser = await db.user.findFirst({ where: { email: 'teacher1@sunriseacademy.edu' } })
 
   // 1. The demo teacher becomes the class teacher of Grade 9-A (idempotent).
   const grade9 = await db.class.findFirst({
-    where: { schoolId: school.id, name: { contains: '9' } },
+    // Phase 8A PG-compat: mode 'insensitive' keeps SQLite-era matching
+    // semantics after the provider flip (PG LIKE is case-sensitive).
+    where: { schoolId: school.id, name: { contains: '9', mode: 'insensitive' } },
     include: { students: { where: { guardianId: { not: null } }, orderBy: { rollNo: 'asc' } } },
   })
   if (!grade9) throw new Error('Grade 9 class not found')
@@ -48,15 +55,15 @@ async function main() {
 
   // 2. Give Grade 9-A's guardian users proper display names (display-only).
   const parentNames: Record<string, string> = {
-    'parent2@demoschool.edu': 'Mrs. Sneha Patel',
-    'parent3@demoschool.edu': 'Mr. Karthik Reddy',
-    'parent4@demoschool.edu': 'Mrs. Meera Gupta',
-    'parent5@demoschool.edu': 'Mr. Ravindra Singh',
-    'parent6@demoschool.edu': 'Mrs. Lakshmi Nair',
-    'parent7@demoschool.edu': 'Mr. Rajesh Iyer',
-    'parent8@demoschool.edu': 'Mrs. Anita Verma',
-    'parent9@demoschool.edu': 'Mr. Sandeep Joshi',
-    'parent10@demoschool.edu': 'Mrs. Priya Mehta',
+    'parent2@sunriseacademy.edu': 'Mrs. Sneha Patel',
+    'parent3@sunriseacademy.edu': 'Mr. Karthik Reddy',
+    'parent4@sunriseacademy.edu': 'Mrs. Meera Gupta',
+    'parent5@sunriseacademy.edu': 'Mr. Ravindra Singh',
+    'parent6@sunriseacademy.edu': 'Mrs. Lakshmi Nair',
+    'parent7@sunriseacademy.edu': 'Mr. Rajesh Iyer',
+    'parent8@sunriseacademy.edu': 'Mrs. Anita Verma',
+    'parent9@sunriseacademy.edu': 'Mr. Sandeep Joshi',
+    'parent10@sunriseacademy.edu': 'Mrs. Priya Mehta',
   }
   for (const [email, name] of Object.entries(parentNames)) {
     await db.user.updateMany({ where: { email, schoolId: school.id, role: 'PARENT' }, data: { name } })

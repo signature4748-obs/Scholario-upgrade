@@ -2,6 +2,8 @@ import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
 import { growthScoresFor } from '@/lib/growth/service'
+import type { Prisma } from '@prisma/client'
+import { num, dec, outstandingDec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -421,11 +423,11 @@ export async function GET(request: Request) {
             select: { studentId: true, amount: true, paid: true, dueDate: true },
           })
         : []
-      const feeByStudent = new Map<string, { outstanding: number; overdue: boolean }>()
+      const feeByStudent = new Map<string, { outstanding: Prisma.Decimal; overdue: boolean }>()
       for (const f of feeRows) {
-        const entry = feeByStudent.get(f.studentId) ?? { outstanding: 0, overdue: false }
-        entry.outstanding += Math.max(0, f.amount - f.paid)
-        if (f.amount - f.paid > 0 && f.dueDate && f.dueDate < todayEnd) entry.overdue = true
+        const entry = feeByStudent.get(f.studentId) ?? { outstanding: dec(0), overdue: false }
+        entry.outstanding = entry.outstanding.plus(outstandingDec(f.amount, f.paid))
+        if (dec(f.amount).minus(f.paid).greaterThan(0) && f.dueDate && f.dueDate < todayEnd) entry.overdue = true
         feeByStudent.set(f.studentId, entry)
       }
 
@@ -472,7 +474,7 @@ export async function GET(request: Request) {
           growthScore: g?.score ?? null,
           growthMonthDelta: g?.monthDelta ?? 0,
           academicPct: latestStats.has(s.id) ? Math.round((latestStats.get(s.id)!.pct + Number.EPSILON) * 10) / 10 : null,
-          feeOutstanding: fee?.outstanding ?? 0,
+          feeOutstanding: num(fee?.outstanding),
           feeOverdue: fee?.overdue ?? false,
         }
       })

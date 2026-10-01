@@ -1,31 +1,50 @@
 /**
- * Tenant-isolation test fixtures — PHASE 2.
+ * Tenant-isolation test fixtures — PHASE 2, rearchitected for Phase 8A
+ * (two-tenant acceptance corpus).
  *
- * Creates the SECOND tenant (School B) with a full set of role users and
- * cross-tenant probe targets, WITHOUT touching the canonical Greenwood
- * (School A) data:
+ * The corpus is exactly two tenants:
  *
- *   School B  : Bluebell International Academy (slug bluebell-academy)
- *   Users     : principal / teacher / student / parent  (role per account)
- *   Data rows : class, subject, teacher, student, fee, notification, event,
- *               exam, question, room, study-material — all owned by School B
+ *   School B (CLEAN) : Green Valley Public School (slug green-valley) —
+ *                      bootstrap config + role users, ZERO business data.
+ *                      Ensured here via seed-clean's ensureCleanSchool()
+ *                      so a standalone run bootstraps it too.
+ *   School A (DEMO)  : Sunrise Academy (slug sunrise-academy) — the full
+ *                      demo corpus. THIS seed plants the cross-tenant test
+ *                      identities + probe targets INSIDE School A:
+ *
+ *   Users     : tenant.principal/teacher/student/parent.a@sunrise.test
+ *               (roles per account, password ScholarioTest2026) +
+ *               tenant.superadmin@sunrise.test (schoolless) +
+ *               tenant.student.probe@sunrise.test ('Aarav Mehta' — the
+ *               probe student, equivalent of the legacy Bluebell 'Ira Rao'
+ *               fixture, rebranded with a DIFFERENT name inside the demo
+ *               tenant).
+ *   Fixtures  : teacher row (TT-A-001) + student row for the .a identities,
+ *               minimal probe corpus in School A — class 'Grade 5 - A',
+ *               subject SR-MATH, CSA (teacher.a scope), probe student
+ *               'Aarav Mehta', fee / notification / event / exam /
+ *               question / room / study-material probes, homework probes
+ *               (both A + B labels) — all owned by School A so cross-tenant
+ *               test targets still exist while School B stays honest-zero.
  *
  * Passwords are FIXED test credentials (they never appear in the client
  * bundle; this file is server/test infrastructure only).
  *
- * Idempotent: re-running refreshes nothing — it only creates rows that are
- * missing, so canonical test state survives repeated invocations.
+ * Idempotent: re-running refreshes fixture hygiene (password/role/status)
+ * and only creates rows that are missing, so canonical test state
+ * survives repeated invocations.
  *
  * Run: bun prisma/seed-tenant-isolation.ts
  */
 import { PrismaClient } from '@prisma/client'
 import { scryptSync, randomBytes } from 'crypto'
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG, PROBE_MATERIAL_TITLE, PROBE_SUBJECT_CODE } from './seed-identity'
+import { ensureCleanSchool } from './seed-clean'
 
 const db = new PrismaClient()
 
-const SCHOOL_B_SLUG = 'bluebell-academy'
 const TEST_PASSWORD = 'ScholarioTest2026'
-const SCHOOL_A_PASSWORD = TEST_PASSWORD
 
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex')
@@ -68,211 +87,42 @@ async function upsertUser(opts: {
 }
 
 async function main() {
-  // ── School B ────────────────────────────────────────────────────────
-  let schoolB = await db.school.findUnique({ where: { slug: SCHOOL_B_SLUG } })
-  if (!schoolB) {
-    schoolB = await db.school.create({
-      data: {
-        name: 'Bluebell International Academy',
-        slug: SCHOOL_B_SLUG,
-        code: 'BBA',
-        city: 'Pune',
-        academicYear: '2025-2026',
-        plan: 'STANDARD',
-        status: 'ACTIVE',
-        isDemo: false,
-      },
-    })
-    console.log(`[tenant-fixtures] created School B ${schoolB.id} (${schoolB.name})`)
-  } else {
-    console.log(`[tenant-fixtures] School B exists: ${schoolB.id}`)
-  }
-  const sid = schoolB.id
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-tenant-isolation')
 
-  // ── Role users ───────────────────────────────────────────────────────
-  const principal = await upsertUser({ email: 'principal.b@bluebell.test', name: 'Dr. Meera Nair', role: 'PRINCIPAL', schoolId: sid })
-  const teacherUser = await upsertUser({ email: 'teacher.b@bluebell.test', name: 'Sunil Rao', role: 'TEACHER', schoolId: sid })
-  const studentUser = await upsertUser({ email: 'student.b@bluebell.test', name: 'Ira Rao', role: 'STUDENT', schoolId: sid })
-  const parentUser = await upsertUser({ email: 'parent.b@bluebell.test', name: 'Vikram Rao', role: 'PARENT', schoolId: sid })
+  // ── School B (clean tenant) ──────────────────────────────────────────
+  // Green Valley Public School: bootstrap configuration + b@ fixture
+  // users, ZERO business data. Delegated to seed-clean so the definition
+  // lives in exactly one place.
+  await ensureCleanSchool(db)
+  const schoolB = await db.school.findUniqueOrThrow({ where: { slug: 'green-valley' } })
+  console.log(`[tenant-fixtures] clean tenant ready: ${schoolB.name} (${schoolB.slug}) ${schoolB.id}`)
 
-  // ── Class + Subject + Teacher rows ───────────────────────────────────
-  let classB = await db.class.findFirst({ where: { schoolId: sid, name: 'Grade 5 - A' } })
-  if (!classB) {
-    classB = await db.class.create({ data: { schoolId: sid, name: 'Grade 5 - A', section: 'A' } })
-    console.log(`[tenant-fixtures] created class ${classB.id}`)
-  }
-
-  let subjectB = await db.subject.findFirst({ where: { schoolId: sid, code: 'BB-MATH' } })
-  if (!subjectB) {
-    subjectB = await db.subject.create({
-      data: { schoolId: sid, name: 'Mathematics', code: 'BB-MATH', fullMarks: 100, passMarks: 35 },
-    })
-    console.log(`[tenant-fixtures] created subject ${subjectB.id}`)
-  }
-
-  let teacherB = await db.teacher.findFirst({ where: { schoolId: sid, userId: teacherUser.id } })
-  if (!teacherB) {
-    teacherB = await db.teacher.create({
-      data: {
-        schoolId: sid,
-        userId: teacherUser.id,
-        employeeId: 'BBA-T-001',
-        department: 'Mathematics',
-        qualification: 'M.Sc Mathematics',
-        subjects: 'Mathematics',
-      },
-    })
-    console.log(`[tenant-fixtures] created teacher row ${teacherB.id}`)
-  } else if (!teacherUser) {
-    console.log('[tenant-fixtures] teacher user missing')
-  }
-
-  // CSA appointment (teacher B teaches Mathematics in Grade 5 - A) — gives
-  // the teacher a REAL server-side scope so teacher-surface positive
-  // controls exercise the assignment-driven permission model.
-  let csaB = await db.classSubjectAssignment.findFirst({
-    where: { schoolId: sid, classId: classB.id, subjectId: subjectB.id, teacherUserId: teacherUser.id },
-  })
-  if (!csaB) {
-    csaB = await db.classSubjectAssignment.create({
-      data: { schoolId: sid, classId: classB.id, subjectId: subjectB.id, teacherUserId: teacherUser.id, isActive: true },
-    })
-    console.log(`[tenant-fixtures] created CSA ${csaB.id} (teacher B → Grade 5 - A Mathematics)`)
-  }
-
-  // ── Student (ward of parentB) ────────────────────────────────────────
-  let studentB = await db.student.findFirst({ where: { schoolId: sid, userId: studentUser.id } })
-  if (!studentB) {
-    studentB = await db.student.create({
-      data: {
-        schoolId: sid,
-        userId: studentUser.id,
-        classId: classB.id,
-        rollNo: '01',
-        admissionNo: 'BBA-2026-0001',
-        guardianId: parentUser.id,
-        guardianName: 'Vikram Rao',
-        guardianPhone: '+91 90000 00002',
-        gender: 'female',
-      },
-    })
-    console.log(`[tenant-fixtures] created student ${studentB.id}`)
-  }
-
-  // ── Cross-tenant probe targets owned by School B ─────────────────────
-  const probes: Record<string, { id: string }> = {}
-
-  let feeB = await db.fee.findFirst({ where: { schoolId: sid, studentId: studentB.id } })
-  if (!feeB) {
-    feeB = await db.fee.create({
-      data: { schoolId: sid, studentId: studentB.id, title: 'Bluebell Term Fee', amount: 12000, paid: 0, status: 'UNPAID' },
-    })
-  }
-  probes.fee = feeB
-
-  let notifB = await db.notification.findFirst({ where: { schoolId: sid, title: 'Bluebell Winter Carnival' } })
-  if (!notifB) {
-    notifB = await db.notification.create({
-      data: { schoolId: sid, title: 'Bluebell Winter Carnival', message: 'Bluebell school-only announcement', audience: 'ALL', priority: 'NORMAL' },
-    })
-  }
-  probes.notification = notifB
-
-  let eventB = await db.schoolEvent.findFirst({ where: { schoolId: sid, title: 'Bluebell Founders Day' } })
-  if (!eventB) {
-    eventB = await db.schoolEvent.create({
-      data: { schoolId: sid, title: 'Bluebell Founders Day', type: 'EVENT', startDate: new Date('2026-12-01T09:00:00Z'), audience: 'ALL', createdBy: principal.id },
-    })
-  }
-  probes.event = eventB
-
-  let examB = await db.exam.findFirst({ where: { schoolId: sid, name: 'Bluebell Unit Test 1' } })
-  if (!examB) {
-    examB = await db.exam.create({
-      data: { schoolId: sid, name: 'Bluebell Unit Test 1', type: 'Unit Test', session: '2025-2026', status: 'Scheduled', resultStatus: 'Not Started', passPercentage: 35, createdBy: principal.id },
-    })
-  }
-  probes.exam = examB
-
-  let questionB = await db.questionBank.findFirst({ where: { schoolId: sid, question: 'Bluebell probe question: simplify 2x+3?' } })
-  if (!questionB) {
-    questionB = await db.questionBank.create({
-      data: {
-        schoolId: sid,
-        subjectId: subjectB.id,
-        question: 'Bluebell probe question: simplify 2x+3?',
-        optionA: '2x+3', optionB: '5x', optionC: 'x', optionD: '6',
-        answer: 'A', type: 'MCQ', difficulty: 'EASY', marks: 1,
-      },
-    })
-  }
-  probes.question = questionB
-
-  let roomB = await db.room.findFirst({ where: { schoolId: sid, name: 'Bluebell Room 5A' } })
-  if (!roomB) {
-    roomB = await db.room.create({
-      data: { schoolId: sid, name: 'Bluebell Room 5A', code: 'BBA-5A', capacity: 30, type: 'Classroom', active: true },
-    })
-  }
-  probes.room = roomB
-
-  let materialB = await db.studyMaterial.findFirst({ where: { schoolId: sid, title: 'Bluebell Maths Worksheet 1' } })
-  if (!materialB) {
-    materialB = await db.studyMaterial.create({
-      data: {
-        schoolId: sid,
-        title: 'Bluebell Maths Worksheet 1',
-        description: 'Bluebell-only worksheet (tenant-isolation probe)',
-        subjectId: subjectB.id,
-        className: classB.name,
-        category: 'worksheet',
-        fileName: 'bluebell-probe-worksheet.pdf',
-        originalName: 'Bluebell Maths Worksheet 1.pdf',
-        mimeType: 'application/pdf',
-        sizeBytes: 1024,
-        status: 'published',
-        publishedAt: new Date(),
-        uploadedById: teacherB.id,
-      },
-    })
-  }
-  probes.material = materialB
-
-  console.log('[tenant-fixtures] School B probe targets:')
-  for (const [k, v] of Object.entries(probes)) console.log(`  ${k}: ${v.id}`)
-  console.log(`[tenant-fixtures] users: principal=${principal.email} teacher=${teacherUser.email} student=${studentUser.email} parent=${parentUser.email}`)
-  console.log('[tenant-fixtures] password for all fixture users:', TEST_PASSWORD)
-
-  // ─────────────────────────────────────────────────────────────────────
-  // School A (Greenwood, the canonical demo tenant) TEST identities.
-  // Additive only — no canonical row is modified. These accounts exist so
-  // the cross-tenant test suite has controlled credentials in BOTH tenants
-  // (positive controls) without depending on demo login data.
-  // ─────────────────────────────────────────────────────────────────────
-  const schoolA = await db.school.findFirst({ where: { slug: 'demo-school' } })
+  // ── School A (demo tenant — Sunrise Academy) test identities ─────────
+  const schoolA = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
   if (!schoolA) {
-    console.log('[tenant-fixtures] School A (demo-school) not found — skipping School A fixtures')
+    console.log('[tenant-fixtures] School A (sunrise-academy) not found — skipping School A fixtures')
     return
   }
   const aid = schoolA.id
 
-  const principalA = await upsertUser({ email: 'tenant.principal.a@scholario.test', name: 'Tenant Test Principal A', role: 'PRINCIPAL', schoolId: aid })
-  const teacherAUser = await upsertUser({ email: 'tenant.teacher.a@scholario.test', name: 'Tenant Test Teacher A', role: 'TEACHER', schoolId: aid })
-  const studentAUser = await upsertUser({ email: 'tenant.student.a@scholario.test', name: 'Tenant Test Student A', role: 'STUDENT', schoolId: aid })
-  const parentAUser = await upsertUser({ email: 'tenant.parent.a@scholario.test', name: 'Tenant Test Parent A', role: 'PARENT', schoolId: aid })
+  const principalA = await upsertUser({ email: 'tenant.principal.a@sunrise.test', name: 'Tenant Test Principal A', role: 'PRINCIPAL', schoolId: aid })
+  const teacherAUser = await upsertUser({ email: 'tenant.teacher.a@sunrise.test', name: 'Tenant Test Teacher A', role: 'TEACHER', schoolId: aid })
+  const studentAUser = await upsertUser({ email: 'tenant.student.a@sunrise.test', name: 'Tenant Test Student A', role: 'STUDENT', schoolId: aid })
+  const parentAUser = await upsertUser({ email: 'tenant.parent.a@sunrise.test', name: 'Tenant Test Parent A', role: 'PARENT', schoolId: aid })
 
   // SUPER_ADMIN rows are schoolless — managed directly (the platform
   // account must NEVER be bound to a tenant).
-  let saUser = await db.user.findUnique({ where: { email: 'tenant.superadmin@scholario.test' } })
+  let saUser = await db.user.findUnique({ where: { email: 'tenant.superadmin@sunrise.test' } })
   if (!saUser) {
     saUser = await db.user.create({
       data: {
-        email: 'tenant.superadmin@scholario.test',
+        email: 'tenant.superadmin@sunrise.test',
         name: 'Tenant Test Super Admin',
         role: 'SUPER_ADMIN',
         schoolId: null,
         status: 'ACTIVE',
-        passwordHash: hashPassword(SCHOOL_A_PASSWORD),
+        passwordHash: hashPassword(TEST_PASSWORD),
       },
     })
   } else if (saUser.schoolId !== null || saUser.role !== 'SUPER_ADMIN' || saUser.status !== 'ACTIVE') {
@@ -306,8 +156,146 @@ async function main() {
     console.log(`[tenant-fixtures] School A test student ${studentA.id} (class ${classA.name})`)
   }
 
-  // Homework probes for BOTH tenants (the one route family with no
-  // pre-existing canonical rows) — clearly-labeled DRAFT test artifacts.
+  // ── Probe corpus INSIDE School A (moved from the legacy Bluebell
+  //    tenant, rebranded Sunrise) ────────────────────────────────────────
+  // The minimal fixtures that used to live in School B (class, probe
+  // subject, CSA, probe student 'Ira Rao') now exist as Sunrise-owned
+  // equivalents with DIFFERENT names, so cross-tenant test targets exist
+  // while the clean school carries zero students/classes.
+  let probeClass = await db.class.findFirst({ where: { schoolId: aid, name: 'Grade 5 - A' } })
+  if (!probeClass) {
+    probeClass = await db.class.create({ data: { schoolId: aid, name: 'Grade 5 - A', section: 'A' } })
+    console.log(`[tenant-fixtures] created probe class ${probeClass.id} (Grade 5 - A, School A)`)
+  }
+
+  let probeSubject = await db.subject.findFirst({ where: { schoolId: aid, code: PROBE_SUBJECT_CODE } })
+  if (!probeSubject) {
+    probeSubject = await db.subject.create({
+      data: { schoolId: aid, name: 'Mathematics', code: PROBE_SUBJECT_CODE, fullMarks: 100, passMarks: 35 },
+    })
+    console.log(`[tenant-fixtures] created probe subject ${probeSubject.id} (${PROBE_SUBJECT_CODE}, School A)`)
+  }
+
+  // Probe student 'Aarav Mehta' (the legacy 'Ira Rao' equivalent) + its
+  // own fixture user, ward of the School A test parent.
+  const probeStudentUser = await upsertUser({ email: 'tenant.student.probe@sunrise.test', name: 'Aarav Mehta', role: 'STUDENT', schoolId: aid })
+  let probeStudent = await db.student.findFirst({ where: { schoolId: aid, userId: probeStudentUser.id } })
+  if (!probeStudent) {
+    probeStudent = await db.student.create({
+      data: {
+        schoolId: aid,
+        userId: probeStudentUser.id,
+        classId: probeClass.id,
+        rollNo: '51',
+        admissionNo: 'TT-2026-0501',
+        guardianId: parentAUser.id,
+        guardianName: 'Tenant Test Parent A',
+        guardianPhone: '+91 90000 00003',
+        gender: 'male',
+      },
+    })
+    console.log(`[tenant-fixtures] created probe student ${probeStudent.id} (Aarav Mehta, School A)`)
+  }
+
+  // ── Cross-tenant probe targets owned by School A ─────────────────────
+  const probes: Record<string, { id: string }> = {}
+
+  let feeProbe = await db.fee.findFirst({ where: { schoolId: aid, studentId: probeStudent.id } })
+  if (!feeProbe) {
+    feeProbe = await db.fee.create({
+      data: { schoolId: aid, studentId: probeStudent.id, title: 'Sunrise Term Fee', amount: 12000, paid: 0, status: 'UNPAID' },
+    })
+  }
+  probes.fee = feeProbe
+
+  let notifA = await db.notification.findFirst({ where: { schoolId: aid, title: 'Sunrise Winter Carnival' } })
+  if (!notifA) {
+    notifA = await db.notification.create({
+      data: { schoolId: aid, title: 'Sunrise Winter Carnival', message: 'Sunrise school-only announcement', audience: 'ALL', priority: 'NORMAL' },
+    })
+  }
+  probes.notification = notifA
+
+  let eventA = await db.schoolEvent.findFirst({ where: { schoolId: aid, title: 'Sunrise Founders Day' } })
+  if (!eventA) {
+    eventA = await db.schoolEvent.create({
+      data: { schoolId: aid, title: 'Sunrise Founders Day', type: 'EVENT', startDate: new Date('2026-12-01T09:00:00Z'), audience: 'ALL', createdBy: principalA.id },
+    })
+  }
+  probes.event = eventA
+
+  let examA = await db.exam.findFirst({ where: { schoolId: aid, name: 'Sunrise Unit Test 1' } })
+  if (!examA) {
+    examA = await db.exam.create({
+      data: { schoolId: aid, name: 'Sunrise Unit Test 1', type: 'Unit Test', session: '2026-2027', status: 'Scheduled', resultStatus: 'Not Started', passPercentage: 35, createdBy: principalA.id },
+    })
+  }
+  probes.exam = examA
+
+  let questionA = await db.questionBank.findFirst({ where: { schoolId: aid, question: 'Sunrise probe question: simplify 2x+3?' } })
+  if (!questionA) {
+    questionA = await db.questionBank.create({
+      data: {
+        schoolId: aid,
+        subjectId: probeSubject.id,
+        question: 'Sunrise probe question: simplify 2x+3?',
+        optionA: '2x+3', optionB: '5x', optionC: 'x', optionD: '6',
+        answer: 'A', type: 'MCQ', difficulty: 'EASY', marks: 1,
+      },
+    })
+  }
+  probes.question = questionA
+
+  let roomA5 = await db.room.findFirst({ where: { schoolId: aid, name: 'Sunrise Room 5A' } })
+  if (!roomA5) {
+    roomA5 = await db.room.create({
+      data: { schoolId: aid, name: 'Sunrise Room 5A', code: 'SRA-5A', capacity: 30, type: 'Classroom', active: true },
+    })
+  }
+  probes.room = roomA5
+
+  // NOTE: seed-study-materials wipes the school's materials on every run —
+  // it explicitly preserves this probe row (title match, see PROBE_MATERIAL_TITLE).
+  let materialA = await db.studyMaterial.findFirst({ where: { schoolId: aid, title: PROBE_MATERIAL_TITLE } })
+  if (!materialA) {
+    materialA = await db.studyMaterial.create({
+      data: {
+        schoolId: aid,
+        title: PROBE_MATERIAL_TITLE,
+        description: 'Sunrise-only worksheet (tenant-isolation probe)',
+        subjectId: probeSubject.id,
+        className: probeClass.name,
+        category: 'worksheet',
+        fileName: 'sunrise-probe-worksheet.pdf',
+        originalName: 'Sunrise Maths Worksheet 1.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 1024,
+        status: 'published',
+        publishedAt: new Date(),
+        uploadedById: teacherA.id,
+      },
+    })
+  }
+  probes.material = materialA
+
+  // CSA appointment (teacher A teaches probe Mathematics in Grade 5 - A) —
+  // gives the School A test teacher a REAL server-side scope so
+  // teacher-surface positive controls exercise the assignment-driven
+  // permission model. (seed-teacher-academics rebuilds the CSA matrix and
+  // explicitly preserves this probe appointment.)
+  let csaA = await db.classSubjectAssignment.findFirst({
+    where: { schoolId: aid, classId: probeClass.id, subjectId: probeSubject.id, teacherUserId: teacherAUser.id },
+  })
+  if (!csaA) {
+    csaA = await db.classSubjectAssignment.create({
+      data: { schoolId: aid, classId: probeClass.id, subjectId: probeSubject.id, teacherUserId: teacherAUser.id, isActive: true },
+    })
+    console.log(`[tenant-fixtures] created CSA ${csaA.id} (teacher A → Grade 5 - A probe Mathematics)`)
+  }
+
+  // Homework probes (the one route family with no pre-existing canonical
+  // rows) — clearly-labeled DRAFT test artifacts, now BOTH inside School A
+  // (the clean school carries none).
   const hwTitleA = 'ZZ Tenant Test Probe Homework (safe to ignore)'
   let hwA = await db.homework.findFirst({ where: { schoolId: aid, title: hwTitleA } })
   if (!hwA && classA) {
@@ -330,12 +318,12 @@ async function main() {
     console.log(`[tenant-fixtures] School A homework probe ${hwA.id}`)
   }
   const hwTitleB = 'ZZ Tenant Test Probe Homework B'
-  let hwB = await db.homework.findFirst({ where: { schoolId: sid, title: hwTitleB } })
+  let hwB = await db.homework.findFirst({ where: { schoolId: aid, title: hwTitleB } })
   if (!hwB) {
     hwB = await db.homework.create({
       data: {
-        schoolId: sid,
-        classId: classB.id,
+        schoolId: aid,
+        classId: probeClass.id,
         title: hwTitleB,
         description: 'Cross-tenant IDOR probe target (B)',
         status: 'DRAFT',
@@ -343,12 +331,12 @@ async function main() {
         maxMarks: 10,
         assignedDate: new Date(),
         dueDate: new Date(Date.now() + 7 * 86400_000),
-        teacherId: teacherUser.id,
-        teacherName: 'Sunil Rao',
-        createdBy: teacherUser.id,
+        teacherId: teacherAUser.id,
+        teacherName: 'Tenant Test Teacher A',
+        createdBy: teacherAUser.id,
       },
     })
-    console.log(`[tenant-fixtures] School B homework probe ${hwB.id}`)
+    console.log(`[tenant-fixtures] School A homework probe (B) ${hwB.id}`)
   }
 
   // School A probe rows the cross-tenant matrix reads (rooms / grade scale /
@@ -389,7 +377,11 @@ async function main() {
     console.log(`[tenant-fixtures] School A exam type ${examTypeRowA.id}`)
   }
 
-  console.log(`[tenant-fixtures] School A users ready (password ${SCHOOL_A_PASSWORD}): principal=${principalA.email} teacher=${teacherAUser.email} student=${studentAUser.email} parent=${parentAUser.email} superadmin=tenant.superadmin@scholario.test`)
+  console.log('[tenant-fixtures] School A probe targets:')
+  for (const [k, v] of Object.entries(probes)) console.log(`  ${k}: ${v.id}`)
+  console.log(`[tenant-fixtures] users: principal=${principalA.email} teacher=${teacherAUser.email} student=${studentAUser.email} parent=${parentAUser.email} probeStudent=${probeStudentUser.email}`)
+  console.log('[tenant-fixtures] password for all fixture users:', TEST_PASSWORD)
+  console.log('[tenant-fixtures] clean tenant (green-valley) users: principal@greenvalley.test + principal.b/teacher.b/student.b/parent.b@greenvalley.test')
 }
 
 main()

@@ -3,6 +3,8 @@ import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
 import { growthScoresFor } from '@/lib/growth/service'
 import { bandOf } from '@/lib/growth/shared'
+import type { Prisma } from '@prisma/client'
+import { num, dec, minDec, outstandingDec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -104,17 +106,17 @@ export async function GET() {
                 select: { amount: true },
               })
             : []
-          const feesByStudent = new Map<string, { billed: number; paid: number; outstanding: number; overdue: boolean }>()
+          const feesByStudent = new Map<string, { billed: Prisma.Decimal; paid: Prisma.Decimal; outstanding: Prisma.Decimal; overdue: boolean }>()
           for (const f of feeRows) {
-            const entry = feesByStudent.get(f.studentId) ?? { billed: 0, paid: 0, outstanding: 0, overdue: false }
-            entry.billed += f.amount
-            entry.paid += Math.min(f.amount, f.paid)
-            entry.outstanding += Math.max(0, f.amount - f.paid)
-            if (f.amount - f.paid > 0 && f.dueDate && f.dueDate < todayEnd) entry.overdue = true
+            const entry = feesByStudent.get(f.studentId) ?? { billed: dec(0), paid: dec(0), outstanding: dec(0), overdue: false }
+            entry.billed = entry.billed.plus(f.amount)
+            entry.paid = entry.paid.plus(minDec(f.amount, f.paid))
+            entry.outstanding = entry.outstanding.plus(outstandingDec(f.amount, f.paid))
+            if (dec(f.amount).minus(f.paid).greaterThan(0) && f.dueDate && f.dueDate < todayEnd) entry.overdue = true
             feesByStudent.set(f.studentId, entry)
           }
           const defaulters = [...feesByStudent.entries()]
-            .filter(([, v]) => v.outstanding > 0)
+            .filter(([, v]) => v.outstanding.greaterThan(0))
             .map(([studentId, v]) => {
               const stu = c.students.find((s) => s.id === studentId)
               return {
@@ -122,21 +124,21 @@ export async function GET() {
                 name: nameByStudent.get(studentId) ?? 'Student',
                 rollNo: stu?.rollNo ?? null,
                 guardianPhone: stu?.guardianPhone ?? null,
-                outstanding: v.outstanding,
+                outstanding: num(v.outstanding),
                 hasOverdue: v.overdue,
               }
             })
             .sort((a, b) => (a.hasOverdue === b.hasOverdue ? b.outstanding - a.outstanding : a.hasOverdue ? -1 : 1))
             .slice(0, 12)
           const fees = {
-            totalBilled: feeRows.reduce((sum, f) => sum + f.amount, 0),
-            totalCollected: feeRows.reduce((sum, f) => sum + Math.min(f.amount, f.paid), 0),
-            outstanding: feeRows.reduce((sum, f) => sum + Math.max(0, f.amount - f.paid), 0),
-            fullyPaidStudents: [...feesByStudent.values()].filter((v) => v.outstanding <= 0).length,
+            totalBilled: num(feeRows.reduce((sum, f) => sum.plus(f.amount), dec(0))),
+            totalCollected: num(feeRows.reduce((sum, f) => sum.plus(minDec(f.amount, f.paid)), dec(0))),
+            outstanding: num(feeRows.reduce((sum, f) => sum.plus(outstandingDec(f.amount, f.paid)), dec(0))),
+            fullyPaidStudents: [...feesByStudent.values()].filter((v) => v.outstanding.lessThanOrEqualTo(0)).length,
             studentsWithFees: feesByStudent.size,
             overdueStudents: [...feesByStudent.values()].filter((v) => v.overdue).length,
             awaitingVerificationCount: pendingTxns.length,
-            awaitingVerificationAmount: pendingTxns.reduce((sum, t) => sum + t.amount, 0),
+            awaitingVerificationAmount: num(pendingTxns.reduce((sum, t) => sum.plus(t.amount), dec(0))),
             defaulters,
           }
 

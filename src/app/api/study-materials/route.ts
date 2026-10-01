@@ -1,9 +1,7 @@
 import { NextRequest } from 'next/server'
-import { mkdir, writeFile } from 'fs/promises'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import {
-  STUDY_MATERIAL_UPLOAD_DIR,
   STUDY_MATERIAL_MAX_BYTES,
   STUDY_MATERIAL_CATEGORIES,
   STUDY_MATERIAL_STATUSES,
@@ -15,6 +13,7 @@ import { requireStudent, authorizedMaterials, type StudentContext } from '@/lib/
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { AppError } from '@/lib/security/errors'
 import { contentLengthExceedsUploadLimit } from '@/lib/security/upload'
+import { storageUpload } from '@/lib/storage/supabase'
 import type { StudyMaterial } from '@prisma/client'
 
 export const runtime = 'nodejs'
@@ -109,10 +108,12 @@ export async function GET(req: NextRequest) {
 ///   file         (required — max 20 MB; PDF, png/jpg/webp, plain text,
 ///                 doc/docx, ppt/pptx, xls/xlsx)
 ///
-/// The file is stored under db/uploads/study-materials with a generated
-/// safe fileName (server id + canonical extension — the user's filename
-/// never touches the filesystem), the row + targeting rows are created,
-/// and the metadata is returned: { ok: true, data: StudyMaterialMeta }.
+/// The file is stored in the PRIVATE 'school-media' Supabase bucket
+/// with a generated safe fileName (server id + canonical extension —
+/// the user's filename never names an object; Phase 8A 8A-C9 object
+/// path `study-materials/<schoolId>/<fileName>`), the row + targeting
+/// rows are created, and the metadata is returned:
+/// { ok: true, data: StudyMaterialMeta }.
 export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
@@ -192,17 +193,14 @@ export async function POST(req: NextRequest) {
         throw new Error('This file type is not allowed')
       }
 
-      // Generate the SAFE server-side name BEFORE touching the disk —
-      // extension derives from the validated MIME map, never from the
-      // user-supplied filename.
+      // Generate the SAFE server-side name BEFORE uploading — extension
+      // derives from the validated MIME map, never from the user-supplied
+      // filename. Phase 8A: bytes go to Supabase Storage (x-upsert,
+      // PRIVATE bucket, deterministic path from the row).
       const fileName = generateStudyMaterialFileName(mimeType)
       const bytes = Buffer.from(await file.arrayBuffer())
 
-      await mkdir(STUDY_MATERIAL_UPLOAD_DIR, { recursive: true })
-      await writeFile(
-        `${STUDY_MATERIAL_UPLOAD_DIR}/${fileName}`,
-        bytes,
-      )
+      await storageUpload('study-materials', fileName, bytes, mimeType, schoolId)
 
       const row = await db.studyMaterial.create({
         data: {

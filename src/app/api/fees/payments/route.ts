@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -66,7 +67,7 @@ export async function GET(req: NextRequest) {
         receiptNo: txn.receiptNo,
         gatewayPaymentId: txn.gatewayPaymentId,
         orderId: txn.gatewayOrderId ?? '',
-        amount: txn.amount,
+        amount: num(txn.amount),
         method: txn.method,
         txnId: txn.id,
         note: txn.note,

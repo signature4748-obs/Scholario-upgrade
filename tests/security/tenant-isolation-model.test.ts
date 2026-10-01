@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PHASE 2 — unit tests for the central authorization model
  * (src/lib/security/authz.ts + permissions.ts).
@@ -10,13 +11,12 @@
  *   · client-supplied schoolId stripping
  */
 import { describe, test, expect } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { can, rolesWith } from '@/lib/security/permissions'
 import { authorize, assertTenantRow, assertSameTenant, assertStudentInTenant, stripClientSchoolId, type Authz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import type { AuthUser } from '@/lib/auth'
 
-const db = new PrismaClient()
 
 function fakeUser(overrides: Partial<AuthUser> = {}): AuthUser {
   return {
@@ -161,17 +161,20 @@ describe('resource-scope guards (fail-safe 404 semantics)', () => {
 
 describe('assertStudentInTenant (DB-backed, real tenants)', () => {
   test('resolves a student of the caller school', async () => {
-    const schoolB = await db.school.findUnique({ where: { slug: 'bluebell-academy' } })
-    const studentB = await db.student.findFirst({ where: { schoolId: schoolB!.id } })
-    if (!schoolB || !studentB) throw new Error('run bun prisma/seed-tenant-isolation.ts first')
-    const ctxB: Authz = { ...ctxA, schoolId: schoolB.id, tenant: { schoolId: schoolB.id } }
-    const resolved = await assertStudentInTenant(ctxB, studentB.id)
-    expect(resolved.id).toBe(studentB.id)
+    // Phase 8A re-target: the legacy Bluebell fixture student no longer
+    // exists (the clean tenant carries ZERO students) — the same-tenant
+    // positive resolution is proven against the DEMO tenant's student.
+    const schoolA = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+    const studentA = await db.student.findFirst({ where: { schoolId: schoolA!.id } })
+    if (!schoolA || !studentA) throw new Error('run bun prisma/seed-tenant-isolation.ts first')
+    const ctxSchoolA: Authz = { ...ctxA, schoolId: schoolA.id, tenant: { schoolId: schoolA.id } }
+    const resolved = await assertStudentInTenant(ctxSchoolA, studentA.id)
+    expect(resolved.id).toBe(studentA.id)
   })
 
   test('foreign-school student id → NOT_FOUND (no existence oracle)', async () => {
-    const schoolA = await db.school.findUnique({ where: { slug: 'demo-school' } })
-    const schoolB = await db.school.findUnique({ where: { slug: 'bluebell-academy' } })
+    const schoolA = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+    const schoolB = await db.school.findUnique({ where: { slug: 'green-valley' } })
     const studentA = await db.student.findFirst({ where: { schoolId: schoolA!.id } })
     if (!schoolA || !schoolB || !studentA) throw new Error('fixtures missing')
     const ctxB: Authz = { ...ctxA, schoolId: schoolB.id, tenant: { schoolId: schoolB.id } }

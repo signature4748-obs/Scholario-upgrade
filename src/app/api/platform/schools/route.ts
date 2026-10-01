@@ -38,10 +38,10 @@ export async function GET(req: NextRequest) {
       ...(query.q
         ? {
             OR: [
-              { name: { contains: query.q } },
-              { slug: { contains: query.q } },
-              { code: { contains: query.q } },
-              { domain: { contains: query.q } },
+              { name: { contains: query.q, mode: 'insensitive' as const } },
+              { slug: { contains: query.q, mode: 'insensitive' as const } },
+              { code: { contains: query.q, mode: 'insensitive' as const } },
+              { domain: { contains: query.q, mode: 'insensitive' as const } },
             ],
           }
         : {}),

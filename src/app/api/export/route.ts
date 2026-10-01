@@ -4,6 +4,7 @@ import { withUser, schoolScoped } from '@/lib/api'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { auditEvent } from '@/lib/security/audit'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { num, outstandingDec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -121,9 +122,9 @@ export async function GET(req: NextRequest) {
           student: f.student.user.name,
           title: f.title,
           type: f.type,
-          amount: f.amount,
-          paid: f.paid,
-          balance: f.amount - f.paid,
+          amount: num(f.amount),
+          paid: num(f.paid),
+          balance: num(outstandingDec(f.amount, f.paid)),
           status: f.status,
           dueDate: f.dueDate ? new Date(f.dueDate).toLocaleDateString() : '',
           paidDate: f.paidDate ? new Date(f.paidDate).toLocaleDateString() : '',

@@ -1,12 +1,8 @@
 import { NextRequest } from 'next/server'
-import { unlink } from 'fs/promises'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
-import {
-  isSafeStoredFileName,
-  studyMaterialPath,
-  toStudyMaterialMeta,
-} from '@/lib/study-materials'
+import { isSafeStoredFileName, toStudyMaterialMeta } from '@/lib/study-materials'
+import { storedObjectLocation, storageDelete } from '@/lib/storage/supabase'
 
 export const runtime = 'nodejs'
 
@@ -49,9 +45,13 @@ export async function DELETE(
       }
 
       // Best-effort byte removal — guarded by the same path safety check
-      // as downloads; an already-missing file is fine (row still goes).
+      // as downloads; an already-missing object is fine (storageDelete
+      // maps NoSuchKey to ok; the row still goes). Phase 8A: the object
+      // lives at the deterministic study-materials/<schoolId>/<fileName>
+      // path in the PRIVATE 'school-media' bucket.
       if (isSafeStoredFileName(material.fileName)) {
-        await unlink(studyMaterialPath(material.fileName)).catch(() => {})
+        const location = storedObjectLocation('study-materials', material.schoolId, material.fileName)
+        await storageDelete(location.bucket, location.path).catch(() => {})
       }
 
       await db.studyMaterial.delete({ where: { id } })

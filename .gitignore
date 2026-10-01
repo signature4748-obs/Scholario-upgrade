@@ -81,3 +81,6 @@ keepalive.pid
 !.env.example
 db/*.db
 db/*.db-journal
+
+# Phase 8A ops — logical backup archives (contain password hashes; never commit)
+/backups/

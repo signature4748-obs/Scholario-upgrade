@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { auditEvent } from '@/lib/security/audit'
 import { newRequestId } from '@/lib/security/errors'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -91,7 +92,7 @@ export async function GET(req: NextRequest) {
             p.fee?.school?.name ?? '—',
             METHOD_LABELS[(p.method || '').toUpperCase()] ?? p.method ?? '—',
             p.status,
-            p.amount,
+            num(p.amount),
           ]
             .map(csvCell)
             .join(',')

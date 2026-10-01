@@ -1,6 +1,8 @@
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { deriveAttendanceSummary } from '@/lib/teacher/student-ledger'
+import type { Prisma } from '@prisma/client'
+import { num, dec, outstandingDec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -230,13 +232,13 @@ export async function GET() {
         where: { schoolId, studentId: { in: studentIds } },
         select: { studentId: true, amount: true, paid: true, dueDate: true },
       })
-      const billedBy = new Map<string, number>()
-      const paidBy = new Map<string, number>()
+      const billedBy = new Map<string, Prisma.Decimal>()
+      const paidBy = new Map<string, Prisma.Decimal>()
       const hasDueBy = new Map<string, boolean>()
       for (const f of feeRows) {
-        billedBy.set(f.studentId, (billedBy.get(f.studentId) ?? 0) + f.amount)
-        paidBy.set(f.studentId, (paidBy.get(f.studentId) ?? 0) + f.paid)
-        if (f.dueDate && f.dueDate < new Date() && f.paid < f.amount) hasDueBy.set(f.studentId, true)
+        billedBy.set(f.studentId, (billedBy.get(f.studentId) ?? dec(0)).plus(f.amount))
+        paidBy.set(f.studentId, (paidBy.get(f.studentId) ?? dec(0)).plus(f.paid))
+        if (f.dueDate && f.dueDate < new Date() && dec(f.paid).lessThan(f.amount)) hasDueBy.set(f.studentId, true)
       }
       const pendingTxnRows = await db.feeTransaction.groupBy({
         by: ['studentId'],
@@ -247,7 +249,7 @@ export async function GET() {
         },
         _sum: { amount: true },
       })
-      const awaitingBy = new Map(pendingTxnRows.map((t) => [t.studentId ?? '', t._sum.amount ?? 0]))
+      const awaitingBy = new Map(pendingTxnRows.map((t) => [t.studentId ?? '', num(t._sum.amount)]))
 
       // ── Growth + behavior counts ────────────────────────────────────
       const growthRows = await db.growthEvent.groupBy({
@@ -294,11 +296,13 @@ export async function GET() {
             }
           : null
 
-        const billed = billedBy.get(s.id) ?? 0
-        const paidAmt = paidBy.get(s.id) ?? 0
-        const outstanding = Math.max(0, billed - paidAmt)
+        const billedD = billedBy.get(s.id) ?? dec(0)
+        const paidD = paidBy.get(s.id) ?? dec(0)
+        const billed = num(billedD)
+        const paidAmt = num(paidD)
+        const outstanding = num(outstandingDec(billedD, paidD))
         const feeStatus: RosterStudent['fees']['status'] =
-          billed === 0 ? 'NONE' : outstanding <= 0 ? 'PAID' : hasDueBy.get(s.id) ? 'OVERDUE' : paidAmt > 0 ? 'PARTIAL' : 'UNPAID'
+          billedD.eq(0) ? 'NONE' : outstanding <= 0 ? 'PAID' : hasDueBy.get(s.id) ? 'OVERDUE' : paidD.greaterThan(0) ? 'PARTIAL' : 'UNPAID'
 
         const isSelf = s.id === selfStudentId
         // Classmate projection (STUDENT scope): everything that is not a

@@ -30,11 +30,11 @@ export async function GET(req: NextRequest) {
     const pageSize = 50
 
     const where = {
-      ...(query.action ? { action: { contains: query.action } } : {}),
+      ...(query.action ? { action: { contains: query.action, mode: 'insensitive' as const } } : {}),
       ...(query.schoolId ? { schoolId: query.schoolId } : {}),
       ...(query.adminId ? { adminId: query.adminId } : {}),
       ...(query.q
-        ? { OR: [{ action: { contains: query.q } }, { reason: { contains: query.q } }] }
+        ? { OR: [{ action: { contains: query.q, mode: 'insensitive' as const } }, { reason: { contains: query.q, mode: 'insensitive' as const } }] }
         : {}),
     }
 

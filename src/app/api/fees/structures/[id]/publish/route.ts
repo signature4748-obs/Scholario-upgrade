@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -76,6 +77,9 @@ export async function POST(
           // Snapshot the published structure into the versions table
           // (immutable) — inside the SAME transaction as the promotion so
           // the version trail can never miss a published structure.
+          // Phase 8A: h.amount is Prisma.Decimal — JSON.stringify(Decimal)
+          // emits a STRING; store num() so the snapshot keeps its numeric
+          // shape for version-trail consumers.
           const snapshot = JSON.stringify({
             structureId: promoted.id,
             classId: promoted.classId,
@@ -87,7 +91,7 @@ export async function POST(
               catalogueId: h.catalogueId,
               name: h.name,
               category: h.category,
-              amount: h.amount,
+              amount: num(h.amount),
               frequency: h.frequency,
               mandatory: h.mandatory,
               active: h.active,
@@ -109,7 +113,8 @@ export async function POST(
 
           return promoted
         })
-        return promoted
+        // Phase 8A: FeeHead.amount is Prisma.Decimal — emit numbers.
+        return { ...promoted, heads: promoted.heads.map((h) => ({ ...h, amount: num(h.amount) })) }
       } catch (e) {
         const err = e as { code?: string; message?: string }
         if (err?.code === 'P2002') {

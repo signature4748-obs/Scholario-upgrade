@@ -13,6 +13,7 @@ import {
   toFeeTxnDto,
   TXN_STATUS,
 } from '@/lib/fee-workflow'
+import { num, dec, outstandingDec, formatINRServer } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -106,10 +107,12 @@ export async function GET() {
         recent: recentRows.map(toFeeTxnDto),
         stats: {
           pendingCount: pendingRows.length,
-          pendingAmount: pendingRows.reduce((sum, t) => sum + t.amount, 0),
-          verifiedThisMonth: monthTxns
-            .filter((t) => t.status === TXN_STATUS.VERIFIED)
-            .reduce((sum, t) => sum + t.amount, 0),
+          pendingAmount: num(pendingRows.reduce((sum, t) => sum.plus(t.amount), dec(0))),
+          verifiedThisMonth: num(
+            monthTxns
+              .filter((t) => t.status === TXN_STATUS.VERIFIED)
+              .reduce((sum, t) => sum.plus(t.amount), dec(0)),
+          ),
           verifiedCountThisMonth: monthTxns.filter((t) => t.status === TXN_STATUS.VERIFIED).length,
           rejectedThisMonth: monthTxns.filter((t) => t.status === TXN_STATUS.REJECTED).length,
         },
@@ -119,13 +122,13 @@ export async function GET() {
           rollNo: s.rollNo,
           classLabel: s.class ? classLabelOf({ name: s.class.name, section: s.class.section }) : 'Unassigned',
           openFees: (byStudent.get(s.id) ?? [])
-            .filter((f) => f.amount - f.paid > 0)
+            .filter((f) => dec(f.amount).minus(f.paid).greaterThan(0))
             .map((f) => ({
               id: f.id,
               title: f.title,
-              amount: f.amount,
-              paid: f.paid,
-              outstanding: Math.max(0, f.amount - f.paid),
+              amount: num(f.amount),
+              paid: num(f.paid),
+              outstanding: num(outstandingDec(f.amount, f.paid)),
               dueDate: f.dueDate ? f.dueDate.toISOString().slice(0, 10) : null,
             })),
         })),
@@ -239,14 +242,14 @@ export async function POST(req: NextRequest) {
             user.id,
             result.txn.collectedById,
             `Payment verified · ${result.txn.studentName ?? 'Student'}`,
-            `Your collection of ₹${result.txn.amount.toLocaleString('en-IN')} from ${result.txn.studentName ?? 'the student'}${result.txn.className ? ` (${result.txn.className})` : ''} is verified by ${user.name ?? 'the Principal'}. Receipt ${result.txn.receiptNo} has been issued and the student's fee balance is updated.`,
+            `Your collection of ₹${formatINRServer(result.txn.amount)} from ${result.txn.studentName ?? 'the student'}${result.txn.className ? ` (${result.txn.className})` : ''} is verified by ${user.name ?? 'the Principal'}. Receipt ${result.txn.receiptNo} has been issued and the student's fee balance is updated.`,
           )
         }
         await audit(
           schoolId,
           user.id,
           'fee.verified',
-          `Verified ₹${result.txn.amount.toLocaleString('en-IN')} from ${result.txn.studentName ?? 'student'} — receipt ${result.txn.receiptNo} (txn ${result.txn.id})`,
+          `Verified ₹${formatINRServer(result.txn.amount)} from ${result.txn.studentName ?? 'student'} — receipt ${result.txn.receiptNo} (txn ${result.txn.id})`,
         )
 
         return { txn: toFeeTxnDto(result.txn), ledger: result.ledger }
@@ -298,14 +301,14 @@ export async function POST(req: NextRequest) {
             user.id,
             txn.collectedById,
             `Payment rejected · ${txn.studentName ?? 'Student'}`,
-            `The collection of ₹${txn.amount.toLocaleString('en-IN')} from ${txn.studentName ?? 'the student'}${txn.className ? ` (${txn.className})` : ''} was rejected by ${user.name ?? 'the Principal'}: "${reason}". The student's fee balance was not changed — please follow up with the family and re-record the payment when resolved.`,
+            `The collection of ₹${formatINRServer(txn.amount)} from ${txn.studentName ?? 'the student'}${txn.className ? ` (${txn.className})` : ''} was rejected by ${user.name ?? 'the Principal'}: "${reason}". The student's fee balance was not changed — please follow up with the family and re-record the payment when resolved.`,
           )
         }
         await audit(
           schoolId,
           user.id,
           'fee.rejected',
-          `Rejected ₹${txn.amount.toLocaleString('en-IN')} from ${txn.studentName ?? 'student'} — "${reason}" (txn ${txn.id})`,
+          `Rejected ₹${formatINRServer(txn.amount)} from ${txn.studentName ?? 'student'} — "${reason}" (txn ${txn.id})`,
         )
 
         return { txn: toFeeTxnDto(txn) }
@@ -344,11 +347,11 @@ export async function POST(req: NextRequest) {
         const result = await trackedTransaction('fee-direct-record', async (tx) => {
           const fee = await tx.fee.findFirst({ where: { id: feeId, studentId, schoolId } })
           if (!fee) throw new Error('Fee record not found for this student')
-          const outstanding = Math.max(0, fee.amount - fee.paid)
-          if (outstanding <= 0) throw new Error('This fee is already fully paid')
-          if (amount > outstanding) {
+          const outstanding = outstandingDec(fee.amount, fee.paid)
+          if (outstanding.lessThanOrEqualTo(0)) throw new Error('This fee is already fully paid')
+          if (dec(amount).greaterThan(outstanding)) {
             throw new Error(
-              `Amount exceeds the outstanding balance of this fee (₹${outstanding.toLocaleString('en-IN')}).`,
+              `Amount exceeds the outstanding balance of this fee (₹${formatINRServer(outstanding)}).`,
             )
           }
           await assertReferenceUnique(schoolId, referenceNumber, tx)
@@ -402,14 +405,14 @@ export async function POST(req: NextRequest) {
             user.id,
             cls.classTeacherId,
             `Direct fee payment · ${studentName}`,
-            `A fee payment of ₹${amount.toLocaleString('en-IN')} from ${studentName} (${classLabel}) towards "${result.txn.feeHeadName}" was recorded directly through ${source === 'PRINCIPAL' ? 'the Principal' : 'the School Office'} by ${user.name ?? 'the Principal'}. Receipt ${result.txn.receiptNo} is issued — no further collection is needed for this amount.`,
+            `A fee payment of ₹${formatINRServer(amount)} from ${studentName} (${classLabel}) towards "${result.txn.feeHeadName}" was recorded directly through ${source === 'PRINCIPAL' ? 'the Principal' : 'the School Office'} by ${user.name ?? 'the Principal'}. Receipt ${result.txn.receiptNo} is issued — no further collection is needed for this amount.`,
           )
         }
         await audit(
           schoolId,
           user.id,
           'fee.direct-recorded',
-          `Direct ${source} payment ₹${amount.toLocaleString('en-IN')} from ${studentName} (${classLabel}) — receipt ${result.txn.receiptNo} (txn ${result.txn.id})`,
+          `Direct ${source} payment ₹${formatINRServer(amount)} from ${studentName} (${classLabel}) — receipt ${result.txn.receiptNo} (txn ${result.txn.id})`,
         )
 
         return { txn: toFeeTxnDto(result.txn), ledger: result.ledger }

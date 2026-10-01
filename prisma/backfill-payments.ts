@@ -1,8 +1,12 @@
 // One-off backfill: create Payment transaction rows for PAID fees that lack one.
 // Makes superadmin platform revenue reflect real collections without a full reseed.
+import { assertSeedable } from './seed-guard'
 import { db } from '../src/lib/db'
 
 async function main() {
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('backfill-payments')
+
   const paidFees = await db.fee.findMany({
     where: { status: 'PAID', paid: { gt: 0 } },
     include: { payments: { select: { id: true } } },
@@ -17,7 +21,9 @@ async function main() {
         // Phase 3: Payment.schoolId is required — derived from the fee.
         schoolId: fee.schoolId,
         feeId: fee.id,
-        amount: fee.paid,
+        // Phase 8A PG-compat: Fee.paid is a Prisma Decimal on postgres —
+        // pass a Number into the create (8A-R1 census §7).
+        amount: Number(fee.paid),
         method: methods[idx % methods.length],
         status: 'SUCCESS',
         transactionId: `TXN-${fee.id.slice(-8).toUpperCase()}`,

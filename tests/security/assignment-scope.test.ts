@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PIH-5 — INVARIANT: in-tenant assignment scope (the RBAC/assignment matrix).
  *
@@ -33,22 +34,23 @@
  * a failing assertion must not leak state.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
 import { getTeacherSubjectAssignments } from '@/lib/teacher-scope'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const db = new PrismaClient()
+
 const T = 45_000 // generous: first-hit dev compilation (tenant-isolation precedent)
 
 const MARKER = randomBytes(4).toString('hex')
 
 // ── resolved fixtures (DB truth, never hardcoded ids) ─────────────────────
 let schoolId = ''
-let teacher1 = { id: '', name: '', email: 'teacher1@demoschool.edu' }
-let principal = { id: '', email: 'principal@demoschool.edu' }
-let student1 = { id: '', email: 'student1@demoschool.edu', classTeacherId: '' }
-let subjectOnly = { id: '', email: 'tenant.teacher.a@scholario.test' }
+let teacher1 = { id: '', name: '', email: 'teacher1@sunriseacademy.edu' }
+let principal = { id: '', email: 'principal@sunriseacademy.edu' }
+let student1 = { id: '', email: 'student1@sunriseacademy.edu', classTeacherId: '' }
+let subjectOnly = { id: '', email: `pih5.subjectonly.${MARKER}@sunrise.test` }
 let g9a = { id: '' } // NOT teacher1's class; Math taught by a colleague
 let g8a = { id: '' } // teacher1's class-teacher class; Math NOT her subject
 let g10a = { id: '' } // Science here IS teacher1's subject (positive control)
@@ -72,19 +74,17 @@ beforeAll(async () => {
     if (!u) throw new Error(`fixture user missing: ${email}`)
     return u
   }
-  const [t1, p1, s1, so] = await Promise.all([
+  const [t1, p1, s1] = await Promise.all([
     byEmail(teacher1.email),
     byEmail(principal.email),
     byEmail(student1.email),
-    byEmail(subjectOnly.email),
   ])
   teacher1 = { ...teacher1, id: t1.id, name: t1.name ?? '' }
   principal = { ...principal, id: p1.id }
-  subjectOnly = { ...subjectOnly, id: so.id }
 
   // student1's STUDENT row (the route takes the student id, not the user id).
   const s1row = await db.student.findFirst({ where: { schoolId, userId: s1.id }, include: { class: true } })
-  if (!s1row) throw new Error('fixture student row missing for student1@demoschool.edu')
+  if (!s1row) throw new Error('fixture student row missing for student1@sunriseacademy.edu')
   student1 = { ...student1, id: s1row.id, classTeacherId: s1row.class?.classTeacherId ?? '' }
 
   const classBy = async (name: string) => {
@@ -98,11 +98,67 @@ beforeAll(async () => {
   g10a = { id: c10.id }
 
   const subjectBy = async (name: string) => {
-    const s = await db.subject.findFirst({ where: { schoolId, name } })
+    // Phase 8A: the corpus carries THREE rows named 'Mathematics' (canonical
+    // MAT — referenced by the PA1 sheets — plus MATH and the SR-MATH probe);
+    // resolve deterministically by code so the sheet lookups below are stable.
+    const s = await db.subject.findFirst({ where: { schoolId, name }, orderBy: { code: 'asc' } })
     if (!s) throw new Error(`fixture subject missing: ${name}`)
     return s.id
   }
   ;[mathId, scienceId] = await Promise.all([subjectBy('Mathematics'), subjectBy('Science')])
+
+  // Phase 8A re-target: the legacy subject-only fixture (tenant.teacher.a)
+  // became a class teacher via the roster-150 rotation (Grade 4-A/7-B), so
+  // the "CSA scope but ZERO appointments" premise is staged as a THROWAWAY
+  // teacher minted + swept by this suite (same invariant, self-contained
+  // fixture — the export-policy/csv-injection throwaway convention).
+  const throwawayTeacher = await db.user.create({
+    data: {
+      schoolId,
+      email: subjectOnly.email,
+      name: `PIH5 Subject-Only ${MARKER}`,
+      role: 'TEACHER',
+      status: 'ACTIVE',
+    },
+  })
+  subjectOnly = { ...subjectOnly, id: throwawayTeacher.id }
+  await db.teacher.create({
+    data: { schoolId, userId: throwawayTeacher.id, employeeId: `PIH5-SO-${MARKER}`, department: 'Test', subjects: 'Test' },
+  })
+  // A REAL subject assignment (CSA) on a probe-free (class, subject) pair —
+  // Grade 9-A × SR-MATH (the probe subject, unassigned there) — so the
+  // teacher has subject scope but appointed class teacher of NOTHING.
+  // Self-healing fixture (Phase 8A): if a prior crashed run left a CSA on
+  // this pair, RE-BIND it to the throwaway teacher (and restore it to
+  // teacher-less in cleanup) instead of colliding on (classId, subjectId).
+  const probeSubjectId = (await db.subject.findFirstOrThrow({ where: { schoolId, code: 'SR-MATH' } })).id
+  const existingProbeCsa = await db.classSubjectAssignment.findFirst({
+    where: { schoolId, classId: g9a.id, subjectId: probeSubjectId },
+  })
+  if (existingProbeCsa) {
+    await db.classSubjectAssignment.update({
+      where: { id: existingProbeCsa.id },
+      data: { teacherUserId: throwawayTeacher.id, isActive: true },
+    })
+    cleanup.push(() =>
+      db.classSubjectAssignment.update({
+        where: { id: existingProbeCsa.id },
+        data: { teacherUserId: null },
+      }))
+  } else {
+    await db.classSubjectAssignment.create({
+      data: {
+        schoolId,
+        classId: g9a.id,
+        subjectId: probeSubjectId,
+        teacherUserId: throwawayTeacher.id,
+        isActive: true,
+      },
+    })
+  }
+  cleanup.push(() => db.classSubjectAssignment.deleteMany({ where: { teacherUserId: throwawayTeacher.id } }))
+  cleanup.push(() => db.teacher.deleteMany({ where: { userId: throwawayTeacher.id } }))
+  cleanup.push(() => db.user.delete({ where: { id: throwawayTeacher.id } })) // sessions cascade
 
   const exam = await db.exam.findFirst({ where: { schoolId, name: 'Periodic Assessment 1' } })
   if (!exam) throw new Error('fixture exam missing: Periodic Assessment 1')
@@ -122,13 +178,21 @@ beforeAll(async () => {
   subjectOnlyToken = randomBytes(32).toString('hex')
   await db.session.createMany({
     data: [
-      { userId: t1.id, token: teacherToken, expiresAt: new Date(Date.now() + 3600_000) },
-      { userId: p1.id, token: principalToken, expiresAt: new Date(Date.now() + 3600_000) },
-      { userId: so.id, token: subjectOnlyToken, expiresAt: new Date(Date.now() + 3600_000) },
+      // PHASE 8A — rows store sha256(token); the RAW tokens ride the
+      // cookie jar below (createSession wire contract).
+      { userId: t1.id, tokenHash: hashSessionToken(teacherToken), expiresAt: new Date(Date.now() + 3600_000) },
+      { userId: p1.id, tokenHash: hashSessionToken(principalToken), expiresAt: new Date(Date.now() + 3600_000) },
+      { userId: subjectOnly.id, tokenHash: hashSessionToken(subjectOnlyToken), expiresAt: new Date(Date.now() + 3600_000) },
     ],
   })
   cleanup.push(() =>
-    db.session.deleteMany({ where: { token: { in: [teacherToken, principalToken, subjectOnlyToken] } } }),
+    db.session.deleteMany({
+      where: {
+        tokenHash: {
+          in: [teacherToken, principalToken, subjectOnlyToken].map(hashSessionToken),
+        },
+      },
+    }),
   )
 }, 60_000)
 
@@ -288,8 +352,9 @@ describe('PIH-5 · teacher fee-collection scope (class-teacher appointment)', ()
   }, T)
 
   test('subject-only teacher (no class-teacher appointment) → honest { classes: [] }', async () => {
-    // Fixture: tenant.teacher.a@scholario.test — a TEACHER with subject
-    // assignments but appointed class teacher of NOTHING (verified in DB).
+    // Fixture: a THROWAWAY TEACHER with a real CSA assignment but appointed
+    // class teacher of NOTHING (verified in DB) — the clean-school-era
+    // equivalent of the legacy tenant.teacher.a premise.
     const appointed = await db.class.findFirst({ where: { schoolId, classTeacherId: subjectOnly.id } })
     expect(appointed).toBeNull()
 

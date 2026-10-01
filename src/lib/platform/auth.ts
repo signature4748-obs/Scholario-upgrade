@@ -21,10 +21,11 @@
  *                               mirroring the school-side bearer pattern
  *                               (lib/auth.ts isDevSessionBearerEnabled).
  *   · Token at rest           — sha256(token). A DB leak does not yield
- *                               usable credentials (school sessions store
- *                               raw tokens — a known, documented Phase-0
- *                               baseline risk; the platform plane does
- *                               not repeat it).
+ *                               usable credentials. The school plane moved
+ *                               to the same convention in PHASE 8A
+ *                               (lib/auth.ts hashSessionToken — Session
+ *                               stores tokenHash, not the raw token); the
+ *                               two planes now agree on at-rest form.
  *
  * MFA: every platform login verifies a TOTP code (RFC 6238, lib/platform/totp).
  * A fresh MFA grants a 10-minute step-up window for destructive actions.

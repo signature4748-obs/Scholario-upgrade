@@ -7,6 +7,7 @@ import { auditRateLimit } from '@/lib/security/audit'
 import { log } from '@/lib/observability/logger'
 import { runWithContext } from '@/lib/observability/context'
 import { sanitizeRequestId, newRequestId } from '@/lib/observability/http'
+import { rupeesFromPaise } from '@/lib/money'
 
 /**
  * Razorpay webhook receiver — real signature verification + DB-persisted
@@ -449,9 +450,9 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
               gatewayName: 'razorpay',
               periodStart,
               periodEnd,
-              grossAmount: grossPaise / 100,
-              fees: feePaise / 100,
-              netAmount: (grossPaise - feePaise) / 100,
+              grossAmount: rupeesFromPaise(grossPaise),
+              fees: rupeesFromPaise(feePaise),
+              netAmount: rupeesFromPaise(grossPaise - feePaise),
               status: 'settled',
               bankReference: bankRef,
               paidOutAt: settledAt,
@@ -459,9 +460,9 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
             update: {
               periodStart,
               periodEnd,
-              grossAmount: grossPaise / 100,
-              fees: feePaise / 100,
-              netAmount: (grossPaise - feePaise) / 100,
+              grossAmount: rupeesFromPaise(grossPaise),
+              fees: rupeesFromPaise(feePaise),
+              netAmount: rupeesFromPaise(grossPaise - feePaise),
               status: 'settled',
               bankReference: bankRef,
               paidOutAt: settledAt,

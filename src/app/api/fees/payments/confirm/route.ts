@@ -4,6 +4,7 @@ import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { applyPaymentToLedger, mintReceiptNo, resolveFeeIdForTxn } from '@/lib/fee-workflow'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { num, type MoneyInput } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -73,7 +74,7 @@ function settlementOf(txn: {
   receiptNo: string | null
   gatewayPaymentId: string | null
   gatewayOrderId: string | null
-  amount: number
+  amount: MoneyInput
   method: string
 }) {
   return {
@@ -81,7 +82,7 @@ function settlementOf(txn: {
     receiptNo: txn.receiptNo,
     gatewayPaymentId: txn.gatewayPaymentId,
     orderId: txn.gatewayOrderId ?? '',
-    amount: txn.amount,
+    amount: num(txn.amount),
     method: txn.method,
     txnId: txn.id,
   }

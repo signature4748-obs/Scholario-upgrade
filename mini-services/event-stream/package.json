@@ -6,6 +6,7 @@
     "dev": "bun --hot index.ts"
   },
   "dependencies": {
+    "pg": "^8.23.1",
     "socket.io": "^4.8.1"
   }
 }

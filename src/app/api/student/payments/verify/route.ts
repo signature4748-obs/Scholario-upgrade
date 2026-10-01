@@ -7,6 +7,7 @@ import { getPaymentProvider } from '@/lib/payments/provider'
 import { paymentMethodFor, prettyMethod } from '@/lib/payments/methods'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { auditEvent } from '@/lib/security/audit'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -121,7 +122,7 @@ export async function POST(req: NextRequest) {
         }
         return {
           receiptNo: txn.receiptNo,
-          amount: txn.amount,
+          amount: num(txn.amount),
           method: prettyMethod(txn.method),
           status: 'SUCCESS' as const,
           gatewayPaymentId: txn.gatewayPaymentId,
@@ -220,7 +221,7 @@ export async function POST(req: NextRequest) {
           data: {
             schoolId: txn.schoolId,
             title: 'Fee payment received',
-            message: `${ctx.user.name} paid ₹${txn.amount} via ${prettyMethod(txn.method)} · Receipt ${txn.receiptNo}`,
+            message: `${ctx.user.name} paid ₹${num(txn.amount)} via ${prettyMethod(txn.method)} · Receipt ${txn.receiptNo}`,
             audience: 'STAFF',
             priority: 'NORMAL',
             senderId: ctx.user.id,
@@ -235,7 +236,7 @@ export async function POST(req: NextRequest) {
         const current = updatedTxn.txn ?? txn
         return {
           receiptNo: current.receiptNo,
-          amount: current.amount,
+          amount: num(current.amount),
           method: prettyMethod(current.method),
           status: 'SUCCESS' as const,
           gatewayPaymentId: current.gatewayPaymentId ?? paymentId,
@@ -255,7 +256,7 @@ export async function POST(req: NextRequest) {
             rawPayload: JSON.stringify({
               orderId,
               paymentId,
-              amount: txn.amount,
+              amount: num(txn.amount),
               method: txn.method,
               receiptNo: txn.receiptNo,
             }),
@@ -275,12 +276,12 @@ export async function POST(req: NextRequest) {
         userId: ctx.user.id,
         action: 'PAYMENT_VERIFIED',
         requestId,
-        detail: `FeeTransaction ${txn.id} verified · receipt ${txn.receiptNo} · ₹${txn.amount}`,
+        detail: `FeeTransaction ${txn.id} verified · receipt ${txn.receiptNo} · ₹${num(txn.amount)}`,
       }).catch(() => {})
 
       return {
         receiptNo: txn.receiptNo,
-        amount: txn.amount,
+        amount: num(txn.amount),
         method: prettyMethod(txn.method),
         status: 'SUCCESS' as const,
         gatewayPaymentId: paymentId,

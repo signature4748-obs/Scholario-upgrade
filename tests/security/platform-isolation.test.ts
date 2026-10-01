@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PHASE 6 — PLATFORM CONTROL-PLANE ISOLATION SUITE.
  *
@@ -38,11 +39,12 @@
  * fully on every run via the documented direct-session fixtures.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
+import { hashSessionToken } from '@/lib/auth'
+import { resetLoginBuckets } from '../helpers/login-buckets'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const db = new PrismaClient()
 
 // Seeded demo TOTP secrets (prisma/seed-platform.ts — DEV PREVIEW ONLY).
 const ROOT_EMAIL = 'admin@scholario.cloud'
@@ -54,6 +56,13 @@ const OPS_PASSWORD = 'ops12345'
 const SCHOOL_PW = 'ScholarioTest2026' // tenant-isolation fixture password
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+/** Per-run random XFF IP — Phase 8A: the DB-backed login limiter makes
+ * loopback-IP buckets persist across runs; a random per-run address gives
+ * every suite run a fresh bucket (the production limiter semantics stay
+ * fully exercised — the 429 fallback paths are still pinned by the
+ * dedicated rate-limit suites). */
+const RUN_IP = `10.231.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 
 /** Compute the current TOTP code with the server's own implementation. */
 async function totpNow(secret: string): Promise<string> {
@@ -69,7 +78,7 @@ async function totpNow(secret: string): Promise<string> {
 async function schoolLogin(email: string, password = SCHOOL_PW): Promise<string> {
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email, password }),
   })
   const body = (await res.json()) as { ok: boolean; data?: { sessionToken?: string }; error?: string }
@@ -95,7 +104,7 @@ async function platformLogin(
   const code = await totpNow(totpSecret)
   const res = await fetch(`${BASE}/api/platform/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email, password, totpCode: code }),
   })
   const body = (await res.json()) as { ok: boolean; data?: { sessionToken?: string } }
@@ -176,7 +185,11 @@ async function directSchoolSession(email: string): Promise<string> {
   const u = await db.user.findUnique({ where: { email } })
   if (!u) throw new Error(`no user ${email}`)
   const token = randomBytes(32).toString('hex')
-  await db.session.create({ data: { userId: u.id, token, expiresAt: new Date(Date.now() + 3600_000) } })
+  // PHASE 8A — school rows store sha256(token) exactly like the platform
+  // plane; the RAW token keeps riding the school transports below.
+  await db.session.create({
+    data: { userId: u.id, tokenHash: hashSessionToken(token), expiresAt: new Date(Date.now() + 3600_000) },
+  })
   return token
 }
 
@@ -209,16 +222,28 @@ let throwawaySchoolId: string | null = null
 beforeAll(async () => {
   const schools = await db.school.findMany({ select: { id: true, slug: true } })
   const bySlug = new Map(schools.map((s) => [s.slug, s.id]))
-  schoolAId = bySlug.get('demo-school') ?? ''
-  schoolBId = bySlug.get('bluebell-academy') ?? ''
+  schoolAId = bySlug.get('sunrise-academy') ?? ''
+  schoolBId = bySlug.get('green-valley') ?? ''
   if (!schoolAId || !schoolBId) throw new Error('seed schools missing — run bun prisma/seed-tenant-isolation.ts')
 
+  // Phase 8A — DB-backed login buckets persist across runs; heal them so
+  // this run starts from clean limiter state (fixture accounts only).
+  await resetLoginBuckets([
+    'tenant.principal.a@sunrise.test',
+    'tenant.teacher.a@sunrise.test',
+    'tenant.student.a@sunrise.test',
+    'tenant.parent.a@sunrise.test',
+    'principal.b@greenvalley.test',
+    ROOT_EMAIL,
+    OPS_EMAIL,
+  ])
+
   // School sessions for every role (login API — the REAL path).
-  principalA = await schoolLogin('tenant.principal.a@scholario.test')
-  teacherA = await schoolLogin('tenant.teacher.a@scholario.test')
-  studentA = await schoolLogin('tenant.student.a@scholario.test')
-  parentA = await schoolLogin('tenant.parent.a@scholario.test')
-  principalB = await schoolLogin('principal.b@bluebell.test')
+  principalA = await schoolLogin('tenant.principal.a@sunrise.test')
+  teacherA = await schoolLogin('tenant.teacher.a@sunrise.test')
+  studentA = await schoolLogin('tenant.student.a@sunrise.test')
+  parentA = await schoolLogin('tenant.parent.a@sunrise.test')
+  principalB = await schoolLogin('principal.b@greenvalley.test')
 
   // Platform sessions (full MFA).
   rootToken = await rateSafePlatformLogin()
@@ -356,8 +381,8 @@ describe('PHASE 6 · platform admin manages multiple schools', () => {
     // bucket; 429 on a rate-limited re-run — BOTH are refusals).
     const loginRes = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: 'principal.b@bluebell.test', password: SCHOOL_PW }),
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
+      body: JSON.stringify({ email: 'principal.b@greenvalley.test', password: SCHOOL_PW }),
     })
     await expectLoginRefusal(loginRes, 403, 'SCHOOL_SUSPENDED')
 
@@ -375,14 +400,14 @@ describe('PHASE 6 · platform admin manages multiple schools', () => {
     expect(reactivate.status).toBe(200)
     const bLogin = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: 'principal.b@bluebell.test', password: SCHOOL_PW }),
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
+      body: JSON.stringify({ email: 'principal.b@greenvalley.test', password: SCHOOL_PW }),
     })
     if (bLogin.status === 200) {
       expect(bLogin.status).toBe(200)
     } else {
       expect(bLogin.status).toBe(429) // limiter — prove access via fixture
-      const bToken = await directSchoolSession('principal.b@bluebell.test')
+      const bToken = await directSchoolSession('principal.b@greenvalley.test')
       const me = await asSchool(bToken, '/api/auth/me')
       expect(me.status).toBe(200)
     }
@@ -411,7 +436,7 @@ describe('PHASE 6 · platform admin manages multiple schools', () => {
     // any form: 401/403/429 — no session is issued).
     const pendingLogin = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: 'probe.principal@isolation.test', password: 'Probe#Pass123' }),
     })
     expect([401, 403, 429]).toContain(pendingLogin.status)
@@ -421,7 +446,7 @@ describe('PHASE 6 · platform admin manages multiple schools', () => {
     await asPlatform(rootToken, `/api/platform/schools/${throwawaySchoolId}/activate`, { method: 'POST' })
     const activeLogin = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: 'probe.principal@isolation.test', password: 'Probe#Pass123' }),
     })
     if (activeLogin.status !== 200) {
@@ -511,7 +536,7 @@ describe('PHASE 6 · school session ≠ platform session (structural)', () => {
     // refusal — no session is issued.)
     const res = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: ROOT_EMAIL, password: ROOT_PASSWORD }),
     })
     await expectLoginRefusal(res, 401, 'AUTH_REQUIRED')
@@ -520,7 +545,7 @@ describe('PHASE 6 · school session ≠ platform session (structural)', () => {
   test('the legacy superadmin email does not even reach the role gate with wrong password (anti-enum: identical 401)', async () => {
     const res = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: ROOT_EMAIL, password: 'wrong-password' }),
     })
     await expectLoginRefusal(res, 401, 'AUTH_REQUIRED')
@@ -530,7 +555,7 @@ describe('PHASE 6 · school session ≠ platform session (structural)', () => {
     // ops@scholario.io is a PlatformAdmin — NOT a school User.
     const res = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: OPS_EMAIL, password: OPS_PASSWORD }),
     })
     await expectLoginRefusal(res, 401, 'AUTH_REQUIRED')
@@ -544,9 +569,12 @@ describe('PHASE 6 · school session ≠ platform session (structural)', () => {
   }, T)
 
   test('platform sessions live in their own table with hashed tokens', async () => {
-    // The platform session token has no row in the school Session
-    // table (raw tokens) — and its hash is the only stored form.
-    const schoolRow = await db.session.findUnique({ where: { token: rootToken } })
+    // The platform session token has no row in the school Session table
+    // (both planes are hash-keyed — cross-plane token forgery finds no
+    // row) — and its hash is the only stored form.
+    const schoolRow = await db.session.findUnique({
+      where: { tokenHash: hashSessionToken(rootToken) },
+    })
     expect(schoolRow).toBeNull()
     const crypto = await import('crypto')
     const hash = crypto.createHash('sha256').update(rootToken).digest('hex')
@@ -564,7 +592,7 @@ describe('PHASE 6 · platform MFA and step-up', () => {
   test('login WITHOUT a TOTP code → 401 MFA_REQUIRED', async () => {
     const res = await fetch(`${BASE}/api/platform/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: ROOT_EMAIL, password: ROOT_PASSWORD }),
     })
     await expectLoginRefusal(res, 401, 'MFA_REQUIRED')
@@ -573,7 +601,7 @@ describe('PHASE 6 · platform MFA and step-up', () => {
   test('login with a WRONG TOTP code → 401 MFA_INVALID', async () => {
     const res = await fetch(`${BASE}/api/platform/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: ROOT_EMAIL, password: ROOT_PASSWORD, totpCode: '000000' }),
     })
     await expectLoginRefusal(res, 401, 'MFA_INVALID')
@@ -582,7 +610,7 @@ describe('PHASE 6 · platform MFA and step-up', () => {
   test('login with wrong password → 401 AUTH_REQUIRED (checked before MFA)', async () => {
     const res = await fetch(`${BASE}/api/platform/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: ROOT_EMAIL, password: 'wrong-password', totpCode: await totpNow(ROOT_TOTP_SECRET) }),
     })
     await expectLoginRefusal(res, 401, 'AUTH_REQUIRED')
@@ -650,7 +678,7 @@ describe('PHASE 6 · platform MFA and step-up', () => {
     for (let i = 0; i < 6; i++) {
       const res = await fetch(`${BASE}/api/platform/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
         body: JSON.stringify({ email, password: 'wrong-password', totpCode: '000000' }),
       })
       const body = (await res.json()) as { ok: boolean; code: string }
@@ -886,7 +914,7 @@ describe('PHASE 6 · platform session lifecycle', () => {
     // Suspended admins cannot log back in (401; 429 = limiter, also no access).
     const loginRes = await fetch(`${BASE}/api/platform/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: OPS_EMAIL, password: OPS_PASSWORD, totpCode: await totpNow('KRSXG5CTMVRXEZLU') }),
     })
     expect([401, 429]).toContain(loginRes.status)

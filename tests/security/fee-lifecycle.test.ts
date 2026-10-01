@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PIH-5 — INVARIANT: the fee money lifecycle (parity, receipts, guards).
  *
@@ -33,19 +34,20 @@
  * after cleanup — the suite leaves the DB exactly as it found it.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const db = new PrismaClient()
+
 const T = 45_000 // generous: first-hit dev compilation (tenant-isolation precedent)
 
 const MARKER = randomBytes(4).toString('hex')
 
 // ── resolved fixtures ──────────────────────────────────────────────────────
 let schoolId = ''
-let teacher1 = { id: '', name: '', email: 'teacher1@demoschool.edu' }
-let principal = { id: '', email: 'principal@demoschool.edu' }
+let teacher1 = { id: '', name: '', email: 'teacher1@sunriseacademy.edu' }
+let principal = { id: '', email: 'principal@sunriseacademy.edu' }
 let teacherToken = ''
 let principalToken = ''
 /** A fee OUTSIDE teacher1's class-teacher roster, for the overpay guard. */
@@ -76,11 +78,19 @@ beforeAll(async () => {
   principalToken = randomBytes(32).toString('hex')
   await db.session.createMany({
     data: [
-      { userId: t1.id, token: teacherToken, expiresAt: new Date(Date.now() + 3600_000) },
-      { userId: p1.id, token: principalToken, expiresAt: new Date(Date.now() + 3600_000) },
+      // PHASE 8A — rows store sha256(token); the RAW tokens ride the
+      // cookie jar below (createSession wire contract).
+      { userId: t1.id, tokenHash: hashSessionToken(teacherToken), expiresAt: new Date(Date.now() + 3600_000) },
+      { userId: p1.id, tokenHash: hashSessionToken(principalToken), expiresAt: new Date(Date.now() + 3600_000) },
     ],
   })
-  cleanup.push(() => db.session.deleteMany({ where: { token: { in: [teacherToken, principalToken] } } }))
+  cleanup.push(() =>
+    db.session.deleteMany({
+      where: {
+        tokenHash: { in: [hashSessionToken(teacherToken), hashSessionToken(principalToken)] },
+      },
+    }),
+  )
 
   // teacher1's appointed classes → her students' open fees (collection flow).
   const myClasses = await db.class.findMany({
@@ -100,22 +110,29 @@ beforeAll(async () => {
     where: { schoolId, status: TXN_PENDING, feeId: { not: null } },
     _sum: { amount: true },
   })
-  const pendingByFee = new Map(pendingOnFees.map((p) => [p.feeId ?? '', p._sum.amount ?? 0]))
+  const pendingByFee = new Map(pendingOnFees.map((p) => [p.feeId ?? '', Number(p._sum.amount ?? 0)]))
 
   const openFees = await db.fee.findMany({
     where: { schoolId, status: { in: ['UNPAID', 'PARTIAL'] } },
     select: { id: true, studentId: true, amount: true, paid: true, title: true },
     orderBy: { createdAt: 'asc' },
   })
+  // Money columns are Prisma.Decimal on PG — normalize to numbers at the
+  // fixture boundary (8A parity corpus: ₹21,62,650.00 across 124 receipts).
   const collectCandidate = openFees.find(
-    (f) => myStudentIds.has(f.studentId) && f.amount - f.paid - (pendingByFee.get(f.id) ?? 0) >= 200,
+    (f) => myStudentIds.has(f.studentId) && Number(f.amount) - Number(f.paid) - (pendingByFee.get(f.id) ?? 0) >= 200,
   )
   if (!collectCandidate) throw new Error('no open fee on a teacher1 student — seed state unexpected')
-  collectFee = { ...collectCandidate, outstanding: collectCandidate.amount - collectCandidate.paid }
+  collectFee = {
+    ...collectCandidate,
+    amount: Number(collectCandidate.amount),
+    paid: Number(collectCandidate.paid),
+    outstanding: Number(collectCandidate.amount) - Number(collectCandidate.paid),
+  }
 
-  const overpayCandidate = openFees.find((f) => !myStudentIds.has(f.studentId) && f.amount - f.paid > 0)
+  const overpayCandidate = openFees.find((f) => !myStudentIds.has(f.studentId) && Number(f.amount) - Number(f.paid) > 0)
   if (!overpayCandidate) throw new Error('no open fee outside teacher1 roster — seed state unexpected')
-  overpayFee = overpayCandidate
+  overpayFee = { ...overpayCandidate, amount: Number(overpayCandidate.amount), paid: Number(overpayCandidate.paid) }
 }, 60_000)
 
 afterAll(async () => {
@@ -143,7 +160,8 @@ async function ledgerSums(sid: string): Promise<{ payments: number; txns: number
     db.feeTransaction.aggregate({ where: { schoolId: sid, status: 'SUCCESS' }, _sum: { amount: true } }),
     db.fee.aggregate({ where: { schoolId: sid }, _sum: { paid: true } }),
   ])
-  return { payments: pay._sum.amount ?? 0, txns: txn._sum.amount ?? 0, fees: fee._sum.paid ?? 0 }
+  // NUMERIC aggregates arrive as Prisma.Decimal — normalize for numeric equality.
+  return { payments: Number(pay._sum.amount ?? 0), txns: Number(txn._sum.amount ?? 0), fees: Number(fee._sum.paid ?? 0) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -220,7 +238,7 @@ describe('PIH-5 · manual fee transaction overpay guard (live)', () => {
 
     // The ledger did not move and no transaction row leaked.
     const feeAfter = await db.fee.findUnique({ where: { id: overpayFee.id }, select: { paid: true } })
-    expect(feeAfter?.paid).toBe(overpayFee.paid)
+    expect(Number(feeAfter?.paid)).toBe(overpayFee.paid)
     const txnCountAfter = await db.feeTransaction.count({ where: { feeId: overpayFee.id } })
     expect(txnCountAfter).toBe(txnCountBefore)
   }, T)
@@ -267,7 +285,7 @@ describe('PIH-5 · verify settles atomically; rejecting a settled txn is refused
 
     // The pending collection deliberately did NOT touch the ledger.
     const midFee = await db.fee.findUnique({ where: { id: collectFee.id }, select: { paid: true } })
-    expect(midFee?.paid).toBe(feeBefore!.paid)
+    expect(Number(midFee?.paid)).toBe(Number(feeBefore!.paid))
 
     try {
       // ── STAGE 2: the principal verifies → SUCCESS + receipt + credit ──
@@ -286,17 +304,17 @@ describe('PIH-5 · verify settles atomically; rejecting a settled txn is refused
 
       // DB truth: the ledger moved by exactly the amount + a Payment mirror.
       const verifiedFee = await db.fee.findUnique({ where: { id: collectFee.id }, select: { paid: true } })
-      expect(verifiedFee?.paid).toBe(feeBefore!.paid + amount)
+      expect(Number(verifiedFee?.paid)).toBe(Number(feeBefore!.paid) + amount)
       const mirror = await db.payment.findUnique({
         where: { transactionId: txn!.id },
         select: { id: true, amount: true, status: true },
       })
       expect(mirror).not.toBeNull()
-      expect(mirror?.amount).toBe(amount)
+      expect(Number(mirror?.amount)).toBe(amount)
       expect(mirror?.status).toBe('SUCCESS')
 
       // ── STAGE 3: rejecting the SAME (settled) txn id → 4xx, no movement ──
-      const paidAfterVerify = verifiedFee!.paid
+      const paidAfterVerify = Number(verifiedFee!.paid)
       const reject = await as(principalToken, '/api/fees/verification', {
         method: 'POST',
         body: JSON.stringify({ action: 'reject', txnId: txn!.id, reason: 'PIH-5 settled-txn reject probe' }),
@@ -307,7 +325,7 @@ describe('PIH-5 · verify settles atomically; rejecting a settled txn is refused
       expect(rejectBody.code).toBe('CONFLICT')
 
       const afterReject = await db.fee.findUnique({ where: { id: collectFee.id }, select: { paid: true } })
-      expect(afterReject?.paid).toBe(paidAfterVerify) // ledger did NOT move
+      expect(Number(afterReject?.paid)).toBe(paidAfterVerify) // ledger did NOT move
       const txnRow = await db.feeTransaction.findUnique({ where: { id: txn!.id }, select: { status: true } })
       expect(txnRow?.status).toBe(TXN_SUCCESS) // still settled, never flipped to REJECTED
     } finally {

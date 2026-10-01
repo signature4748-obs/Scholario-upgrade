@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PHASE 2 — Cross-tenant isolation test suite.
  *
@@ -8,13 +9,17 @@
  * This is a LIVE HTTP integration suite: it runs against the dev server
  * (default http://localhost:3000) with REAL sessions, REAL fixture tenants
  * and REAL database rows. Fixtures are created by
- * `prisma/seed-tenant-isolation.ts` (idempotent):
+ * `prisma/seed-tenant-isolation.ts` (idempotent). Phase 8A two-tenant
+ * corpus layout:
  *
- *   School A — Greenwood Public School (slug demo-school) — the canonical
- *              tenant, plus controlled test identities
- *              (tenant.*@scholario.test).
- *   School B — Bluebell International Academy (slug bluebell-academy) —
- *              principal / teacher / student / parent fixture accounts.
+ *   School A — Sunrise Academy (slug sunrise-academy) — the DEMO tenant:
+ *              full canonical corpus + the controlled test identities
+ *              (tenant.*@sunrise.test) + the cross-tenant probe rows
+ *              (probe student 'Aarav Mehta', Grade 5 - A, SR-MATH …).
+ *   School B — Green Valley Public School (slug green-valley) — the CLEAN
+ *              tenant: bootstrap config + principal/teacher/student/parent
+ *              .b@greenvalley.test fixture accounts and ZERO business
+ *              data — every School B surface shows its honest empty state.
  *
  * Roles exercised: SUPER_ADMIN, PRINCIPAL, TEACHER, STUDENT, PARENT.
  * Actions attempted across the tenant boundary: read, create, update,
@@ -22,7 +27,8 @@
  * (search, counts, dashboard metrics, notifications, file URLs, error
  * messages, ids). Every unauthorized attempt must FAIL SAFELY (401/403/404
  * with a sanitized envelope that does not confirm the foreign resource's
- * existence).
+ * existence); a clean-tenant subject that no longer exists fails closed
+ * ("does not exist" is the honest answer — never a leak).
  *
  * Authentication: real POST /api/auth/login for the first sessions (the
  * login mechanics themselves are covered by the Phase-1 suite); when the
@@ -32,11 +38,11 @@
  * bypasses ONLY the login limiter, never any authorization gate.
  */
 import { describe, test, expect, beforeAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const db = new PrismaClient()
 
 // ─────────────────────────────────────────────────────────────────────────
 // Fixture resolution (DB-direct: the tests KNOW the victim ids exist)
@@ -58,20 +64,13 @@ interface Fixtures {
   }
   rows: {
     studentA: { id: string; userId: string }
-    studentB: { id: string; userId: string }
     classA: { id: string; name: string }
-    classB: { id: string }
     subjectA: { id: string }
     feeA: { id: string }
-    feeB: { id: string }
     examA: { id: string }
-    examB: { id: string }
     homeworkA: { id: string }
     homeworkB: { id: string }
     materialA: { id: string }
-    materialB: { id: string }
-    notificationA: { id: string; title: string }
-    notificationB: { id: string; title: string }
     eventA: { id: string }
     questionA: { id: string }
     roomA: { id: string }
@@ -89,8 +88,8 @@ let fx: Fixtures
 const tokens: Record<string, string> = {}
 
 beforeAll(async () => {
-  const schoolA = await db.school.findUnique({ where: { slug: 'demo-school' } })
-  const schoolB = await db.school.findUnique({ where: { slug: 'bluebell-academy' } })
+  const schoolA = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+  const schoolB = await db.school.findUnique({ where: { slug: 'green-valley' } })
   if (!schoolA || !schoolB) throw new Error('Fixtures missing — run: bun prisma/seed-tenant-isolation.ts')
 
   const byEmail = async (email: string) => {
@@ -100,32 +99,29 @@ beforeAll(async () => {
   }
 
   const [pA, tA, sA, paA, sa, pB, tB, sB, paB] = await Promise.all([
-    byEmail('tenant.principal.a@scholario.test'),
-    byEmail('tenant.teacher.a@scholario.test'),
-    byEmail('tenant.student.a@scholario.test'),
-    byEmail('tenant.parent.a@scholario.test'),
-    byEmail('tenant.superadmin@scholario.test'),
-    byEmail('principal.b@bluebell.test'),
-    byEmail('teacher.b@bluebell.test'),
-    byEmail('student.b@bluebell.test'),
-    byEmail('parent.b@bluebell.test'),
+    byEmail('tenant.principal.a@sunrise.test'),
+    byEmail('tenant.teacher.a@sunrise.test'),
+    byEmail('tenant.student.a@sunrise.test'),
+    byEmail('tenant.parent.a@sunrise.test'),
+    byEmail('tenant.superadmin@sunrise.test'),
+    byEmail('principal.b@greenvalley.test'),
+    byEmail('teacher.b@greenvalley.test'),
+    byEmail('student.b@greenvalley.test'),
+    byEmail('parent.b@greenvalley.test'),
   ])
 
+  // Phase 8A: the School B (clean tenant) carries ZERO business rows —
+  // student/class/fee/exam/material/notification lookups there return null
+  // by design. The cross-tenant probe rows (incl. BOTH homework probes)
+  // live INSIDE School A (Sunrise) now.
   const studentA = await db.student.findFirst({ where: { schoolId: schoolA.id, userId: sA.id } })
-  const studentB = await db.student.findFirst({ where: { schoolId: schoolB.id, userId: sB.id } })
   const classA = await db.class.findFirst({ where: { schoolId: schoolA.id }, orderBy: { name: 'asc' } })
-  const classB = await db.class.findFirst({ where: { schoolId: schoolB.id } })
   const subjectA = await db.subject.findFirst({ where: { schoolId: schoolA.id } })
   const feeA = await db.fee.findFirst({ where: { schoolId: schoolA.id } })
-  const feeB = await db.fee.findFirst({ where: { schoolId: schoolB.id } })
   const examA = await db.exam.findFirst({ where: { schoolId: schoolA.id } })
-  const examB = await db.exam.findFirst({ where: { schoolId: schoolB.id } })
   const hwA = await db.homework.findFirst({ where: { schoolId: schoolA.id, title: { contains: 'Tenant Test Probe' } } })
-  const hwB = await db.homework.findFirst({ where: { schoolId: schoolB.id, title: { contains: 'Tenant Test Probe' } } })
+  const hwB = await db.homework.findFirst({ where: { schoolId: schoolA.id, title: { contains: 'Tenant Test Probe Homework B' } } })
   const matA = await db.studyMaterial.findFirst({ where: { schoolId: schoolA.id } })
-  const matB = await db.studyMaterial.findFirst({ where: { schoolId: schoolB.id } })
-  const notifA = await db.notification.findFirst({ where: { schoolId: schoolA.id }, orderBy: { createdAt: 'desc' } })
-  const notifB = await db.notification.findFirst({ where: { schoolId: schoolB.id } })
   const eventA = await db.schoolEvent.findFirst({ where: { schoolId: schoolA.id } })
   const qA = await db.questionBank.findFirst({ where: { schoolId: schoolA.id } })
   const roomA = await db.room.findFirst({ where: { schoolId: schoolA.id } })
@@ -136,7 +132,7 @@ beforeAll(async () => {
   const notifTitlesA = (await db.notification.findMany({ where: { schoolId: schoolA.id }, orderBy: { createdAt: 'desc' }, take: 5, select: { title: true } })).map((n) => n.title)
   const firstStudentA = await db.student.findFirst({ where: { schoolId: schoolA.id }, orderBy: { admissionNo: 'asc' }, include: { user: { select: { name: true } } } })
 
-  if (!studentA || !studentB || !classA || !classB || !hwA || !hwB) {
+  if (!studentA || !classA || !hwA || !hwB) {
     throw new Error('Probe rows missing — run: bun prisma/seed-tenant-isolation.ts')
   }
 
@@ -156,20 +152,13 @@ beforeAll(async () => {
     },
     rows: {
       studentA: { id: studentA.id, userId: studentA.userId },
-      studentB: { id: studentB.id, userId: studentB.userId },
       classA: { id: classA.id, name: classA.name },
-      classB: { id: classB.id },
       subjectA: { id: subjectA?.id ?? '' },
       feeA: { id: feeA?.id ?? '' },
-      feeB: { id: feeB?.id ?? '' },
       examA: { id: examA?.id ?? '' },
-      examB: { id: examB?.id ?? '' },
       homeworkA: { id: hwA.id },
       homeworkB: { id: hwB.id },
       materialA: { id: matA?.id ?? '' },
-      materialB: { id: matB?.id ?? '' },
-      notificationA: { id: notifA?.id ?? '', title: notifA?.title ?? '' },
-      notificationB: { id: notifB?.id ?? '', title: notifB?.title ?? '' },
       eventA: { id: eventA?.id ?? '' },
       questionA: { id: qA?.id ?? '' },
       roomA: { id: roomA?.id ?? '' },
@@ -214,7 +203,11 @@ async function directSession(email: string): Promise<string> {
   const u = await db.user.findUnique({ where: { email } })
   if (!u) throw new Error(`no user ${email}`)
   const token = randomBytes(32).toString('hex')
-  await db.session.create({ data: { userId: u.id, token, expiresAt: new Date(Date.now() + 3600_000) } })
+  // PHASE 8A — the row stores the hash; the RAW token keeps riding the
+  // Authorization header (identical to a server-minted session).
+  await db.session.create({
+    data: { userId: u.id, tokenHash: hashSessionToken(token), expiresAt: new Date(Date.now() + 3600_000) },
+  })
   return token
 }
 
@@ -276,7 +269,7 @@ describe('PHASE 2 · tenant isolation — authentication boundary', () => {
 describe('PHASE 2 · cross-tenant READ attempts must fail safely', () => {
   const victim = () => ({
     victimIds: [fx.rows.studentA.id, fx.schoolA.id],
-    victimStrings: [fx.rows.studentNameA, 'Greenwood'],
+    victimStrings: [fx.rows.studentNameA, 'Sunrise'],
   })
 
   test('principal B → GET /api/students/[A-student] → 404, no oracle', async () => {
@@ -315,8 +308,10 @@ describe('PHASE 2 · cross-tenant READ attempts must fail safely', () => {
   }, T)
 
   test('teacher B → GET /api/teacher/students/[A-student] → 404 (scope+tenant)', async () => {
-    const res = await as(fx.users.teacherB.email, `/api/teacher/students/${fx.rows.studentA.id}`)
-    await expectSafeFailure(res, victim())
+    await withBsideTeacherRecords(async () => {
+      const res = await as(fx.users.teacherB.email, `/api/teacher/students/${fx.rows.studentA.id}`)
+      await expectSafeFailure(res, victim())
+    })
   }, T)
 
   test('principal B → GET /api/rooms lists ONLY School B rooms', async () => {
@@ -328,12 +323,14 @@ describe('PHASE 2 · cross-tenant READ attempts must fail safely', () => {
 
   test('principal B → GET /api/schools/[A-school] → fail-safe, no other-school data', async () => {
     const res = await as(fx.users.principalB.email, `/api/schools/${fx.schoolA.id}`)
-    await expectSafeFailure(res, { victimIds: [fx.schoolA.id], victimStrings: ['Greenwood'] })
+    await expectSafeFailure(res, { victimIds: [fx.schoolA.id], victimStrings: ['Sunrise'] })
   }, T)
 
   test('student B → GET /api/student/timetable has no School A cells', async () => {
     const res = await as(fx.users.studentB.email, '/api/student/timetable')
-    // 200 with empty/own-school payload — the school scope is the invariant
+    // Fail-closed for the enrollment-less clean-tenant student (sanitized
+    // 400 NO_STUDENT_RECORD) OR 200 with own-school payload — the school
+    // scope is the invariant either way
     const text = await res.text()
     expect(text).not.toContain(fx.schoolA.id)
     expect(text).not.toContain(fx.rows.classA.id)
@@ -347,7 +344,7 @@ describe('PHASE 2 · cross-tenant READ attempts must fail safely', () => {
 describe('PHASE 2 · cross-tenant WRITE/DELETE attempts must fail safely', () => {
   const victim = () => ({
     victimIds: [fx.rows.studentA.id, fx.rows.classA.id, fx.schoolA.id],
-    victimStrings: [fx.rows.studentNameA, 'Greenwood'],
+    victimStrings: [fx.rows.studentNameA, 'Sunrise'],
   })
 
   test('principal B → DELETE /api/events?id=[A-event] → 404, event survives', async () => {
@@ -398,7 +395,7 @@ describe('PHASE 2 · cross-tenant WRITE/DELETE attempts must fail safely', () =>
   }, T)
 
   test('principal B → POST /api/students with A classId → 404, no account created', async () => {
-    const email = `probe.${Date.now()}@bluebell.test`
+    const email = `probe.${Date.now()}@greenvalley.test`
     const res = await as(fx.users.principalB.email, '/api/students', {
       method: 'POST',
       body: JSON.stringify({ name: 'Cross Tenant Probe', email, classId: fx.rows.classA.id, password: 'Probe1234' }),
@@ -484,11 +481,13 @@ describe('PHASE 2 · indirect leakage probes', () => {
   }, T)
 
   test('student B search for A material title → zero results', async () => {
-    const res = await as(fx.users.studentB.email, `/api/search?q=${encodeURIComponent('Addition & Subtraction')}`)
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok: boolean; data: { results: unknown[] } }
-    expect(body.ok).toBe(true)
-    expect(body.data.results.length).toBe(0)
+    await withBsideTeacherRecords(async () => {
+      const res = await as(fx.users.studentB.email, `/api/search?q=${encodeURIComponent('Addition & Subtraction')}`)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { ok: boolean; data: { results: unknown[] } }
+      expect(body.ok).toBe(true)
+      expect(body.data.results.length).toBe(0)
+    })
   }, T)
 
   test('principal B → GET /api/contacts has no School A users', async () => {
@@ -497,16 +496,22 @@ describe('PHASE 2 · indirect leakage probes', () => {
     const text = await res.text()
     expect(text).not.toContain(fx.users.principalA.id)
     expect(text).not.toContain(fx.users.studentA.id)
-    expect(text).not.toContain('Greenwood')
+    expect(text).not.toContain('Sunrise')
   }, T)
 
-  test('principal B → CSV /api/export?type=students contains ONLY School B students', async () => {
+  test('principal B → CSV /api/export?type=students contains ONLY School B students (honest-empty)', async () => {
+    // Phase 8A re-target: the clean tenant has ZERO students — its export
+    // is the header row alone (every School B student row, all zero of
+    // them, and NEVER a School A row). The old `toContain('Ira Rao')`
+    // positive moved with the probe student ('Aarav Mehta') INTO Sunrise
+    // and is asserted as invisible here instead.
     const res = await as(fx.users.principalB.email, '/api/export?type=students')
     expect(res.status).toBe(200)
     const csv = await res.text()
-    expect(csv).toContain('Ira Rao') // School B student
+    expect(csv.trim().split('\n').length).toBe(1) // header only — zero data rows
     expect(csv).not.toContain(fx.rows.studentNameA) // School A canonical student
     expect(csv).not.toContain('Tenant Test Student A') // School A test student
+    expect(csv).not.toContain('Aarav Mehta') // the migrated probe student stays Sunrise-only
   }, T)
 
   test('principal B → CSV /api/payments-export has no School A names', async () => {
@@ -524,11 +529,11 @@ describe('PHASE 2 · indirect leakage probes', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: { scope: string; stats: { students: number; teachers: number } } }
     expect(body.data.scope).toBe('SCHOOL')
-    expect(body.data.stats.students).toBe(1) // only the School B fixture student
-    expect(body.data.stats.teachers).toBe(1)
+    expect(body.data.stats.students).toBe(0) // honest zero — the clean tenant's truth
+    expect(body.data.stats.teachers).toBe(0)
     const text = JSON.stringify(body)
     expect(text).not.toContain(fx.rows.studentNameA)
-    expect(text).not.toContain('Greenwood')
+    expect(text).not.toContain('Sunrise')
   }, T)
 
   test('student B → /api/notifications-feed carries no School A notices', async () => {
@@ -538,19 +543,27 @@ describe('PHASE 2 · indirect leakage probes', () => {
     for (const title of fx.rows.notifTitlesA) expect(text).not.toContain(title)
   }, T)
 
-  test('principal B → GET /api/announcements shows only School B broadcasts', async () => {
+  test('principal B → GET /api/announcements shows only School B broadcasts (honest-empty)', async () => {
+    // Phase 8A re-target: Green Valley has zero broadcasts — its own list
+    // is exactly empty AND no Sunrise broadcast title leaks through.
     const res = await as(fx.users.principalB.email, '/api/announcements')
     expect(res.status).toBe(200)
-    const text = await res.text()
-    expect(text).toContain(fx.rows.notificationB.title)
+    const body = (await res.json()) as { ok: boolean; data: { announcements: unknown[] } }
+    expect(body.ok).toBe(true)
+    expect(body.data.announcements).toEqual([]) // zero rows IS School B's broadcast list
+    const text = JSON.stringify(body)
     for (const title of fx.rows.notifTitlesA) expect(text).not.toContain(title)
   }, T)
 
-  test('principal B → GET /api/exams lists only School B exams', async () => {
+  test('principal B → GET /api/exams lists only School B exams (honest-empty)', async () => {
+    // Phase 8A re-target: Green Valley has zero exams — the list is exactly
+    // empty AND the Sunrise exam id never appears.
     const res = await as(fx.users.principalB.email, '/api/exams')
     expect(res.status).toBe(200)
-    const text = await res.text()
-    expect(text).toContain(fx.rows.examB.id)
+    const body = (await res.json()) as { ok: boolean; data: { exams: unknown[] } }
+    expect(body.ok).toBe(true)
+    expect(body.data.exams).toEqual([]) // zero rows IS School B's exam list
+    const text = JSON.stringify(body)
     expect(text).not.toContain(fx.rows.examA.id)
   }, T)
 
@@ -611,7 +624,7 @@ describe('PHASE 2/6 · platform admin boundary', () => {
 
   test('non-admin cannot read another school via /api/schools/[id]', async () => {
     const res = await as(fx.users.teacherB.email, `/api/schools/${fx.schoolA.id}`)
-    await expectSafeFailure(res, { victimIds: [fx.schoolA.id], victimStrings: ['Greenwood'] })
+    await expectSafeFailure(res, { victimIds: [fx.schoolA.id], victimStrings: ['Sunrise'] })
   }, T)
 })
 
@@ -655,13 +668,26 @@ describe('PHASE 2 · role boundaries (frontend hiding is not authorization)', ()
     expect(res.status).toBe(403)
   }, T)
 
-  test('student B self-service surfaces stay healthy and school-scoped', async () => {
-    const res = await as(fx.users.studentB.email, '/api/student/dashboard')
-    expect(res.status).toBe(200)
-    const text = await res.text()
-    expect(text).toContain('Ira Rao')
-    expect(text).not.toContain(fx.rows.studentNameA)
-    expect(text).not.toContain('Greenwood')
+  test('student B (no enrollment record — clean tenant) self-service fails CLOSED; the enrolled School A student stays healthy and school-scoped', async () => {
+    // Phase 8A re-target: Green Valley's student.b is an ACTIVE STUDENT user
+    // with NO Student row (honest-zero corpus) — the self-service surface
+    // must fail closed with a sanitized envelope and leak nothing. The
+    // healthy 200-with-own-data case (the old 'Ira Rao' assertion's
+    // invariant) is re-proven on the SAME surface via the ENROLLED School A
+    // fixture student.
+    const bRes = await as(fx.users.studentB.email, '/api/student/dashboard')
+    expect([400, 404]).toContain(bRes.status) // fail-closed (NO_STUDENT_RECORD), never a leak
+    const bText = await bRes.text()
+    expect(bText).not.toContain(fx.rows.studentNameA)
+    expect(bText).not.toContain('Sunrise')
+    expect(bText).not.toContain(fx.schoolA.id)
+
+    const aRes = await as(fx.users.studentA.email, '/api/student/dashboard')
+    expect(aRes.status).toBe(200)
+    const aText = await aRes.text()
+    expect(aText).toContain('Tenant Test Student A') // own-tenant identity
+    expect(aText).not.toContain('Green Valley')
+    expect(aText).not.toContain(fx.schoolB.id)
   }, T)
 
   test('student A roster hides classmates\u2019 fees/marks/growth (projection guard)', async () => {
@@ -696,9 +722,16 @@ describe('PHASE 2 · positive controls — same-tenant access still works', () =
     expect(body.ok).toBe(true)
   }, T)
 
-  test('principal B reads their own student → 200', async () => {
-    const res = await as(fx.users.principalB.email, `/api/students/${fx.rows.studentB.id}`)
+  test('principal B reads their own student roster → 200 (honest-empty — the clean tenant truth)', async () => {
+    // Phase 8A re-target: School B has no student rows, so the own-tenant
+    // read positive is the ROSTER surface: healthy 200 + exactly zero
+    // School B students (never a School A row).
+    const res = await as(fx.users.principalB.email, '/api/students')
     expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; data: unknown[] }
+    expect(body.ok).toBe(true)
+    expect(body.data).toEqual([])
+    expect(JSON.stringify(body)).not.toContain(fx.rows.studentNameA)
   }, T)
 
   test('principal A reads their own homework probe → 200', async () => {
@@ -706,17 +739,36 @@ describe('PHASE 2 · positive controls — same-tenant access still works', () =
     expect(res.status).toBe(200)
   }, T)
 
-  test('principal B reads their own homework probe → 200', async () => {
-    const res = await as(fx.users.principalB.email, `/api/homework/${fx.rows.homeworkB.id}`)
-    expect(res.status).toBe(200)
+  test('principal B → /api/homework → 200 (honest-empty); the migrated B-labeled probe is Sunrise-owned and readable by principal A → 200', async () => {
+    // Phase 8A re-target: the B-labeled homework probe moved INTO Sunrise
+    // (Green Valley has none). B's list surface stays healthy + honestly
+    // empty; the same probe row is positively readable by its NEW owner.
+    const bList = await as(fx.users.principalB.email, '/api/homework')
+    expect(bList.status).toBe(200)
+    const bBody = (await bList.json()) as { ok: boolean; data: { homework: unknown[] } }
+    expect(bBody.ok).toBe(true)
+    expect(bBody.data.homework).toEqual([])
+    expect(JSON.stringify(bBody)).not.toContain(fx.rows.homeworkB.id)
+
+    const aRead = await as(fx.users.principalA.email, `/api/homework/${fx.rows.homeworkB.id}`)
+    expect(aRead.status).toBe(200)
   }, T)
 
-  test('teacher B lists their own school students → 200 (own scope)', async () => {
+  test('teacher B lists their own school students → 200 (honest-empty scope); teacher A sees Sunrise students on the same surface', async () => {
+    // Phase 8A re-target: the old positive (Bluebell's 'Ira Rao' visible to
+    // teacher B) has no equivalent data in the clean tenant — teacher B's
+    // scope is honestly EMPTY, and the data-visible positive is proven on
+    // the same surface by teacher A (who sees the Sunrise probe student).
     const res = await as(fx.users.teacherB.email, '/api/teacher/students')
     expect(res.status).toBe(200)
     const text = await res.text()
-    expect(text).toContain('Ira Rao')
     expect(text).not.toContain(fx.rows.studentNameA)
+    expect(text).not.toContain('Aarav Mehta')
+
+    const aRes = await as(fx.users.teacherA.email, '/api/teacher/students')
+    expect(aRes.status).toBe(200)
+    const aText = await aRes.text()
+    expect(aText).toContain('Aarav Mehta') // own-tenant probe student — visible
   }, T)
 
   test('principal A → /api/schools/[A] → 200 (own school)', async () => {
@@ -728,14 +780,26 @@ describe('PHASE 2 · positive controls — same-tenant access still works', () =
     const res = await as(fx.users.studentB.email, '/api/exams/school-context')
     expect(res.status).toBe(200)
     const text = await res.text()
-    expect(text).toContain('Bluebell')
+    expect(text).toContain('Green Valley')
+    expect(text).not.toContain('Sunrise')
   }, T)
 
-  test('principal B → /api/search finds their own student', async () => {
-    const res = await as(fx.users.principalB.email, '/api/search?q=Ira')
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { data: { results: unknown[] } }
-    expect(body.data.results.length).toBeGreaterThan(0)
+  test('own-tenant search: principal A finds Sunrise students (lowercase q — pins ILIKE parity); principal B sees NOTHING (cross-tenant invisible)', async () => {
+    // Phase 8A re-target (was: principal B finds Bluebell's 'Ira Rao').
+    // The clean tenant has no students to find, so the own-tenant
+    // visibility positive is proven from the Sunrise side — with a
+    // LOWERCASE q, which also pins the PG ILIKE case-insensitivity the
+    // 8A-C2 wave restored — while the cross-tenant case stays invisible.
+    const aRes = await as(fx.users.principalA.email, '/api/search?q=aarav')
+    expect(aRes.status).toBe(200)
+    const aBody = (await aRes.json()) as { data: { results: unknown[] } }
+    expect(aBody.data.results.length).toBeGreaterThan(0)
+    expect(JSON.stringify(aBody)).toContain('Aarav Mehta') // the Sunrise probe student
+
+    const bRes = await as(fx.users.principalB.email, '/api/search?q=Aarav')
+    expect(bRes.status).toBe(200)
+    const bBody = (await bRes.json()) as { data: { results: unknown[] } }
+    expect(bBody.data.results.length).toBe(0)
   }, T)
 })
 
@@ -747,7 +811,29 @@ describe('PHASE 2 · cleanup', () => {
   test('purge fixture sessions created by this run', async () => {
     const emails = Object.values(fx.users).map((u) => u.email)
     const users = await db.user.findMany({ where: { email: { in: emails } }, select: { id: true } })
-    const res = await db.session.deleteMany({ where: { userId: { in: users.map((u) => u.id) }, token: { in: Object.values(tokens) } } })
+    const res = await db.session.deleteMany({
+      where: {
+        userId: { in: users.map((u) => u.id) },
+        tokenHash: { in: Object.values(tokens).map(hashSessionToken) },
+      },
+    })
     expect(res.count).toBeGreaterThanOrEqual(0)
   }, T)
 })
+
+// Phase 8A — the clean tenant is honest-zero (mission §7). Two B-side
+// probes need FUNCTIONAL teacher/student records mid-test; they are
+// created and destroyed INSIDE those tests only, so every other
+// assertion still sees the clean school at zero.
+async function withBsideTeacherRecords(fn: () => Promise<void>): Promise<void> {
+  const teacherExisted = !!(await db.teacher.findFirst({ where: { userId: fx.users.teacherB.id } }))
+  const studentExisted = !!(await db.student.findFirst({ where: { userId: fx.users.studentB.id } }))
+  if (!teacherExisted) await db.teacher.create({ data: { schoolId: fx.schoolB.id, userId: fx.users.teacherB.id } })
+  if (!studentExisted) await db.student.create({ data: { schoolId: fx.schoolB.id, userId: fx.users.studentB.id, admissionNo: 'TI-B-FIXTURE' } })
+  try {
+    await fn()
+  } finally {
+    if (!studentExisted) await db.student.deleteMany({ where: { userId: fx.users.studentB.id } })
+    if (!teacherExisted) await db.teacher.deleteMany({ where: { userId: fx.users.teacherB.id } })
+  }
+}

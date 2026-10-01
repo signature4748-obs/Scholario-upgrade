@@ -22,6 +22,7 @@
  *   ops   ops@scholario.io / ops12345        (limited: no billing/provision/admins/settings)
  */
 import { PrismaClient } from '@prisma/client'
+import { assertSeedable } from './seed-guard'
 
 const db = new PrismaClient()
 
@@ -75,6 +76,8 @@ async function grant(adminId: string, keys: readonly string[]) {
 }
 
 async function main() {
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-platform')
   // PIH-4a — production hard gate: this seed plants dev-preview platform
   // admins with FIXED demo TOTP secrets (computable by anyone holding the
   // repo). It must never run against a production environment.

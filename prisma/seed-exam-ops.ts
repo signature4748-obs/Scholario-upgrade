@@ -22,6 +22,8 @@
  * Run: bun run db:seed-exam-ops
  */
 import { PrismaClient } from '@prisma/client'
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG } from './seed-identity'
 
 const db = new PrismaClient()
 
@@ -56,8 +58,18 @@ interface PaperPlan {
 }
 
 async function main() {
-  const school = await db.school.findFirst({ select: { id: true, name: true } })
-  if (!school) throw new Error('No school found')
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-exam-ops')
+
+  // Phase 8A: target the DEMO tenant explicitly. The legacy "first school
+  // in the DB" heuristic broke once the corpus grew a second tenant
+  // (green-valley) — this dataset (Grade 9/10, Rohan/Kavita/Priya/Arjun,
+  // Mid-Term/PA1/UT2/Final) is demo-corpus-specific by construction.
+  const school = await db.school.findUnique({
+    where: { slug: DEMO_SCHOOL_SLUG },
+    select: { id: true, name: true },
+  })
+  if (!school) throw new Error(`Demo school (${DEMO_SCHOOL_SLUG}) not found`)
   console.log(`School: ${school.name}`)
 
   // ── Ground truth: classes, subjects, teachers, students ────────────────

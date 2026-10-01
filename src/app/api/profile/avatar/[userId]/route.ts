@@ -1,8 +1,9 @@
-import { readFile, stat } from 'fs/promises'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { avatarPath, AVATAR_EXT_TO_MIME, isSafeAvatarFileName } from '@/lib/avatar'
+import { AppError } from '@/lib/security/errors'
+import { storageDownload } from '@/lib/storage/supabase'
+import { avatarLocation, AVATAR_EXT_TO_MIME, isSafeAvatarFileName } from '@/lib/avatar'
 
 export const runtime = 'nodejs'
 
@@ -14,6 +15,12 @@ export const runtime = 'nodejs'
  * avatar when they ARE that user, share the school, or are the platform
  * super admin — the same trust boundary the rest of the ERP uses for
  * cross-role identity surfaces. Never public, never cached cross-user.
+ *
+ * Phase 8A (8A-C9b): the bytes are read from the PRIVATE 'school-media'
+ * bucket at the deterministic `avatars/<schoolId-or-'avatars'>/<fileName>`
+ * path (same derivation the POST route writes). A missing object keeps
+ * the honest 404 (row exists but bytes gone); the byte-streaming
+ * response contract (status/headers) is identical to the disk era.
  */
 export async function GET(
   _req: Request,
@@ -36,11 +43,19 @@ export async function GET(
       (target.schoolId !== null && viewer.schoolId === target.schoolId)
     if (!allowed) return forbidden()
 
-    const filePath = avatarPath(target.avatar)
-    const info = await stat(filePath).catch(() => null)
-    if (!info || !info.isFile()) return notFound()
-
-    const bytes = await readFile(filePath)
+    // ── Storage read (Phase 8A): authorization has passed; derive the
+    // object path from the target row exactly like the POST route does.
+    const location = avatarLocation(target.schoolId, target.avatar)
+    let bytes: ArrayBuffer
+    try {
+      bytes = await storageDownload(location.bucket, location.path)
+    } catch (e) {
+      // Row exists but the object is gone — honest 404, never a 500.
+      if (e instanceof AppError && (e.code === 'RESOURCE_NOT_FOUND' || e.status === 404)) {
+        return notFound()
+      }
+      throw e
+    }
     const ext = target.avatar.split('.').pop() ?? ''
     const mime = AVATAR_EXT_TO_MIME[ext] ?? 'application/octet-stream'
 

@@ -61,8 +61,11 @@ export async function DELETE() {
     enforceRateLimit(`rl:sessrevoke:${user.id}`, RATE_LIMITS.sessionRevoke)
 
     const current = await getCurrentSession()
+    // PHASE 8A — the Session row carries tokenHash, not the raw token; the
+    // current row (already resolved by hashing the presented token) is the
+    // one to keep.
     const revoked = await db.session.deleteMany({
-      where: { userId: user.id, ...(current ? { token: { not: current.token } } : {}) },
+      where: { userId: user.id, ...(current ? { tokenHash: { not: current.tokenHash } } : {}) },
     })
 
     await db.activityLog.create({

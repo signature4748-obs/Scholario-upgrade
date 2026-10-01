@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -53,6 +54,14 @@ export async function GET(req: NextRequest) {
       },
       take: 100,
     })
-    return settlements
+    // Phase 8A: Settlement money columns are Prisma.Decimal — emit
+    // JSON numbers (grossAmount/fees/netAmount + nested txn amounts).
+    return settlements.map((s) => ({
+      ...s,
+      grossAmount: num(s.grossAmount),
+      fees: num(s.fees),
+      netAmount: num(s.netAmount),
+      transactions: s.transactions.map((t) => ({ ...t, amount: num(t.amount) })),
+    }))
   })
 }

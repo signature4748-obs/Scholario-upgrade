@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readFile } from 'fs/promises'
-import path from 'path'
 import { db } from '@/lib/db'
 import { newRequestId } from '@/lib/security/errors'
 import { clientIpFromHeaders, checkRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 import { isValidStoredFileId, WEBSITE_UPLOAD_POLICY } from '@/lib/security/upload'
 import { notificationVisibilityWhere } from '@/lib/notices'
+import {
+  storedObjectLocation,
+  storageDownload,
+} from '@/lib/storage/supabase'
 
 export const runtime = 'nodejs'
-
-const UPLOAD_DIR = path.join(process.cwd(), 'db', 'uploads', 'website')
 
 /**
  * GET /api/public/website/media/<fileId> — PUBLIC website image bytes.
@@ -22,6 +22,18 @@ const UPLOAD_DIR = path.join(process.cwd(), 'db', 'uploads', 'website')
  *     of an ACTIVE school).
  * Unpublished/draft/private uploads fail-safe 404. No school data beyond
  * the image bytes is ever exposed. Anonymous per-IP rate limited.
+ *
+ * Phase 8A (8A-C9) — the bytes live in the PUBLIC 'public-media' bucket
+ * (`website/<schoolId>/<fileId>`). This gate route still decides WHO
+ * may fetch: when (and only when) the published-reference check passes,
+ * the route REDIRECTS (302) to the object's public URL. TRUST MODEL
+ * (documented per mission): the public URL is unguessable-ish — the
+ * fileId is an opaque server-minted id — but PUBLIC once known; that is
+ * the same trust model the local-disk public media had (the gate has
+ * always been the only thing standing between an unpublished upload and
+ * the world). The public Cache-Control policy is preserved on the
+ * redirect; existence is probed first so "row exists but bytes gone"
+ * keeps the honest 404.
  */
 export async function GET(
   req: NextRequest,
@@ -75,27 +87,37 @@ export async function GET(
       return new NextResponse('Not found', { status: 404, headers: { 'X-Request-Id': requestId } })
     }
 
-    let bytes: Buffer
-    try {
-      bytes = await readFile(path.join(UPLOAD_DIR, fileId))
-    } catch {
+    // ── Gate passed (Phase 8A): stream the object bytes SAME-ORIGIN.
+    // The earlier 302-redirect design broke the Next <Image> optimizer
+    // (/_next/image fetches the redirect target — a remote Supabase host
+    // that is neither allow-listed nor resolvable by the optimizer —
+    // HTTP 400 "not a valid image", QA 8A-QA/B8). Streaming the bytes
+    // through this gate keeps the privacy model AND makes the route a
+    // plain same-origin image source the optimizer can consume. The
+    // public Cache-Control policy is preserved on the byte response.
+    const location = storedObjectLocation('website', file.schoolId, fileId)
+    const bytes = await storageDownload(location.bucket, location.path).catch(() => null)
+    if (!bytes || bytes.byteLength === 0) {
       return new NextResponse('Not found', { status: 404, headers: { 'X-Request-Id': requestId } })
     }
 
-    const ext = fileId.split('.').pop()?.toLowerCase()
-    const mime =
+    // Content type from the extension (the route's ext allowlist already
+    // gated the id; the bucket objects were magic-byte-validated at upload).
+    const ext = fileId.toLowerCase().split('.').pop() ?? ''
+    const contentType =
       ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
 
-    return new NextResponse(new Uint8Array(bytes), {
+    const res = new NextResponse(Buffer.from(bytes), {
       status: 200,
       headers: {
-        'Content-Type': mime,
-        'Content-Length': String(bytes.length),
+        'Content-Type': contentType,
         'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
         'X-Content-Type-Options': 'nosniff',
+        'Content-Length': String(bytes.byteLength),
         'X-Request-Id': requestId,
       },
     })
+    return res
   } catch {
     return new NextResponse('Unavailable', { status: 503, headers: { 'X-Request-Id': requestId } })
   }

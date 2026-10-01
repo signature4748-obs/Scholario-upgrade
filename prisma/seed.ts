@@ -1,11 +1,16 @@
+import { assertSeedable } from './seed-guard'
+import { CLEAN_SCHOOL_SLUG, DEMO_SCHOOL_CODE, DEMO_SCHOOL_DOMAIN, DEMO_SCHOOL_SLUG } from './seed-identity'
 import { db } from '../src/lib/db'
 import { hashPassword } from '../src/lib/auth'
 import { mintReceiptNo } from '../src/lib/fee-workflow'
 
 async function main() {
-  // PIH-4a — production hard gate: this seed DELETES every table and plants
-  // demo credentials (principal@demoschool.edu / password123 …). It must
-  // never run against a production environment.
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed')
+  // PIH-4a — production hard gate (kept: belt & braces alongside the
+  // shared guard): this seed DELETES every demo-tenant table and plants
+  // demo credentials (principal@sunriseacademy.edu / password123 …).
+  // It must never run against a production environment.
   if (process.env.NODE_ENV === 'production') {
     console.error(
       '[seed] Refusing to run: NODE_ENV=production. The seed suite wipes all data and installs demo credentials.',
@@ -14,35 +19,59 @@ async function main() {
   }
   console.log('🌱 Seeding database...')
 
+  // ── Phase 8A: wipe is scoped to the DEMO tenant plane ────────────────
+  // Deterministic re-run: everything EXCEPT the clean school (green-valley,
+  // planted by seed-clean.ts) and its users is hard-wiped and recreated —
+  // `bun run seed:demo` resets the demo tenant to canonical state while
+  // the clean tenant keeps its honest zeros. When the clean school is
+  // absent the wipe is the legacy full reset. School-scoped tables that
+  // are not in the list below (study materials, rooms, grade scales,
+  // conversations, exam marks, …) die via the School ON DELETE CASCADE
+  // when the school rows go.
+  const cleanSchool = await db.school.findUnique({ where: { slug: CLEAN_SCHOOL_SLUG } })
+  const cleanUserIds = cleanSchool
+    ? (await db.user.findMany({ where: { schoolId: cleanSchool.id }, select: { id: true } })).map((u) => u.id)
+    : []
+  const notCleanSchoolRows = cleanSchool ? { schoolId: { not: cleanSchool.id } } : {}
+  // ActivityLog.schoolId is nullable — null rows (platform events) keep
+  // the legacy wipe semantics (deleted).
+  const notCleanActivity = cleanSchool ? { OR: [{ schoolId: { not: cleanSchool.id } }, { schoolId: null }] } : {}
+  const notCleanUsers = cleanSchool ? { id: { notIn: cleanUserIds } } : {}
+  const notCleanSessions = cleanSchool ? { userId: { notIn: cleanUserIds } } : {}
+  const notCleanSchools = cleanSchool ? { id: { not: cleanSchool.id } } : {}
+
   // Clean (order matters for FK). FeeTransaction is the canonical ledger
   // mirror of Payment — the base seed now writes both (PIH-4b parity), so
   // the full reset clears both together.
-  await db.feeTransaction.deleteMany()
-  await db.payment.deleteMany()
+  await db.feeTransaction.deleteMany({ where: notCleanSchoolRows })
+  await db.payment.deleteMany({ where: notCleanSchoolRows })
+  // BookIssue carries no schoolId (tenant-derived via book→school): the
+  // clean school has no library books and therefore no issues — the
+  // unscoped delete keeps the legacy full-wipe semantics.
   await db.bookIssue.deleteMany()
-  await db.libraryBook.deleteMany()
-  await db.notification.deleteMany()
-  await db.assignment.deleteMany()
+  await db.libraryBook.deleteMany({ where: notCleanSchoolRows })
+  await db.notification.deleteMany({ where: notCleanSchoolRows })
+  await db.assignment.deleteMany({ where: notCleanSchoolRows })
   await db.result.deleteMany()
-  await db.examPaper.deleteMany()
-  await db.questionBank.deleteMany()
-  await db.exam.deleteMany()
-  await db.attendance.deleteMany()
-  await db.timetable.deleteMany()
-  await db.fee.deleteMany()
-  await db.vehicle.deleteMany()
-  await db.route.deleteMany()
-  await db.driver.deleteMany()
-  await db.teacher.deleteMany()
-  await db.student.deleteMany()
-  await db.subject.deleteMany()
-  await db.class.deleteMany()
-  await db.activityLog.deleteMany()
-  await db.session.deleteMany()
-  await db.message.deleteMany()
-  await db.schoolEvent.deleteMany()
-  await db.user.deleteMany()
-  await db.school.deleteMany()
+  await db.examPaper.deleteMany({ where: notCleanSchoolRows })
+  await db.questionBank.deleteMany({ where: notCleanSchoolRows })
+  await db.exam.deleteMany({ where: notCleanSchoolRows })
+  await db.attendance.deleteMany({ where: notCleanSchoolRows })
+  await db.timetable.deleteMany({ where: notCleanSchoolRows })
+  await db.fee.deleteMany({ where: notCleanSchoolRows })
+  await db.vehicle.deleteMany({ where: notCleanSchoolRows })
+  await db.route.deleteMany({ where: notCleanSchoolRows })
+  await db.driver.deleteMany({ where: notCleanSchoolRows })
+  await db.teacher.deleteMany({ where: notCleanSchoolRows })
+  await db.student.deleteMany({ where: notCleanSchoolRows })
+  await db.subject.deleteMany({ where: notCleanSchoolRows })
+  await db.class.deleteMany({ where: notCleanSchoolRows })
+  await db.activityLog.deleteMany({ where: notCleanActivity })
+  await db.session.deleteMany({ where: notCleanSessions })
+  await db.message.deleteMany({ where: notCleanSchoolRows })
+  await db.schoolEvent.deleteMany({ where: notCleanSchoolRows })
+  await db.user.deleteMany({ where: notCleanUsers })
+  await db.school.deleteMany({ where: notCleanSchools })
   await db.platformSetting.deleteMany()
 
   // Initialize Platform Settings
@@ -65,17 +94,17 @@ async function main() {
     },
   })
 
-  // ---------------- DEMO SCHOOL OF SCHOLARIO ----------------
+  // ---------------- SUNRISE ACADEMY (demo tenant) ----------------
   const demoSchool = await db.school.create({
     data: {
-      name: 'Demo School of Scholario',
-      slug: 'demo-school',
-      code: 'DEMO',
-      domain: 'demoschool.scholario.app',
+      name: 'Sunrise Academy',
+      slug: DEMO_SCHOOL_SLUG,
+      code: DEMO_SCHOOL_CODE,
+      domain: DEMO_SCHOOL_DOMAIN,
       address: '100 Knowledge Parkway, Sector 47',
       city: 'Gurugram',
       phone: '+91 124 4567 800',
-      email: 'office@demoschool.edu',
+      email: 'office@sunriseacademy.edu',
       themeColor: '#0f766e',
       accentColor: '#f59e0b',
       plan: 'ENTERPRISE',
@@ -100,19 +129,19 @@ async function main() {
     })
   }
 
-  // ---------------- DEMO SCHOOL USERS ----------------
-  const demoPrincipal = await mkUser(demoSchool.id, 'principal@demoschool.edu', 'Dr. Sarah Jenkins', 'PRINCIPAL', '+91 124 1111 2222')
-  const _demoMgmt = await mkUser(demoSchool.id, 'management@demoschool.edu', 'Mr. Rajesh Mehta', 'MANAGEMENT', '+91 124 3333 4444')
-  const demoTeacher1 = await mkUser(demoSchool.id, 'teacher1@demoschool.edu', 'Mrs. Kavita Sharma', 'TEACHER', '+91 124 5555 6666')
-  const demoTeacher2 = await mkUser(demoSchool.id, 'teacher2@demoschool.edu', 'Mr. Arjun Nair', 'TEACHER', '+91 124 7777 8888')
-  const demoTeacher3 = await mkUser(demoSchool.id, 'teacher3@demoschool.edu', 'Ms. Priya Iyer', 'TEACHER', '+91 124 9999 0000')
-  const demoDriver1 = await mkUser(demoSchool.id, 'driver1@demoschool.edu', 'Mr. Suresh Kumar', 'DRIVER', '+91 124 1212 3434')
-  const demoParent1 = await mkUser(demoSchool.id, 'parent1@demoschool.edu', 'Mr. Vikram Desai', 'PARENT', '+91 124 2323 4545')
+  // ---------------- DEMO SCHOOL USERS (Sunrise Academy) ----------------
+  const demoPrincipal = await mkUser(demoSchool.id, 'principal@sunriseacademy.edu', 'Dr. Sarah Jenkins', 'PRINCIPAL', '+91 124 1111 2222')
+  const _demoMgmt = await mkUser(demoSchool.id, 'management@sunriseacademy.edu', 'Mr. Rajesh Mehta', 'MANAGEMENT', '+91 124 3333 4444')
+  const demoTeacher1 = await mkUser(demoSchool.id, 'teacher1@sunriseacademy.edu', 'Mrs. Kavita Sharma', 'TEACHER', '+91 124 5555 6666')
+  const demoTeacher2 = await mkUser(demoSchool.id, 'teacher2@sunriseacademy.edu', 'Mr. Arjun Nair', 'TEACHER', '+91 124 7777 8888')
+  const demoTeacher3 = await mkUser(demoSchool.id, 'teacher3@sunriseacademy.edu', 'Ms. Priya Iyer', 'TEACHER', '+91 124 9999 0000')
+  const demoDriver1 = await mkUser(demoSchool.id, 'driver1@sunriseacademy.edu', 'Mr. Suresh Kumar', 'DRIVER', '+91 124 1212 3434')
+  const demoParent1 = await mkUser(demoSchool.id, 'parent1@sunriseacademy.edu', 'Mr. Vikram Desai', 'PARENT', '+91 124 2323 4545')
 
   // Teachers
-  await db.teacher.create({ data: { schoolId: demoSchool.id, userId: demoTeacher1.id, employeeId: 'DEMO-T-001', department: 'Mathematics', qualification: 'M.Sc, B.Ed', subjects: 'MATH' } })
-  await db.teacher.create({ data: { schoolId: demoSchool.id, userId: demoTeacher2.id, employeeId: 'DEMO-T-002', department: 'Science', qualification: 'M.Sc Physics, B.Ed', subjects: 'PHY' } })
-  await db.teacher.create({ data: { schoolId: demoSchool.id, userId: demoTeacher3.id, employeeId: 'DEMO-T-003', department: 'English', qualification: 'M.A English, B.Ed', subjects: 'ENG' } })
+  await db.teacher.create({ data: { schoolId: demoSchool.id, userId: demoTeacher1.id, employeeId: 'SRA-T-001', department: 'Mathematics', qualification: 'M.Sc, B.Ed', subjects: 'MATH' } })
+  await db.teacher.create({ data: { schoolId: demoSchool.id, userId: demoTeacher2.id, employeeId: 'SRA-T-002', department: 'Science', qualification: 'M.Sc Physics, B.Ed', subjects: 'PHY' } })
+  await db.teacher.create({ data: { schoolId: demoSchool.id, userId: demoTeacher3.id, employeeId: 'SRA-T-003', department: 'English', qualification: 'M.A English, B.Ed', subjects: 'ENG' } })
 
   // Driver
   const demoDriverRec = await db.driver.create({ data: { schoolId: demoSchool.id, userId: demoDriver1.id, licenseNo: 'HR2620190001234', phone: '+91 124 1212 3434' } })
@@ -143,8 +172,8 @@ async function main() {
     const ln = studentLastNames[i % studentLastNames.length]
     const name = `${fn} ${ln}`
     const cls = i < 10 ? demoClass9 : demoClass10
-    const email = `student${i + 1}@demoschool.edu`
-    const parentEmail = `parent${i + 1}@demoschool.edu`
+    const email = `student${i + 1}@sunriseacademy.edu`
+    const parentEmail = `parent${i + 1}@sunriseacademy.edu`
     const parentName = `${ln} Family`
     const parentUser = i === 0 ? demoParent1 : await mkUser(demoSchool.id, parentEmail, parentName, 'PARENT', '+91 124 9000 ' + (1000 + i))
     const u = await mkUser(demoSchool.id, email, name, 'STUDENT', '+91 124 8000 ' + (2000 + i))
@@ -154,7 +183,7 @@ async function main() {
         userId: u.id,
         classId: cls.id,
         rollNo: String(i + 1).padStart(2, '0'),
-        admissionNo: 'DEMO-2026-' + String(i + 1).padStart(4, '0'),
+        admissionNo: 'SRA-2026-' + String(i + 1).padStart(4, '0'),
         guardianId: parentUser.id,
         guardianName: parentName,
         guardianPhone: parentUser.phone,
@@ -293,12 +322,13 @@ async function main() {
   }
 
   // Activity Log
-  await db.activityLog.create({ data: { schoolId: demoSchool.id, userId: demoPrincipal.id, action: 'SCHOOL_SETUP', detail: 'Demo School of Scholario configured for demonstration.' } })
+  await db.activityLog.create({ data: { schoolId: demoSchool.id, userId: demoPrincipal.id, action: 'SCHOOL_SETUP', detail: 'Sunrise Academy configured for demonstration.' } })
 
   // ---------------- SCHOLARIO-OS DEMO LOGIN USERS ----------------
   // These match the credentials exposed on the public login page (login-page.tsx).
-  // They are additional to the @demoschool.edu accounts above so the demo role
+  // They are additional to the @sunriseacademy.edu accounts above so the demo role
   // cards work end-to-end with the real auth API.
+  // (Phase 8A rebrand: the legacy Greenwood showcase identity is now Sunrise.)
   await db.user.upsert({
     where: { email: 'admin@scholario.cloud' },
     update: {},
@@ -312,12 +342,12 @@ async function main() {
     },
   })
 
-  const greenwoodPrincipal = await db.user.upsert({
-    where: { email: 'principal@greenwood.edu.in' },
+  const sunrisePrincipal = await db.user.upsert({
+    where: { email: 'ananya.iyer@sunriseacademy.edu' },
     update: {},
     create: {
       schoolId: demoSchool.id,
-      email: 'principal@greenwood.edu.in',
+      email: 'ananya.iyer@sunriseacademy.edu',
       passwordHash: hashPassword('principal123'),
       name: 'Dr. Ananya Iyer',
       role: 'PRINCIPAL',
@@ -326,12 +356,12 @@ async function main() {
     },
   })
 
-  const greenwoodTeacher = await db.user.upsert({
-    where: { email: 'rohan.mehta@greenwood.edu.in' },
+  const sunriseTeacher = await db.user.upsert({
+    where: { email: 'rohan.mehta@sunriseacademy.edu' },
     update: {},
     create: {
       schoolId: demoSchool.id,
-      email: 'rohan.mehta@greenwood.edu.in',
+      email: 'rohan.mehta@sunriseacademy.edu',
       passwordHash: hashPassword('teacher123'),
       name: 'Rohan Mehta',
       role: 'TEACHER',
@@ -340,24 +370,24 @@ async function main() {
     },
   })
   await db.teacher.upsert({
-    where: { userId: greenwoodTeacher.id },
+    where: { userId: sunriseTeacher.id },
     update: {},
     create: {
       schoolId: demoSchool.id,
-      userId: greenwoodTeacher.id,
-      employeeId: 'GWS-T-014',
+      userId: sunriseTeacher.id,
+      employeeId: 'SRA-T-014',
       department: 'Mathematics',
       qualification: 'M.Sc Mathematics, B.Ed',
       subjects: 'MATH',
     },
   })
 
-  const greenwoodStudent = await db.user.upsert({
-    where: { email: 'aarav.sharma@greenwood.edu.in' },
+  const sunriseStudent = await db.user.upsert({
+    where: { email: 'aarav.sharma@sunriseacademy.edu' },
     update: {},
     create: {
       schoolId: demoSchool.id,
-      email: 'aarav.sharma@greenwood.edu.in',
+      email: 'aarav.sharma@sunriseacademy.edu',
       passwordHash: hashPassword('student123'),
       name: 'Aarav Sharma',
       role: 'STUDENT',
@@ -366,14 +396,14 @@ async function main() {
     },
   })
   await db.student.upsert({
-    where: { userId: greenwoodStudent.id },
+    where: { userId: sunriseStudent.id },
     update: {},
     create: {
       schoolId: demoSchool.id,
-      userId: greenwoodStudent.id,
+      userId: sunriseStudent.id,
       classId: demoClass9.id,
       rollNo: '18',
-      admissionNo: 'GWS2026018',
+      admissionNo: 'SRA2026018',
       guardianName: 'Rahul Sharma',
       guardianPhone: '+91 98100 12345',
       dob: '2015-04-12',
@@ -387,18 +417,21 @@ async function main() {
   await db.activityLog.create({
     data: {
       schoolId: demoSchool.id,
-      userId: greenwoodPrincipal.id,
+      userId: sunrisePrincipal.id,
       action: 'SCHOOL_SETUP',
-      detail: 'Greenwood demo credentials linked to Demo School of Scholario for the SCHOLARIO-OS public showcase.',
+      detail: 'Sunrise showcase credentials linked to Sunrise Academy for the SCHOLARIO-OS public showcase.',
     },
   })
 
   console.log('✅ Seed complete!')
   console.log('   Super Admin (legacy): admin@erpsuite.io / admin123')
   console.log('   Super Admin (showcase): admin@scholario.cloud / admin123')
-  console.log('   Demo Principal: principal@demoschool.edu / password123')
-  console.log('   Demo Student1: student1@demoschool.edu / password123')
-  console.log('   Demo Teacher1: teacher1@demoschool.edu / password123')
+  console.log('   Demo Principal: principal@sunriseacademy.edu / password123')
+  console.log('   Demo Student1: student1@sunriseacademy.edu / password123')
+  console.log('   Demo Teacher1: teacher1@sunriseacademy.edu / password123')
+  console.log('   Showcase Principal: ananya.iyer@sunriseacademy.edu / principal123')
+  console.log('   Showcase Teacher: rohan.mehta@sunriseacademy.edu / teacher123')
+  console.log('   Showcase Student: aarav.sharma@sunriseacademy.edu / student123')
 }
 
 main()

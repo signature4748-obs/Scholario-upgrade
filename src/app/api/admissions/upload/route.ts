@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomBytes } from 'crypto'
-import { mkdir, writeFile, unlink } from 'fs/promises'
-import path from 'path'
 import { getCurrentUser } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { auditEvent } from '@/lib/security/audit'
+import { storageUpload, storageDelete } from '@/lib/storage/supabase'
 import {
   ADMISSION_UPLOAD_POLICY,
   sniffFileType,
@@ -40,6 +39,13 @@ export const runtime = 'nodejs'
  * ANY school's PRINCIPAL could read/delete/sign-URL any other school's
  * admission document, because the signed token bound scope+fileId but
  * never a tenant). Upload requires a school-scoped session.
+ *
+ * Phase 8A (8A-C9): the byte destination is now Supabase Storage
+ * (PRIVATE 'school-media' bucket, object path
+ * `admissions/<schoolId>/<opaque-fileId>`, deterministic from the
+ * registry row). The validation stack above (auth, rate limit,
+ * early-413, magic bytes, size ceiling, registry, audit) is
+ * IDENTICAL; only the write target changed. No local-disk fallback.
  */
 export async function POST(req: NextRequest) {
   const requestId = newRequestId()
@@ -101,15 +107,23 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    await mkdir(UPLOAD_DIR, { recursive: true })
-    // Server-minted opaque id — client filenames never touch the disk.
+    // Server-minted opaque id — client filenames never name an object.
+    // Phase 8A: bytes go to Supabase Storage (x-upsert, PRIVATE bucket);
+    // the object path is `admissions/<schoolId>/<fileId>`, derived from
+    // the registry triple the serving routes re-derive.
     const fileId = `${Date.now().toString(36)}-${randomBytes(6).toString('hex')}.${EXT_BY_TYPE[sniffed]}`
-    await writeFile(path.join(UPLOAD_DIR, fileId), bytes)
+    const stored = await storageUpload(
+      'admissions',
+      fileId,
+      bytes,
+      MIME_BY_TYPE[sniffed],
+      user.schoolId,
+    )
 
     // Phase 2 (3-c V5/V10) — register the document's SCHOOL ownership.
     // The registry row is what the read/delete/token-mint routes verify;
     // failure to register means the file can never be managed again, so
-    // a failed registration fails the upload (no orphan PII on disk).
+    // a failed registration fails the upload (no orphan PII in storage).
     try {
       await db.uploadedFile.create({
         data: {
@@ -121,7 +135,7 @@ export async function POST(req: NextRequest) {
         },
       })
     } catch {
-      await unlink(path.join(UPLOAD_DIR, fileId)).catch(() => {})
+      await storageDelete(stored.bucket, stored.path).catch(() => {})
       return NextResponse.json(
         { success: false, error: 'Upload failed. Please try again.' },
         { status: 500 },
@@ -133,7 +147,7 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       action: 'FILE_UPLOADED',
       requestId,
-      detail: `Admission document stored (${sniffed}, ${file.size} bytes) as ${fileId}`,
+      detail: `Admission document stored (${sniffed}, ${file.size} bytes) as ${fileId} → supabase://${stored.bucket}/${stored.path}`,
     }).catch(() => {})
 
     return NextResponse.json({
@@ -150,5 +164,3 @@ export async function POST(req: NextRequest) {
     )
   }
 }
-
-const UPLOAD_DIR = path.join(process.cwd(), 'db', 'uploads', 'admissions')

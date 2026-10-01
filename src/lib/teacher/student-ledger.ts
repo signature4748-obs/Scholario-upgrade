@@ -4,7 +4,13 @@
  * Student Profile, Fees & Payments). Pure functions: no db import, no
  * client/server coupling — the routes fetch rows their own (batched) way
  * and every module renders the SAME numbers (master task §11/§22).
+ *
+ * Phase 8A: input rows arrive with Prisma.Decimal money fields (Postgres
+ * NUMERIC). All arithmetic is exact Decimal math; the DTO boundary emits
+ * JSON numbers (num()) so client renderers are unchanged.
  */
+
+import { num, dec, minDec, type MoneyInput } from '@/lib/money'
 
 // ── DTO types (server-computed, client-rendered) ─────────────────────
 
@@ -66,8 +72,8 @@ export interface AttendanceSummaryDto {
 interface FeeRowInput {
   id: string
   title: string
-  amount: number
-  paid: number
+  amount: MoneyInput
+  paid: MoneyInput
   dueDate: Date | null
   method: string | null
 }
@@ -75,7 +81,7 @@ interface FeeRowInput {
 interface LegacyPaymentInput {
   id: string
   feeId: string | null
-  amount: number
+  amount: MoneyInput
   method: string | null
   status: string
   createdAt: Date
@@ -86,7 +92,7 @@ interface TxnRowInput {
   id: string
   feeHeadName: string | null
   feeId: string | null
-  amount: number
+  amount: MoneyInput
   method: string
   status: string
   source: string | null
@@ -132,21 +138,22 @@ export function deriveStudentFees(
   }
   const feeTitleByFeeId = new Map(feeRows.map((f) => [f.id, f.title]))
   const items: FeeItemDto[] = feeRows.map((f) => {
-    const outstanding = Math.max(0, f.amount - f.paid)
+    const outstanding = dec(f.amount).minus(f.paid)
+    const outstandingNum = outstanding.lessThan(0) ? 0 : num(outstanding)
     const status: FeeItemDto['status'] =
-      outstanding <= 0
+      outstanding.lessThanOrEqualTo(0)
         ? 'PAID'
         : f.dueDate && f.dueDate < endOfToday
           ? 'OVERDUE'
-          : f.paid > 0
+          : dec(f.paid).greaterThan(0)
             ? 'PARTIAL'
             : 'UNPAID'
     return {
       id: f.id,
       title: f.title,
-      amount: f.amount,
-      paid: f.paid,
-      outstanding,
+      amount: num(f.amount),
+      paid: num(f.paid),
+      outstanding: outstandingNum,
       status,
       dueDate: f.dueDate ? f.dueDate.toISOString().slice(0, 10) : null,
       method: f.method,
@@ -160,7 +167,7 @@ export function deriveStudentFees(
         id: p.id,
         txnId: null,
         feeTitle: p.feeId ? feeTitleByFeeId.get(p.feeId) ?? f.title : f.title,
-        amount: p.amount,
+        amount: num(p.amount),
         method: p.method,
         status: p.status,
         createdAt: p.createdAt.toISOString(),
@@ -176,7 +183,7 @@ export function deriveStudentFees(
     id: t.id,
     txnId: t.id,
     feeTitle: t.feeHeadName ?? (t.feeId ? feeTitleByFeeId.get(t.feeId) ?? 'Fee' : 'Fee'),
-    amount: t.amount,
+    amount: num(t.amount),
     method: t.method,
     status: t.status,
     createdAt: (t.collectedAt ?? t.createdAt).toISOString(),
@@ -190,9 +197,12 @@ export function deriveStudentFees(
   const payments = [...txnPayments, ...legacyPayments]
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
     .slice(0, 12)
-  const outstanding = items.reduce((sum, i) => sum + i.outstanding, 0)
+  const outstanding = feeRows.reduce((sum, f) => {
+    const o = dec(f.amount).minus(f.paid)
+    return sum.plus(o.lessThan(0) ? dec(0) : o)
+  }, dec(0))
   const status: StudentFeesDto['status'] =
-    outstanding <= 0
+    outstanding.lessThanOrEqualTo(0)
       ? 'PAID'
       : items.some((i) => i.status === 'OVERDUE')
         ? 'OVERDUE'
@@ -201,12 +211,14 @@ export function deriveStudentFees(
           : 'UNPAID'
   return {
     status,
-    totalBilled: feeRows.reduce((sum, f) => sum + f.amount, 0),
-    totalPaid: feeRows.reduce((sum, f) => sum + Math.min(f.amount, f.paid), 0),
-    outstanding,
-    awaitingVerification: txnRows
-      .filter((t) => PENDING_STATUSES.includes(t.status))
-      .reduce((sum, t) => sum + t.amount, 0),
+    totalBilled: num(feeRows.reduce((sum, f) => sum.plus(f.amount), dec(0))),
+    totalPaid: num(feeRows.reduce((sum, f) => sum.plus(minDec(f.amount, f.paid)), dec(0))),
+    outstanding: num(outstanding),
+    awaitingVerification: num(
+      txnRows
+        .filter((t) => PENDING_STATUSES.includes(t.status))
+        .reduce((sum, t) => sum.plus(t.amount), dec(0)),
+    ),
     lastPaymentAt: payments[0]?.createdAt ?? null,
     items: items.slice(0, 8),
     payments,

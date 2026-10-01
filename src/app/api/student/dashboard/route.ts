@@ -10,6 +10,7 @@ import {
   type LearningMaterialCard,
 } from '@/lib/learning'
 import { toStudyMaterialMeta } from '@/lib/study-materials'
+import { num, dec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -233,8 +234,8 @@ export async function GET(_req: NextRequest) {
           where: { studentId: ctx.studentId },
           orderBy: [{ dueDate: 'asc' }],
         })
-        const due = rows.filter((r) => r.amount - r.paid > 0.005)
-        const outstanding = Math.round(due.reduce((s, r) => s + (r.amount - r.paid), 0))
+        const due = rows.filter((r) => dec(r.amount).minus(r.paid).greaterThan(0))
+        const outstanding = Math.round(num(due.reduce((s, r) => s.plus(dec(r.amount).minus(r.paid)), dec(0))))
         const nearestDue = due.find((r) => r.dueDate)?.dueDate?.toISOString() ?? null
 
         // Round-7 — the principal's latest fee-reminder message for THIS
@@ -268,7 +269,7 @@ export async function GET(_req: NextRequest) {
           nearestDue,
           items: due.slice(0, 3).map((r) => ({
             title: r.title,
-            balance: Math.round(r.amount - r.paid),
+            balance: Math.round(num(dec(r.amount).minus(r.paid))),
             dueDate: r.dueDate?.toISOString() ?? null,
           })),
           reminder,

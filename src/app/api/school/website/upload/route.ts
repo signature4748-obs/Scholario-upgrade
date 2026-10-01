@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomBytes } from 'crypto'
-import { mkdir, writeFile, unlink } from 'fs/promises'
-import path from 'path'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { newRequestId } from '@/lib/security/errors'
 import { auditEvent } from '@/lib/security/audit'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { storageUpload, storageDelete } from '@/lib/storage/supabase'
 import {
   WEBSITE_UPLOAD_POLICY,
   sniffFileType,
@@ -18,8 +17,6 @@ import {
 
 export const runtime = 'nodejs'
 
-const UPLOAD_DIR = path.join(process.cwd(), 'db', 'uploads', 'website')
-
 /**
  * POST /api/school/website/upload — Website CMS image upload.
  *
@@ -29,6 +26,15 @@ const UPLOAD_DIR = path.join(process.cwd(), 'db', 'uploads', 'website')
  * stay PRIVATE by default — they are served publicly only through
  * /api/public/website/media/<fileId> for PUBLISHED gallery images /
  * announcements, or referenced as school branding.
+ *
+ * Phase 8A (8A-C9): bytes go to the PUBLIC 'public-media' bucket
+ * (`website/<schoolId>/<fileId>`). The bucket is public because
+ * website-published media is the one PUBLIC-by-design family — but
+ * WHO may fetch is still decided by the /api/public/website/media
+ * privacy gate (published-reference check → redirect). The public
+ * URL is unguessable-ish (opaque server-minted fileId) yet public
+ * once known — the SAME trust model the local-disk public media had.
+ * Validation stack above unchanged; no local-disk fallback.
  */
 export async function POST(req: NextRequest) {
   const requestId = newRequestId()
@@ -86,9 +92,16 @@ export async function POST(req: NextRequest) {
         )
       }
 
-      await mkdir(UPLOAD_DIR, { recursive: true })
+      // Phase 8A: PUBLIC bucket (website-published media), object path
+      // `website/<schoolId>/<fileId>` — x-upsert keeps seeds idempotent.
       const fileId = `${Date.now().toString(36)}-${randomBytes(6).toString('hex')}.${EXT_BY_TYPE[sniffed]}`
-      await writeFile(path.join(UPLOAD_DIR, fileId), bytes)
+      const stored = await storageUpload(
+        'website',
+        fileId,
+        bytes,
+        MIME_BY_TYPE[sniffed],
+        schoolId,
+      )
 
       try {
         await db.uploadedFile.create({
@@ -101,7 +114,7 @@ export async function POST(req: NextRequest) {
           },
         })
       } catch {
-        await unlink(path.join(UPLOAD_DIR, fileId)).catch(() => {})
+        await storageDelete(stored.bucket, stored.path).catch(() => {})
         return NextResponse.json(
           { success: false, error: 'Upload failed. Please try again.' },
           { status: 500, headers: { 'X-Request-Id': requestId } },
@@ -114,7 +127,7 @@ export async function POST(req: NextRequest) {
         userId: user.id,
         action: 'FILE_UPLOADED',
         requestId,
-        detail: `Website image stored (${sniffed}, ${file.size} bytes) as ${fileId}`,
+        detail: `Website image stored (${sniffed}, ${file.size} bytes) as ${fileId} → supabase://${stored.bucket}/${stored.path}`,
       }).catch(() => {})
 
       return NextResponse.json(

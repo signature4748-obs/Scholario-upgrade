@@ -1,25 +1,22 @@
-import { NextRequest } from 'next/server'
-import { createReadStream } from 'fs'
-import { stat } from 'fs/promises'
-import { Readable } from 'stream'
+import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import {
   isSafeStoredFileName,
-  studyMaterialPath,
-  contentDispositionAttachment,
+  STUDY_MATERIAL_DOWNLOAD_TTL_SEC,
 } from '@/lib/study-materials'
 import { requireStudent, materialVisibleToStudent, targetedMaterialIds } from '@/lib/learning'
+import { storedObjectLocation, storageExists, storageSignedUrl } from '@/lib/storage/supabase'
 
 export const runtime = 'nodejs'
 
 /// GET /api/study-materials/[id]/download
 ///
-/// SERVER-AUTHORIZED file download — the ONLY reader of the upload
-/// directory, path-guarded, never served statically.
+/// SERVER-AUTHORIZED file download — the ONLY reader of the stored
+/// study-material objects, never served statically.
 ///
-/// Authorization (L2D spec §33/§70 — publication state is now part of
-/// the check):
+/// Authorization (L2D spec §33/§70 — publication state is part of the
+/// check):
 ///   · SCHOOL scope always (RLS — a foreign id is an honest 404).
 ///   · STUDENT: published AND authorized (whole-school / my class label /
 ///     targeted at me). Anything else is an honest 404.
@@ -27,9 +24,15 @@ export const runtime = 'nodejs'
 ///     for the uploader (their own work-in-progress).
 ///   · PRINCIPAL: any status for their school.
 ///
-/// The bytes stream from db/uploads/study-materials with the stored
-/// mimeType and a Content-Disposition: attachment header carrying the
-/// original filename. 404 when the row is missing OR the file is gone.
+/// Phase 8A (8A-C9): the bytes live in the PRIVATE 'school-media'
+/// bucket at `study-materials/<schoolId>/<fileName>`. The role-gated
+/// authorization above is IDENTICAL and runs BEFORE any URL is minted;
+/// an authorized download then REDIRECTS (302) to a 10-minute signed
+/// URL. The attachment semantics (Content-Disposition with the
+/// original filename) ride the Storage `download` query param; the
+/// no-store cache policy is preserved on the redirect. 404 when the
+/// row is missing OR the stored object is gone (probed first —
+/// honest 404, never a redirect into a broken target).
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -61,31 +64,24 @@ export async function GET(
 
       if (!isSafeStoredFileName(material.fileName)) throw new Error('NOT_FOUND')
 
-      const filePath = studyMaterialPath(material.fileName)
-      let size: number
-      try {
-        const st = await stat(filePath)
-        if (!st.isFile()) throw new Error('NOT_FOUND')
-        size = st.size
-      } catch {
-        // Row exists but the bytes are gone — honest 404, never a 500.
-        throw new Error('NOT_FOUND')
-      }
+      const location = storedObjectLocation('study-materials', material.schoolId, material.fileName)
+      const exists = await storageExists(location.bucket, location.path).catch(() => false)
+      // Row exists but the bytes are gone — honest 404, never a 500.
+      if (!exists) throw new Error('NOT_FOUND')
 
-      const nodeStream = createReadStream(filePath)
-      const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>
+      // Signed URL (10-min TTL) + attachment hint carrying the original
+      // filename (ASCII-safe fallback — the Storage `download` param
+      // emits `Content-Disposition: attachment; filename="…"`).
+      const asciiName =
+        material.originalName.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_') || material.fileName
+      let target = await storageSignedUrl(location.bucket, location.path, STUDY_MATERIAL_DOWNLOAD_TTL_SEC)
+      target += `${target.includes('?') ? '&' : '?'}download=${encodeURIComponent(asciiName)}`
 
-      return new Response(webStream, {
-        status: 200,
-        headers: {
-          'Content-Type': material.mimeType,
-          'Content-Length': String(size),
-          'Content-Disposition': contentDispositionAttachment(material.originalName),
-          // Authorized per-session content — never shared-cached.
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff',
-        },
-      })
+      const res = NextResponse.redirect(target, 302)
+      // Authorized per-session content — never shared-cached.
+      res.headers.set('Cache-Control', 'no-store')
+      res.headers.set('X-Content-Type-Options', 'nosniff')
+      return res
     },
     { roles: ['STUDENT', 'TEACHER', 'PRINCIPAL'] },
   )

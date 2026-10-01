@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PHASE 7.5 — Product/tenant test suite (LIVE HTTP + unit proofs).
  *
@@ -29,15 +30,15 @@
  * other proofs or the dev environment.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
 import { unlink } from 'fs/promises'
 import path from 'path'
 import { evaluateSchoolAccess, planAllows } from '@/lib/access-policy'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const PW = 'ScholarioTest2026'
-const db = new PrismaClient()
 
 // ─── fixtures ──────────────────────────────────────────────────────────────
 
@@ -52,15 +53,15 @@ let tokenB = ''
 const cleanup: Array<() => Promise<unknown>> = []
 
 beforeAll(async () => {
-  const a = await db.school.findUnique({ where: { slug: 'demo-school' } })
-  const b = await db.school.findUnique({ where: { slug: 'bluebell-academy' } })
-  if (!a || !b) throw new Error('fixture schools missing (run bun run db:seed-tenant-isolation)')
+  const a = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+  const b = await db.school.findUnique({ where: { slug: 'green-valley' } })
+  if (!a || !b) throw new Error('fixture schools missing (run bun run seed:demo / seed:clean)')
   schoolA = { id: a.id, slug: a.slug, name: a.name, themeColor: a.themeColor }
   schoolB = { id: b.id, slug: b.slug, name: b.name, themeColor: b.themeColor }
 
-  const pa = await db.user.findUnique({ where: { email: 'tenant.principal.a@scholario.test' } })
-  const pb = await db.user.findUnique({ where: { email: 'principal.b@bluebell.test' } })
-  const sa = await db.user.findUnique({ where: { email: 'tenant.superadmin@scholario.test' } })
+  const pa = await db.user.findUnique({ where: { email: 'tenant.principal.a@sunrise.test' } })
+  const pb = await db.user.findUnique({ where: { email: 'principal.b@greenvalley.test' } })
+  const sa = await db.user.findUnique({ where: { email: 'tenant.superadmin@sunrise.test' } })
   if (!pa || !pb || !sa) throw new Error('fixture users missing (run bun run db:seed-tenant-isolation)')
   principalB = { id: pb.id, email: pb.email }
   superadmin = { id: sa.id, email: sa.email }
@@ -69,11 +70,17 @@ beforeAll(async () => {
   tokenB = randomBytes(32).toString('hex')
   await db.session.createMany({
     data: [
-      { userId: pa.id, token: tokenA, expiresAt: new Date(Date.now() + 3600_000) },
-      { userId: pb.id, token: tokenB, expiresAt: new Date(Date.now() + 3600_000) },
+      // PHASE 8A — Session rows store sha256(token); the RAW tokens ride
+      // the Authorization headers below (createSession wire contract).
+      { userId: pa.id, tokenHash: hashSessionToken(tokenA), expiresAt: new Date(Date.now() + 3600_000) },
+      { userId: pb.id, tokenHash: hashSessionToken(tokenB), expiresAt: new Date(Date.now() + 3600_000) },
     ],
   })
-  cleanup.push(() => db.session.deleteMany({ where: { token: { in: [tokenA, tokenB] } } }))
+  cleanup.push(() =>
+    db.session.deleteMany({
+      where: { tokenHash: { in: [hashSessionToken(tokenA), hashSessionToken(tokenB)] } },
+    }),
+  )
 }, 60000)
 
 afterAll(async () => {
@@ -116,8 +123,8 @@ describe('PHASE 7.5 · website content is tenant-scoped', () => {
     expect(pb.body?.data?.name).toBe(schoolB.name)
     expect(pb.body?.data?.name).not.toBe(schoolA.name)
 
-    // The demo school carries the seeded editorial document; Bluebell has
-    // none, so its hero must be the NEUTRAL fallback — never Greenwood's.
+    // The demo school carries the seeded editorial document; Green Valley
+    // carries its honest bootstrap skeleton hero — never Sunrise's.
     const heroA: string = pa.body.data.websiteContent?.hero?.title ?? ''
     const heroB: string = pb.body.data.websiteContent?.hero?.title ?? ''
     expect(heroA.length).toBeGreaterThan(0)
@@ -395,8 +402,8 @@ describe('PHASE 7.5 · dashboard values are DB-derived (never fabricated)', () =
     expect(stats.students).toBe(students)
     expect(stats.teachers).toBe(teachers)
     expect(stats.classes).toBe(classes)
-    expect(stats.feesTotal).toBe(feesTotal._sum.amount || 0)
-    expect(stats.feesPaid).toBe(feesPaid._sum.paid || 0)
+    expect(stats.feesTotal).toBe(Number(feesTotal._sum.amount || 0))
+    expect(stats.feesPaid).toBe(Number(feesPaid._sum.paid || 0))
     expect(stats.overdue).toBe(overdue)
     expect(Number.isFinite(stats.attendanceRate)).toBe(true)
     expect(stats.attendanceRate).toBeGreaterThanOrEqual(0)
@@ -437,8 +444,8 @@ describe('PHASE 7.5 · fee aggregation correctness', () => {
       db.fee.count({ where: { schoolId: schoolA.id, status: { in: ['UNPAID', 'OVERDUE'] } } }),
       db.student.count({ where: { schoolId: schoolA.id } }),
     ])
-    expect(stats.feesTotal).toBe(feesTotal._sum.amount || 0)
-    expect(stats.feesPaid).toBe(feesPaid._sum.paid || 0)
+    expect(stats.feesTotal).toBe(Number(feesTotal._sum.amount || 0))
+    expect(stats.feesPaid).toBe(Number(feesPaid._sum.paid || 0))
     expect(stats.overdue).toBe(overdue)
 
     // donut semantics: collected cannot exceed billed on honest data
@@ -455,7 +462,7 @@ describe('PHASE 7.5 · fee aggregation correctness', () => {
     const months: Record<string, number> = {}
     for (const p of payments) {
       const key = p.createdAt.toISOString().slice(0, 7)
-      months[key] = (months[key] || 0) + p.amount
+      months[key] = (months[key] || 0) + Number(p.amount) // NUMERIC → Decimal → number
     }
     const expected = Object.entries(months)
       .sort((x, y) => (x[0] < y[0] ? -1 : 1))

@@ -35,6 +35,12 @@ export function OverviewTab({ store, onNavigateToClasses: _onNavigateToClasses }
 
   const boys = Math.round(totalStudents * 0.52)
   const girls = totalStudents - boys
+  // PHASE 8A (QA 8A-QA/A2) — honest insights: the old card carried a
+  // hardcoded "94.2% average attendance" + fabricated historical trend
+  // that rendered even on an empty roster. Derive what we can from the
+  // live roster; on an empty school show an honest build-up insight and
+  // clamp the derived series to zero instead of negative history.
+  const hasRoster = totalStudents > 0
   const occupancyPct = totalCapacity > 0 ? Math.round((totalStudents / totalCapacity) * 100) : 0
 
   // REAL over-capacity detection — enrolled = ACTIVE roster students in the
@@ -46,9 +52,11 @@ export function OverviewTab({ store, onNavigateToClasses: _onNavigateToClasses }
 
   const insights = useMemo(() => [
     ...(overloadedClasses.length > 0 ? [{ icon: <AlertTriangle className="h-4 w-4" />, color: 'rose', title: `${overloadedClasses.length} class${overloadedClasses.length > 1 ? 'es' : ''} over capacity`, desc: `${overloadedClasses.slice(0, 2).map((c) => c.name).join(', ')} exceed recommended section capacity limits.` }] : []),
-    { icon: <TrendingUp className="h-4 w-4" />, color: 'emerald', title: `94.2% average attendance rate`, desc: `Student attendance remains consistently healthy across primary & secondary wings.` },
+    ...(hasRoster
+      ? [{ icon: <TrendingUp className="h-4 w-4" />, color: 'emerald', title: `${formatNumber(totalStudents)} active students on the roster`, desc: `Across ${classes.length} classes and ${formatNumber(totalSections)} sections — live counts from the school database.` }]
+      : [{ icon: <TrendingUp className="h-4 w-4" />, color: 'emerald', title: 'No students yet', desc: 'Insights appear here once the roster grows — nothing is estimated in advance.' }]),
     { icon: <Lightbulb className="h-4 w-4" />, color: 'violet', title: `${occupancyPct}% total seat utilization`, desc: `${formatNumber(totalStudents)} of ${formatNumber(totalCapacity)} seats filled across ${classes.length} active classes.` },
-  ], [overloadedClasses, occupancyPct, totalStudents, totalCapacity, classes.length])
+  ], [overloadedClasses, occupancyPct, totalStudents, totalSections, totalCapacity, classes.length, hasRoster])
 
   // REAL level distribution — ACTIVE students grouped by their class's level.
   const levelDistribution = useMemo(() => {
@@ -68,9 +76,9 @@ export function OverviewTab({ store, onNavigateToClasses: _onNavigateToClasses }
   ]
 
   const growthTrend = [
-    { term: 'Term 1 2024', count: totalStudents - 45 },
-    { term: 'Term 2 2024', count: totalStudents - 22 },
-    { term: 'Term 3 2024', count: totalStudents - 8 },
+    { term: 'Term 1 2024', count: Math.max(0, totalStudents - 45) },
+    { term: 'Term 2 2024', count: Math.max(0, totalStudents - 22) },
+    { term: 'Term 3 2024', count: Math.max(0, totalStudents - 8) },
     { term: 'AY 2025 Current', count: totalStudents },
   ]
 

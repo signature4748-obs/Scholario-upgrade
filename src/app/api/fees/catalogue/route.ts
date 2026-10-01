@@ -1,8 +1,14 @@
 import { NextRequest } from 'next/server'
+import { z } from 'zod'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
+
+/// Phase 8A — bounded money validation for master fee head amounts
+/// (was `Number(body.amount) || 0`, silently 0-ing garbage).
+const amountSchema = z.coerce.number().finite().min(0).max(500000)
 
 /// GET /api/fees/catalogue — list all master fee heads.
 export async function GET() {
@@ -15,7 +21,8 @@ export async function GET() {
       },
       orderBy: { sortOrder: 'asc' },
     })
-    return heads
+    // Phase 8A: MasterFeeHead.amount is Prisma.Decimal — emit numbers.
+    return heads.map((h) => ({ ...h, amount: num(h.amount) }))
   })
 }
 
@@ -37,19 +44,25 @@ export async function POST(req: NextRequest) {
         where: { schoolId },
         _max: { sortOrder: true },
       })
+      // Phase 8A — bounded zod validation (undefined defaults to 0, the
+      // old `|| 0` behaviour for absent fields; garbage now 4xxs).
+      const parsedAmount = amountSchema.default(0).safeParse(body.amount)
+      if (!parsedAmount.success) {
+        throw new Error('amount must be a number between 0 and 500000')
+      }
       const head = await db.masterFeeHead.create({
         data: {
           schoolId,
           name,
           category: String(body.category || 'Other'),
           frequency: String(body.frequency || 'Monthly'),
-          amount: Number(body.amount) || 0,
+          amount: parsedAmount.data,
           mandatory: body.mandatory !== false,
           description: body.description ? String(body.description) : null,
           sortOrder: (maxOrder._max.sortOrder ?? -1) + 1,
         },
       })
-      return head
+      return { ...head, amount: num(head.amount) }
     },
     { roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
@@ -77,19 +90,29 @@ export async function PATCH(req: NextRequest) {
         if (collision) throw new Error('Another master fee head with this name already exists')
       }
 
+      // Phase 8A — bounded zod validation when amount is provided.
+      let amountUpdate: { amount: number } | Record<string, never> = {}
+      if (body.amount !== undefined) {
+        const parsedAmount = amountSchema.safeParse(body.amount)
+        if (!parsedAmount.success) {
+          throw new Error('amount must be a number between 0 and 500000')
+        }
+        amountUpdate = { amount: parsedAmount.data }
+      }
+
       const updated = await db.masterFeeHead.update({
         where: { id },
         data: {
           ...(body.name ? { name: String(body.name).trim() } : {}),
           ...(body.category ? { category: String(body.category) } : {}),
           ...(body.frequency ? { frequency: String(body.frequency) } : {}),
-          ...(body.amount !== undefined ? { amount: Number(body.amount) } : {}),
+          ...amountUpdate,
           ...(body.mandatory !== undefined ? { mandatory: body.mandatory } : {}),
           ...(body.active !== undefined ? { active: body.active } : {}),
           ...(body.description !== undefined ? { description: body.description ? String(body.description) : null } : {}),
         },
       })
-      return updated
+      return { ...updated, amount: num(updated.amount) }
     },
     { roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )

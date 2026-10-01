@@ -12,6 +12,7 @@ import {
   toFeeTxnDto,
   TXN_STATUS,
 } from '@/lib/fee-workflow'
+import { num, dec, minDec, outstandingDec, formatINRServer } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -102,26 +103,29 @@ export async function GET(req: NextRequest) {
           continue
         }
         const items = rows.map((f) => {
-          const outstanding = Math.max(0, f.amount - f.paid)
+          const outstanding = outstandingDec(f.amount, f.paid)
           const status =
-            outstanding <= 0 ? 'PAID'
+            outstanding.lessThanOrEqualTo(0) ? 'PAID'
             : f.dueDate && f.dueDate < endOfToday ? 'OVERDUE'
-            : f.paid > 0 ? 'PARTIAL' : 'UNPAID'
+            : dec(f.paid).greaterThan(0) ? 'PARTIAL' : 'UNPAID'
           return {
-            id: f.id, title: f.title, amount: f.amount, paid: f.paid, outstanding,
+            id: f.id, title: f.title, amount: num(f.amount), paid: num(f.paid), outstanding: num(outstanding),
             status, dueDate: f.dueDate ? f.dueDate.toISOString().slice(0, 10) : null,
           }
         })
-        const outstanding = items.reduce((sum, i) => sum + i.outstanding, 0)
+        const outstanding = rows.reduce(
+          (sum, f) => sum.plus(outstandingDec(f.amount, f.paid)),
+          dec(0),
+        )
         const status: LedgerDto['status'] =
-          outstanding <= 0 ? 'PAID'
+          outstanding.lessThanOrEqualTo(0) ? 'PAID'
           : items.some((i) => i.status === 'OVERDUE') ? 'OVERDUE'
           : items.some((i) => i.paid > 0) ? 'PARTIAL' : 'UNPAID'
         ledgerByStudent.set(s.id, {
           status,
-          totalBilled: rows.reduce((sum, f) => sum + f.amount, 0),
-          totalPaid: rows.reduce((sum, f) => sum + Math.min(f.amount, f.paid), 0),
-          outstanding,
+          totalBilled: num(rows.reduce((sum, f) => sum.plus(f.amount), dec(0))),
+          totalPaid: num(rows.reduce((sum, f) => sum.plus(minDec(f.amount, f.paid)), dec(0))),
+          outstanding: num(outstanding),
           awaitingVerification: 0, // filled from txns below
           items,
           officePayments: rows
@@ -129,7 +133,7 @@ export async function GET(req: NextRequest) {
               f.payments
                 .filter((p) => !p.transactionId)
                 .map((p) => ({
-                  id: p.id, feeTitle: f.title, amount: p.amount,
+                  id: p.id, feeTitle: f.title, amount: num(p.amount),
                   method: p.method, createdAt: p.createdAt.toISOString(),
                 })),
             )
@@ -147,15 +151,15 @@ export async function GET(req: NextRequest) {
           })
         : []
 
-      // awaiting-verification totals per student.
-      const pendingByStudent = new Map<string, number>()
+      // awaiting-verification totals per student (exact Decimal sums).
+      const pendingByStudent = new Map<string, ReturnType<typeof dec>>()
       for (const t of txnRows) {
         if (t.status === TXN_STATUS.PENDING_VERIFICATION && t.studentId) {
-          pendingByStudent.set(t.studentId, (pendingByStudent.get(t.studentId) ?? 0) + t.amount)
+          pendingByStudent.set(t.studentId, (pendingByStudent.get(t.studentId) ?? dec(0)).plus(t.amount))
         }
       }
       for (const [sid, ledger] of ledgerByStudent) {
-        ledger.awaitingVerification = pendingByStudent.get(sid) ?? 0
+        ledger.awaitingVerification = num(pendingByStudent.get(sid) ?? dec(0))
       }
 
       const classesDto = classes.map((c) => {
@@ -170,29 +174,35 @@ export async function GET(req: NextRequest) {
           room: c.room,
           studentCount: classStudents.length,
           summary: {
-            totalBilled: ledgers.reduce((sum, l) => sum + l.totalBilled, 0),
-            collected: ledgers.reduce((sum, l) => sum + l.totalPaid, 0),
-            outstanding: ledgers.reduce((sum, l) => sum + l.outstanding, 0),
+            totalBilled: num(ledgers.reduce((sum, l) => sum.plus(l.totalBilled), dec(0))),
+            collected: num(ledgers.reduce((sum, l) => sum.plus(l.totalPaid), dec(0))),
+            outstanding: num(ledgers.reduce((sum, l) => sum.plus(l.outstanding), dec(0))),
             fullyPaid: ledgers.filter((l) => l.status === 'PAID').length,
             overdueStudents: ledgers.filter((l) => l.status === 'OVERDUE').length,
             awaitingVerificationCount: classTxns.filter(
               (t) => t.status === TXN_STATUS.PENDING_VERIFICATION,
             ).length,
-            awaitingVerificationAmount: classTxns
-              .filter((t) => t.status === TXN_STATUS.PENDING_VERIFICATION)
-              .reduce((sum, t) => sum + t.amount, 0),
+            awaitingVerificationAmount: num(
+              classTxns
+                .filter((t) => t.status === TXN_STATUS.PENDING_VERIFICATION)
+                .reduce((sum, t) => sum.plus(t.amount), dec(0)),
+            ),
           },
           month: {
             label: monthStart.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
-            verifiedAmount: classTxns
-              .filter((t) => t.status === TXN_STATUS.VERIFIED && inMonth(t.verifiedAt ?? t.collectedAt))
-              .reduce((sum, t) => sum + t.amount, 0),
+            verifiedAmount: num(
+              classTxns
+                .filter((t) => t.status === TXN_STATUS.VERIFIED && inMonth(t.verifiedAt ?? t.collectedAt))
+                .reduce((sum, t) => sum.plus(t.amount), dec(0)),
+            ),
             verifiedCount: classTxns.filter(
               (t) => t.status === TXN_STATUS.VERIFIED && inMonth(t.verifiedAt ?? t.collectedAt),
             ).length,
-            pendingAmount: classTxns
-              .filter((t) => t.status === TXN_STATUS.PENDING_VERIFICATION && inMonth(t.collectedAt))
-              .reduce((sum, t) => sum + t.amount, 0),
+            pendingAmount: num(
+              classTxns
+                .filter((t) => t.status === TXN_STATUS.PENDING_VERIFICATION && inMonth(t.collectedAt))
+                .reduce((sum, t) => sum.plus(t.amount), dec(0)),
+            ),
             pendingCount: classTxns.filter(
               (t) => t.status === TXN_STATUS.PENDING_VERIFICATION && inMonth(t.collectedAt),
             ).length,
@@ -254,11 +264,11 @@ export async function POST(req: NextRequest) {
 
       const fee = await db.fee.findFirst({ where: { id: feeId, studentId, schoolId } })
       if (!fee) throw new Error('Fee record not found for this student')
-      const outstanding = Math.max(0, fee.amount - fee.paid)
-      if (outstanding <= 0) throw new Error('This fee is already fully paid')
-      if (amount > outstanding) {
+      const outstanding = outstandingDec(fee.amount, fee.paid)
+      if (outstanding.lessThanOrEqualTo(0)) throw new Error('This fee is already fully paid')
+      if (dec(amount).greaterThan(outstanding)) {
         throw new Error(
-          `Amount exceeds the outstanding balance of this fee (₹${outstanding.toLocaleString('en-IN')}). Partial payments are allowed — overpayments are not.`,
+          `Amount exceeds the outstanding balance of this fee (₹${formatINRServer(outstanding)}). Partial payments are allowed — overpayments are not.`,
         )
       }
 
@@ -272,10 +282,10 @@ export async function POST(req: NextRequest) {
         where: { feeId: fee.id, status: TXN_STATUS.PENDING_VERIFICATION },
         select: { amount: true },
       })
-      const pendingSum = pendingOnFee.reduce((s, t) => s + t.amount, 0)
-      if (pendingSum > 0 && pendingSum + amount > outstanding) {
+      const pendingSum = pendingOnFee.reduce((s, t) => s.plus(t.amount), dec(0))
+      if (pendingSum.greaterThan(0) && pendingSum.plus(amount).greaterThan(outstanding)) {
         throw new Error(
-          `₹${pendingSum.toLocaleString('en-IN')} towards "${fee.title}" is already awaiting the Principal's verification. Once verified (or rejected), you can collect up to the remaining balance of ₹${Math.max(0, outstanding - pendingSum).toLocaleString('en-IN')}.`,
+          `₹${formatINRServer(pendingSum)} towards "${fee.title}" is already awaiting the Principal's verification. Once verified (or rejected), you can collect up to the remaining balance of ₹${formatINRServer(outstandingDec(outstanding, pendingSum))}.`,
         )
       }
 

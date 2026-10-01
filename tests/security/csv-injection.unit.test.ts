@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PIH-5 — INVARIANT: CSV formula/DDE injection neutralization (OWASP).
  *
@@ -31,12 +32,12 @@
  * and FeeTransaction Σ all move by the same amount).
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
 import { csvEscape } from '@/lib/csv'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const db = new PrismaClient()
 
 const MARKER = randomBytes(4).toString('hex')
 
@@ -84,13 +85,17 @@ beforeAll(async () => {
   if (!school) throw new Error('demo school missing (run the canonical seeds)')
   schoolId = school.id
 
-  const principal = await db.user.findUnique({ where: { email: 'principal@demoschool.edu' } })
-  if (!principal) throw new Error('fixture user missing: principal@demoschool.edu')
+  const principal = await db.user.findUnique({ where: { email: 'principal@sunriseacademy.edu' } })
+  if (!principal) throw new Error('fixture user missing: principal@sunriseacademy.edu')
   principalToken = randomBytes(32).toString('hex')
   await db.session.create({
-    data: { userId: principal.id, token: principalToken, expiresAt: new Date(Date.now() + 3600_000) },
+    data: {
+      userId: principal.id,
+      tokenHash: hashSessionToken(principalToken),
+      expiresAt: new Date(Date.now() + 3600_000),
+    },
   })
-  cleanup.push(() => db.session.deleteMany({ where: { token: principalToken } }))
+  cleanup.push(() => db.session.deleteMany({ where: { tokenHash: hashSessionToken(principalToken) } }))
 
   // Seed the matrix: 6 dangerous + 2 control students (deleted in cleanup).
   const specs: { name: string; admissionNo: string }[] = [
@@ -102,7 +107,7 @@ beforeAll(async () => {
     const user = await db.user.create({
       data: {
         schoolId,
-        email: `pih5.inj.${MARKER}.${spec.admissionNo}@scholario.test`,
+        email: `pih5.inj.${MARKER}.${spec.admissionNo}@sunrise.test`,
         name: spec.name,
         role: 'STUDENT',
         status: 'ACTIVE',
@@ -173,7 +178,7 @@ describe('PIH-5 · /api/payments-export csvCell guard — fee title payload (rou
     const studentUser = await db.user.create({
       data: {
         schoolId,
-        email: `pih5.pay.${MARKER}@scholario.test`,
+        email: `pih5.pay.${MARKER}@sunrise.test`,
         name: `=EVILPAY-${MARKER}`,
         role: 'STUDENT',
         status: 'ACTIVE',

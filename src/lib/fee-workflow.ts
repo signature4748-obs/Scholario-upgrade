@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import type { AuthUser } from '@/lib/auth'
 import type { Prisma } from '@prisma/client'
 import { classLabelOf } from '@/lib/teacher-hub'
+import { num, dec, minDec, outstandingDec, type MoneyInput } from '@/lib/money'
 
 /**
  * fee-workflow — THE canonical two-stage fee collection workflow.
@@ -187,7 +188,8 @@ export interface LedgerApplyInput {
   txnId: string
   schoolId: string
   feeId: string | null
-  amount: number
+  /** Decimal (DB-sourced txn row) or number (validated request body). */
+  amount: MoneyInput
   method: string
 }
 
@@ -239,25 +241,26 @@ export async function applyPaymentToLedger(
   if (existing) {
     return {
       feeId: fee.id,
-      paid: fee.paid,
-      outstanding: Math.max(0, fee.amount - fee.paid),
+      paid: num(fee.paid),
+      outstanding: num(outstandingDec(fee.amount, fee.paid)),
       status: fee.status,
       applied: 0,
       alreadyApplied: true,
     }
   }
 
-  // Clamp: never credit beyond the billed amount.
-  const outstanding = Math.max(0, fee.amount - fee.paid)
-  const applied = Math.min(input.amount, outstanding)
-  if (applied <= 0) {
+  // Clamp: never credit beyond the billed amount. All arithmetic is
+  // paise-exact Prisma.Decimal math on DB-sourced NUMERIC values.
+  const outstanding = outstandingDec(fee.amount, fee.paid)
+  const applied = minDec(input.amount, outstanding)
+  if (applied.lessThanOrEqualTo(0)) {
     // Fee already fully paid — nothing to apply (Payment.amount must be
     // > 0 per the DB guard; a zero mirror row would be rejected anyway).
-    return { feeId: fee.id, paid: fee.paid, outstanding, status: fee.status, applied: 0, alreadyApplied: false }
+    return { feeId: fee.id, paid: num(fee.paid), outstanding: num(outstanding), status: fee.status, applied: 0, alreadyApplied: false }
   }
 
-  const newPaid = fee.paid + applied
-  const status = newPaid >= fee.amount ? 'PAID' : 'PARTIAL'
+  const newPaid = dec(fee.paid).plus(applied)
+  const status = newPaid.greaterThanOrEqualTo(fee.amount) ? 'PAID' : 'PARTIAL'
   await tx.fee.update({
     where: { id: fee.id },
     data: { paid: { increment: applied }, status, method: input.method, paidDate: new Date() },
@@ -275,10 +278,10 @@ export async function applyPaymentToLedger(
   })
   return {
     feeId: fee.id,
-    paid: newPaid,
-    outstanding: Math.max(0, fee.amount - newPaid),
+    paid: num(newPaid),
+    outstanding: num(outstandingDec(fee.amount, newPaid)),
     status,
-    applied,
+    applied: num(applied),
     alreadyApplied: false,
   }
 }
@@ -301,7 +304,7 @@ export async function resolveFeeIdForTxn(
     studentId: string
     feeId: string | null
     feeHeadName: string | null
-    amount: number
+    amount: MoneyInput
     method: string
     paidAt?: Date
   },
@@ -368,7 +371,7 @@ type TxnRow = {
   className: string | null
   feeId: string | null
   feeHeadName: string | null
-  amount: number
+  amount: MoneyInput
   method: string
   status: string
   source: string | null
@@ -395,7 +398,7 @@ export function toFeeTxnDto(t: TxnRow): FeeTxnDto {
     className: t.className,
     feeId: t.feeId,
     feeHeadName: t.feeHeadName,
-    amount: t.amount,
+    amount: num(t.amount),
     method: t.method,
     status: t.status,
     source: t.source,

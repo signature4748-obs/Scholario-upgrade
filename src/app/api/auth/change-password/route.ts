@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import {
   getCurrentUser,
   getCurrentSession,
+  getSessionToken,
   verifyPassword,
   hashPassword,
   rotateSession,
@@ -89,20 +90,27 @@ export async function POST(req: NextRequest) {
       data: { passwordHash: hashPassword(body.newPassword) },
     })
 
-    // Revoke every OTHER session (standard practice).
+    // Revoke every OTHER session (standard practice). PHASE 8A: the row
+    // stores tokenHash (never the raw token), so "not this session" is a
+    // hash comparison.
     const current = await getCurrentSession()
     const revoked = current
       ? await db.session.deleteMany({
-          where: { userId: user.id, token: { not: current.token } },
+          where: { userId: user.id, tokenHash: { not: current.tokenHash } },
         })
       : await db.session.deleteMany({ where: { userId: user.id } })
 
     // SESSION ROTATION — mint a fresh token for THIS device so the old
-    // (possibly stolen) token stops working immediately.
+    // (possibly stolen) token stops working immediately. The raw current
+    // token is re-read from the wire (cookie/bearer) because the Session
+    // row no longer carries it.
     let rotatedToken: string | null = null
     if (current) {
-      rotatedToken = await rotateSession(current.token)
-      await setSessionCookie(rotatedToken)
+      const currentToken = await getSessionToken()
+      if (currentToken) {
+        rotatedToken = await rotateSession(currentToken)
+        await setSessionCookie(rotatedToken)
+      }
     }
 
     await auditEvent({

@@ -19,19 +19,30 @@
  *      rows (scope 'website') and one PUBLISHED "Campus Life" album, so
  *      the public gallery renders from the DB like any school's would.
  *
+ * Phase 8A (8A-C9b): the gallery bytes are stored in Supabase Storage's
+ * PUBLIC 'public-media' bucket at the deterministic
+ * `website/<schoolId>/<fileId>` path (x-upsert, idempotent) — the same
+ * location /api/public/website/media redirects to. No local-disk copy.
+ *
  * Idempotent: re-running refreshes content but never duplicates rows.
  * Usage: bun prisma/seed-website-cms.ts
  */
 import { PrismaClient } from '@prisma/client'
 import { randomBytes } from 'crypto'
-import { mkdir, copyFile } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import path from 'path'
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG } from './seed-identity'
+import { storageUpload, storagePublicUrl } from '../src/lib/storage/supabase'
 
 const db = new PrismaClient()
 
-const SLUG = process.env.SEED_SCHOOL_SLUG || 'demo-school'
+const SLUG = process.env.SEED_SCHOOL_SLUG || DEMO_SCHOOL_SLUG
 
 async function main() {
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-website-cms')
+
   const school = await db.school.findUnique({ where: { slug: SLUG } })
   if (!school) {
     console.log(`[seed-website-cms] school "${SLUG}" not found — nothing to seed.`)
@@ -39,11 +50,12 @@ async function main() {
   }
 
   // ── 1. Identity columns (only fill what is not already configured) ──
+  // Phase 8A rebrand: Greenwood identity → Sunrise Academy.
   const identity = {
-    shortName: school.shortName ?? 'Greenwood',
+    shortName: school.shortName ?? 'Sunrise',
     tagline: school.tagline ?? 'Excellence in Education & Innovation',
     affiliation: school.affiliation ?? 'CBSE — Affiliation No. 1730456',
-    website: school.website ?? 'https://greenwood.edu.in',
+    website: school.website ?? 'https://sunriseacademy.edu',
     principalName: school.principalName ?? 'Dr. Ananya Iyer',
     established: school.established ?? '1995',
   }
@@ -158,14 +170,14 @@ async function main() {
       about:
         'Nurturing minds, shaping character, and inspiring excellence.',
       social: {
-        facebook: 'https://facebook.com/greenwoodpublicschool',
-        instagram: 'https://instagram.com/greenwoodpublicschool',
-        youtube: 'https://youtube.com/@greenwoodpublicschool',
-        twitter: 'https://x.com/greenwoodschool',
+        facebook: 'https://facebook.com/sunriseacademyedu',
+        instagram: 'https://instagram.com/sunriseacademyedu',
+        youtube: 'https://youtube.com/@sunriseacademyedu',
+        twitter: 'https://x.com/sunriseacademyedu',
       },
     },
     seo: {
-      title: 'Greenwood Public School — Excellence in Education',
+      title: 'Sunrise Academy — Excellence in Education',
       description:
         'A future-ready learning community where tradition meets innovation. Admissions open.',
     },
@@ -212,8 +224,7 @@ async function main() {
     select: { id: true },
   })
 
-  const uploadDir = path.join(process.cwd(), 'db', 'uploads', 'website')
-  await mkdir(uploadDir, { recursive: true })
+  const campusDir = path.join(process.cwd(), 'public', 'images', 'campus')
 
   let album = await db.galleryAlbum.findUnique({
     where: { schoolId_title: { schoolId: school.id, title: 'Campus Life' } },
@@ -229,10 +240,13 @@ async function main() {
   for (const img of images) {
     const existing = album.images.find((i) => i.caption === img.caption)
     if (existing) continue
-    const source = path.join(process.cwd(), 'public', 'images', 'campus', img.src)
+    const source = path.join(campusDir, img.src)
     try {
+      const bytes = await readFile(source)
       const fileId = `seed-${randomBytes(6).toString('hex')}.jpg`
-      await copyFile(source, path.join(uploadDir, fileId))
+      // Phase 8A: store in the PUBLIC 'public-media' bucket at the
+      // deterministic website/<schoolId>/<fileId> path (x-upsert).
+      const stored = await storageUpload('website', fileId, bytes, 'image/jpeg', school.id)
       await db.uploadedFile.create({
         data: {
           id: fileId,
@@ -249,7 +263,10 @@ async function main() {
           order: img.order,
         },
       })
-      console.log(`[seed-website-cms] gallery image registered: ${img.caption}`)
+      console.log(
+        `[seed-website-cms] gallery image registered: ${img.caption} ` +
+          `→ ${storagePublicUrl(stored.bucket, stored.path)}`,
+      )
     } catch (e) {
       console.warn(`[seed-website-cms] skip ${img.src}: ${(e as Error).message}`)
     }

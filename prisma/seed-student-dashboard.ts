@@ -1,6 +1,6 @@
 // ============================================================
 // seed-student-dashboard — SD-1 demo seed for Student Dashboard V2
-// (Demo School of Scholario).
+// (Sunrise Academy — the Phase-8A demo tenant).
 //
 // Seeds REAL rows through the actual database models so the student
 // dashboard's server-side aggregation has a complete, realistic demo —
@@ -25,6 +25,8 @@
 // Run: bun run db:seed-dashboard   (or: bun prisma/seed-student-dashboard.ts)
 // ============================================================
 
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG } from './seed-identity'
 import { db } from '../src/lib/db'
 import { mintReceiptNo } from '../src/lib/fee-workflow'
 
@@ -49,9 +51,12 @@ const daysAhead = (n: number) => new Date(new Date().getTime() + n * DAY_MS)
 // ─── Seed ───────────────────────────────────────────────────────────
 
 async function main() {
-  const school = await db.school.findFirst({ where: { slug: 'demo-school' } })
-  if (!school) throw new Error('Demo school not found — run the base seed first.')
-  const user = await db.user.findFirst({ where: { email: 'student1@demoschool.edu' } })
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-student-dashboard')
+
+  const school = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
+  if (!school) throw new Error('Demo school (sunrise-academy) not found — run the base seed first.')
+  const user = await db.user.findFirst({ where: { email: 'student1@sunriseacademy.edu' } })
   if (!user) throw new Error('Demo student user not found.')
   const student = await db.student.findUnique({ where: { userId: user.id }, include: { class: true } })
   if (!student || !student.class) throw new Error('Demo student has no class — run the base seed first.')

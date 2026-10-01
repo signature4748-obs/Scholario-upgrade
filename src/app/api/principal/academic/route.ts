@@ -196,7 +196,7 @@ export async function POST(req: NextRequest) {
           // Catalog lookup is case-insensitive so "mathematics" finds the
           // existing "Mathematics" row — one subject per name, no dupes.
           let subject = await db.subject.findFirst({
-            where: { schoolId, name: { equals: subjectName } },
+            where: { schoolId, name: { equals: subjectName, mode: 'insensitive' as const } },
             select: { id: true, name: true },
           })
           if (!subject) {

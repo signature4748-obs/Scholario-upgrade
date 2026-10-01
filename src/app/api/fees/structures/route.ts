@@ -1,9 +1,15 @@
 import { NextRequest } from 'next/server'
+import { z } from 'zod'
 import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
+
+/// Phase 8A — bounded money validation for structure head amounts
+/// (was `Number(h.amount) || 0`, silently 0-ing garbage).
+const headAmountSchema = z.coerce.number().finite().min(0).max(500000)
 
 /// GET /api/fees/structures?status=current&classId=C12
 /// Returns all fee structures for the school, optionally filtered.
@@ -27,7 +33,11 @@ export async function GET(req: NextRequest) {
       },
       orderBy: [{ classLevel: 'asc' }, { className: 'asc' }],
     })
-    return structures
+    // Phase 8A: FeeHead.amount is Prisma.Decimal — emit numbers.
+    return structures.map((s) => ({
+      ...s,
+      heads: s.heads.map((h) => ({ ...h, amount: num(h.amount) })),
+    }))
   })
 }
 
@@ -95,6 +105,15 @@ export async function POST(req: NextRequest) {
     }).catch(() => null)
     if (existing) throw new AppError('CONFLICT', { publicMessage: 'A current structure already exists for this class. Archive it first.' })
 
+    // Phase 8A — bounded money validation per head BEFORE the write
+    // (was `Number(h.amount) || 0`, silently 0-ing garbage).
+    const parsedHeadAmounts = heads.map((h: any) => headAmountSchema.default(0).safeParse(h?.amount))
+    if (parsedHeadAmounts.some((r) => !r.success)) {
+      throw new AppError('INVALID_INPUT', {
+        publicMessage: 'Each fee head amount must be a number between 0 and 500000',
+      })
+    }
+
     const structure = await db.feeStructure.create({
       data: {
         schoolId,
@@ -109,7 +128,7 @@ export async function POST(req: NextRequest) {
             catalogueId: h.catalogueId || null,
             name: String(h.name || ''),
             category: String(h.category || 'Other'),
-            amount: Number(h.amount) || 0,
+            amount: parsedHeadAmounts[i].data,
             frequency: String(h.frequency || 'Monthly'),
             mandatory: h.mandatory !== false,
             active: true,
@@ -119,6 +138,6 @@ export async function POST(req: NextRequest) {
       },
       include: { heads: { orderBy: { sortOrder: 'asc' } } },
     })
-    return structure
+    return { ...structure, heads: structure.heads.map((h) => ({ ...h, amount: num(h.amount) })) }
   })
 }

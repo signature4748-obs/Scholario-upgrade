@@ -451,8 +451,8 @@ export async function getAssignmentRepository(schoolId: string, filters: { teach
   if (filters.classId && filters.classId !== 'all') where.classId = filters.classId
   if (filters.search) {
     where.OR = [
-      { title: { contains: filters.search } },
-      { description: { contains: filters.search } },
+      { title: { contains: filters.search, mode: 'insensitive' as const } },
+      { description: { contains: filters.search, mode: 'insensitive' as const } },
     ]
   }
   const homework = await db.homework.findMany({

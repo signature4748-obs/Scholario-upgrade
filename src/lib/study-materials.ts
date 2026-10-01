@@ -2,23 +2,19 @@
 // STUDY MATERIALS — server-side repository helpers (RB-1)
 // ------------------------------------------------------------
 // Shared constants + validators for the /api/study-materials routes.
-// The bytes live under db/uploads/study-materials/<safe-file-name> and
-// are served ONLY through the authorized download route — never from
-// /public, never statically. Uploads are principal-only; reads are
-// STUDENT / TEACHER / PRINCIPAL, always school-scoped (RLS).
+// Phase 8A (8A-C9): the bytes live in the PRIVATE 'school-media'
+// Supabase bucket at `study-materials/<schoolId>/<safe-file-name>`
+// and are served ONLY through the authorized download route (10-min
+// signed-URL redirect) — never from /public, never statically.
+// Uploads are teacher/principal; reads are STUDENT / TEACHER /
+// PRINCIPAL, always school-scoped (RLS).
 // ============================================================
 
 import { randomBytes } from 'crypto'
-import path from 'path'
 import type { StudyMaterial } from '@prisma/client'
 
-/** Absolute upload directory (db/uploads/study-materials). */
-export const STUDY_MATERIAL_UPLOAD_DIR = path.join(
-  process.cwd(),
-  'db',
-  'uploads',
-  'study-materials',
-)
+/** Signed-URL TTL for authorized downloads (mission: 10 minutes). */
+export const STUDY_MATERIAL_DOWNLOAD_TTL_SEC = 600
 
 /** Repository categories (single source for API validation + UI chips). */
 export const STUDY_MATERIAL_CATEGORIES = [
@@ -115,16 +111,12 @@ export function generateStudyMaterialFileName(mimeType: string): string {
 
 /**
  * Defense-in-depth path guard: the stored fileName must be a bare,
- * extension-only name inside the upload directory — no separators, no
- * traversal, no hidden/odd characters. Applied again at download time.
+ * extension-only name — no separators, no traversal, no hidden/odd
+ * characters. Applied at download time (the storage wrapper
+ * re-validates every path segment server-side).
  */
 export function isSafeStoredFileName(fileName: string): boolean {
   return /^[a-z0-9]+\.[a-z0-9]{1,8}$/.test(fileName)
-}
-
-/** Absolute path for a stored file (assumes isSafeStoredFileName passed). */
-export function studyMaterialPath(fileName: string): string {
-  return path.join(STUDY_MATERIAL_UPLOAD_DIR, fileName)
 }
 
 /**

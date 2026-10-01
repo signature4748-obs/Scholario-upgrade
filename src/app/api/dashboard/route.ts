@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { num, dec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -79,7 +80,7 @@ export async function GET() {
         }
       }
 
-      const monthBuckets = new Map<string, Record<string, number>>()
+      const monthBuckets = new Map<string, Record<string, ReturnType<typeof dec>>>()
       // Pre-seed the 6 buckets ending at windowEnd (oldest → newest)
       for (let i = 5; i >= 0; i--) {
         const d = new Date(windowEnd)
@@ -91,12 +92,12 @@ export async function GET() {
         if (!monthBuckets.has(key)) continue // outside the chosen window
         const bucket = monthBuckets.get(key) || {}
         const m = (p.method || 'UNKNOWN').toUpperCase()
-        bucket[m] = (bucket[m] || 0) + p.amount
+        bucket[m] = (bucket[m] ?? dec(0)).plus(p.amount)
         monthBuckets.set(key, bucket)
       }
       const methodTrend = Array.from(monthBuckets.entries()).map(([month, byMethod]) => ({
         month,
-        ...byMethod,
+        ...Object.fromEntries(Object.entries(byMethod).map(([k, v]) => [k, num(v)])),
       }))
 
       const recentSchools = await db.school.findMany({
@@ -117,13 +118,13 @@ export async function GET() {
           schools: schoolsCount,
           students: studentsCount,
           teachers: teachersCount,
-          revenue: revenueAgg._sum.amount || 0,
+          revenue: num(revenueAgg._sum.amount),
         },
         byPlan,
         // Payment method breakdown for the collections donut (UPI/CARD/…)
         methodBreakdown: methodAgg.map((m) => ({
           method: m.method || 'UNKNOWN',
-          amount: m._sum.amount || 0,
+          amount: num(m._sum.amount),
           count: m._count.id,
         })),
         // Monthly stacked trend: [{ month: 'Sep 25', UPI: 50000, CARD: 25000, … }]
@@ -191,15 +192,15 @@ export async function GET() {
       orderBy: { createdAt: 'desc' },
       take: 200,
     })
-    const months: Record<string, number> = {}
+    const months: Record<string, ReturnType<typeof dec>> = {}
     for (const p of payments) {
       const key = p.createdAt.toISOString().slice(0, 7)
-      months[key] = (months[key] || 0) + p.amount
+      months[key] = (months[key] ?? dec(0)).plus(p.amount)
     }
     const trend = Object.entries(months)
       .sort((a, b) => (a[0] < b[0] ? -1 : 1))
       .slice(-6)
-      .map(([month, amount]) => ({ month, amount }))
+      .map(([month, amount]) => ({ month, amount: num(amount) }))
 
     const recentActivity = await db.activityLog.findMany({
       where: { schoolId },
@@ -227,8 +228,8 @@ export async function GET() {
         routes,
         books,
         notifications,
-        feesTotal: feesTotal._sum.amount || 0,
-        feesPaid: feesPaid._sum.paid || 0,
+        feesTotal: num(feesTotal._sum.amount),
+        feesPaid: num(feesPaid._sum.paid),
         overdue,
         attendanceRate,
       },
@@ -322,7 +323,7 @@ export async function POST(req: NextRequest) {
       // Today's timetable for this teacher
       const todayKey = new Date().toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase().slice(0, 3)
       const todaySchedule = await db.timetable.findMany({
-        where: { schoolId, day: todayKey, teacherName: { contains: user.name } },
+        where: { schoolId, day: todayKey, teacherName: { contains: user.name, mode: 'insensitive' as const } },
         include: { subject: true, class: true },
         orderBy: { period: 'asc' },
         take: 10,

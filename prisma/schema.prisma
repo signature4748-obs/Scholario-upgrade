@@ -5,8 +5,19 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// PHASE 8A — deployment-safe rate limiting: fixed-window counters live in
+// the shared database (bounded rows, lazily pruned + swept TTL) so every
+// app instance enforces the same budget. Written/read ONLY through the
+// atomic upsert in src/lib/security/rate-limit.ts — never client-served.
+model RateLimitBucket {
+  key         String   @id
+  count       Int      @default(0)
+  windowStart DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model School {
@@ -527,7 +538,8 @@ model ExamScheduleItem {
   class           Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
   subjectId       String
   subject         Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  date            DateTime
+  /// PHASE 8A — day-anchored column: PG native DATE (time component impossible).
+  date            DateTime @db.Date
   startTime       String
   endTime         String
   room            String?
@@ -730,8 +742,9 @@ model Fee {
   studentId String
   student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
   title     String
-  amount    Float
-  paid      Float     @default(0)
+  /// PHASE 8A — money is NUMERIC(12,2), never float (paise-exact ledger).
+  amount    Decimal @db.Decimal(12, 2)
+  paid      Decimal @db.Decimal(12, 2) @default(0)
   type      String?
   dueDate   DateTime?
   status    String    @default("UNPAID")
@@ -755,7 +768,8 @@ model Payment {
   school        School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   feeId         String?
   fee           Fee?     @relation(fields: [feeId], references: [id], onDelete: SetNull)
-  amount        Float
+  /// PHASE 8A — money is NUMERIC(12,2), never float.
+  amount        Decimal @db.Decimal(12, 2)
   method        String?
   status        String   @default("SUCCESS")
   /// Gateway transaction reference — UNIQUE so a replayed webhook or a
@@ -776,7 +790,8 @@ model Attendance {
   student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   classId   String?
   class     Class?   @relation(fields: [classId], references: [id])
-  date      DateTime
+  /// PHASE 8A — day-level canonical identity: PG native DATE (CLASS+DATE+STUDENT).
+  date      DateTime @db.Date
   status    String
   markedBy  String?
   createdAt DateTime @default(now())
@@ -1119,7 +1134,8 @@ model Route {
   school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   name      String
   stops     String?
-  fare      Float?
+  /// PHASE 8A — transport fare is money: NUMERIC(10,2).
+  fare      Decimal? @db.Decimal(10, 2)
   startTime String?
   endTime   String?
   createdAt DateTime @default(now())
@@ -1161,7 +1177,10 @@ model Session {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token     String   @unique
+  /// PHASE 8A — session tokens are stored hashed (SHA-256 hex), never
+  /// plaintext: a DB read cannot be replayed as a session. Lookup =
+  /// hash(presented token) → row.
+  tokenHash String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
   // SS-1 — device/session management (Settings → Devices). Captured at
@@ -1381,7 +1400,8 @@ model NoHomeworkDate {
   id        String   @id @default(cuid())
   schoolId  String
   school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  date      DateTime
+  /// PHASE 8A — day-anchored column: PG native DATE.
+  date      DateTime @db.Date
   reason    String? // "Sports Day", "Festival", "Exam Week"
   createdAt DateTime @default(now())
 
@@ -1453,7 +1473,8 @@ model MasterFeeHead {
   name        String
   category    String   @default("Other") // Tuition, Admission, Annual, Transport, Lab, Library, Exam, Activity, Board, Other
   frequency   String   @default("Monthly") // Annual, Half-Yearly, Quarterly, Monthly, Per Term, One-Time
-  amount      Float    @default(0)
+  /// PHASE 8A — money is NUMERIC(12,2), never float.
+  amount      Decimal @db.Decimal(12, 2) @default(0)
   mandatory   Boolean  @default(true)
   active      Boolean  @default(true)
   description String?
@@ -1511,7 +1532,8 @@ model FeeHead {
   catalogue   MasterFeeHead? @relation(fields: [catalogueId], references: [id], onDelete: SetNull)
   name        String
   category    String         @default("Other")
-  amount      Float          @default(0)
+  /// PHASE 8A — money is NUMERIC(12,2), never float.
+  amount      Decimal         @db.Decimal(12, 2) @default(0)
   frequency   String         @default("Monthly")
   mandatory   Boolean        @default(true)
   active      Boolean        @default(true)
@@ -1557,7 +1579,8 @@ model FeeTransaction {
   structureId          String?
   structure            FeeStructure?    @relation(fields: [structureId], references: [id], onDelete: SetNull)
   feeHeadName          String?
-  amount               Float
+  /// PHASE 8A — money is NUMERIC(12,2), never float (ledger parity exact).
+  amount               Decimal @db.Decimal(12, 2)
   method               String           @default("CASH") // UPI, Card, Net Banking, Cash, Bank Transfer
   status               String           @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED, UNDER_VERIFICATION, REJECTED
   // ── COLLECTION WORKFLOW (two-stage: Class Teacher collects → Principal verifies) ──
@@ -1625,9 +1648,10 @@ model Settlement {
   gatewayName   String? // razorpay, cashfree, payu, manual
   periodStart   DateTime
   periodEnd     DateTime
-  grossAmount   Float
-  fees          Float     @default(0)
-  netAmount     Float
+  /// PHASE 8A — settlement money is NUMERIC(14,2) (gateway payout scale).
+  grossAmount   Decimal @db.Decimal(14, 2)
+  fees          Decimal @db.Decimal(14, 2) @default(0)
+  netAmount     Decimal @db.Decimal(14, 2)
   status        String    @default("pending") // pending, settled, failed, reversed
   bankReference String?
   paidOutAt     DateTime?

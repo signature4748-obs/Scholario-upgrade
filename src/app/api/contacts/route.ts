@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
           role: 'TEACHER',
           status: 'ACTIVE',
           id: { not: user.id },
-          ...(q ? { name: { contains: q } } : {}),
+          ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
         },
         select: { id: true, name: true, role: true },
         orderBy: { name: 'asc' },
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
         schoolId,
         id: { not: user.id },
         status: 'ACTIVE',
-        ...(q ? { name: { contains: q } } : {}),
+        ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
       },
       select: {
         id: true,

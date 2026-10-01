@@ -1,9 +1,9 @@
 // ============================================================
 // seed-learning — L2D-1 demo seed for Learning Experience 2.0
-// (Demo School of Scholario).
+// (Sunrise Academy — the Phase-8A demo tenant).
 //
 // Seeds REAL rows for the demo student (the one behind the demo login
-// chip student1@demoschool.edu — resolved at runtime, never a hardcoded
+// chip student1@sunriseacademy.edu — resolved at runtime, never hardcoded
 // cuid):
 //   · 4 flashcard decks with real cards (SM-2 states start empty —
 //     every review a student does is genuinely computed from zero)
@@ -23,6 +23,8 @@
 // Run: bun run db:seed-learning   (or: bun prisma/seed-learning.ts)
 // ============================================================
 
+import { assertSeedable } from './seed-guard'
+import { DEMO_SCHOOL_SLUG } from './seed-identity'
 import { db } from '../src/lib/db'
 
 // ─── Flashcard decks ────────────────────────────────────────────────
@@ -149,20 +151,23 @@ function at(dayOffset: number, hour = 17): Date {
 // ─── Seed runner ─────────────────────────────────────────────────────
 
 async function main() {
-  const school = await db.school.findFirst({ where: { slug: 'demo-school' } })
+  // Phase 8A — shared seed lock (fail-safe, first statement).
+  assertSeedable('seed-learning')
+
+  const school = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
     ?? await db.school.findFirst({ where: { isDemo: true } })
   if (!school) {
-    throw new Error('Demo school not found — run prisma/seed.ts first.')
+    throw new Error('Demo school (sunrise-academy) not found — run prisma/seed.ts first.')
   }
 
   // The demo student — resolved exactly the way the APIs do (user → student).
   const demoUser = await db.user.findUnique({
-    where: { email: 'student1@demoschool.edu' },
+    where: { email: 'student1@sunriseacademy.edu' },
     include: { student: true },
   })
   const demoStudent = demoUser?.student
   if (!demoStudent) {
-    throw new Error('Demo student (student1@demoschool.edu) not found — run prisma/seed.ts first.')
+    throw new Error('Demo student (student1@sunriseacademy.edu) not found — run prisma/seed.ts first.')
   }
 
   const subjects = await db.subject.findMany({ where: { schoolId: school.id } })
@@ -271,14 +276,16 @@ async function main() {
   })
 
   // ── Learning activity + bookmark (Continue Learning / Saved work) ──
+  // Phase 8A PG-compat: mode 'insensitive' keeps SQLite-era matching
+  // semantics after the provider flip (PG LIKE is case-sensitive).
   const mathsWorksheet = await db.studyMaterial.findFirst({
-    where: { schoolId: school.id, title: { contains: 'Maths Worksheet 7' } },
+    where: { schoolId: school.id, title: { contains: 'Maths Worksheet 7', mode: 'insensitive' } },
   })
   const mentalSums = await db.studyMaterial.findFirst({
-    where: { schoolId: school.id, title: { contains: 'Mental Sums' } },
+    where: { schoolId: school.id, title: { contains: 'Mental Sums', mode: 'insensitive' } },
   })
   const grammarNotes = await db.studyMaterial.findFirst({
-    where: { schoolId: school.id, title: { contains: 'Grammar Notes' } },
+    where: { schoolId: school.id, title: { contains: 'Grammar Notes', mode: 'insensitive' } },
   })
 
   if (mathsWorksheet) {

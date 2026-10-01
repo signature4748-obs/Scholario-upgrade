@@ -3,6 +3,7 @@ import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { applyPaymentToLedger, mintReceiptNo, resolveFeeIdForTxn } from '@/lib/fee-workflow'
+import { num, dec, outstandingDec, formatINRServer } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -40,7 +41,8 @@ export async function GET(req: NextRequest) {
           settlement: { select: { id: true, payoutId: true, status: true, periodStart: true, periodEnd: true } },
         },
       })
-      return transactions
+      // Phase 8A: FeeTransaction.amount is Prisma.Decimal — emit numbers.
+      return transactions.map((t) => ({ ...t, amount: num(t.amount) }))
       // Audit §11 — the school fee ledger is admin-only; students read
       // their own payments through /api/student/payments/*.
     },
@@ -162,11 +164,11 @@ export async function POST(req: NextRequest) {
           if (ledgerFeeId) {
             const fee = await tx.fee.findUnique({ where: { id: ledgerFeeId } })
             if (fee && fee.schoolId === schoolId) {
-              const outstanding = Math.max(0, fee.amount - fee.paid)
-              if (amount > outstanding) {
+              const outstanding = outstandingDec(fee.amount, fee.paid)
+              if (dec(amount).greaterThan(outstanding)) {
                 throw new AppError('CONFLICT', {
-                  publicMessage: `Amount exceeds the outstanding balance of this fee (₹${outstanding.toLocaleString('en-IN')}). Partial payments are allowed — overpayments are not.`,
-                  internalDetail: `fees/transactions POST: amount ${amount} > outstanding ${outstanding} on fee ${ledgerFeeId}`,
+                  publicMessage: `Amount exceeds the outstanding balance of this fee (₹${formatINRServer(outstanding)}). Partial payments are allowed — overpayments are not.`,
+                  internalDetail: `fees/transactions POST: amount ${amount} > outstanding ${formatINRServer(outstanding)} on fee ${ledgerFeeId}`,
                 })
               }
             }
@@ -229,7 +231,7 @@ export async function POST(req: NextRequest) {
         })
       // Response echoes the ledger outcome (applied amount + closing
       // totals) so the caller can reconcile against server truth.
-      return { ...txn.created, ledger: txn.ledger }
+      return { ...txn.created, amount: num(txn.created.amount), ledger: txn.ledger }
     },
   )
 }

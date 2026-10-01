@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import type { Prisma } from '@prisma/client'
+import { num, dec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -57,15 +59,15 @@ export async function GET(req: NextRequest) {
         rollNo: string | null
         guardianName: string | null
         guardianPhone: string | null
-        outstanding: number
+        outstanding: Prisma.Decimal
         feeLines: Array<{ id: string; title: string; amount: number; paid: number; dueDate: string | null; status: string }>
         oldestDueAt: string | null
       }
       const byStudent = new Map<string, Bucket>()
 
       for (const f of feeRows) {
-        const outstanding = f.amount - f.paid
-        if (outstanding <= 0) continue
+        const outstanding = dec(f.amount).minus(f.paid)
+        if (outstanding.lessThanOrEqualTo(0)) continue
         let b = byStudent.get(f.studentId)
         if (!b) {
           b = {
@@ -76,18 +78,18 @@ export async function GET(req: NextRequest) {
             rollNo: f.student.rollNo ?? null,
             guardianName: f.student.guardianName ?? null,
             guardianPhone: f.student.guardianPhone ?? null,
-            outstanding: 0,
+            outstanding: dec(0),
             feeLines: [],
             oldestDueAt: null,
           }
           byStudent.set(f.studentId, b)
         }
-        b.outstanding += outstanding
+        b.outstanding = b.outstanding.plus(outstanding)
         b.feeLines.push({
           id: f.id,
           title: f.title,
-          amount: f.amount,
-          paid: f.paid,
+          amount: num(f.amount),
+          paid: num(f.paid),
           dueDate: f.dueDate ? f.dueDate.toISOString() : null,
           status: f.status,
         })
@@ -103,7 +105,7 @@ export async function GET(req: NextRequest) {
           const ms = now.getTime() - new Date(b.oldestDueAt).getTime()
           daysOverdue = ms > 0 ? Math.floor(ms / 86_400_000) : null
         }
-        return { ...b, daysOverdue }
+        return { ...b, outstanding: num(b.outstanding), daysOverdue }
       }).sort((a, b) => b.outstanding - a.outstanding)
 
       // Last reminder per student — Message rows with the stable subject
@@ -135,7 +137,7 @@ export async function GET(req: NextRequest) {
         return { ...d, lastRemindedAt: at ? at.toISOString() : null }
       })
 
-      const totalOutstanding = withReminders.reduce((s, d) => s + d.outstanding, 0)
+      const totalOutstanding = num(withReminders.reduce((s, d) => s.plus(d.outstanding), dec(0)))
       const overdueCount = withReminders.filter((d) => d.daysOverdue !== null).length
 
       // Class spread + largest defaulter — the summary-mode extras the KPI

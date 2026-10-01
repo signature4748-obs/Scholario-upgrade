@@ -1,5 +1,5 @@
 import { db } from './db'
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { cookies, headers } from 'next/headers'
 
 // Lightweight password hashing using Node's scrypt (no external deps)
@@ -34,6 +34,21 @@ export function burnPasswordTiming(): void {
 
 export function generateToken(): string {
   return randomBytes(32).toString('hex')
+}
+
+/**
+ * PHASE 8A — school session tokens are stored HASHED, never plaintext:
+ * sha256(token) hex, the exact at-rest convention the platform plane
+ * already uses for PlatformAdminSession/SupportSession
+ * (lib/platform/auth.ts hashToken). The RAW token only ever travels
+ * on the wire (HttpOnly cookie / dev bearer header / login response)
+ * and lives in memory; the Session row holds only its hash, so a DB
+ * read/leak cannot be replayed as a session. Lookup =
+ * hashSessionToken(presented token) → row. Exported so test fixtures
+ * can mint Session rows in the same format.
+ */
+export function hashSessionToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
 }
 
 export const SESSION_COOKIE = 'erp_session'
@@ -77,7 +92,9 @@ export async function createSession(
   await db.session.create({
     data: {
       userId,
-      token,
+      // PHASE 8A — at-rest form is the hash; the raw token is returned
+      // to the caller (cookie/bearer) and never persisted.
+      tokenHash: hashSessionToken(token),
       expiresAt,
       // SS-1 — device context for Settings → Devices (nullable: older
       // sessions honestly render as "unknown device").
@@ -97,7 +114,7 @@ export async function destroySession(token: string): Promise<void> {
   // Swallowing a DB failure here would leave a stolen token valid for the
   // full 7-day TTL while the client believes it signed out. Propagate the
   // failure (callers run inside api() → 500 envelope, never a fake ok).
-  await db.session.deleteMany({ where: { token } })
+  await db.session.deleteMany({ where: { tokenHash: hashSessionToken(token) } })
 }
 
 /**
@@ -106,13 +123,15 @@ export async function destroySession(token: string): Promise<void> {
  * password change so a stolen pre-rotation token dies immediately.
  */
 export async function rotateSession(currentToken: string): Promise<string> {
-  const old = await db.session.findUnique({ where: { token: currentToken } })
+  const old = await db.session.findUnique({
+    where: { tokenHash: hashSessionToken(currentToken) },
+  })
   if (!old) throw new Error('UNAUTHORIZED')
   const newToken = generateToken()
   await db.session.create({
     data: {
       userId: old.userId,
-      token: newToken,
+      tokenHash: hashSessionToken(newToken),
       expiresAt: new Date(Date.now() + SESSION_TTL_MS),
       userAgent: old.userAgent,
       ipAddress: old.ipAddress,
@@ -208,12 +227,15 @@ export async function getSessionToken(): Promise<string | undefined> {
   return undefined
 }
 
-/** SS-1 — the caller's Session row (token never leaves the server; the
- *  id/createdAt/expiresAt/device metadata shape what Settings renders). */
+/** SS-1 — the caller's Session row (raw token never touches the DB —
+ *  the row is found by its hash; id/createdAt/expiresAt/device metadata
+ *  shape what Settings renders). */
 export async function getCurrentSession() {
   const token = await getSessionToken()
   if (!token) return null
-  const session = await db.session.findUnique({ where: { token } })
+  const session = await db.session.findUnique({
+    where: { tokenHash: hashSessionToken(token) },
+  })
   if (!session) return null
   if (session.expiresAt < new Date()) {
     await db.session.delete({ where: { id: session.id } }).catch(() => {})
@@ -294,7 +316,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   const token = await getSessionToken()
   if (!token) return null
   const session = await db.session.findUnique({
-    where: { token },
+    where: { tokenHash: hashSessionToken(token) },
     include: {
       user: { include: { school: true } },
     },

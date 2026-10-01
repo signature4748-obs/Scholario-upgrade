@@ -5,6 +5,7 @@ import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { parseJsonBody, idSchema, safeText } from '@/lib/security/validation'
+import { num, dec, outstandingDec, formatINRServer } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -36,7 +37,14 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: 'desc' },
       take: 300,
     })
-    return fees
+    // Phase 8A: money columns are Prisma.Decimal (NUMERIC) — emit JSON
+    // numbers so client formatters/stores are unchanged.
+    return fees.map((f) => ({
+      ...f,
+      amount: num(f.amount),
+      paid: num(f.paid),
+      payments: f.payments.map((p) => ({ ...p, amount: num(p.amount) })),
+    }))
   })
 }
 
@@ -80,21 +88,21 @@ export async function POST(req: NextRequest) {
       const result = await trackedTransaction('payment-record-manual', async (tx) => {
         const fee = await tx.fee.findUnique({ where: { id: body.feeId! } })
         if (!fee || fee.schoolId !== schoolId) throw new AppError('RESOURCE_NOT_FOUND')
-        const remaining = fee.amount - fee.paid
-        if (remaining <= 0) {
+        const remaining = outstandingDec(fee.amount, fee.paid)
+        if (remaining.lessThanOrEqualTo(0)) {
           throw new AppError('INVALID_INPUT', {
             publicMessage: 'This fee is already fully paid',
-            internalDetail: `fee ${fee.id} paid=${fee.paid} amount=${fee.amount}`,
+            internalDetail: `fee ${fee.id} paid=${num(fee.paid)} amount=${num(fee.amount)}`,
           })
         }
-        if (amount > remaining) {
+        if (dec(amount).greaterThan(remaining)) {
           throw new AppError('INVALID_INPUT', {
-            publicMessage: `Amount exceeds the outstanding balance (₹${remaining})`,
-            internalDetail: `fee ${fee.id} payment ${amount} > remaining ${remaining}`,
+            publicMessage: `Amount exceeds the outstanding balance (₹${formatINRServer(remaining)})`,
+            internalDetail: `fee ${fee.id} payment ${amount} > remaining ${formatINRServer(remaining)}`,
           })
         }
-        const newPaid = fee.paid + amount
-        const status = newPaid >= fee.amount ? 'PAID' : newPaid > 0 ? 'PARTIAL' : fee.status
+        const newPaid = dec(fee.paid).plus(amount)
+        const status = newPaid.greaterThanOrEqualTo(fee.amount) ? 'PAID' : newPaid.greaterThan(0) ? 'PARTIAL' : fee.status
         await tx.payment.create({
           data: {
             schoolId,
@@ -108,7 +116,7 @@ export async function POST(req: NextRequest) {
           where: { id: fee.id },
           data: { paid: { increment: amount }, status, method: body.method || fee.method, paidDate: new Date() },
         })
-        return { feeId: fee.id, paid: newPaid, status }
+        return { feeId: fee.id, paid: num(newPaid), status }
       })
       return { ok: true, ...result }
     }
@@ -141,6 +149,6 @@ export async function POST(req: NextRequest) {
         status: 'UNPAID',
       },
     })
-    return fee
+    return { ...fee, amount: num(fee.amount), paid: num(fee.paid) }
   })
 }

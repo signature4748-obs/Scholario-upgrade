@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
+import { num, outstandingDec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -88,9 +89,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ txn
         if (fee && fee.schoolId === schoolId) {
           feeLine = {
             title: fee.title,
-            amount: fee.amount,
-            paid: fee.paid,
-            outstanding: Math.max(0, fee.amount - fee.paid),
+            amount: num(fee.amount),
+            paid: num(fee.paid),
+            outstanding: num(outstandingDec(fee.amount, fee.paid)),
           }
         }
       }
@@ -100,7 +101,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ txn
           id: txn.id,
           status: txn.status,
           receiptNo: txn.receiptNo,
-          amount: txn.amount,
+          amount: num(txn.amount),
           method: txn.method,
           source: txn.source,
           referenceNumber: txn.referenceNumber,

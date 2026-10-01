@@ -1,9 +1,10 @@
+import { db } from '../helpers/db'
 /**
  * PHASE 4 (item 10) — API DOMAIN SMOKE tests (prioritized domains).
  *
  * One or two golden-path checks per domain against the LIVE dev server,
- * all through REAL logins (demo principal principal@demoschool.edu /
- * password123 from prisma/seed.ts + the tenant fixtures from
+ * all through REAL logins (demo principal principal@sunriseacademy.edu /
+ * password123 from the seed:demo pipeline + the tenant fixtures from
  * prisma/seed-tenant-isolation.ts).
  *
  * Domains: auth (login → me → logout), admissions (public inquiry form),
@@ -17,16 +18,17 @@
  * short-lived (1h) and belong to fixture accounts.
  */
 import { describe, test, expect, afterAll, beforeAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
-const db = new PrismaClient()
+
 const T = 45000 // generous: first-hit dev compilation
 
 const RUN_IP = `10.231.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 const FIXTURE_PW = 'ScholarioTest2026'
-const DEMO_PRINCIPAL = { email: 'principal@demoschool.edu', password: 'password123' }
+const DEMO_PRINCIPAL = { email: 'principal@sunriseacademy.edu', password: 'password123' }
 const tokens: Record<string, string> = {}
 
 // ── auth helpers (login with rate-limit fallback, tenant-isolation pattern) ──
@@ -51,7 +53,11 @@ async function directSession(email: string): Promise<string> {
   const u = await db.user.findUnique({ where: { email } })
   if (!u) throw new Error(`no fixture user ${email}`)
   const token = randomBytes(32).toString('hex')
-  await db.session.create({ data: { userId: u.id, token, expiresAt: new Date(Date.now() + 3600_000) } })
+  // PHASE 8A — the row stores the hash; the RAW token keeps riding the
+  // Authorization header (identical to a server-minted session).
+  await db.session.create({
+    data: { userId: u.id, tokenHash: hashSessionToken(token), expiresAt: new Date(Date.now() + 3600_000) },
+  })
   return token
 }
 
@@ -143,13 +149,13 @@ describe('admissions domain · public inquiry form', () => {
         email: '',
         grade: 'Grade 5',
         notes: 'phase-4 domain smoke',
-        schoolSlug: 'demo-school',
+        schoolSlug: 'sunrise-academy',
       }),
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { success: boolean; message: string }
     expect(body.success).toBe(true)
-    // the inquiry landed for the RIGHT tenant (demo-school)
+    // the inquiry landed for the RIGHT tenant (sunrise-academy)
     const notif = await db.notification.findFirst({ where: { title: { startsWith: `New Admission Inquiry: ${marker}` } } })
     expect(notif).not.toBeNull()
     expect(notif!.schoolId).not.toBeNull()
@@ -162,7 +168,7 @@ describe('admissions domain · public inquiry form', () => {
 
 describe('fees domain · principal golden path', () => {
   test('GET /api/fees → 200 {ok:true, data array}', async () => {
-    const res = await as('tenant.principal.a@scholario.test', '/api/fees')
+    const res = await as('tenant.principal.a@sunrise.test', '/api/fees')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown[] }
     expect(body.ok).toBe(true)
@@ -170,14 +176,14 @@ describe('fees domain · principal golden path', () => {
   }, T)
 
   test('GET /api/fees/transactions → 200 {ok:true}', async () => {
-    const res = await as('tenant.principal.a@scholario.test', '/api/fees/transactions')
+    const res = await as('tenant.principal.a@sunrise.test', '/api/fees/transactions')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown }
     expect(body.ok).toBe(true)
   }, T)
 
   test('GET /api/fees/catalogue → 200 {ok:true}', async () => {
-    const res = await as('tenant.principal.a@scholario.test', '/api/fees/catalogue')
+    const res = await as('tenant.principal.a@sunrise.test', '/api/fees/catalogue')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown }
     expect(body.ok).toBe(true)
@@ -190,14 +196,14 @@ describe('fees domain · principal golden path', () => {
 
 describe('academics domain · attendance / exams / timetable (principal)', () => {
   test('GET /api/attendance/overview → 200 {ok:true}', async () => {
-    const res = await as('tenant.principal.a@scholario.test', '/api/attendance/overview')
+    const res = await as('tenant.principal.a@sunrise.test', '/api/attendance/overview')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown }
     expect(body.ok).toBe(true)
   }, T)
 
   test('GET /api/exams → 200 {ok:true, data.exams present}', async () => {
-    const res = await as('tenant.principal.a@scholario.test', '/api/exams')
+    const res = await as('tenant.principal.a@sunrise.test', '/api/exams')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: { exams: unknown[]; classes: unknown[] } }
     expect(body.ok).toBe(true)
@@ -205,7 +211,7 @@ describe('academics domain · attendance / exams / timetable (principal)', () =>
   }, T)
 
   test('GET /api/timetable → 200 {ok:true}', async () => {
-    const res = await as('tenant.principal.a@scholario.test', '/api/timetable')
+    const res = await as('tenant.principal.a@sunrise.test', '/api/timetable')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown }
     expect(body.ok).toBe(true)
@@ -218,14 +224,14 @@ describe('academics domain · attendance / exams / timetable (principal)', () =>
 
 describe('teacher permissions (fixture teacher)', () => {
   test('GET /api/teacher/dashboard → 200 {ok:true} (teacher surface)', async () => {
-    const res = await as('tenant.teacher.a@scholario.test', '/api/teacher/dashboard')
+    const res = await as('tenant.teacher.a@sunrise.test', '/api/teacher/dashboard')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown }
     expect(body.ok).toBe(true)
   }, T)
 
   test('GET /api/students as teacher → 200 (teachers read the roster)', async () => {
-    const res = await as('tenant.teacher.a@scholario.test', '/api/students')
+    const res = await as('tenant.teacher.a@sunrise.test', '/api/students')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown[] }
     expect(body.ok).toBe(true)
@@ -235,7 +241,7 @@ describe('teacher permissions (fixture teacher)', () => {
   test('GET /api/platform/settings as teacher (school session) → 401 (platform boundary)', async () => {
     // PHASE 6 — the platform control plane has its own credential space;
     // a school session never reaches platform routes.
-    const res = await as('tenant.teacher.a@scholario.test', '/api/platform/settings')
+    const res = await as('tenant.teacher.a@sunrise.test', '/api/platform/settings')
     expect(res.status).toBe(401)
     const body = (await res.json()) as { ok: boolean; code: string; error: string }
     expect(body.ok).toBe(false)
@@ -243,7 +249,7 @@ describe('teacher permissions (fixture teacher)', () => {
   }, T)
 
   test('GET /api/teacher/dashboard as PRINCIPAL → 403 (role gate is symmetric)', async () => {
-    const res = await as('tenant.principal.a@scholario.test', '/api/teacher/dashboard')
+    const res = await as('tenant.principal.a@sunrise.test', '/api/teacher/dashboard')
     expect(res.status).toBe(403)
     const body = (await res.json()) as { ok: boolean; code: string }
     expect(body.ok).toBe(false)
@@ -257,7 +263,7 @@ describe('teacher permissions (fixture teacher)', () => {
 
 describe('principal permissions + write-path validation', () => {
   test('GET /api/dashboard → 200 {ok:true} (principal home surface)', async () => {
-    const res = await as('tenant.principal.a@scholario.test', '/api/dashboard')
+    const res = await as('tenant.principal.a@sunrise.test', '/api/dashboard')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown }
     expect(body.ok).toBe(true)
@@ -265,7 +271,7 @@ describe('principal permissions + write-path validation', () => {
 
   test('POST /api/fees with NO body → 422 VALIDATION_FAILED (no rows written)', async () => {
     const before = await db.fee.count()
-    const res = await as('tenant.principal.a@scholario.test', '/api/fees', { method: 'POST' })
+    const res = await as('tenant.principal.a@sunrise.test', '/api/fees', { method: 'POST' })
     expect(res.status).toBe(422)
     const body = (await res.json()) as { ok: boolean; code: string; error: string }
     expect(body.ok).toBe(false)
@@ -282,14 +288,14 @@ describe('principal permissions + write-path validation', () => {
 
 describe('student permissions (fixture student)', () => {
   test('GET /api/student/dashboard → 200 {ok:true} (student surface)', async () => {
-    const res = await as('tenant.student.a@scholario.test', '/api/student/dashboard')
+    const res = await as('tenant.student.a@sunrise.test', '/api/student/dashboard')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown }
     expect(body.ok).toBe(true)
   }, T)
 
   test('GET /api/teachers as student → 403 FORBIDDEN (staff read is gated)', async () => {
-    const res = await as('tenant.student.a@scholario.test', '/api/teachers')
+    const res = await as('tenant.student.a@sunrise.test', '/api/teachers')
     expect(res.status).toBe(403)
     const body = (await res.json()) as { ok: boolean; code: string }
     expect(body.ok).toBe(false)
@@ -303,7 +309,7 @@ describe('student permissions (fixture student)', () => {
 
 describe('parent permissions (fixture parent)', () => {
   test('GET /api/events as parent → 200 {ok:true} (school-wide calendar)', async () => {
-    const res = await as('tenant.parent.a@scholario.test', '/api/events')
+    const res = await as('tenant.parent.a@sunrise.test', '/api/events')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown[] }
     expect(body.ok).toBe(true)

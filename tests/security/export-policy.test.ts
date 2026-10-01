@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PIH-5 — INVARIANT: the bulk CSV export policy.
  *
@@ -26,22 +27,23 @@
  * cookie jar, cleanup of every row this suite creates.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const db = new PrismaClient()
+
 const T = 45_000 // generous: first-hit dev compilation (tenant-isolation precedent)
 
 const MARKER = randomBytes(4).toString('hex')
 
 // ── fixtures ───────────────────────────────────────────────────────────────
 let schoolA = { id: '' } // demo school (the CSV seeding target)
-let schoolB = { id: '' } // bluebell (the suspension probe target)
-let teacher1 = { id: '', email: 'teacher1@demoschool.edu' }
-let student1 = { id: '', email: 'student1@demoschool.edu' }
-let principalA = { id: '', email: 'principal@demoschool.edu' }
-let principalB = { id: '', email: 'principal.b@bluebell.test' }
+let schoolB = { id: '' } // green-valley (the clean tenant — suspension probe target)
+let teacher1 = { id: '', email: 'teacher1@sunriseacademy.edu' }
+let student1 = { id: '', email: 'student1@sunriseacademy.edu' }
+let principalA = { id: '', email: 'principal@sunriseacademy.edu' }
+let principalB = { id: '', email: 'principal.b@greenvalley.test' }
 let teacherToken = ''
 let studentToken = ''
 let principalAToken = ''
@@ -56,10 +58,10 @@ const cleanup: Array<() => Promise<unknown>> = []
 
 beforeAll(async () => {
   const demo = await db.school.findFirst({ where: { isDemo: true } })
-  const bluebell = await db.school.findUnique({ where: { slug: 'bluebell-academy' } })
-  if (!demo || !bluebell) throw new Error('fixture schools missing (run bun run db:seed-tenant-isolation)')
+  const greenValley = await db.school.findUnique({ where: { slug: 'green-valley' } })
+  if (!demo || !greenValley) throw new Error('fixture schools missing (run bun run seed:demo / seed:clean)')
   schoolA = { id: demo.id }
-  schoolB = { id: bluebell.id }
+  schoolB = { id: greenValley.id }
 
   const byEmail = async (email: string) => {
     const u = await db.user.findUnique({ where: { email } })
@@ -83,15 +85,23 @@ beforeAll(async () => {
   principalBToken = randomBytes(32).toString('hex')
   await db.session.createMany({
     data: [
-      { userId: t1.id, token: teacherToken, expiresAt: new Date(Date.now() + 3600_000) },
-      { userId: s1.id, token: studentToken, expiresAt: new Date(Date.now() + 3600_000) },
-      { userId: pA.id, token: principalAToken, expiresAt: new Date(Date.now() + 3600_000) },
-      { userId: pB.id, token: principalBToken, expiresAt: new Date(Date.now() + 3600_000) },
+      // PHASE 8A — rows store sha256(token); the RAW tokens ride the
+      // cookie jar below (createSession wire contract).
+      { userId: t1.id, tokenHash: hashSessionToken(teacherToken), expiresAt: new Date(Date.now() + 3600_000) },
+      { userId: s1.id, tokenHash: hashSessionToken(studentToken), expiresAt: new Date(Date.now() + 3600_000) },
+      { userId: pA.id, tokenHash: hashSessionToken(principalAToken), expiresAt: new Date(Date.now() + 3600_000) },
+      { userId: pB.id, tokenHash: hashSessionToken(principalBToken), expiresAt: new Date(Date.now() + 3600_000) },
     ],
   })
   cleanup.push(() =>
     db.session.deleteMany({
-      where: { token: { in: [teacherToken, studentToken, principalAToken, principalBToken, rateLimitToken] } },
+      where: {
+        tokenHash: {
+          in: [teacherToken, studentToken, principalAToken, principalBToken, rateLimitToken].map(
+            hashSessionToken,
+          ),
+        },
+      },
     }),
   )
 
@@ -99,7 +109,7 @@ beforeAll(async () => {
   // boundary: a FRESH user owns a fresh `rl:export:${userId}` bucket.
   rateLimitUser = {
     id: '',
-    email: `pih5.export.${MARKER}@scholario.test`,
+    email: `pih5.export.${MARKER}@sunrise.test`,
   }
   const rl = await db.user.create({
     data: {
@@ -113,7 +123,11 @@ beforeAll(async () => {
   rateLimitUser = { ...rateLimitUser, id: rl.id }
   rateLimitToken = randomBytes(32).toString('hex')
   await db.session.create({
-    data: { userId: rl.id, token: rateLimitToken, expiresAt: new Date(Date.now() + 3600_000) },
+    data: {
+      userId: rl.id,
+      tokenHash: hashSessionToken(rateLimitToken),
+      expiresAt: new Date(Date.now() + 3600_000),
+    },
   })
   // Cleanup ORDER matters: the throwaway user's 30 export-audit rows must
   // be deleted BEFORE the user row (the ActivityLog.user FK is SetNull —
@@ -185,7 +199,7 @@ describe('PIH-5 · export role gate (permission matrix)', () => {
 
   test('PRINCIPAL → 200 text/csv attachment; a seeded "=HYPERLINK" student name is neutralized, never an unescaped formula cell', async () => {
     // Seed a throwaway student whose NAME is a classic CSV/DDE payload.
-    const email = `pih5.csv.${MARKER}@scholario.test`
+    const email = `pih5.csv.${MARKER}@sunrise.test`
     const user = await db.user.create({
       data: { schoolId: schoolA.id, email, name: EVIL_NAME, role: 'STUDENT', status: 'ACTIVE' },
     })

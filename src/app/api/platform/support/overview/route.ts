@@ -3,6 +3,7 @@ import { api } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
 import { getSupportSession } from '@/lib/platform/auth'
 import { platformAuditEvent } from '@/lib/platform/audit'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -91,7 +92,7 @@ export async function GET() {
       counts: counts?._count ?? {},
       finance: {
         successfulPayments: finance._count,
-        collectedTotal: finance._sum.amount ?? 0,
+        collectedTotal: num(finance._sum.amount),
       },
       recentActivity: recentActivity.map((a) => ({
         id: a.id,

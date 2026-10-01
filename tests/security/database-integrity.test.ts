@@ -1,8 +1,11 @@
+import { Prisma } from '@prisma/client'
+import { db } from '../helpers/db'
 /**
  * PHASE 3 — DATABASE INTEGRITY TESTS (the automated invariant gate).
  *
  * Companion docs: docs/DATABASE_INTEGRITY.md.
- * These tests demonstrate, against the real SQLite database, that:
+ * These tests demonstrate, against the real PostgreSQL database (Phase 8A
+ * Supabase), that:
  *   1. the business-key UNIQUE constraints reject duplicates
  *      (admission numbers, roll numbers, attendance, fees, receipts,
  *       payments, exams, marks, timetable, rooms*, class/subject
@@ -24,10 +27,9 @@
  * Trigger ABORTs surface from Prisma as P2003; unique violations as P2002.
  */
 import { describe, test, expect, afterAll, beforeAll, mock } from 'bun:test'
-import { PrismaClient, Prisma } from '@prisma/client'
+
 import { applyPaymentToLedger } from '@/lib/fee-workflow'
 
-const db = new PrismaClient()
 
 // exams/service.ts carries `import 'server-only'` (a Next.js RSC guard).
 // Under bun:test it throws, so intercept it before dynamically importing
@@ -55,16 +57,28 @@ let _resultKey = { studentId: '', examId: '', subjectId: '' }
 let _attendanceKey = { studentId: '', date: new Date() }
 let feeA = { id: '', amount: 0, paid: 0 }
 let bookA = { id: '' }
+let subjectB = { id: '' }
 
+/**
+ * The write MUST be rejected by the database. SQLite surfaced trigger
+ * ABORTs as P2003 and unique violations as P2002; on PostgreSQL the
+ * UNIQUE violations still map to P2002, but CHECK constraints (23514)
+ * and RAISE EXCEPTION guards (P0001 — the "tenant-guard:"/"bound-guard:"
+ * triggers) surface as PrismaClientUnknownRequestError with the
+ * PostgresError payload embedded in the message. Both shapes are the
+ * SAME rejections — normalize the provider artifact, never the verdict.
+ */
 async function blocked(fn: () => Promise<unknown>): Promise<{ code: string }> {
   try {
     await fn()
   } catch (e) {
-    const code = (e as { code?: string }).code ?? ''
-    if (code !== 'P2002' && code !== 'P2003') {
-      throw new Error(`expected a DB constraint rejection (P2002/P2003), got: ${code || 'no code'} — ${(e as Error).message.slice(0, 160)}`)
-    }
-    return { code }
+    const err = e as { code?: string; message?: string }
+    const code = err.code ?? ''
+    if (code === 'P2002' || code === 'P2003') return { code }
+    const msg = String(err.message ?? '')
+    const pg = /PostgresError \{[^}]*code: "(P0001|23514|23503)"/.exec(msg)
+    if (pg) return { code: pg[1] }
+    throw new Error(`expected a DB constraint rejection (P2002/P2003 or PG guard 23514/P0001), got: ${code || 'no code'} — ${msg.slice(0, 160)}`)
   }
   throw new Error('expected the write to be REJECTED by the database, but it succeeded')
 }
@@ -76,10 +90,15 @@ beforeAll(async () => {
   const feeWorkflow = await import('@/lib/fee-workflow')
   _resolveFeeIdForTxn = feeWorkflow.resolveFeeIdForTxn
 
-  const schools = await db.school.findMany({ orderBy: { createdAt: 'asc' } })
+  const schools = await db.school.findMany()
   expect(schools.length).toBeGreaterThanOrEqual(2)
-  schoolA = schools[0]
-  schoolB = schools[schools.length - 1]
+  // Phase 8A two-tenant corpus: schoolA = the DEMO tenant (full business
+  // data — the legacy first-by-createdAt order flipped when the clean
+  // school was seeded first); schoolB = the CLEAN tenant (bootstrap config,
+  // zero business rows). The A-side fixtures below REQUIRE the data tenant.
+  const demo = schools.find((s) => s.isDemo) ?? schools[0]
+  schoolA = demo
+  schoolB = schools.find((s) => s.id !== demo.id) ?? schools[schools.length - 1]
 
   classA = (await db.class.findFirstOrThrow({ where: { schoolId: schoolA.id }, select: { id: true, name: true, section: true } }))!
   const tu = await db.user.findFirst({ where: { schoolId: schoolA.id, role: 'TEACHER', status: 'ACTIVE' }, select: { id: true } })
@@ -89,7 +108,11 @@ beforeAll(async () => {
     select: { id: true, admissionNo: true, classId: true, rollNo: true },
   })
   studentA = sA ?? { id: '', admissionNo: null, classId: null, rollNo: null }
-  studentB = (await db.student.findFirstOrThrow({ where: { schoolId: schoolB.id }, select: { id: true } }))!
+  // Phase 8A: the clean tenant carries ZERO students — the cross-tenant
+  // FK-guard probes below use a THROWAWAY student minted here (P-swept in
+  // afterAll) instead of a corpus row.
+  const sbPair = await tempUserStudent(schoolB.id, null)
+  studentB = { id: sbPair.student.id }
   subjectA = (await db.subject.findFirstOrThrow({ where: { schoolId: schoolA.id }, select: { id: true } }))!
 
   const cfg = await db.examSubjectConfig.findFirst({
@@ -107,9 +130,17 @@ beforeAll(async () => {
   const att = await db.attendance.findFirst({ where: { schoolId: schoolA.id }, select: { studentId: true, date: true } })
   if (att) _attendanceKey = att
 
-  feeA = (await db.fee.findFirstOrThrow({ where: { schoolId: schoolA.id }, select: { id: true, amount: true, paid: true } }))!
+  const feeRow = (await db.fee.findFirstOrThrow({ where: { schoolId: schoolA.id }, select: { id: true, amount: true, paid: true } }))!
+  // NUMERIC(12,2) money arrives as Prisma.Decimal — normalize at the fixture boundary.
+  feeA = { id: feeRow.id, amount: Number(feeRow.amount), paid: Number(feeRow.paid) }
   bookA = (await db.libraryBook.findFirstOrThrow({ where: { schoolId: schoolA.id }, select: { id: true } }))!
-})
+
+  // Phase 8A: the clean tenant also carries no subjects — plant a P-swept
+  // probe subject there so the cross-school homework guard below stays
+  // non-vacuous (a REAL foreign subject id to reject).
+  subjectB = (await db.subject.findFirst({ where: { schoolId: schoolB.id }, select: { id: true } }))
+    ?? (await db.subject.create({ data: { id: `${P}subj-b`, schoolId: schoolB.id, name: 'P3 Cross-School Subject' } }))
+}, 60_000) // remote-Supabase fixture resolution (family convention — fee-lifecycle/assignment-scope)
 
 afterAll(async () => {
   // sweep: every model this suite can touch, idempotent deletes
@@ -319,7 +350,9 @@ describe('PHASE 3 · bound guards (database level)', () => {
     const m = await db.examMark.findFirstOrThrow({ where: { examId: markKey.examId, classId: markKey.classId, subjectId: markKey.subjectId, marksObtained: { not: null } } })
     const cfg = await db.examSubjectConfig.findFirstOrThrow({ where: { examId: m.examId, classId: m.classId, subjectId: m.subjectId } })
     const r = await blocked(() => db.examMark.update({ where: { id: m.id }, data: { marksObtained: cfg.maxMarks + 1 } }))
-    expect(r.code).toBe('P2003')
+    // P2003 = the legacy SQLite trigger-ABORT mapping; P0001 = the same
+    // bound-guard on PG (RAISE EXCEPTION). Either proves the DB rejection.
+    expect(['P2003', 'P0001']).toContain(r.code)
   })
 
   test('ExamMark rejects negative marks', async () => {
@@ -455,8 +488,7 @@ describe('PHASE 3 · cross-school FK guards (database level)', () => {
   })
 
   test('a Homework cannot reference another school\'s subject', async () => {
-    const subjB = await db.subject.findFirst({ where: { schoolId: schoolB.id } })
-    if (!subjB) return // School B has no subject fixture — trivially green
+    const subjB = subjectB // Phase 8A: P-swept probe subject in the clean tenant
     await blocked(() =>
       db.homework.create({
         data: {
@@ -547,7 +579,7 @@ describe('PHASE 3 · transactional financial integrity', () => {
       expect(second?.applied).toBe(20) // outstanding is 20, not 80
 
       const feeAfter = await db.fee.findUniqueOrThrow({ where: { id: fee.id } })
-      expect(feeAfter.paid).toBe(100) // exactly the billed amount — never more
+      expect(Number(feeAfter.paid)).toBe(100) // exactly the billed amount — never more
       expect(feeAfter.status).toBe('PAID')
       const mirrors = await db.payment.findMany({ where: { transactionId: { startsWith: `${P}ledger-txn` } } })
       expect(mirrors.length).toBe(2) // one per distinct txnId — not one per call
@@ -563,7 +595,7 @@ describe('PHASE 3 · transactional financial integrity', () => {
       await db.student.delete({ where: { id: student.id } }).catch(() => {})
       await db.user.delete({ where: { id: user.id } }).catch(() => {})
     }
-  })
+  }, 30_000) // remote-Supabase roundtrips (4 ledger transactions + mirrors)
 
   test('fee targeting resolves the oldest unsettled fee, never a paid row (resolveFeeIdForTxn contract)', async () => {
     const resolveFeeIdForTxn = _resolveFeeIdForTxn!

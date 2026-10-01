@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { stat, readFile, unlink } from 'fs/promises'
-import path from 'path'
 import { getCurrentUser } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { newRequestId } from '@/lib/security/errors'
+import { AppError, newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { verifyFileToken } from '@/lib/security/file-signing'
-import { isValidStoredFileId, TEACHER_UPLOAD_POLICY, MIME_BY_TYPE } from '@/lib/security/upload'
+import { isValidStoredFileId, TEACHER_UPLOAD_POLICY } from '@/lib/security/upload'
 import { auditEvent } from '@/lib/security/audit'
+import {
+  storedObjectLocation,
+  storageExists,
+  storageSignedUrl,
+  storageDelete,
+} from '@/lib/storage/supabase'
 
 export const runtime = 'nodejs'
 
@@ -37,9 +41,15 @@ export const runtime = 'nodejs'
  *     the registry existed).
  *   · DELETE: registered file + foreign school → 404; NO registry row →
  *     404 (ownership cannot be verified, so the delete is refused).
+ *
+ * Phase 8A (8A-C9) — bytes live in the PRIVATE 'school-media' bucket at
+ * `teachers/<schoolId>/<fileId>` (scope-fallback path for unregistered
+ * legacy ids). Authorization runs BEFORE any URL is minted; an allowed
+ * read REDIRECTS (302) to a short-TTL Supabase signed URL (900 s for
+ * HMAC-token links / 3600 s session reads — the previous Cache-Control
+ * lifetimes). `?download=1` rides the Storage `download` param. Missing
+ * objects keep the honest-404 contract.
  */
-
-const UPLOAD_DIR = path.join(process.cwd(), 'db', 'uploads', 'teachers')
 
 /** Registry row for this fileId (null = legacy pre-registry file). */
 async function registryRow(fileId: string) {
@@ -48,13 +58,22 @@ async function registryRow(fileId: string) {
 
 type ReadVerdict = 'allow' | 'not-found' | 'unauthorized'
 
-async function authorizeFileRead(req: NextRequest, fileId: string): Promise<ReadVerdict> {
+/**
+ * Authorization + registry row (the row also derives the storage
+ * location; the token path fetches it purely to compute the path).
+ */
+async function authorizeFileRead(
+  req: NextRequest,
+  fileId: string,
+): Promise<{ verdict: ReadVerdict; row: Awaited<ReturnType<typeof registryRow>> }> {
   // Path 1 — signed URL token (works for <img>/<a> where auth headers
   // cannot ride along, e.g. the dev preview iframe). The token is an
   // unguessable HMAC over fileId|scope|exp — validity alone authorizes
   // the read (legacy files included).
   const token = req.nextUrl.searchParams.get('t')
-  if (token && verifyFileToken(fileId, 'teachers', token)) return 'allow'
+  if (token && verifyFileToken(fileId, 'teachers', token)) {
+    return { verdict: 'allow', row: await registryRow(fileId) }
+  }
 
   // Path 2 — session (cookie or dev Bearer): PRINCIPAL / MANAGEMENT.
   const user = await getCurrentUser()
@@ -63,13 +82,15 @@ async function authorizeFileRead(req: NextRequest, fileId: string): Promise<Read
       // 3-c V5/V10: prefer the registry when a row exists.
       const row = await registryRow(fileId)
       if (row) {
-        return row.schoolId === user.schoolId && row.scope === 'teachers' ? 'allow' : 'not-found'
+        return row.schoolId === user.schoolId && row.scope === 'teachers'
+          ? { verdict: 'allow', row }
+          : { verdict: 'not-found', row }
       }
     }
     // Legacy (unregistered) file — pre-Phase-2 behavior stands.
-    return 'allow'
+    return { verdict: 'allow', row: null }
   }
-  return 'unauthorized'
+  return { verdict: 'unauthorized', row: null }
 }
 
 export async function GET(
@@ -81,7 +102,7 @@ export async function GET(
     return NextResponse.json({ success: false, error: 'Invalid file id.' }, { status: 400 })
   }
 
-  const verdict = await authorizeFileRead(req, fileId)
+  const { verdict, row } = await authorizeFileRead(req, fileId)
   if (verdict === 'not-found') {
     // Fail-safe: a foreign school's file "does not exist".
     return NextResponse.json(
@@ -96,39 +117,51 @@ export async function GET(
     )
   }
 
-  const filePath = path.join(UPLOAD_DIR, fileId)
-  try {
-    const info = await stat(filePath)
-    if (!info.isFile()) throw new Error('not a file')
-    const data = await readFile(filePath)
-    const ext = fileId.split('.').pop()!.toLowerCase()
-    const download = req.nextUrl.searchParams.get('download') === '1'
-    const signed = !!req.nextUrl.searchParams.get('t')
+  // ── Storage read (Phase 8A): tenant checks passed → derive the object
+  // location, probe existence (honest 404), then redirect to a signed URL.
+  const location = storedObjectLocation('teachers', row?.schoolId ?? null, fileId)
+  const download = req.nextUrl.searchParams.get('download') === '1'
+  const signed = !!req.nextUrl.searchParams.get('t')
 
-    const res = new NextResponse(new Uint8Array(data), {
-      headers: {
-        'Content-Type': MIME_BY_TYPE[ext] || 'application/octet-stream',
-        'Content-Length': String(info.size),
-        'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${fileId}"`,
-        // Signed-URL responses may be cached by the browser for the life
-        // of the link; session responses stay private no-store-adjacent.
-        'Cache-Control': signed ? 'private, max-age=900' : 'private, max-age=3600',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    })
-    res.headers.set('X-Request-Id', newRequestId())
-    return res
-  } catch {
-    return NextResponse.json(
-      { success: false, error: 'File not found. It may have been removed.' },
-      { status: 404 },
+  let target: string
+  try {
+    if (!(await storageExists(location.bucket, location.path))) {
+      throw new AppError('RESOURCE_NOT_FOUND')
+    }
+    target = await storageSignedUrl(
+      location.bucket,
+      location.path,
+      signed ? 900 : 3600, // mirrors the previous Cache-Control lifetimes
     )
+  } catch (e) {
+    if (e instanceof AppError && (e.code === 'RESOURCE_NOT_FOUND' || e.status === 404)) {
+      return NextResponse.json(
+        { success: false, error: 'File not found. It may have been removed.' },
+        { status: 404 },
+      )
+    }
+    // Storage outage / misconfiguration — fail loud, no silent fallback.
+    const status = e instanceof AppError ? e.status : 500
+    const error = e instanceof AppError ? e.publicMessage : 'File storage is temporarily unavailable.'
+    return NextResponse.json({ success: false, error }, { status })
   }
+  if (download) {
+    // Signed URLs already carry ?token=… — append the attachment hint.
+    target += `&download=${encodeURIComponent(fileId)}`
+  }
+
+  const res = NextResponse.redirect(target, 302)
+  // Signed-URL responses may be cached by the browser for the life of
+  // the link; session responses stay private (same lifetimes as before).
+  res.headers.set('Cache-Control', signed ? 'private, max-age=900' : 'private, max-age=3600')
+  res.headers.set('X-Content-Type-Options', 'nosniff')
+  res.headers.set('X-Request-Id', newRequestId())
+  return res
 }
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: Promise<{ fileId: string }> }
+  { params }: { params: Promise<{ fileId: string }> },
 ) {
   const requestId = newRequestId()
   const { fileId } = await params
@@ -164,7 +197,8 @@ export async function DELETE(
   }
 
   try {
-    await unlink(path.join(UPLOAD_DIR, fileId))
+    const location = storedObjectLocation('teachers', row.schoolId, fileId)
+    await storageDelete(location.bucket, location.path)
     // The registry row goes with the file (no stale ownership records).
     await db.uploadedFile.delete({ where: { id: fileId } }).catch(() => {})
     await auditEvent({
@@ -172,11 +206,13 @@ export async function DELETE(
       userId: user.id,
       action: 'FILE_DELETED',
       requestId,
-      detail: `Teacher media removed (${fileId})`,
+      detail: `Teacher media removed (${fileId}) → supabase://${location.bucket}/${location.path}`,
     }).catch(() => {})
     return NextResponse.json({ success: true })
   } catch {
-    // Deleting a missing file is fine — the record is being cleared anyway.
+    // Deleting a missing object is fine (storageDelete maps NoSuchKey to
+    // ok); a genuine storage failure still clears the record — the
+    // metadata must never outlive its delete intent (legacy semantics).
     await db.uploadedFile.delete({ where: { id: fileId } }).catch(() => {})
     return NextResponse.json({ success: true })
   }

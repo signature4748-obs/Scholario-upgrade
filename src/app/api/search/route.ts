@@ -6,6 +6,7 @@ import { requireTeacher, authorizedStudentWhere, classLabelOf } from '@/lib/teac
 import { notificationVisibilityWhere, audienceAllows } from '@/lib/notices'
 import { can } from '@/lib/security/permissions'
 import type { SearchResultItem } from '@/lib/search-service/types'
+import { num, dec, formatINRServer } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -49,9 +50,9 @@ export async function GET(req: NextRequest) {
       where: {
         schoolId,
         OR: [
-          { user: { name: { contains: q } } },
-          { admissionNo: { contains: q } },
-          { rollNo: { contains: q } },
+          { user: { name: { contains: q, mode: 'insensitive' as const } } },
+          { admissionNo: { contains: q, mode: 'insensitive' as const } },
+          { rollNo: { contains: q, mode: 'insensitive' as const } },
         ],
       },
       take,
@@ -84,9 +85,9 @@ export async function GET(req: NextRequest) {
       where: {
         schoolId,
         OR: [
-          { user: { name: { contains: q } } },
-          { employeeId: { contains: q } },
-          { department: { contains: q } },
+          { user: { name: { contains: q, mode: 'insensitive' as const } } },
+          { employeeId: { contains: q, mode: 'insensitive' as const } },
+          { department: { contains: q, mode: 'insensitive' as const } },
         ],
       },
       take,
@@ -120,8 +121,8 @@ export async function GET(req: NextRequest) {
         where: {
           schoolId,
           OR: [
-            { title: { contains: q } },
-            { student: { user: { name: { contains: q } } } },
+            { title: { contains: q, mode: 'insensitive' as const } },
+            { student: { user: { name: { contains: q, mode: 'insensitive' as const } } } },
           ],
         },
         take,
@@ -129,11 +130,11 @@ export async function GET(req: NextRequest) {
         include: { student: { include: { user: { select: { name: true } } } } },
       })
       fees.forEach((f) => {
-        const paidPct = f.amount > 0 ? Math.round((f.paid / f.amount) * 100) : 0
+        const paidPct = dec(f.amount).greaterThan(0) ? Math.round(num(dec(f.paid).div(f.amount).times(100))) : 0
         results.push({
           id: `fee-${f.id}`,
           title: `${f.title} — ${f.student?.user?.name ?? 'Student'}`,
-          subtitle: `₹${f.amount.toLocaleString('en-IN')} · ${f.paid.toLocaleString('en-IN')} collected (${paidPct}%)${f.dueDate ? ` · due ${new Date(f.dueDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}`,
+          subtitle: `₹${formatINRServer(f.amount)} · ${formatINRServer(f.paid)} collected (${paidPct}%)${f.dueDate ? ` · due ${new Date(f.dueDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}`,
           category: 'Fees & Finance',
           type: 'fee',
           moduleKey: 'fees',
@@ -150,17 +151,17 @@ export async function GET(req: NextRequest) {
         where: {
           schoolId,
           studentId: ctx.studentId,
-          title: { contains: q },
+          title: { contains: q, mode: 'insensitive' as const },
         },
         take,
         orderBy: { createdAt: 'desc' },
       })
       myFees.forEach((f) => {
-        const paidPct = f.amount > 0 ? Math.round((f.paid / f.amount) * 100) : 0
+        const paidPct = dec(f.amount).greaterThan(0) ? Math.round(num(dec(f.paid).div(f.amount).times(100))) : 0
         results.push({
           id: `fee-${f.id}`,
           title: f.title,
-          subtitle: `₹${f.amount.toLocaleString('en-IN')} · ${f.paid.toLocaleString('en-IN')} paid (${paidPct}%)${f.dueDate ? ` · due ${new Date(f.dueDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : ''}`,
+          subtitle: `₹${formatINRServer(f.amount)} · ${formatINRServer(f.paid)} paid (${paidPct}%)${f.dueDate ? ` · due ${new Date(f.dueDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : ''}`,
           category: 'Fees & Finance',
           type: 'fee',
           moduleKey: 'fees',
@@ -181,7 +182,7 @@ export async function GET(req: NextRequest) {
       where: {
         schoolId,
         ...notificationVisibilityWhere(),
-        OR: [{ title: { contains: q } }, { message: { contains: q } }],
+        OR: [{ title: { contains: q, mode: 'insensitive' as const } }, { message: { contains: q, mode: 'insensitive' as const } }],
       },
       take: 18,
       orderBy: { createdAt: 'desc' },
@@ -245,7 +246,7 @@ export async function GET(req: NextRequest) {
       where: {
         schoolId,
         recipientId: user.id,
-        OR: [{ subject: { contains: q } }, { body: { contains: q } }],
+        OR: [{ subject: { contains: q, mode: 'insensitive' as const } }, { body: { contains: q, mode: 'insensitive' as const } }],
       },
       take,
       orderBy: { createdAt: 'desc' },
@@ -278,9 +279,9 @@ export async function GET(req: NextRequest) {
         where: {
           schoolId,
           OR: [
-            { guardianName: { contains: q } },
-            { guardianPhone: { contains: q } },
-            { user: { name: { contains: q } } },
+            { guardianName: { contains: q, mode: 'insensitive' as const } },
+            { guardianPhone: { contains: q, mode: 'insensitive' as const } },
+            { user: { name: { contains: q, mode: 'insensitive' as const } } },
           ],
         },
         take,
@@ -316,12 +317,12 @@ export async function GET(req: NextRequest) {
       const ctx = await requireStudent(user)
       const [materials, decks, groups] = await Promise.all([
         authorizedMaterials(ctx, {
-          filter: { OR: [{ title: { contains: q } }, { description: { contains: q } }] },
+          filter: { OR: [{ title: { contains: q, mode: 'insensitive' as const } }, { description: { contains: q, mode: 'insensitive' as const } }] },
         }),
         db.flashcardDeck.findMany({
           where: {
             schoolId,
-            OR: [{ name: { contains: q } }, { description: { contains: q } }],
+            OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { description: { contains: q, mode: 'insensitive' as const } }],
           },
           take,
           include: { subject: { select: { name: true } }, _count: { select: { cards: true } } },
@@ -329,7 +330,7 @@ export async function GET(req: NextRequest) {
         db.studyGroup.findMany({
           where: {
             schoolId,
-            OR: [{ name: { contains: q } }, { description: { contains: q } }],
+            OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { description: { contains: q, mode: 'insensitive' as const } }],
           },
           take,
           include: { subject: { select: { name: true } }, _count: { select: { members: true } } },
@@ -394,9 +395,9 @@ export async function GET(req: NextRequest) {
                 schoolId,
                 teacherId: user.id,
                 OR: [
-                  { parent: { name: { contains: q } } },
-                  { student: { user: { name: { contains: q } } } },
-                  { messages: { some: { body: { contains: q } } } },
+                  { parent: { name: { contains: q, mode: 'insensitive' as const } } },
+                  { student: { user: { name: { contains: q, mode: 'insensitive' as const } } } },
+                  { messages: { some: { body: { contains: q, mode: 'insensitive' as const } } } },
                 ],
               },
               take: 4,
@@ -418,9 +419,9 @@ export async function GET(req: NextRequest) {
                 status: 'ACTIVE',
                 student: authorizedStudentWhere(ctx),
                 OR: [
-                  { student: { user: { name: { contains: q } } } },
-                  { reason: { contains: q } },
-                  { category: { contains: q } },
+                  { student: { user: { name: { contains: q, mode: 'insensitive' as const } } } },
+                  { reason: { contains: q, mode: 'insensitive' as const } },
+                  { category: { contains: q, mode: 'insensitive' as const } },
                 ],
               },
               take: 4,
@@ -441,7 +442,7 @@ export async function GET(req: NextRequest) {
                 teacherId: user.id,
                 status: 'open',
                 kind: 'parent-connect',
-                OR: [{ reason: { contains: q } }, { student: { user: { name: { contains: q } } } }],
+                OR: [{ reason: { contains: q, mode: 'insensitive' as const } }, { student: { user: { name: { contains: q, mode: 'insensitive' as const } } } }],
               },
               take: 4,
               orderBy: { dueDate: 'asc' },

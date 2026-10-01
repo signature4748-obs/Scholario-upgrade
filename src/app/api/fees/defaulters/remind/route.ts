@@ -1,12 +1,15 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import type { Prisma } from '@prisma/client'
+import { num, dec } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
-/** INR formatting shared by subject + body (₹1,23,456 — Indian grouping). */
-function formatINR(n: number): string {
-  return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+/** INR formatting shared by subject + body (₹1,23,456 — Indian grouping).
+ * Accepts Prisma.Decimal (Phase 8A) — Decimal has no toLocaleString. */
+function formatINR(n: Prisma.Decimal | number): string {
+  return `₹${num(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
 }
 
 function formatDay(iso: string): string {
@@ -63,13 +66,13 @@ export async function POST(req: NextRequest) {
         userId: string
         name: string
         className: string | null
-        outstanding: number
-        lines: Array<{ title: string; amount: number; dueDate: Date | null }>
+        outstanding: Prisma.Decimal
+        lines: Array<{ title: string; amount: Prisma.Decimal; dueDate: Date | null }>
       }
       const targets = new Map<string, Target>()
       for (const f of feeRows) {
-        const outstanding = f.amount - f.paid
-        if (outstanding <= 0) continue
+        const outstanding = dec(f.amount).minus(f.paid)
+        if (outstanding.lessThanOrEqualTo(0)) continue
         let t = targets.get(f.studentId)
         if (!t) {
           t = {
@@ -77,12 +80,12 @@ export async function POST(req: NextRequest) {
             userId: f.student.userId,
             name: f.student.user.name ?? 'Unknown student',
             className: f.student.class?.name ?? null,
-            outstanding: 0,
+            outstanding: dec(0),
             lines: [],
           }
           targets.set(f.studentId, t)
         }
-        t.outstanding += outstanding
+        t.outstanding = t.outstanding.plus(outstanding)
         t.lines.push({ title: f.title, amount: outstanding, dueDate: f.dueDate })
       }
 
@@ -145,7 +148,7 @@ export async function POST(req: NextRequest) {
         ].join('\n')
 
         sendable.push({ t, subject, messageBody })
-        sent.push({ studentId: t.studentId, name: t.name, outstanding: t.outstanding })
+        sent.push({ studentId: t.studentId, name: t.name, outstanding: num(t.outstanding) })
       }
 
       if (sendable.length > 0) {
@@ -161,7 +164,7 @@ export async function POST(req: NextRequest) {
         })
       }
 
-      const totalOutstandingCovered = sent.reduce((s, x) => s + x.outstanding, 0)
+      const totalOutstandingCovered = num(sent.reduce((s, x) => s.plus(x.outstanding), dec(0)))
 
       if (sent.length > 0) {
         // Audit trail — the Super Admin activity feed reads ActivityLog rows.

@@ -1,9 +1,15 @@
 import { NextRequest } from 'next/server'
+import { z } from 'zod'
 import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
+import { num } from '@/lib/money'
 
 export const runtime = 'nodejs'
+
+/// Phase 8A — bounded money validation for structure head amounts
+/// (was `Number(h.amount) || 0`, silently 0-ing garbage).
+const headAmountSchema = z.coerce.number().finite().min(0).max(500000)
 
 /// GET /api/fees/structures/[id] — full structure with heads + versions.
 export async function GET(
@@ -21,7 +27,8 @@ export async function GET(
       },
     })
     if (!structure) throw new AppError('RESOURCE_NOT_FOUND')
-    return structure
+    // Phase 8A: FeeHead.amount is Prisma.Decimal — emit numbers.
+    return { ...structure, heads: structure.heads.map((h) => ({ ...h, amount: num(h.amount) })) }
   })
 }
 
@@ -78,8 +85,17 @@ export async function PATCH(
         }
       }
 
-      // ── 3-c fix: atomic head replacement + structure update ─────────
+      // ── Phase 8A — bounded money validation per head BEFORE the ─
+      // replacement write (was `Number(h.amount) || 0`).
       const heads = body.heads as any[]
+      const parsedHeadAmounts = heads.map((h) => headAmountSchema.default(0).safeParse(h?.amount))
+      if (parsedHeadAmounts.some((r) => !r.success)) {
+        throw new AppError('INVALID_INPUT', {
+          publicMessage: 'Each fee head amount must be a number between 0 and 500000',
+        })
+      }
+
+      // ── 3-c fix: atomic head replacement + structure update ─────────
       const updated = await trackedTransaction('fee-structure-update', async (tx) => {
         await tx.feeHead.deleteMany({ where: { structureId: id } })
         for (let i = 0; i < heads.length; i++) {
@@ -91,7 +107,7 @@ export async function PATCH(
               catalogueId: h.catalogueId || null,
               name: String(h.name || ''),
               category: String(h.category || 'Other'),
-              amount: Number(h.amount) || 0,
+              amount: parsedHeadAmounts[i].data,
               frequency: String(h.frequency || 'Monthly'),
               mandatory: h.mandatory !== false,
               active: h.active !== false,
@@ -108,7 +124,7 @@ export async function PATCH(
           include: { heads: { orderBy: { sortOrder: 'asc' } } },
         })
       })
-      return updated
+      return { ...updated, heads: updated.heads.map((h) => ({ ...h, amount: num(h.amount) })) }
     }
 
     const updated = await db.feeStructure.update({
@@ -119,7 +135,7 @@ export async function PATCH(
       },
       include: { heads: { orderBy: { sortOrder: 'asc' } } },
     })
-    return updated
+    return { ...updated, heads: updated.heads.map((h) => ({ ...h, amount: num(h.amount) })) }
   })
 }
 

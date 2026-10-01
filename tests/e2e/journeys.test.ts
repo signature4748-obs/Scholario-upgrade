@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PHASE 4 (item 10) — E2E JOURNEYS: live-HTTP user journeys against the
  * dev server (process.env.E2E_BASE_URL ?? 'http://localhost:3000').
@@ -22,11 +23,12 @@
  * the per-IP bucket fresh.
  */
 import { describe, test, expect, beforeAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes } from 'crypto'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.E2E_BASE_URL ?? 'http://localhost:3000'
-const db = new PrismaClient()
+
 const T = 45000 // generous: first-hit dev compilation
 
 const RUN_IP = `10.222.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
@@ -48,7 +50,11 @@ async function loginJourney(email: string, password: string): Promise<Journey> {
     const u = await db.user.findUnique({ where: { email } })
     if (!u) throw new Error(`no fixture user ${email}`)
     const token = randomBytes(32).toString('hex')
-    await db.session.create({ data: { userId: u.id, token, expiresAt: new Date(Date.now() + 3600_000) } })
+    // PHASE 8A — the row stores sha256(token); the RAW token rides the
+    // cookie below (identical to a server-minted session).
+    await db.session.create({
+      data: { userId: u.id, tokenHash: hashSessionToken(token), expiresAt: new Date(Date.now() + 3600_000) },
+    })
     return { cookie: `erp_session=${token}` }
   }
   const body = (await res.json()) as { ok: boolean; data?: { sessionToken?: string } }
@@ -92,13 +98,13 @@ beforeAll(async () => {
 
 describe('E2E Journey 1 · principal (login → modules → logout, one session)', () => {
   test('demo principal completes the full module chain', async () => {
-    const j = await loginJourney('principal@demoschool.edu', 'password123')
+    const j = await loginJourney('principal@sunriseacademy.edu', 'password123')
 
     // identity
     const me = await step(j, '/api/auth/me')
     const meBody = await expectOkData(me, 'me')
     const user = (meBody.data as { user: { email: string; role: string } }).user
-    expect(user.email).toBe('principal@demoschool.edu')
+    expect(user.email).toBe('principal@sunriseacademy.edu')
     expect(user.role).toBe('PRINCIPAL')
 
     // home dashboard
@@ -135,7 +141,7 @@ describe('E2E Journey 1 · principal (login → modules → logout, one session)
 
 describe('E2E Journey 2 · teacher (login → dashboard → class-hub → logout)', () => {
   test('fixture teacher completes the teaching chain', async () => {
-    const j = await loginJourney('tenant.teacher.a@scholario.test', FIXTURE_PW)
+    const j = await loginJourney('tenant.teacher.a@sunrise.test', FIXTURE_PW)
 
     const me = await step(j, '/api/auth/me')
     const meBody = await expectOkData(me, 'me')
@@ -158,7 +164,7 @@ describe('E2E Journey 2 · teacher (login → dashboard → class-hub → logout
 
 describe('E2E Journey 3 · student (login → dashboard → timetable → logout)', () => {
   test('fixture student completes the student chain', async () => {
-    const j = await loginJourney('tenant.student.a@scholario.test', FIXTURE_PW)
+    const j = await loginJourney('tenant.student.a@sunrise.test', FIXTURE_PW)
 
     const me = await step(j, '/api/auth/me')
     const meBody = await expectOkData(me, 'me')

@@ -55,7 +55,7 @@ async function estimateRecipients(schoolId: string, audience: string): Promise<n
     if (audience.startsWith('CLASS:')) {
       const className = audience.slice(6).trim()
       return await db.student.count({
-        where: { schoolId, user: { status: 'ACTIVE' }, class: { name: { contains: className } } },
+        where: { schoolId, user: { status: 'ACTIVE' }, class: { name: { contains: className, mode: 'insensitive' as const } } },
       })
     }
     return null

@@ -22,6 +22,10 @@ import { log } from '@/lib/observability/logger'
  * Query text is truncated to 400 chars and params are dropped by design:
  * the SQL shape + duration is the diagnostic; the values are PII.
  *
+ *   db_retry             (warn)  — transient connectivity error retried
+ *                                  (see withDbRetry below): attempt
+ *                                  number, prisma error code, backoff delay.
+ *
  * Slow-query threshold: DB_SLOW_QUERY_MS env (default 200).
  */
 
@@ -29,6 +33,98 @@ const SLOW_QUERY_MS = Number(process.env.DB_SLOW_QUERY_MS ?? 200)
 
 function truncateSql(sql: string): string {
   return sql.length > 400 ? `${sql.slice(0, 400)}…` : sql
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// ─── Transient-connection retry wrapper (Phase 8A — Supabase) ────────────
+
+/**
+ * Prisma error codes that mean "the database was momentarily unreachable
+ * or the connection died" — safe to retry the SAME operation for.
+ *
+ *   P1001  can't reach the database server
+ *   P1002  database server does not respond within the timeout
+ *   P1006  connection to the database server was closed
+ *   P1008  operations timed out
+ *   P1017  server closed the connection
+ *
+ * Everything else is terminal by design: constraint violations (P2002
+ * unique / P2003 FK / P2004 check) and validation errors MUST fail fast —
+ * retrying them would re-run a doomed statement and mask the real bug.
+ */
+const TRANSIENT_PRISMA_CODES: ReadonlySet<string> = new Set([
+  'P1001',
+  'P1002',
+  'P1006',
+  'P1008',
+  'P1017',
+])
+
+function isTransientPrismaError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null | undefined)?.code
+  return typeof code === 'string' && TRANSIENT_PRISMA_CODES.has(code)
+}
+
+export interface DbRetryOptions {
+  /** Total attempts (initial call + retries). Default 3. */
+  attempts?: number
+  /** Base backoff delay in ms; doubles per retry (100→200→400…). Default 100. */
+  baseDelayMs?: number
+  /** Label for the structured db_retry log lines. */
+  label?: string
+}
+
+/**
+ * Run `fn`, retrying ONLY transient connectivity failures (see
+ * TRANSIENT_PRISMA_CODES). Backoff: exponential (base 100ms doubling —
+ * 100→200, the 400ms step applies if `attempts` is raised past the default
+ * 3) with ±30% jitter so concurrent callers desynchronize. After the last
+ * attempt the error is rethrown unchanged.
+ *
+ * Phase 8A rationale: the app now talks to a REMOTE Supabase pooler —
+ * blips (DNS, pool restart, TLS renegotiation) that a local SQLite file
+ * could never produce now surface as P1001/P1006/P1008. Financial routes
+ * already funnel through trackedTransaction (below), which wraps its
+ * $transaction in this helper.
+ *
+ * Retry-safety note: an interactive-transaction callback re-executes from
+ * scratch on retry — that is exactly what transactions guarantee (all-or-
+ * nothing), so a transient failure mid-tx leaves no partial state. The one
+ * accepted edge (per Phase-8A spec) is a commit ack lost to a P1008: the
+ * retry may re-run an already-committed unit; callers whose business logic
+ * is not naturally idempotent keep their own guards (idempotency keys,
+ * unique constraints) — which fail as P2002 and are NOT retried here.
+ */
+export async function withDbRetry<T>(
+  fn: () => Promise<T>,
+  opts: DbRetryOptions = {},
+): Promise<T> {
+  const attempts = Math.max(1, opts.attempts ?? 3)
+  const baseDelayMs = Math.max(1, opts.baseDelayMs ?? 100)
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn()
+    } catch (e) {
+      if (attempt >= attempts || !isTransientPrismaError(e)) throw e
+      const nominal = baseDelayMs * 2 ** (attempt - 1)
+      const delayMs = Math.max(
+        1,
+        Math.round(nominal * (1 + (Math.random() * 0.6 - 0.3))),
+      ) // ±30% jitter
+      log('warn', 'db_retry', {
+        channel: 'db',
+        label: opts.label,
+        attempt,
+        nextAttempt: attempt + 1,
+        errorCode: (e as { code?: string }).code,
+        delayMs,
+      })
+      await sleep(delayMs)
+    }
+  }
 }
 
 function createDb(): PrismaClient {
@@ -83,8 +179,14 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
  * `db_transaction_failure` line with the business label, duration and the
  * underlying error code — instead of a bare 500 in the request log.
  *
- * Behavior is IDENTICAL to db.$transaction (options pass through); only
- * observability is added.
+ * Behavior is IDENTICAL to db.$transaction (options pass through) except
+ * for Phase 8A: TRANSIENT connectivity failures (P1001/P1002/P1006/P1008/
+ * P1017 only — constraint/validation errors stay terminal) are retried up
+ * to 3 attempts with jittered exponential backoff via withDbRetry before
+ * the failure is logged/raised. On top of the observability added in
+ * Phase 4, each retry emits a `db_retry` warn line with the attempt
+ * number, prisma error code and backoff delay; `durationMs` in the
+ * commit/failure lines therefore includes any retry backoff time.
  */
 export async function trackedTransaction<T>(
   label: string,
@@ -93,7 +195,12 @@ export async function trackedTransaction<T>(
 ): Promise<T> {
   const startedAt = Date.now()
   try {
-    const result = await db.$transaction(fn, opts)
+    // Phase 8A: remote-Supabase connectivity blips (P1001/P1002/P1006/
+    // P1008/P1017) are retried by withDbRetry before the transaction is
+    // declared failed — see its retry-safety note for the semantics.
+    const result = await withDbRetry(() => db.$transaction(fn, opts), {
+      label: `trackedTransaction:${label}`,
+    })
     log('debug', 'db_transaction', {
       channel: 'db',
       label,

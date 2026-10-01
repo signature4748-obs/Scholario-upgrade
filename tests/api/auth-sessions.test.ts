@@ -1,3 +1,4 @@
+import { db } from '../helpers/db'
 /**
  * PIH-5 — INVARIANT: session lifecycle hygiene.
  *
@@ -30,11 +31,12 @@
  * 16-byte salt, 64-byte key) so no fixture credential is ever mutated.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { PrismaClient } from '@prisma/client'
+
 import { randomBytes, scryptSync } from 'crypto'
+import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const db = new PrismaClient()
+
 const T = 45_000 // generous: first-hit dev compilation (tenant-isolation precedent)
 
 const MARKER = randomBytes(4).toString('hex')
@@ -48,8 +50,8 @@ const NEW_PW = 'Pih5NewPass2'
 const RUN_IP = `10.247.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 
 let schoolId = ''
-let student1 = { id: '', email: 'student1@demoschool.edu' }
-let principal = { id: '', email: 'principal@demoschool.edu' }
+let student1 = { id: '', email: 'student1@sunriseacademy.edu' }
+let principal = { id: '', email: 'principal@sunriseacademy.edu' }
 let principalToken = ''
 const suiteStart = new Date()
 
@@ -78,9 +80,15 @@ beforeAll(async () => {
 
   principalToken = randomBytes(32).toString('hex')
   await db.session.create({
-    data: { userId: p1.id, token: principalToken, expiresAt: new Date(Date.now() + 3600_000) },
+    data: {
+      userId: p1.id,
+      // PHASE 8A — rows store sha256(token); the RAW token rides the
+      // cookie jar below (createSession wire contract).
+      tokenHash: hashSessionToken(principalToken),
+      expiresAt: new Date(Date.now() + 3600_000),
+    },
   })
-  cleanup.push(() => db.session.deleteMany({ where: { token: principalToken } }))
+  cleanup.push(() => db.session.deleteMany({ where: { tokenHash: hashSessionToken(principalToken) } }))
   // The no-store probe's export writes one STUDENT_DATA_EXPORT audit row.
   cleanup.push(() =>
     db.activityLog.deleteMany({
@@ -111,13 +119,14 @@ function as(token: string, path: string, init?: RequestInit): Promise<Response> 
   })
 }
 
-/** Direct-mint a session row for an existing user (fresh 1h expiry). */
+/** Direct-mint a session row for an existing user (fresh 1h expiry).
+ *  PHASE 8A — stores the hash, returns the RAW token (wire contract). */
 async function mintSession(userId: string): Promise<string> {
   const token = randomBytes(32).toString('hex')
   await db.session.create({
-    data: { userId, token, expiresAt: new Date(Date.now() + 3600_000) },
+    data: { userId, tokenHash: hashSessionToken(token), expiresAt: new Date(Date.now() + 3600_000) },
   })
-  cleanup.push(() => db.session.deleteMany({ where: { token } }))
+  cleanup.push(() => db.session.deleteMany({ where: { tokenHash: hashSessionToken(token) } }))
   return token
 }
 
@@ -129,9 +138,13 @@ describe('PIH-5 · expired sessions are refused and pruned', () => {
   test('well-formed token with past expiresAt → /api/auth/me 401; the Session row is gone', async () => {
     const token = randomBytes(32).toString('hex') // exact createSession format
     await db.session.create({
-      data: { userId: student1.id, token, expiresAt: new Date(Date.now() - 60_000) },
+      data: {
+        userId: student1.id,
+        tokenHash: hashSessionToken(token),
+        expiresAt: new Date(Date.now() - 60_000),
+      },
     })
-    cleanup.push(() => db.session.deleteMany({ where: { token } }))
+    cleanup.push(() => db.session.deleteMany({ where: { tokenHash: hashSessionToken(token) } }))
 
     const res = await as(token, '/api/auth/me')
     expect(res.status).toBe(401)
@@ -140,7 +153,10 @@ describe('PIH-5 · expired sessions are refused and pruned', () => {
     expect(body.code).toBe('AUTH_REQUIRED')
 
     // The same read PRUNED the expired row (fail-closed + self-cleaning).
-    const row = await db.session.findUnique({ where: { token }, select: { id: true } })
+    const row = await db.session.findUnique({
+      where: { tokenHash: hashSessionToken(token) },
+      select: { id: true },
+    })
     expect(row).toBeNull()
   }, T)
 })
@@ -162,7 +178,10 @@ describe('PIH-5 · logout destroys the session row', () => {
     const meAfter = await as(token, '/api/auth/me')
     expect(meAfter.status).toBe(401)
 
-    const row = await db.session.findUnique({ where: { token }, select: { id: true } })
+    const row = await db.session.findUnique({
+      where: { tokenHash: hashSessionToken(token) },
+      select: { id: true },
+    })
     expect(row).toBeNull()
   }, T)
 })
@@ -175,7 +194,7 @@ describe('PIH-5 · change-password rotates the token and revokes every other ses
   test('two live sessions → change password → both old tokens 401; new password logs in, old one does not', async () => {
     // Throwaway TEACHER account (created + deleted by this suite; its hash
     // is minted in the exact src/lib/auth.ts format).
-    const email = `pih5.auth.${MARKER}@scholario.test`
+    const email = `pih5.auth.${MARKER}@sunrise.test`
     const throwaway = await db.user.create({
       data: {
         schoolId,
