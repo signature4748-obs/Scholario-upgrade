@@ -95,6 +95,33 @@ export const WEBSITE_UPLOAD_POLICY = {
 } as const
 
 /**
+ * PIH-4c — EARLY oversized-body rejection.
+ *
+ * The upload routes buffer the full multipart body inside
+ * `req.formData()` / `file.arrayBuffer()` BEFORE the size guard runs, so
+ * a hostile client could make the server buffer arbitrarily large
+ * payloads. This reads the declared Content-Length header (no body I/O)
+ * and reports whether it already exceeds the route's max bytes — the
+ * route then answers 413 immediately without reading the stream.
+ *
+ * The post-parse `file.size` guard stays authoritative: a missing or
+ * chunked Content-Length returns false (the stream is still fully
+ * checked after buffering), and a 64 KB slack keeps multipart framing +
+ * small text fields from falsely rejecting a file exactly at the limit.
+ */
+export function contentLengthExceedsUploadLimit(
+  req: { headers: { get(name: string): string | null } },
+  maxBytes: number,
+): boolean {
+  const raw = req.headers.get('content-length')
+  if (!raw) return false
+  const declared = Number(raw)
+  if (!Number.isFinite(declared) || declared <= 0) return false
+  const MULTIPART_SLACK_BYTES = 64 * 1024
+  return declared > maxBytes + MULTIPART_SLACK_BYTES
+}
+
+/**
  * Validate declared-vs-actual content for a policy. Returns a safe,
  * user-facing error string or null when the file is acceptable.
  */

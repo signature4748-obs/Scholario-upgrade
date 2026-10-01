@@ -6,10 +6,11 @@
 // `getVirtualOccupied` display-only seat-occupancy helper was removed —
 // every student/class count is now derived from the real roster.)
 
-export { useStudentsStore } from './store'
+export { useStudentsStore, ensureStudentsDemoSeed } from './store'
 export {
   syncStudentsFromServer,
   resetRosterSyncGuard,
+  purgeSeedRosterForRealTenant,
   resolveMyStudentRecord,
   useMyStudentRecord,
 } from './server-sync'

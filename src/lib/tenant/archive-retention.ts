@@ -4,8 +4,10 @@
  *
  *   Active → Archived → 30-day retention → auto purge (platform job)
  *
- * HARD BOUNDARY: the purge is a FUTURE SERVER-SIDE CLEANUP JOB (the adapter
- * boundary in src/lib/platform/adapters.ts is where it will be scheduled).
+ * HARD BOUNDARY: the purge is a FUTURE SERVER-SIDE CLEANUP JOB (the old
+ * client adapter seam in src/lib/platform/adapters.ts was removed in the
+ * PIH-4c dead-code pass — the scheduling boundary now lands server-side
+ * with the Resend/infrastructure phase).
  * Nothing here deletes data; there is deliberately NO client timer. The UI
  * may only DISPLAY the retention state ("purge-eligible on <date>").
  */

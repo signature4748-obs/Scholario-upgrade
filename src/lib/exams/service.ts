@@ -740,7 +740,13 @@ export async function setMark(
     const { teacherCanEnterMarks } = await import('@/lib/teacher-scope')
     const allowed = await teacherCanEnterMarks(user, schoolId, input.classId, input.subjectId)
     if (!allowed) {
-      throw new Error('You are not appointed to teach this subject for this class — marks entry is not permitted.')
+      // PIH-4a — taxonomy consistency: the identical CSA denial in
+      // marks-entry save/submit is FORBIDDEN (403); a plain Error here
+      // classified as 400 BAD_REQUEST. Use the AppError pattern.
+      throw new AppError('FORBIDDEN', {
+        publicMessage: 'You are not appointed to teach this subject for this class — marks entry is not permitted.',
+        internalDetail: `setMark: teacher ${user.id} not appointed for class ${input.classId} subject ${input.subjectId} (CSA scope)`,
+      })
     }
   }
 

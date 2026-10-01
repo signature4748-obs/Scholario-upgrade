@@ -54,6 +54,9 @@ server.log
 /skills/
 # RB-1 — study material uploads (server-authorized; never commit user bytes)
 db/uploads/
+# PIH-4a — repo-root upload/ scratch dir (untracked user pastes); git add -A
+# must never commit it.
+/upload/
 # W2.3B — runtime SQLite files: the dev watcher honors .gitignore, and every
 # runtime DB write (sessions, read-receipts, prisma writes) was triggering a
 # webpack Fast-Refresh rebuild loop (stale chunks + sluggish navigation).

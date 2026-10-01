@@ -232,7 +232,13 @@ export const useInventoryStore = create<InventoryState>()(
     {
       name: 'scholario-inventory-v1',
       storage: createTenantScopedStorage('scholario-inventory-v1'),
-      version: 1,
+      // v1 → v2 (PIH-4c, stale-persist purge): the FINAL-GATE emptied the
+      // initial seed state but the version was NOT bumped then — pre-gate
+      // browsers would rehydrate the fabricated item/movement ledger
+      // forever. The bump discards stale v1 persisted state once (zustand
+      // skips hydration on version mismatch; the demo seeder re-applies
+      // the corpus for the demo tenant).
+      version: 2,
       // DATA slices only — search/filters are UI state, actions are functions.
       partialize: (s) => ({ items: s.items, movements: s.movements }),
     },

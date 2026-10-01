@@ -13,6 +13,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Info } from 'lucide-react'
 
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs, type SegmentedTab } from '../shared/segmented-tabs'
@@ -48,6 +49,19 @@ function SalaryShellInner() {
 
   return (
     <PageTransition className="space-y-4">
+      {/* PIH-4c — honest data-residency notice: the payroll ledger lives
+          in this browser's local store (no server canonical yet); the same
+          quiet info-strip pattern as the settings fees-tab banner. */}
+      <div
+        role="note"
+        className="flex items-start gap-2.5 rounded-xl border border-sky-500/25 bg-sky-500/[0.05] px-3 py-2.5 text-[11px] leading-relaxed text-sky-700 dark:text-sky-300"
+      >
+        <Info className="h-3.5 w-3.5 shrink-0 mt-px" aria-hidden />
+        <span className="min-w-0 flex-1">
+          Payroll data is currently stored locally in this browser — server-side persistence arrives with the infrastructure phase.
+        </span>
+      </div>
+
       <div className="overflow-x-auto -mx-1 px-1 pb-1 max-w-full">
         <SegmentedTabs
           tabs={tabs}

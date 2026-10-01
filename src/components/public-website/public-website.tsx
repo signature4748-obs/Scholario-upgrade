@@ -906,7 +906,10 @@ function Journey({
       {loading ? (
         <SectionSkeleton count={3} grid="md:grid-cols-3" label="Loading academic stages" />
       ) : (
-        <div className="grid md:grid-cols-3 gap-8">
+        // PIH-6 — [&>*]:min-w-0: grid items default to min-width:auto, so a
+        // long non-wrapping meta line blew the card 10px past the 320px
+        // viewport; min-w-0 lets the track hold and the badge truncate.
+        <div className="grid md:grid-cols-3 gap-8 [&>*]:min-w-0">
           {stages.map((s, i) => {
             const accent = JOURNEY_ACCENTS[i % JOURNEY_ACCENTS.length]
             const Icon = cmsIcon(s.icon)

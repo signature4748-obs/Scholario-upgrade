@@ -3,6 +3,8 @@ import { rm, writeFile } from 'fs/promises'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
 import { api } from '@/lib/api'
+import { AppError } from '@/lib/security/errors'
+import { contentLengthExceedsUploadLimit } from '@/lib/security/upload'
 import {
   AVATAR_MAX_BYTES,
   AVATAR_MIME_TO_EXT,
@@ -28,6 +30,17 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
     if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
+
+    // PIH-4c — EARLY size rejection BEFORE the multipart body is buffered:
+    // an oversized Content-Length answers 413 (PAYLOAD_TOO_LARGE)
+    // immediately without reading the stream; the post-parse file.size
+    // guard below stays authoritative.
+    if (contentLengthExceedsUploadLimit(req, AVATAR_MAX_BYTES)) {
+      throw new AppError('PAYLOAD_TOO_LARGE', {
+        publicMessage: 'Photo must be smaller than 5 MB',
+        internalDetail: `avatar upload: declared Content-Length exceeds ${AVATAR_MAX_BYTES} bytes`,
+      })
+    }
 
     const form = await req.formData().catch(() => null)
     const file = form?.get('file')

@@ -93,7 +93,11 @@ export async function createSession(
 }
 
 export async function destroySession(token: string): Promise<void> {
-  await db.session.deleteMany({ where: { token } }).catch(() => {})
+  // PIH-2b HIGH — the old-token delete IS the security effect of logout.
+  // Swallowing a DB failure here would leave a stolen token valid for the
+  // full 7-day TTL while the client believes it signed out. Propagate the
+  // failure (callers run inside api() → 500 envelope, never a fake ok).
+  await db.session.deleteMany({ where: { token } })
 }
 
 /**
@@ -114,7 +118,13 @@ export async function rotateSession(currentToken: string): Promise<string> {
       ipAddress: old.ipAddress,
     },
   })
-  await db.session.delete({ where: { id: old.id } }).catch(() => {})
+  // PIH-2b HIGH — same rule as destroySession: if the OLD session row
+  // survives this delete, the pre-rotation (possibly stolen) token stays
+  // valid for up to 7 days. A failure must fail the rotation loudly
+  // (password change already happened, but the caller sees a 500 and the
+  // incident lands in the server log) instead of silently keeping both
+  // tokens alive.
+  await db.session.delete({ where: { id: old.id } })
   return newToken
 }
 

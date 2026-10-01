@@ -559,7 +559,14 @@ export const useCertificatesStore = create<CertificatesState>()(
       // persist; actions live on the store instance.
       name: 'scholario-certificates-v1',
       storage: createTenantScopedStorage('scholario-certificates-v1'),
-      version: 2,
+      // v2 → v3 (PIH-4c, stale-persist purge): the FINAL-GATE emptied the
+      // initial seed state but the version was NOT bumped then — pre-gate
+      // browsers would rehydrate the fabricated issued-document history
+      // (built from the retired STU-xxx seed students) forever. The bump
+      // discards stale v2 persisted state once (zustand skips hydration on
+      // version mismatch; the demo seeder re-applies the sanctioned demo
+      // history for the demo tenant).
+      version: 3,
       partialize: (s) => ({
         templates: s.templates,
         documents: s.documents,

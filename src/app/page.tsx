@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import { useAuth } from '@/lib/store/auth-store'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
+import { useCurrentUser } from '@/lib/store/current-user-store'
 import { installApiBearerInterceptor } from '@/lib/auth-session-token'
 import { AssetErrorBoundary } from '@/components/shared/asset-guard/asset-error-boundary'
 
@@ -88,6 +90,26 @@ export default function Home() {
       }
     }
   }, [isAuthenticated, user?.role])
+
+  // PIH-4c (R8) — the students-store STU-xxx seed universe is DEMO-TIER
+  // content. The store now boots honest-empty; the demo corpus is applied
+  // ONLY when the server-derived demo signal (/api/auth/me → School.isDemo)
+  // confirms the sanctioned demo tenant, and never over a non-pristine
+  // store (pristine guard inside makeDemoSeedApplier). Real tenants boot
+  // empty, hydrate from the canonical roster sync above — and any legacy
+  // STU-xxx universe rehydrated from a pre-gate localStorage (e.g. a
+  // teacher-role session, which never runs the roster sync) is evicted
+  // so every consumer renders its honest empty state.
+  const isDemoTenant = useIsDemoTenant()
+  const meLoaded = useCurrentUser((s) => s.me !== null)
+  useEffect(() => {
+    if (!meLoaded) return
+    if (isDemoTenant) {
+      void import('@/lib/store/students-store').then((m) => m.ensureStudentsDemoSeed())
+    } else {
+      void import('@/lib/store/students-store').then((m) => m.purgeSeedRosterForRealTenant())
+    }
+  }, [meLoaded, isDemoTenant])
 
   // PHASE 6 — the platform control plane moved to the REAL /platform/*
   // route namespace with its own identity boundary. Legacy #platform /

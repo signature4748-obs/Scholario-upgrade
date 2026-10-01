@@ -219,7 +219,14 @@ export function isPastDate(dateStr: string, todayStr: string): boolean {
   return dateStr < todayStr
 }
 
-/** The canonical "today" string used by the legacy shared calendar. */
+/**
+ * The DEMO-SEED calendar anchor (YYYY-MM-DD, "Dec 10 2025") — the month
+ * the illustrative school-events/exam seed corpus (mock/operations
+ * calendarEvents + mock-exams) is authored around. It is NOT a real
+ * "today": the shared Calendar anchors "today" on the REAL clock
+ * (calendar/data.ts CANONICAL_TODAY, PIH-4c) and only the demo tenant
+ * uses this constant as its showcase anchor.
+ */
 export const TODAY_STR = '2025-12-10'
 
 /**

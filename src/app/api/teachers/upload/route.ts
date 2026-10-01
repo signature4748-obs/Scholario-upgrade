@@ -14,6 +14,7 @@ import {
   EXT_BY_TYPE,
   MIME_BY_TYPE,
   sanitizeDisplayFilename,
+  contentLengthExceedsUploadLimit,
 } from '@/lib/security/upload'
 
 export const runtime = 'nodejs'
@@ -75,6 +76,16 @@ export async function POST(req: NextRequest) {
   void requestId
 
   try {
+    // PIH-4c — EARLY size rejection BEFORE the multipart body is buffered.
+    // Coarse ceiling = the photo max (2 MB): the kind field isn't known
+    // until the form parses, so the precise 1 MB signature check stays
+    // post-parse. Oversized Content-Length → immediate 413, no buffering.
+    if (contentLengthExceedsUploadLimit(req, TEACHER_UPLOAD_POLICY.photoMaxBytes)) {
+      return NextResponse.json(
+        { success: false, error: 'File is too large. Maximum size is 2 MB.' },
+        { status: 413 },
+      )
+    }
     const form = await req.formData()
     const file = form.get('file')
     const kind = form.get('kind') === 'signature' ? 'signature' : 'photo'

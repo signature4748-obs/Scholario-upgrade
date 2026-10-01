@@ -18,6 +18,9 @@ export const runtime = 'nodejs'
 ///     method?: 'UPI' | 'Card' | 'Net Banking', notes?: { studentId, feeHead, ... } }
 /// Returns:
 ///   { orderId, amount, currency, receiptNo, txnId, notes }
+///   — receiptNo is null at this stage: receipts belong to SETTLEMENT and
+///     are minted (canonical SCH-YYYY-NNNNNN) by the settlement writer,
+///     never at order creation (PIH-4b).
 ///
 /// 3-c fix — student identity is SERVER-DERIVED for self-service callers:
 ///   · STUDENT: studentId/studentName/className come from the session's
@@ -121,66 +124,44 @@ export async function POST(req: NextRequest) {
       //
       // For the demo, we just mint a unique order id locally and persist
       // it on the FeeTransaction row so the webhook can match it back.
-      // Phase 3: receipt-mint race guard — the Date.now() scheme is kept
-      // (format preserved); if the (schoolId, receiptNo) DB unique rejects
-      // a same-millisecond collision, retry ONCE with a deterministic
-      // suffix.
-      const baseReceiptNo = `RCP-${Date.now()}`
+      //
+      // PIH-4b — NO receipt number is minted or persisted at order
+      // creation: receipts belong to SETTLEMENT (the canonical
+      // SCH-YYYY-NNNNNN series is minted by the settlement writer —
+      // /api/fees/payments/confirm for this demo rail, exactly like
+      // /api/fees/verification mints at verify). The old `RCP-<epoch-ms>`
+      // mint here put a THIRD receipt scheme on the same unique column
+      // before any money had moved. The gateway reference for this row is
+      // the gatewayOrderId; the response keeps the `receiptNo` key for
+      // contract compatibility (null until the order settles).
       const gatewayOrderId = `order_${Math.random().toString(36).slice(2, 14)}${Date.now().toString(36)}`
       const gatewayName = String(body.gateway || 'razorpay').slice(0, 40)
 
-      let receiptNo = baseReceiptNo
-      let txn
-      try {
-        txn = await db.feeTransaction.create({
-          data: {
-            schoolId,
-            studentId: studentId ?? null,
-            studentName: studentName ?? null,
-            className: className ?? null,
-            feeHeadName: feeHead || null,
-            amount,
-            method: String(body.method || 'UPI').toUpperCase().replace(' ', '_'),
-            status: 'PENDING',
-            gatewayName,
-            gatewayOrderId,
-            gatewaySignature: null,
-            gatewayPaymentId: null,
-            receiptNo,
-            reconciliationStatus: 'pending',
-            note: 'Order created — awaiting gateway payment.captured webhook',
-          },
-        })
-      } catch (e) {
-        const err = e as { code?: string }
-        if (err?.code !== 'P2002') throw e
-        receiptNo = `${baseReceiptNo}-2`
-        txn = await db.feeTransaction.create({
-          data: {
-            schoolId,
-            studentId: studentId ?? null,
-            studentName: studentName ?? null,
-            className: className ?? null,
-            feeHeadName: feeHead || null,
-            amount,
-            method: String(body.method || 'UPI').toUpperCase().replace(' ', '_'),
-            status: 'PENDING',
-            gatewayName,
-            gatewayOrderId,
-            gatewaySignature: null,
-            gatewayPaymentId: null,
-            receiptNo,
-            reconciliationStatus: 'pending',
-            note: 'Order created — awaiting gateway payment.captured webhook',
-          },
-        })
-      }
+      const txn = await db.feeTransaction.create({
+        data: {
+          schoolId,
+          studentId: studentId ?? null,
+          studentName: studentName ?? null,
+          className: className ?? null,
+          feeHeadName: feeHead || null,
+          amount,
+          method: String(body.method || 'UPI').toUpperCase().replace(' ', '_'),
+          status: 'PENDING',
+          gatewayName,
+          gatewayOrderId,
+          gatewaySignature: null,
+          gatewayPaymentId: null,
+          receiptNo: null,
+          reconciliationStatus: 'pending',
+          note: 'Order created — awaiting gateway payment.captured webhook',
+        },
+      })
 
       return {
         orderId: gatewayOrderId,
         amount: Math.round(amount * 100), // paise — matches Razorpay convention
         currency: 'INR',
-        receiptNo,
+        receiptNo: null,
         txnId: txn.id,
         notes,
         gateway: gatewayName,

@@ -24,6 +24,7 @@ import {
   classSections,
   type ClassSection,
 } from '@/lib/mock/attendance'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { formatNumber } from '@/lib/format'
 import { ATTENDANCE_PALETTE } from './attendance-charts'
 import { STATUS_META } from './attendance-status'
@@ -64,6 +65,10 @@ export function AttendanceInsights({
   const best = insights?.best ?? EMPTY_INSIGHT
   const needs = insights?.needs ?? EMPTY_INSIGHT
   const average = insights?.average ?? null
+  // PIH-4c (R7) — the per-class Live Class Snapshot's classSections
+  // corpus is DEMO-TIER only (same gate as the sibling tabs): a real
+  // tenant sees the honest "no roster available" empty state.
+  const isDemo = useIsDemoTenant()
   return (
     <>
       {/* Three compact insight cards (Brief §12 — Phase 1 preserved) */}
@@ -100,7 +105,7 @@ export function AttendanceInsights({
       {classFilter === 'all' ? (
         <ClassGroupOverview rows={schoolRows ?? []} onViewAll={onViewAllClasses} />
       ) : (
-        <LiveClassRoster section={classSections.find((c) => c.id === classFilter) ?? null} />
+        <LiveClassRoster section={isDemo ? (classSections.find((c) => c.id === classFilter) ?? null) : null} />
       )}
     </>
   )

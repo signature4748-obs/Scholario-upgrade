@@ -43,6 +43,7 @@ import { cn } from '@/lib/utils'
 import {
   ALL_TYPES,
   CANONICAL_TODAY,
+  DEMO_SEED_ANCHOR_TODAY,
   MONTH_NAMES,
   buildMonthMatrix,
   pad,
@@ -63,9 +64,23 @@ export interface CalendarWorkspaceProps {
 }
 
 export function CalendarWorkspace({ canCreate, showHeading = false }: CalendarWorkspaceProps) {
-  const t = todayParts()
+  // ─── Demo-tier gating (FINAL-GATE EG-9F/R4+R6) ───────────────────
+  //   · the mock-exams seed corpus applies once, only for the demo tenant;
+  //   · the illustrative school-events/holidays corpora render only for
+  //     the demo tenant (a real tenant sees its own user events + an
+  //     honest empty calendar).
+  const isDemo = useIsDemoTenant()
+
+  // PIH-4c — "today" anchors on the REAL clock: every real tenant's
+  // calendar opens on its actual current month (CANONICAL_TODAY, UTC
+  // day). Only the demo tenant keeps the seed-corpus anchor (Dec 10
+  // 2025) so its illustrative events/exams stay around "today".
+  const anchorToday = isDemo ? DEMO_SEED_ANCHOR_TODAY : CANONICAL_TODAY
+  const t = todayParts(anchorToday)
 
   // ─── State ──────────────────────────────────────────────────────
+  // (Initialized from the real clock; the async demo signal moves the
+  // demo tenant's view to its anchor month once it arrives.)
   const [year, setYear] = useState<number>(t.year)
   const [month, setMonth] = useState<number>(t.month)
   const [navDirection, setNavDirection] = useState<number>(1)
@@ -74,20 +89,24 @@ export function CalendarWorkspace({ canCreate, showHeading = false }: CalendarWo
   const [filterTypes, setFilterTypes] = useState<string[]>([...ALL_TYPES])
   const [detailEvent, setDetailEvent] = useState<CalendarEvent | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  const [addDefaultDate, setAddDefaultDate] = useState<string>(CANONICAL_TODAY)
+  const [addDefaultDate, setAddDefaultDate] = useState<string>(anchorToday)
 
   // ─── Data (single unified source) ───────────────────────────────
   const exams = useMockExamsStore((s) => s.exams)
   const userEvents = useCalendarStore((s) => s.userEvents)
-
-  // FINAL-GATE (EG-9F/R4+R6) — demo-tier gating for this module root:
-  //   · the mock-exams seed corpus applies once, only for the demo tenant;
-  //   · the illustrative school-events/holidays corpora render only for
-  //     the demo tenant (a real tenant sees its own user events + an
-  //     honest empty calendar).
-  const isDemo = useIsDemoTenant()
   const ensureDemoSeed = useMockExamsStore((s) => s.ensureDemoSeed)
   useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
+
+  // Once the (async) demo signal arrives, move the view to the demo
+  // seed corpus's anchor month — identical to the pre-PIH-4c showcase
+  // behavior; real tenants stay on their real current month.
+  useEffect(() => {
+    if (isDemo) {
+      const a = todayParts(DEMO_SEED_ANCHOR_TODAY)
+      setYear(a.year)
+      setMonth(a.month)
+    }
+  }, [isDemo])
 
   /**
    * Rolling window: visible month + today's month + the next two.
@@ -146,19 +165,19 @@ export function CalendarWorkspace({ canCreate, showHeading = false }: CalendarWo
     [typeCounts],
   )
 
-  // Upcoming: from canonical today onward, filtered, nearest first.
+  // Upcoming: from the anchor today onward, filtered, nearest first.
   const upcomingEvents = useMemo(
     () =>
       visibleEvents
-        .filter((e) => e.date >= CANONICAL_TODAY)
+        .filter((e) => e.date >= anchorToday)
         .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time)),
-    [visibleEvents],
+    [visibleEvents, anchorToday],
   )
 
   // Is the upcoming list empty only because of the type filters?
   const upcomingEmptyDueToFilter = useMemo(
-    () => rollingEvents.some((e) => e.date >= CANONICAL_TODAY) && upcomingEvents.length === 0,
-    [rollingEvents, upcomingEvents],
+    () => rollingEvents.some((e) => e.date >= anchorToday) && upcomingEvents.length === 0,
+    [rollingEvents, upcomingEvents, anchorToday],
   )
 
   // Grid inputs.

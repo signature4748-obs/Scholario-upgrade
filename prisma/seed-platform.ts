@@ -75,6 +75,15 @@ async function grant(adminId: string, keys: readonly string[]) {
 }
 
 async function main() {
+  // PIH-4a — production hard gate: this seed plants dev-preview platform
+  // admins with FIXED demo TOTP secrets (computable by anyone holding the
+  // repo). It must never run against a production environment.
+  if (process.env.NODE_ENV === 'production') {
+    console.error(
+      '[seed-platform] Refusing to run: NODE_ENV=production. This seed provisions dev-preview platform admins and fixed demo TOTP secrets.',
+    )
+    process.exit(1)
+  }
   // ── 1. Legacy SUPER_ADMIN migration ─────────────────────────────────
   const legacyAdmins = await db.user.findMany({ where: { role: 'SUPER_ADMIN' } })
   for (const legacy of legacyAdmins) {

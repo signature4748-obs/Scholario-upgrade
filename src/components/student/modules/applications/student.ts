@@ -5,8 +5,10 @@
  *
  * IDENTITY MODEL (canonical server identity — since the roster sync):
  *   The signed-in student is resolved through useMyStudentRecord() /
- *   resolveMyStudentRecord() (session user id → email → legacy demo
- *   record). Submissions and payments carry the resolved record's id —
+ *   resolveMyStudentRecord() (session user id → email; NO fabricated
+ *   fallback since PIH-4c — a student without a server roster record
+ *   resolves to undefined and the surfaces render honest-empty).
+ *   Submissions and payments carry the resolved record's id —
  *   the fee store validates canonical ids, and payment derivation joins
  *   on `studentId`.
  */

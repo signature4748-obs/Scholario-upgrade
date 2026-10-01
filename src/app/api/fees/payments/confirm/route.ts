@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
-import { applyPaymentToLedger, resolveFeeIdForTxn } from '@/lib/fee-workflow'
+import { applyPaymentToLedger, mintReceiptNo, resolveFeeIdForTxn } from '@/lib/fee-workflow'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
@@ -153,16 +153,23 @@ export async function POST(req: NextRequest) {
 
       // ── outcome: cancelled (user abandoned the gateway page) ──────
       if (cancelled) {
-        const updated = await db.feeTransaction.update({
-          where: { id: txn.id },
-          data: {
-            status: 'FAILED',
-            reconciliationStatus: 'exception',
-            reconciledAt: new Date(),
-            reconciledBy: 'demo-gateway',
-            note: 'cancelled at gateway',
-          },
+        const updated = await trackedTransaction('payment-confirm-cancel', async (tx) => {
+          // PIH-4b — guarded transition: only a still-PENDING order may
+          // become FAILED. A concurrent settlement (SUCCESS + ledger
+          // credit) is never overwritten by a late cancellation.
+          await tx.feeTransaction.updateMany({
+            where: { id: txn.id, status: 'PENDING' },
+            data: {
+              status: 'FAILED',
+              reconciliationStatus: 'exception',
+              reconciledAt: new Date(),
+              reconciledBy: 'demo-gateway',
+              note: 'cancelled at gateway',
+            },
+          })
+          return tx.feeTransaction.findUnique({ where: { id: txn.id } })
         })
+        if (!updated) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Order not found for this school.' })
         return settlementOf(updated)
       }
 
@@ -183,14 +190,48 @@ export async function POST(req: NextRequest) {
       // atomic unit — the demo flow can no longer produce SUCCESS rows
       // with no Fee.paid effect. The ledger is credited through the
       // canonical applyPaymentToLedger, idempotent on
-      // Payment.transactionId = the minted gateway payment id (the same
-      // key family the webhook/verify paths use), with the same fee
+      // Payment.transactionId = the gateway payment id (the same key
+      // family the webhook/verify paths use), with the same fee
       // targeting (txn feeId → feeHeadName title → oldest unsettled fee →
       // minimal fee row).
-      const gatewayPaymentId = `pay_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+      //
+      // PIH-4b — TWO race fixes:
+      //   · the idempotency key is DERIVED from the order
+      //     (`confirm:${orderId}`), not minted per call: a double-confirm
+      //     (retry, double-click, two tabs) resolves to the SAME
+      //     Payment.transactionId, so applyPaymentToLedger's
+      //     existing-mirror check returns the current totals and writes
+      //     nothing — the per-call random key minted a NEW key every
+      //     attempt and double-credited the ledger.
+      //   · the terminal-state check rides ON the write inside the
+      //     transaction (updateMany with status: 'PENDING'): when a
+      //     concurrent confirm already settled this order, 0 rows update
+      //     and the loser returns the winner's authoritative state
+      //     (idempotent response, no error, no second credit).
+      const gatewayPaymentId = `confirm:${orderId}`
       const updated = await trackedTransaction('payment-confirm-capture', async (tx) => {
-        const u = await tx.feeTransaction.update({
-          where: { id: txn.id },
+        // PIH-4b — fee targeting BEFORE the state write: the resolved fee
+        // id is PERSISTED on the canonical row (same discipline as the
+        // student verify path), so a settled order always carries its
+        // ledger link — an auditor reading the FeeTransaction sees exactly
+        // which Fee row the money landed on.
+        const feeId = txn.studentId
+          ? await resolveFeeIdForTxn(tx, {
+              schoolId: txn.schoolId,
+              studentId: txn.studentId,
+              feeId: txn.feeId,
+              feeHeadName: txn.feeHeadName,
+              amount: txn.amount,
+              method: txn.method,
+            })
+          : txn.feeId
+        // PIH-4b — receipts belong to SETTLEMENT: the canonical
+        // SCH-YYYY-NNNNNN number is minted HERE (inside the settlement
+        // transaction, only by the winner) — /api/fees/orders no longer
+        // persists a receipt on the PENDING row.
+        const receiptNo = await mintReceiptNo(txn.schoolId, tx)
+        const settled = await tx.feeTransaction.updateMany({
+          where: { id: txn.id, status: 'PENDING' },
           data: {
             status: 'SUCCESS',
             gatewayPaymentId,
@@ -199,17 +240,11 @@ export async function POST(req: NextRequest) {
             reconciledAt: new Date(),
             reconciledBy: 'demo-gateway',
             note: 'Settled server-side by the demo gateway',
+            receiptNo,
+            ...(feeId ? { feeId } : {}),
           },
         })
-        if (txn.studentId) {
-          const feeId = await resolveFeeIdForTxn(tx, {
-            schoolId: txn.schoolId,
-            studentId: txn.studentId,
-            feeId: txn.feeId,
-            feeHeadName: txn.feeHeadName,
-            amount: txn.amount,
-            method: txn.method,
-          })
+        if (settled.count > 0 && feeId) {
           await applyPaymentToLedger(
             {
               txnId: gatewayPaymentId,
@@ -221,8 +256,9 @@ export async function POST(req: NextRequest) {
             tx,
           )
         }
-        return u
+        return tx.feeTransaction.findUnique({ where: { id: txn.id } })
       })
+      if (!updated) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Order not found for this school.' })
       // Audit parity with the webhook's auto-reconciliation — Phase 3:
       // existence-checked (transactionId + settlementId) before the create
       // so a retried confirm cannot duplicate recon rows (the DB unique

@@ -5,6 +5,7 @@ import {
   parseDateParam,
   resolveClassScope,
   isValidStatus,
+  istDayKey,
   type AttendanceStatusValue,
 } from '@/lib/class-attendance'
 import { AppError } from '@/lib/security/errors'
@@ -37,10 +38,9 @@ export async function GET(req: NextRequest) {
 
 // POST /api/attendance — the LEGACY bulk class-day marker. The canonical
 // teacher flow is /api/teacher/class-attendance/** (baseline + drafts +
-// audit journal); nothing in the client POSTs here (grep-verified), but
-// the endpoint is hardened anyway (3-d audit: it previously upserted by
-// bare { studentId, date } — a cross-tenant collision on the unique key
-// would have OVERWRITTEN the other school's canonical record).
+// audit journal); nothing in the client POSTs here (grep-verified — the
+// tenant-isolation suite still pins this endpoint's fail-safe behaviour,
+// so the handler is retained, hardened, and PIH-4b day-anchored).
 //
 // Hardening model (mirrors the class-attendance service):
 //   · classId must exist in the CALLER's school (fail-safe 404)
@@ -53,6 +53,10 @@ export async function GET(req: NextRequest) {
 //   · the write itself is tenant-safe: an existing { studentId, date } row
 //     belonging to ANOTHER school is never touched (404), same-school rows
 //     update, otherwise a new row is created carrying the caller's schoolId.
+//   · PIH-4b: an omitted date defaults to TODAY ANCHORED AT MIDNIGHT UTC
+//     (the canonical day key — a time-of-day `new Date()` wrote rows the
+//     day-level unique can never reconcile), and markedBy stores the
+//     caller's DISPLAY NAME (the canonical provenance convention).
 export async function POST(req: NextRequest) {
   return withUser(
     async (user) => {
@@ -64,7 +68,7 @@ export async function POST(req: NextRequest) {
         : []
       if (!classId || !entries.length) throw new Error('classId and entries[] required')
 
-      const date = body?.date ? parseDateParam(body.date) : new Date()
+      const date = body?.date ? parseDateParam(body.date) : parseDateParam(istDayKey())
 
       // ── Class belongs to the caller's school ──
       const cls = await db.class.findFirst({
@@ -141,7 +145,7 @@ export async function POST(req: NextRequest) {
           if (existing) {
             await tx.attendance.update({
               where: { id: existing.id },
-              data: { status: e.status, markedBy: user.id, classId },
+              data: { status: e.status, markedBy: user.name ?? user.id, classId },
             })
           } else {
             await tx.attendance.create({
@@ -151,7 +155,7 @@ export async function POST(req: NextRequest) {
                 classId,
                 date,
                 status: e.status,
-                markedBy: user.id,
+                markedBy: user.name ?? user.id,
               },
             })
           }

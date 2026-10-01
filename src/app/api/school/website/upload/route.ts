@@ -13,6 +13,7 @@ import {
   EXT_BY_TYPE,
   MIME_BY_TYPE,
   readImageDimensions,
+  contentLengthExceedsUploadLimit,
 } from '@/lib/security/upload'
 
 export const runtime = 'nodejs'
@@ -47,6 +48,17 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           { success: false, error: 'Too many uploads. Please try again later.' },
           { status: 429, headers: { 'Retry-After': '60', 'X-Request-Id': requestId } },
+        )
+      }
+
+      // PIH-4c — EARLY size rejection BEFORE the multipart body is buffered:
+      // an oversized Content-Length answers 413 immediately without
+      // reading the stream (the post-parse file.size guard stays
+      // authoritative for missing/chunked lengths).
+      if (contentLengthExceedsUploadLimit(req, WEBSITE_UPLOAD_POLICY.maxBytes)) {
+        return NextResponse.json(
+          { success: false, error: 'Image is too large. Maximum size is 4 MB.' },
+          { status: 413, headers: { 'X-Request-Id': requestId } },
         )
       }
 

@@ -18,7 +18,7 @@
  * Scope of application (see docs/SECURITY_BASELINE.md §2):
  *   login · password change · session revocation · public admission
  *   endpoints · AI generation · message sending · uploads · payment
- *   endpoints · webhooks.
+ *   endpoints · webhooks · bulk CSV exports.
  */
 import { AppError } from './errors'
 
@@ -45,6 +45,8 @@ export const RATE_LIMITS = {
   admissionPublic: { name: 'admission-public', limit: 10, windowMs: 60 * 60_000 },
   /** Authenticated upload endpoints (per-user). */
   upload: { name: 'upload', limit: 30, windowMs: 60 * 60_000 },
+  /** Bulk PII CSV exports — students/fees/attendance/teachers (per-user). */
+  export: { name: 'export', limit: 30, windowMs: 60 * 60_000 },
   /** Public→auth'd file access token minting (per-user). */
   fileAccess: { name: 'file-access', limit: 120, windowMs: 60 * 60_000 },
   /** AI generation is expensive — strict per-user. */

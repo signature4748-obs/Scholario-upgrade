@@ -98,7 +98,7 @@
 
 ### A.11 Email / payment / file-upload infrastructure (verified)
 
-- **Email: none.** The only "email" is the mock `EmailAdapter` (`src/lib/platform/adapters.ts`) writing to a `localStorage` outbox for the Super Admin screen. No Resend/SMTP dependency exists anywhere (grep verified). In-app `Notification` model + announcement reads exist server-side.
+- **Email: none.** The mock `EmailAdapter` seam (`src/lib/platform/adapters.ts`) was REMOVED (PIH-4c dead-code pass): after the Phase-6 deletion of superadmin/platform-controls it had zero importers, so its "localStorage outbox consumed by the Super Admin screen" claim was stale. No Resend/SMTP dependency exists anywhere (grep verified); the real server-side email boundary (queue + audit, not fire-and-forget) lands with the Resend/infrastructure phase. In-app `Notification` model + announcement reads exist server-side.
 - **Payments**: dual implementation —
   1. `src/lib/payments/provider.ts`: real `RazorpayProvider` (plain `fetch` to `api.razorpay.com`, env-gated `RAZORPAY_KEY_ID/SECRET`, never returns secrets) + `SandboxProvider` (`PAYMENTS_SANDBOX=1` + `PAYMENTS_SANDBOX_SECRET`); checkout success only flips `FeeTransaction→SUCCESS` after server-side HMAC verification (`/api/student/payments/verify`).
   2. **Legacy stub**: `/api/fees/orders` mints fake gateway order ids locally (`order_<random>`) with a code comment admitting the gateway call is stubbed — a second, divergent order path.

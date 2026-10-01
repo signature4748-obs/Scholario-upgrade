@@ -5,6 +5,7 @@
 
 import { db, trackedTransaction } from '@/lib/db'
 import { schoolScoped } from '@/lib/api'
+import { getTeacherSubjectAssignments } from '@/lib/teacher-scope'
 
 export const VALID_ATTENDANCE_STATUS = ['PRESENT', 'ABSENT', 'LATE', 'LEAVE'] as const
 export type AttendanceStatusValue = (typeof VALID_ATTENDANCE_STATUS)[number]
@@ -26,9 +27,35 @@ export interface ClassScope {
 }
 
 /**
+ * The SUBJECTS the authenticated teacher may run subject sessions for in
+ * ONE class — resolved through the canonical CSA-first resolver
+ * (teacher-scope.ts: ClassSubjectAssignment(teacherUserId) ∪
+ * Timetable(teacherUserId) ∪ legacy Timetable(teacherName ONLY when the row
+ * carries no teacher user id)). PIH-4a: this used to match a bare
+ * lowercased teacherName, so any same-named account inherited (or lost)
+ * the class's subject scope.
+ */
+async function subjectsInClassScope(
+  user: { id: string; name: string | null },
+  schoolId: string,
+  classId: string
+): Promise<{ id: string; name: string }[]> {
+  const assignments = await getTeacherSubjectAssignments(user, schoolId)
+  const subjectIds = [
+    ...new Set(assignments.filter((a) => a.classId === classId).map((a) => a.subjectId)),
+  ]
+  if (subjectIds.length === 0) return []
+  const rows = await db.subject.findMany({
+    where: { schoolId, id: { in: subjectIds } },
+    select: { id: true, name: true },
+  })
+  return rows.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
  * Resolve what the authenticated teacher may do with a class:
- * class-teacher → owns the daily baseline; subject teacher (has timetable
- * cells in the class) → subject sessions for her own subjects only.
+ * class-teacher → owns the daily baseline; subject teacher (appointed
+ * via CSA / timetable) → subject sessions for her own subjects only.
  */
 export async function resolveClassScope(
   user: { id: string; name: string | null },
@@ -42,20 +69,7 @@ export async function resolveClassScope(
   if (!cls || cls.schoolId !== schoolId) throw new Error('NOT_FOUND')
   const isClassTeacher = cls.classTeacherId === user.id
 
-  const teacherName = (user.name || '').trim().toLowerCase()
-  const rows = teacherName
-    ? await db.timetable.findMany({
-        where: { schoolId, classId, teacherName: { not: null }, subjectId: { not: null } },
-        select: { subjectId: true, subject: { select: { name: true } }, teacherName: true },
-      })
-    : []
-  const subjects = [
-    ...new Map(
-      rows
-        .filter((r) => (r.teacherName || '').trim().toLowerCase() === teacherName)
-        .map((r) => [r.subjectId as string, { id: r.subjectId as string, name: r.subject!.name }])
-    ).values(),
-  ].sort((a, b) => a.name.localeCompare(b.name))
+  const subjects = await subjectsInClassScope(user, schoolId, classId)
 
   if (!isClassTeacher && subjects.length === 0) throw new Error('FORBIDDEN')
   return { isClassTeacher, subjects }
@@ -93,20 +107,7 @@ export async function resolveClassScopeOrNull(
     ? ((await db.user.findUnique({ where: { id: cls.classTeacherId }, select: { name: true } }))?.name ?? null)
     : null
 
-  const teacherName = (user.name || '').trim().toLowerCase()
-  const rows = teacherName
-    ? await db.timetable.findMany({
-        where: { schoolId, classId, teacherName: { not: null }, subjectId: { not: null } },
-        select: { subjectId: true, subject: { select: { name: true } }, teacherName: true },
-      })
-    : []
-  const subjects = [
-    ...new Map(
-      rows
-        .filter((r) => (r.teacherName || '').trim().toLowerCase() === teacherName)
-        .map((r) => [r.subjectId as string, { id: r.subjectId as string, name: r.subject!.name }])
-    ).values(),
-  ].sort((a, b) => a.name.localeCompare(b.name))
+  const subjects = await subjectsInClassScope(user, schoolId, classId)
 
   const isClassTeacher = cls.classTeacherId === user.id
   if (!isClassTeacher && subjects.length === 0) return null

@@ -71,6 +71,11 @@ export async function api(handler: () => Promise<unknown>): Promise<Response> {
       }
       const res = NextResponse.json({ ok: true, data })
       res.headers.set('X-Request-Id', meta.requestId)
+      // PIH-4c (§30) — the JSON envelope serves authenticated, per-request
+      // data (session identity, scoped rosters, exports). No intermediary
+      // or browser cache may store it — same no-store contract the raw
+      // CSV/download responses already carry.
+      res.headers.set('Cache-Control', 'no-store')
       return res
     } catch (e: unknown) {
       const classified = classifyError(e, meta.requestId)
@@ -96,6 +101,9 @@ export async function api(handler: () => Promise<unknown>): Promise<Response> {
       for (const [k, v] of Object.entries(classified.headers ?? {})) {
         res.headers.set(k, v)
       }
+      // PIH-4c (§30) — error envelopes carry the same per-request semantics
+      // (never cached) as the success path above.
+      res.headers.set('Cache-Control', 'no-store')
       return res
     }
   })

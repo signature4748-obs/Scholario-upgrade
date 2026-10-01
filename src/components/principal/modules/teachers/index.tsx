@@ -8,7 +8,6 @@ import {
 import { PageTransition } from '@/components/shared/ui'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { departments } from '@/lib/mock/school'
 import { useSchoolProfile } from '@/lib/school-profile'
 import { toast } from 'sonner'
 // PHASE 7 (Task 7-a) — canonical faculty hydration (server truth) + the
@@ -119,6 +118,15 @@ export function TeachersModule() {
     }
   }, [focus?.ts])
 
+  // PIH-4c — departments meta derives from the hydrated roster (unique
+  // departments of the REAL loaded teachers), honest 0 when none — the
+  // mock school `departments` config (fabricated heads) is no longer
+  // consulted on this surface.
+  const rosterDeptCount = useMemo(
+    () => new Set(s.teachers.map((t) => t.department).filter(Boolean)).size,
+    [s.teachers],
+  )
+
   // Settings full-page sub-route — takes over the entire module area
   if (isSettingsOpen) {
     return (
@@ -151,7 +159,7 @@ export function TeachersModule() {
       ) : (
         <>
           <ModuleHeader
-        meta={[`${s.totalTeachers} faculty`, `${departments.length} depts`, `AY ${schoolProfile.academicYear || '—'}`]}
+        meta={[`${s.totalTeachers} faculty`, `${rosterDeptCount} dept${rosterDeptCount === 1 ? '' : 's'}`, `AY ${schoolProfile.academicYear || '—'}`]}
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => setIsSettingsOpen(true)} className="text-xs gap-1.5 h-8">

@@ -9,11 +9,12 @@
  * only provides presentation tokens (type colors, tints) and pure
  * month-grid helpers.
  *
- * "Today" anchors to the app's canonical academic timeline
- * (`TODAY_STR` from `@/lib/mock/school-calendar`, Dec 10 2025) so the
- * calendar opens on the same month the rest of Scholario-OS is showing
- * (attendance, dashboards, exam schedule) instead of an empty real-clock
- * month.
+ * "Today" anchors on the REAL clock (PIH-4c): CANONICAL_TODAY is the
+ * current UTC day, so every tenant's calendar opens on its actual
+ * current month. The demo tenant alone keeps the seed-corpus anchor
+ * (`DEMO_SEED_ANCHOR_TODAY`, Dec 10 2025) — the illustrative events its
+ * showcase is authored around — applied only where the demo seed corpus
+ * is consumed (calendar-workspace).
  */
 
 import { TODAY_STR } from '@/lib/mock/school-calendar'
@@ -22,11 +23,25 @@ export type { CalendarEvent, CalendarEventSource } from '@/lib/store/calendar-st
 
 // ─── Canonical "today" ────────────────────────────────────────────────
 
-/** The app's canonical today (YYYY-MM-DD) — matches Attendance/timeline. */
-export const CANONICAL_TODAY = TODAY_STR
+/** The REAL clock's current day (YYYY-MM-DD, UTC). */
+function utcTodayISO(): string {
+  return new Date().toISOString().slice(0, 10)
+}
 
-export function todayParts(): { year: number; month: number; day: number } {
-  const [y, m, d] = CANONICAL_TODAY.split('-').map(Number)
+/** The app's canonical today (YYYY-MM-DD) — the REAL clock (UTC day). */
+export const CANONICAL_TODAY = utcTodayISO()
+
+/**
+ * DEMO-TIER anchor (legacy TODAY_STR, Dec 10 2025) — the month the
+ * illustrative school-events/exam seed corpus is authored around. Only
+ * the demo seed consumers use it as "today"; real tenants always use
+ * the real clock.
+ */
+export const DEMO_SEED_ANCHOR_TODAY = TODAY_STR
+
+/** Parse a YYYY-MM-DD "today" anchor into calendar parts. */
+export function todayParts(dateISO: string = CANONICAL_TODAY): { year: number; month: number; day: number } {
+  const [y, m, d] = dateISO.split('-').map(Number)
   return { year: y, month: m - 1, day: d }
 }
 

@@ -5,10 +5,21 @@
 > Source of truth for current state: `docs/DATABASE_INTEGRITY.md`.
 >
 > This is the runbook for moving Scholario-OS from local SQLite
-> (`db/custom.db`, 83 models, 3 versioned migrations) to managed
+> (`db/custom.db`, **96 models** as of the pre-integration hardening audit,
+> 7 versioned migrations) to managed
 > PostgreSQL (target: Supabase) WITHOUT weakening a single Phase-1/2/3
 > invariant — ideally strengthening them (RLS, CHECK constraints,
 > partial unique indexes, ENUMs, FTS).
+>
+> PIH CORRECTIONS (2026-10-01, audit-verified against the live DB):
+> · DateTime storage is **INTEGER epoch-ms** (NOT TEXT) — verified
+>   `typeof(date)=integer`; Prisma-client ETL converts automatically;
+>   raw COPY needs `to_timestamp(ms/1000.0)`.
+> · The trigger census is **78** (64 tenant-guards + 14 bound-guards +
+>   JobRun ×2), not 62.
+> · Status vocabularies are STRING-typed with live mixed-case drift
+>   (e.g. Exam.status `Scheduled` vs `SCHEDULED`) — normalize + CHECK
+>   BEFORE enum creation (§ PIH addendum).
 
 ---
 
@@ -35,12 +46,12 @@
 | Mechanism | SQLite today | Postgres target |
 |---|---|---|
 | Tenant scoping | `schoolId` column on every tenant row + Phase-2 service guards | same + **RLS policies** keyed on `current_setting('app.school_id')` / JWT claim |
-| Cross-school FK safety | 62 BEFORE INSERT/UPDATE triggers (migration `db_level_guards`) | composite FKs where cheap, else **CHECK-free triggers** retained OR RLS + FK validation; prefer `tenant_id` composite FK pattern on hot tables |
+| Cross-school FK safety | 78 BEFORE INSERT/UPDATE triggers (migration `db_level_guards`) | composite FKs where cheap, else **CHECK-free triggers** retained OR RLS + FK validation; prefer `tenant_id` composite FK pattern on hot tables |
 | Marks ≤ maxMarks, money > 0, paid ≤ amount, available ≤ copies | 14 bound-guard triggers | native **CHECK constraints** (single-row) + one trigger only for the cross-table mark-vs-config check |
 | Business-key uniqueness | 46 `@@unique` (NULLS DISTINCT) | same + **partial unique indexes** for the two NULL-bypass gaps |
 | Idempotency keys (eventId, transactionId, receiptNo, referenceNumber, …) | `@unique` columns | same (UNIQUE indexes) |
 | Money | `Float` | `NUMERIC(12,2)` (money) / keep `Int` minor-units where already integer |
-| Dates | `DateTime` (TEXT) / `String` (YYYY-MM-DD) | `TIMESTAMPTZ` / `DATE` (map `date`-string columns) |
+| Dates | `DateTime` (INTEGER epoch-ms; day-anchored columns are exact midnight-UTC multiples) / `String` (YYYY-MM-DD) | `TIMESTAMPTZ` / `DATE` (map `date`-string columns; `to_timestamp(ms/1000.0)` for raw COPY) |
 | Status strings | `String` + zod whitelists | native **ENUM types** (status catalogs in DATABASE_INTEGRITY §3/§9) with `ALTER ... ADD VALUE` governance |
 | Search | `LIKE '%q%'` scans | **pg_trgm** GIN indexes (then optionally FTS/tsvector) |
 | Sessions | opaque token table | same (token_hash unique, userId index) — consider Supabase Auth later |
@@ -122,7 +133,8 @@ not justify it.
 
 ## 5. Validation gates (must ALL pass on the Postgres side)
 
-1. `bun run test:security` → 202/202 (the 41 database-integrity tests
+1. `bun run test:security` → 246/246 (the 41 database-integrity tests +
+   the 29 PIH invariant tests
    are provider-agnostic by design: they assert P2002/P2003 semantics,
    upsert idempotency, ledger math, cascade behavior — all of which
    hold on Postgres; the trigger-error-code assertions may need a
@@ -181,3 +193,57 @@ not justify it.
   with hand-edited migration files allowed only for what Prisma cannot
   express (CHECK/RLS/partial indexes/triggers), exactly as Phase 3
   practiced.
+
+---
+
+## PIH ADDENDUM — pre-integration hardening audit facts (2026-10-01)
+
+The pre-integration forensic audit (worklog PIH-1..6) verified the live DB and
+produced these migration-critical facts. They extend, not replace, the plan.
+
+**Money → NUMERIC strategy (per field):** Fee.amount/paid, Payment.amount,
+FeeTransaction.amount, MasterFeeHead.amount, FeeHead.amount → `NUMERIC(12,2)`;
+Settlement.grossAmount/fees/netAmount → `NUMERIC(14,2)` (compute in paise
+ints, divide once); Route.fare → `NUMERIC(10,2)` (transport fee is money);
+marks/percent Floats → `NUMERIC(6,2)` optional (not money). No field is
+integer-paise or string money today; 0 fractional rows live. In-app rounding
+rules to codify at cutover: single roundToPaise at every input; installment
+splits in integer paise with remainder to the last bucket; percent
+concessions round-half-up to whole rupee; aggregation via SQL SUM (never JS
+float reduce).
+
+**Status-vocabulary normalization (BEFORE enum/CHECK):** live drift exists —
+Exam.status {COMPLETED, SCHEDULED, Scheduled} vs code title-case;
+Exam.resultStatus two schemes ({Declared, In Progress, Not Started} vs
+{Marks Entry, Under Verification, Result Ready, Result Declared});
+ParentGrievance 'monitoring' ∉ comment; FeeTransaction.method mixed case.
+Full vocabulary register: worklog PIH-3b / PRE_INTEGRATION_HARDENING_REPORT.
+
+**RLS boundary:** 73 tables carry schoolId (policy key
+`school_id = current_setting('app.school_id')`); 16 tenant-derived tables
+WITHOUT schoolId are trigger-protected today (ExamClass, ExamMark, Result,
+NotificationRead, BookIssue, GalleryImage, …) — add schoolId at cutover or
+join-based policies; User-scoped: Session, UserPreference; platform plane:
+separate policies (PlatformAuditLog, SupportSession cross-tenant by design);
+legitimately cross-tenant reads: School (pre-auth login resolution),
+PlatformAnnouncement, login lookups.
+
+**Attendance day-anchor rule (now enforced):** canonical attendance dates are
+exact midnight-UTC epoch-ms multiples; the `@@unique(studentId, date)` is the
+day-level constraint BECAUSE of the anchor (PIH migration
+20261001000000_pih_data_integrity deduped + anchored all rows; seeds and all
+writers now day-anchor). ETL must preserve the invariant: reject any
+non-midnight date.
+
+**LIKE case-sensitivity flip:** 37 `contains:` sites rely on SQLite's
+ASCII-case-insensitive LIKE; PG LIKE is case-sensitive — add
+`mode:'insensitive'` + pg_trgm GIN at the provider swap.
+
+**event-stream:** `mini-services/event-stream` polls SQLite via bun:sqlite
+with epoch-ms comparisons — must be rewritten on Prisma/Supabase Realtime at
+cutover (rooms map 1:1 to RLS policies; wire frames unchanged).
+
+**Dead-family note:** FeeStructure/FeeHead/FeeStructureVersion + their routes
+are unwired (0 rows, 0 callers — client reads localStorage). Decide
+wire-or-drop during the PG lineage regeneration; do not carry dead money
+tables into Postgres silently.

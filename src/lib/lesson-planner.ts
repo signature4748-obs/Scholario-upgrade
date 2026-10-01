@@ -5,15 +5,18 @@
  * resolution and the plan payload.
  *
  * Permissions: a teacher may only plan (class, subject) pairs she actually
- * teaches — ACTIVE ClassSubjectAssignment ∩ Timetable cells carrying her
- * name. Class-teacher status grants attendance authority, not lesson
- * planning for subjects she does not teach.
+ * teaches — the canonical CSA-first scope (ClassSubjectAssignment ∪
+ * Timetable teacherUserId, with the legacy name-match only as a fallback
+ * where the row carries no id), intersected with ACTIVE
+ * ClassSubjectAssignments. Class-teacher status grants attendance
+ * authority, not lesson planning for subjects she does not teach.
  */
 
 import { db } from '@/lib/db'
 import { schoolScoped } from '@/lib/api'
 import type { AuthUser } from '@/lib/auth'
 import { classLabelOf } from '@/lib/teacher-hub'
+import { getTeacherSubjectAssignments } from '@/lib/teacher-scope'
 import {
   dayKey,
   isHolidayKey,
@@ -104,27 +107,14 @@ export async function getTeachingAssignments(user: AuthUser): Promise<TeachingAs
   const schoolId = schoolScoped(user)
   const teacher = await db.teacher.findUnique({ where: { userId: user.id } })
   if (!teacher || teacher.schoolId !== schoolId) return []
-  const teacherName = (user.name || '').trim().toLowerCase()
-  if (!teacherName) return []
 
-  const rows = (await db.timetable.findMany({
-    where: { schoolId, teacherName: { not: null }, subjectId: { not: null } },
-    select: {
-      classId: true,
-      subjectId: true,
-      teacherName: true,
-      class: { select: { name: true, section: true } },
-      subject: { select: { name: true } },
-    },
-  })) as {
-    classId: string
-    subjectId: string
-    teacherName: string | null
-    class: { name: string; section: string | null }
-    subject: { name: string }
-  }[]
-  const mine = rows.filter((r) => (r.teacherName || '').trim().toLowerCase() === teacherName)
-  if (mine.length === 0) return []
+  // PIH-4a — CSA-first: reuse the canonical resolver (teacher-scope.ts) —
+  // ClassSubjectAssignment(teacherUserId) ∪ Timetable(teacherUserId) ∪
+  // legacy Timetable(teacherName ONLY when the row carries no teacher
+  // user id). The old bare lowercased NAME match let any same-named
+  // account inherit (or lose) the planning scope.
+  const assignments = await getTeacherSubjectAssignments(user, schoolId)
+  if (assignments.length === 0) return []
 
   // Permission gate: only ACTIVE ClassSubjectAssignments count.
   const csas = await db.classSubjectAssignment.findMany({
@@ -133,21 +123,57 @@ export async function getTeachingAssignments(user: AuthUser): Promise<TeachingAs
   })
   const activeKeys = new Set(csas.map((c) => `${c.classId}|${c.subjectId}`))
 
-  const byKey = new Map<string, TeachingAssignment>()
-  for (const r of mine) {
+  // periodsPerWeek — the teacher's OWN timetable cells per pair (id-linked
+  // first; legacy name-matched cells only where the row has no id).
+  const teacherName = (user.name || '').trim().toLowerCase()
+  const ttRows = await db.timetable.findMany({
+    where: { schoolId, subjectId: { not: null } },
+    select: { classId: true, subjectId: true, teacherUserId: true, teacherName: true },
+  })
+  const cellCount = new Map<string, number>()
+  for (const r of ttRows) {
     if (!r.subjectId) continue
+    const mine =
+      r.teacherUserId === user.id ||
+      (!r.teacherUserId && teacherName !== '' && (r.teacherName || '').trim().toLowerCase() === teacherName)
+    if (!mine) continue
     const key = `${r.classId}|${r.subjectId}`
+    cellCount.set(key, (cellCount.get(key) ?? 0) + 1)
+  }
+
+  const classIds = [...new Set(assignments.map((a) => a.classId))]
+  const subjectIds = [...new Set(assignments.map((a) => a.subjectId))]
+  const [classRows, subjectRows] = await Promise.all([
+    db.class.findMany({
+      where: { schoolId, id: { in: classIds } },
+      select: { id: true, name: true, section: true },
+    }),
+    db.subject.findMany({
+      where: { schoolId, id: { in: subjectIds } },
+      select: { id: true, name: true },
+    }),
+  ])
+  const classById = new Map(classRows.map((c) => [c.id, c]))
+  const subjectById = new Map(subjectRows.map((s) => [s.id, s]))
+
+  const byKey = new Map<string, TeachingAssignment>()
+  for (const a of assignments) {
+    const key = `${a.classId}|${a.subjectId}`
     if (!activeKeys.has(key)) continue
+    const cls = classById.get(a.classId)
+    const subject = subjectById.get(a.subjectId)
+    if (!cls || !subject) continue
+    const cells = cellCount.get(key) ?? 0
     const existing = byKey.get(key)
     if (existing) {
-      existing.periodsPerWeek += 1
+      existing.periodsPerWeek = Math.max(existing.periodsPerWeek, cells)
     } else {
       byKey.set(key, {
-        classId: r.classId,
-        classLabel: classLabelOf(r.class),
-        subjectId: r.subjectId,
-        subjectName: r.subject.name,
-        periodsPerWeek: 1,
+        classId: a.classId,
+        classLabel: classLabelOf(cls),
+        subjectId: a.subjectId,
+        subjectName: subject.name,
+        periodsPerWeek: cells,
       })
     }
   }

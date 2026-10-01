@@ -364,22 +364,35 @@ export function syncStudentsFromServer(): Promise<boolean> {
       // (canonical roster data that was already synced/persisted stays —
       // only the STU-xxx seed universe is evicted), and clear the
       // once-per-session guard so a later mount can retry the sync.
-      const st = useStudentsStore.getState()
-      const isSeedRoster =
-        st.students.length > 0 && st.students.every((s) => s.id.startsWith('STU-'))
-      if (isSeedRoster) {
-        useStudentsStore.setState({
-          students: [],
-          classes: [],
-          academicSubjects: [],
-          studentPositions: [],
-        })
-      }
+      purgeSeedRosterForRealTenant()
       syncPromise = null
       return false
     }
   })()
   return syncPromise
+}
+
+/**
+ * FINAL-GATE (EG-9F/R8) + PIH-4c — evict the legacy STU-xxx seed universe
+ * from a REAL (non-demo) tenant's store. No-op for the demo tenant and
+ * for any store whose roster is NOT the pure seed universe (a canonical
+ * server roster uses DB ids, so already-synced/persisted real data is
+ * never touched). Called on sync failure and from the app root for
+ * teacher-role sessions (which never run the roster sync).
+ */
+export function purgeSeedRosterForRealTenant(): void {
+  if (readIsDemoTenant()) return
+  const st = useStudentsStore.getState()
+  const isSeedRoster =
+    st.students.length > 0 && st.students.every((s) => s.id.startsWith('STU-'))
+  if (isSeedRoster) {
+    useStudentsStore.setState({
+      students: [],
+      classes: [],
+      academicSubjects: [],
+      studentPositions: [],
+    })
+  }
 }
 
 /** Reset the once-per-session guard (used by tests / explicit re-sync). */
@@ -391,9 +404,10 @@ export function resetRosterSyncGuard(): void {
 
 /**
  * Resolve the CURRENT student's canonical StudentRecord from the store,
- * matching the session user (userId first, then email). Falls back to
- * the legacy demo record (STU-58) while the first sync is still in
- * flight — after sync the canonical record always wins.
+ * matching the session user (userId first, then email). No fabricated
+ * fallback (PIH-4c): a real student without a server roster record
+ * resolves to `undefined` — consumers render their honest empty state
+ * until the canonical roster sync lands.
  */
 export function resolveMyStudentRecord(
   students: StudentRecord[],
@@ -408,7 +422,7 @@ export function resolveMyStudentRecord(
     const byEmail = students.find((s) => (s.email ?? '').toLowerCase() === sessionEmail.toLowerCase())
     if (byEmail) return byEmail
   }
-  return students.find((s) => s.id === 'STU-58')
+  return undefined
 }
 
 /** React hook wrapper for the student panel. */

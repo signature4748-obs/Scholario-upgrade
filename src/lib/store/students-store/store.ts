@@ -9,6 +9,7 @@ import { HOUSE_DEFS, SEED_SUBJECTS } from './constants'
 import { SS, SC } from './seed-data'
 import { SUBJECTS_BY_LEVEL } from './constants'
 import { idForCustomSubject, codeForName, type SubjectDef } from '@/lib/mock/academic'
+import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 import {
   migrateLegacyScopedStore, createTenantScopedStorage,
 } from '@/lib/tenant/tenant-storage'
@@ -71,62 +72,77 @@ function endOrphanPositions(
   return { positions: changed ? next : positions, ended }
 }
 
+/**
+ * DEMO-TIER seed positions (RB-1: SESSION-SCOPED — every record carries
+ * the academic session it was awarded in). Applied ONLY to the demo
+ * tenant via `ensureStudentsDemoSeed` (see the store tail):
+ *   · POS-SEED-1 — a Class 9-A monitor so the principal Leadership tab
+ *     shows an occupied state out of the box;
+ *   · POS-SEED-2 — the DEMO student (STU-58, Class 2-A) as Class Captain
+ *     of the LIVE session so the student-side Class Leadership workspace
+ *     is demonstrable immediately (awarding/ending via the Leadership tab
+ *     persists over this seed, per spec §38 E2E).
+ */
+const SEED_STUDENT_POSITIONS: StudentPosition[] = [
+  {
+    id: 'POS-SEED-1',
+    studentId: 'STU-27',
+    studentName: 'Myra Patel',
+    sessionId: SEED_SESSION_ID,
+    // STU-27 is enrolled in Class 9 (C12) · A — the classId must match
+    // the canonical class record so the Class 9 Leadership tab sees the
+    // assignment (§3 — no invisible authority).
+    classId: 'C12',
+    className: 'Class 9',
+    section: 'A',
+    key: 'class-monitor',
+    assignedById: 'PRINCIPAL',
+    assignedByName: 'Dr. Ananya Iyer',
+    assignedOn: '2026-08-15T09:00:00.000Z',
+    active: true,
+    notes: 'Appointed at the Investiture Ceremony.',
+  },
+  {
+    id: 'POS-SEED-2',
+    studentId: 'STU-58',
+    studentName: 'Aarav Sharma',
+    sessionId: SEED_SESSION_ID,
+    classId: 'C05',
+    // SD-3b — display label matches the server enrollment (Grade 9) so
+    // the captaincy never contradicts the sidebar/profile identity.
+    className: 'Grade 9',
+    section: 'A',
+    key: 'class-captain',
+    assignedById: 'PRINCIPAL',
+    assignedByName: 'Dr. Ananya Iyer',
+    assignedOn: '2026-08-15T09:00:00.000Z',
+    active: true,
+    notes: 'Appointed at the Investiture Ceremony — AY 2026–2027.',
+  },
+]
+
 export const useStudentsStore = create<StudentsState>()(
   persist(
     (set, get) => ({
-  students: SS,
-  classes: SC,
+  // PIH-4c (R8) — HONEST-EMPTY initial roster. The 58-student STU-xxx
+  // universe + class corpus is DEMO-TIER content: it is applied only to
+  // the sanctioned demo tenant via `ensureStudentsDemoSeed` (module root,
+  // `makeDemoSeedApplier` pristine-guarded — never over server-synced or
+  // user-mutated state). A real production tenant boots empty and is
+  // hydrated by the canonical /api/students/roster sync (page.tsx) or
+  // renders its honest empty states.
+  students: [],
+  classes: [],
   houses: HOUSE_DEFS,
   promotions: [],
   transfers: [],
-  // Class Captain / Monitor positions (RB-1: SESSION-SCOPED — every record
-  // carries the academic session it was awarded in). Seeded with:
-  //   · POS-SEED-1 — a Class 9-A monitor so the principal Leadership tab
-  //     shows an occupied state out of the box;
-  //   · POS-SEED-2 — the DEMO student (STU-58, Class 2-A) as Class Captain
-  //     of the LIVE session so the student-side Class Leadership workspace
-  //     is demonstrable immediately (awarding/ending via the Leadership tab
-  //     persists over this seed, per spec §38 E2E).
-  studentPositions: [
-    {
-      id: 'POS-SEED-1',
-      studentId: 'STU-27',
-      studentName: 'Myra Patel',
-      sessionId: SEED_SESSION_ID,
-      // STU-27 is enrolled in Class 9 (C12) · A — the classId must match
-      // the canonical class record so the Class 9 Leadership tab sees the
-      // assignment (§3 — no invisible authority).
-      classId: 'C12',
-      className: 'Class 9',
-      section: 'A',
-      key: 'class-monitor',
-      assignedById: 'PRINCIPAL',
-      assignedByName: 'Dr. Ananya Iyer',
-      assignedOn: '2026-08-15T09:00:00.000Z',
-      active: true,
-      notes: 'Appointed at the Investiture Ceremony.',
-    },
-    {
-      id: 'POS-SEED-2',
-      studentId: 'STU-58',
-      studentName: 'Aarav Sharma',
-      sessionId: SEED_SESSION_ID,
-      classId: 'C05',
-      // SD-3b — display label matches the server enrollment (Grade 9) so
-      // the captaincy never contradicts the sidebar/profile identity.
-      className: 'Grade 9',
-      section: 'A',
-      key: 'class-captain',
-      assignedById: 'PRINCIPAL',
-      assignedByName: 'Dr. Ananya Iyer',
-      assignedOn: '2026-08-15T09:00:00.000Z',
-      active: true,
-      notes: 'Appointed at the Investiture Ceremony — AY 2026–2027.',
-    },
-  ],
+  studentPositions: [],
   // Canonical subject registry (Spec §28). Cloned from SEED_SUBJECTS so
   // principal mutations (rename / add custom) don't mutate the seed.
   academicSubjects: SEED_SUBJECTS.map((s) => ({ ...s })),
+  // DEMO-TIER seeder (PIH-4c/R8) — applies the STU-xxx universe above ONLY
+  // for the sanctioned demo tenant (see module tail + demo-tenant.ts).
+  ensureDemoSeed: () => ensureStudentsDemoSeed(),
   archiveStudent: (id, reason, by) => {
     const s = get().students.find((x) => x.id === id)
     if (!s) return
@@ -723,3 +739,20 @@ export const useStudentsStore = create<StudentsState>()(
     },
   ),
 )
+
+// ─── FINAL-GATE (EG-9F/R4 + PIH-4c/R8) demo-tier seeder ──────────────
+// Built lazily on first call (the store exists by then). Applies the
+// sanctioned STU-xxx demo corpus at most once, never over non-pristine
+// state (a completed /api/students/roster sync or any user mutation
+// makes the store non-pristine and skips the seed) — see
+// makeDemoSeedApplier guard rules. Called by the app root (page.tsx)
+// once the server-derived demo signal (readIsDemoTenant) is confirmed.
+let _ensureStudentsDemoSeed: (() => void) | null = null
+export function ensureStudentsDemoSeed(): void {
+  _ensureStudentsDemoSeed ??= makeDemoSeedApplier(useStudentsStore, {
+    students: SS,
+    classes: SC,
+    studentPositions: SEED_STUDENT_POSITIONS,
+  })
+  _ensureStudentsDemoSeed()
+}

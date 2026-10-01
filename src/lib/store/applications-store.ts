@@ -54,7 +54,6 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { useFeeStore } from './fee-store'
 import type { FeeTransaction } from './fee-store'
-import { useStudentsStore } from '@/lib/store/students-store'
 import type { AdditionalChargeCategory } from './fee-store'
 import { CURRENT_ACADEMIC_YEAR } from './fee-store-data'
 import { ACADEMIC_CLASSES } from '@/lib/mock/academic/classes'
@@ -937,10 +936,6 @@ export async function notifyEligibleStudents(app: SchoolApplication): Promise<vo
 
 /** Legacy (un-scoped) data migrates once into the school's tenant namespace. */
 migrateLegacyScopedStore(TENANT_SCOPED_BASES.applications, DEFAULT_TENANT_ID)
-
-/** Session year used by the seed data — declared BEFORE the store so the
- *  initializer's seedApplications() call can never hit a TDZ error. */
-const YEAR = CURRENT_ACADEMIC_YEAR
 
 export const useApplicationsStore = create<ApplicationsState>()(
   persist(
@@ -1868,102 +1863,11 @@ export const useApplicationsStore = create<ApplicationsState>()(
   ),
 )
 
-// ─── Seed data (single Educational Tour, stable IDs) ───────────────────
-
-function seedApplications(): SchoolApplication[] {
-  const tour = APPLICATION_TEMPLATES.educational_tour
-  return [
-    {
-      id: 'APP-JAIPUR-2026',
-      title: 'Educational Tour — Jaipur',
-      destination: 'Jaipur, Rajasthan',
-      description: 'Three-day educational tour to Jaipur covering Amber Fort, City Palace and Jantar Mantar. Fee covers transport, boarding/lodging, entry tickets and insurance.',
-      category: 'Tour',
-      templateKey: 'educational_tour',
-      source: 'Event',
-      academicYear: YEAR,
-      tourEndDate: '2026-10-10',
-      durationDays: '3 Days / 2 Nights',
-      circularNo: 'GW/EDU/TOUR/2026-27/07',
-      circularDate: '2026-08-18',
-      accompanyingStaff: 'Ms. Kavita Joshi (PGT History) · Mr. Deepak Nair (Sports Coach) · Ms. Farah Khan (Lady Attendant)',
-      tourInstructions: 'Reporting time 6:00 AM at the school gate on the day of departure. Students must carry their school ID card, comfortable walking shoes and a light jacket. Electronic items above a smartphone are not permitted.',
-      genderEligibility: 'All',
-      paymentAvailability: 'Both',
-      docTemplate: 'classic',
-      targetClassIds: ['C11'],
-      deadline: '2026-09-15',
-      eventDate: '2026-10-08',
-      participation: 'Optional',
-      guardianConsent: {
-        required: true,
-        method: 'Physical Signature',
-        statement: tour.consentStatement,
-      },
-      teacherApprovalRequired: true,
-      physicalSignatureRequired: true,
-      inChargeTeacherId: 'T-014',
-      inChargeName: 'Rohan Mehta',
-      payment: { mode: 'Required', amount: 2500, feeHeadLabel: 'Educational Tour — Jaipur', chargeId: 'AC-01' },
-      formFields: tour.fields.map((f) => ({ ...f })),
-      status: 'Published',
-      createdBy: 'Dr. Ananya Iyer',
-      createdByRole: 'Principal',
-      approvalNotes: [],
-      createdAt: '2026-08-20T09:35:00Z',
-      updatedAt: '2026-08-22T10:00:00Z',
-    },
-    // AF-TPL — the second seeded session, printed on the Scholario Modern
-    // A4 document (digital consent, Class 4) so a fresh demo shows BOTH
-    // document layouts side by side.
-    {
-      id: 'APP-MYSURU-2026',
-      title: 'Educational Tour — Mysuru',
-      destination: 'Mysuru, Karnataka',
-      description: 'Two-day educational tour to Mysuru covering the Mysore Palace, Chamundi Hills and the Regional Museum of Natural History. Fee covers transport, boarding, entry tickets and insurance.',
-      category: 'Tour',
-      templateKey: 'educational_tour',
-      source: 'Event',
-      academicYear: YEAR,
-      tourEndDate: '2027-01-16',
-      durationDays: '2 Days / 1 Night',
-      circularNo: 'GW/EDU/TOUR/2026-27/09',
-      circularDate: '2026-09-02',
-      accompanyingStaff: 'Ms. Kavita Joshi (PGT History) · Ms. Farah Khan (Lady Attendant)',
-      tourInstructions: 'Report at the school gate by 7:00 AM on the day of departure. Carry the school ID card, a water bottle and a cap.',
-      genderEligibility: 'All',
-      paymentAvailability: 'Both',
-      docTemplate: 'modern',
-      targetClassIds: ['C07'],
-      deadline: '2026-12-20',
-      eventDate: '2027-01-15',
-      participation: 'Optional',
-      guardianConsent: {
-        required: true,
-        method: 'Digital',
-        statement: tour.consentStatement,
-      },
-      teacherApprovalRequired: true,
-      physicalSignatureRequired: false,
-      inChargeTeacherId: 'T-014',
-      inChargeName: 'Rohan Mehta',
-      payment: { mode: 'Required', amount: 1500, feeHeadLabel: 'Educational Tour — Mysuru', chargeId: 'AC-04' },
-      formFields: tour.fields.map((f) => ({ ...f })),
-      status: 'Published',
-      createdBy: 'Dr. Ananya Iyer',
-      createdByRole: 'Principal',
-      approvalNotes: [],
-      createdAt: '2026-09-02T09:40:00Z',
-      updatedAt: '2026-09-03T10:00:00Z',
-    },
-  ]
-}
-
 /**
- * Seeds realistic submissions resolved from the canonical roster so student
- * identity snapshots match real Class 11 students — which makes their
- * payments resolve correctly inside Fee Management accounts. Safe to call
- * repeatedly; only seeds while both collections are empty.
+ * Inert no-op (PIH-4c — the ~230-line fabricated seed body it used to
+ * hide is fully deleted, not just unreachable): teacher/principal
+ * applications modules still import + call it on mount, so the export
+ * stays for import compatibility. The workspace starts honest-empty.
  */
 export function ensureApplicationSeedData(): void {
   // PHASE 7 — RETIRED (fabricated demo submissions). Kept as an inert
@@ -1971,160 +1875,6 @@ export function ensureApplicationSeedData(): void {
   // mount); the workspace now starts honest-empty. See
   // docs/DATA_SOURCE_MAP.md §Applications for the classification.
   return
-}
-
-/* eslint-disable @typescript-eslint/no-unused-vars */
-function __retired_ensureApplicationSeedData(): void {
-  try {
-    const state = useApplicationsStore.getState()
-    if (state.submissions.length > 0 || state.audit.length > 0) return
-    const apps = state.applications.length > 0 ? state.applications : seedApplications()
-    const students = useStudentsStore.getState().students.filter((s) => s.status === 'Active')
-    const tour = apps.find((a) => a.id === 'APP-JAIPUR-2026')
-    if (!tour) return
-
-    const c11 = students.filter((s) => s.classId === 'C11').slice(0, 4)
-    const _mkIdentity = (stu: typeof students[number]): StudentSubmissionIdentity => ({
-      id: stu.id,
-      name: stu.name,
-      admissionNo: stu.admissionNo,
-      className: stu.className,
-      classId: stu.classId,
-      section: stu.section,
-      rollNo: stu.rollNo,
-      dob: stu.dob,
-      gender: stu.gender,
-      bloodGroup: stu.bloodGroup,
-      address: stu.address,
-      guardianName: stu.guardianName,
-      guardianPhone: stu.guardianPhone,
-    })
-
-    const answerSets: Array<Record<string, string | string[] | boolean>> = [
-      { 't-meal': 'Vegetarian', 't-shirt': 'M', 't-emergency': 'Vikram Rao — 98110 22334', 't-medical': '', 't-photo': true },
-      { 't-meal': 'Non-Vegetarian', 't-shirt': 'L', 't-emergency': 'Sunita Kaur — 98730 44556', 't-medical': 'Mild pollen allergy — carries antihistamine.', 't-photo': true },
-      { 't-meal': 'Jain', 't-shirt': 'S', 't-emergency': '96432', 't-medical': '', 't-photo': false },
-      { 't-meal': 'Vegetarian', 't-shirt': 'XL', 't-emergency': 'Mahesh Verma — 99100 55667', 't-medical': 'Lactose intolerant.', 't-photo': true },
-    ]
-
-    // Serials are assigned sequentially over the generated set (class +
-    // gender aware) — the same rules as a live submission.
-    const seeded: ApplicationSubmission[] = []
-    for (const [i, stu] of c11.entries()) {
-      const submittedAt = '2026-08-24T09:00:00Z'
-      const isCorrection = i === 2
-      seeded.push({
-        id: `SUB-SEED-JP-${i + 1}`,
-        applicationId: tour.id,
-        studentId: stu.id,
-        studentName: stu.name,
-        admissionNo: stu.admissionNo,
-        className: stu.className,
-        classId: stu.classId,
-        section: stu.section,
-        rollNo: stu.rollNo,
-        dob: stu.dob,
-        gender: stu.gender,
-        bloodGroup: stu.bloodGroup,
-        address: stu.address,
-        guardianName: stu.guardianName,
-        guardianPhone: stu.guardianPhone,
-        serialNo: nextTourSerial(tour, seeded, stu.className, stu.gender),
-        answers: answerSets[i % answerSets.length],
-        submittedAt,
-        submittedByRole: 'Student' as const,
-        mode: 'Digital' as const,
-        status: (isCorrection ? 'Correction Required' : 'Submitted') as SubmissionWorkflowStatus,
-        physicalDoc: { status: tour.physicalSignatureRequired && tour.guardianConsent.method === 'Physical Signature' ? 'Pending' as const : 'Not Required' as const },
-        reviewNotes: isCorrection ? [{
-          id: 'RN-SEED-1', at: '2026-08-25T10:30:00Z', by: 'Rohan Mehta', role: 'Teacher' as const,
-          note: 'Emergency contact number looks incomplete — please re-enter the full 10-digit mobile number.', kind: 'correction' as const,
-        }] : [],
-        resubmissionCount: 0,
-        formVersion: 1,
-        updatedAt: submittedAt,
-      })
-    }
-    const out = seeded
-
-    // AF-TPL — Mysuru (Scholario Modern document) submissions: two Class 4
-    // applicants through the digital-consent flow. The demo student (STU-18,
-    // Class 4-B) is deliberately NOT seeded so the live apply wizard stays
-    // available on a fresh demo.
-    const mysuru = apps.find((a) => a.id === 'APP-MYSURU-2026')
-    if (mysuru) {
-      const c07 = students.filter((s) => s.classId === 'C07').slice(0, 2)
-      const mysuruAnswers: Array<Record<string, string | string[] | boolean>> = [
-        { 't-meal': 'Vegetarian', 't-motion': false, 't-emergency': 'Ramesh Iyer — 98450 12345', 't-medical': '' },
-        { 't-meal': 'Jain', 't-motion': true, 't-emergency': 'Priya Nair — 99020 33445', 't-medical': 'Bus-sickness — carries medication for long drives.' },
-      ]
-      const mysuruSubs: ApplicationSubmission[] = []
-      for (const [i, stu] of c07.entries()) {
-        const submittedAt = '2026-09-03T10:30:00Z'
-        mysuruSubs.push({
-          id: `SUB-SEED-MY-${i + 1}`,
-          applicationId: mysuru.id,
-          studentId: stu.id,
-          studentName: stu.name,
-          admissionNo: stu.admissionNo,
-          className: stu.className,
-          classId: stu.classId,
-          section: stu.section,
-          rollNo: stu.rollNo,
-          dob: stu.dob,
-          gender: stu.gender,
-          bloodGroup: stu.bloodGroup,
-          address: stu.address,
-          guardianName: stu.guardianName,
-          guardianPhone: stu.guardianPhone,
-          serialNo: nextTourSerial(mysuru, mysuruSubs, stu.className, stu.gender),
-          answers: mysuruAnswers[i % mysuruAnswers.length],
-          submittedAt,
-          submittedByRole: 'Student' as const,
-          mode: 'Digital' as const,
-          status: 'Submitted' as SubmissionWorkflowStatus,
-          physicalDoc: { status: 'Not Required' as const },
-          reviewNotes: [],
-          resubmissionCount: 0,
-          formVersion: 1,
-          updatedAt: submittedAt,
-        })
-      }
-      out.push(...mysuruSubs)
-    }
-
-    useApplicationsStore.setState({
-      submissions: out,
-      audit: out.length ? SEED_APP_AUDIT() : [],
-    })
-  } catch {
-    /* roster unavailable — skip seeding silently */
-  }
-}
-
-function SEED_APP_AUDIT(): ApplicationAuditEvent[] {
-  return [
-    {
-      id: 'AEV-SEED-1', ts: '2026-08-22T09:00:00Z', applicationId: 'APP-JAIPUR-2026',
-      actor: 'Dr. Ananya Iyer', actorRole: 'Principal', action: 'application.published',
-      message: 'Linked to existing charge "Educational Tour — Jaipur" (₹2,500). Deadline 2026-09-15.',
-    },
-    {
-      id: 'AEV-SEED-2', ts: '2026-08-25T10:30:00Z', applicationId: 'APP-JAIPUR-2026', submissionId: 'SUB-SEED-JP-3',
-      actor: 'Rohan Mehta', actorRole: 'Teacher', action: 'submission.correction',
-      message: 'Corrections requested from a Class 11 applicant — emergency contact incomplete.',
-    },
-    {
-      id: 'AEV-SEED-3', ts: '2026-09-03T09:00:00Z', applicationId: 'APP-MYSURU-2026',
-      actor: 'Dr. Ananya Iyer', actorRole: 'Principal', action: 'application.published',
-      message: 'Published on the Scholario Modern A4 document — linked charge "Educational Tour — Mysuru" (₹1,500). Deadline 2026-12-20.',
-    },
-    {
-      id: 'AEV-SEED-4', ts: '2026-09-03T10:30:00Z', applicationId: 'APP-MYSURU-2026', submissionId: 'SUB-SEED-MY-1',
-      actor: 'System', actorRole: 'Principal', action: 'submission.submitted',
-      message: 'Two Class 4 applications received with digital guardian consent — awaiting payment.',
-    },
-  ]
 }
 
 // ─── Examinations module integration (architecture, retained) ──────────

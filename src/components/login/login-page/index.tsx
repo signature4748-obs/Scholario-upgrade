@@ -859,6 +859,16 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
 
+  // PIH-6 — Escape closes the dialog (keyboard-escape parity with the app's
+  // other dialogs; the QA sweep found this was the only one missing it).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -885,9 +895,11 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h3 className="font-display text-xl font-bold text-foreground">Check your inbox</h3>
+            <h3 className="font-display text-xl font-bold text-foreground">Contact your administrator</h3>
             <p className="text-sm text-muted-foreground">
-              If an account exists for <span className="font-semibold text-foreground">{email}</span>, you&apos;ll receive a password reset link shortly.
+              {/* PIH-4c — no reset-email backend exists; the modal tells the
+                  user the truth instead of promising a link that never comes. */}
+              Password resets are handled by your school administrator — please contact them to reset the password for <span className="font-semibold text-foreground">{email}</span>.
             </p>
             <button
               onClick={onClose}
@@ -901,7 +913,10 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
             <div>
               <h3 className="font-display text-xl font-bold text-foreground">Forgot your password?</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Enter your registered email and we&apos;ll send you a reset link.
+                {/* PIH-4c — honest copy: no reset link can be emailed yet
+                    (no email backend). The email identifies the account when
+                    the user contacts their school administrator. */}
+                Enter your registered email, then contact your school administrator to complete the password reset.
               </p>
             </div>
             <form
@@ -933,7 +948,7 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
                   type="submit"
                   className="flex-1 px-5 py-2.5 rounded-full text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:shadow-lg hover:shadow-emerald-500/30 transition-all focus-ring"
                 >
-                  Send reset link
+                  Continue
                 </button>
               </div>
             </form>

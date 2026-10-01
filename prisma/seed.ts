@@ -1,10 +1,23 @@
 import { db } from '../src/lib/db'
 import { hashPassword } from '../src/lib/auth'
+import { mintReceiptNo } from '../src/lib/fee-workflow'
 
 async function main() {
+  // PIH-4a — production hard gate: this seed DELETES every table and plants
+  // demo credentials (principal@demoschool.edu / password123 …). It must
+  // never run against a production environment.
+  if (process.env.NODE_ENV === 'production') {
+    console.error(
+      '[seed] Refusing to run: NODE_ENV=production. The seed suite wipes all data and installs demo credentials.',
+    )
+    process.exit(1)
+  }
   console.log('🌱 Seeding database...')
 
-  // Clean (order matters for FK)
+  // Clean (order matters for FK). FeeTransaction is the canonical ledger
+  // mirror of Payment — the base seed now writes both (PIH-4b parity), so
+  // the full reset clears both together.
+  await db.feeTransaction.deleteMany()
   await db.payment.deleteMany()
   await db.bookIssue.deleteMany()
   await db.libraryBook.deleteMany()
@@ -155,16 +168,22 @@ async function main() {
     students.push(s)
   }
 
-  // Attendance for last 7 days
+  // Attendance for last 7 days. PIH-4b integrity: dates are anchored to
+  // midnight UTC (the canonical day key — a time-of-day date breaks the
+  // (studentId, date) day-level uniqueness) and markedBy carries the
+  // class teacher's DISPLAY NAME (the canonical provenance convention,
+  // same as /api/teacher/class-attendance baseline writes).
   const today = new Date()
   for (let d = 0; d < 7; d++) {
     const date = new Date(today)
     date.setDate(today.getDate() - d)
+    date.setUTCHours(0, 0, 0, 0)
     for (const s of students) {
       const r = Math.random()
       const status = r > 0.9 ? 'ABSENT' : r > 0.85 ? 'LATE' : 'PRESENT'
+      const classTeacherName = s.classId === demoClass9.id ? demoTeacher1.name : demoTeacher2.name
       await db.attendance.create({
-        data: { schoolId: demoSchool.id, studentId: s.id, classId: s.classId, date, status, markedBy: demoTeacher1.id },
+        data: { schoolId: demoSchool.id, studentId: s.id, classId: s.classId, date, status, markedBy: classTeacherName },
       })
     }
   }
@@ -223,6 +242,33 @@ async function main() {
           transactionId: `TXN-${fee.id.slice(-8).toUpperCase()}`,
           note: 'Tuition Fee Q1 collection',
           createdAt: when,
+        },
+      })
+      // PIH-4b ledger parity: every Payment mirror now gets its canonical
+      // FeeTransaction row (status SUCCESS, source SCHOOL_OFFICE, receipt
+      // minted through the SAME mintReceiptNo the live write paths use) so
+      // a fresh DB has SUM(FeeTransaction SUCCESS) == SUM(Fee.paid) from
+      // the start — the dashboard (Fee.paid/Payment) and the fees module
+      // (FeeTransaction) can never diverge again.
+      const seedMethod = feeMethods[idx % feeMethods.length]
+      await db.feeTransaction.create({
+        data: {
+          schoolId: fee.schoolId,
+          studentId: s.id,
+          studentName: `${studentFirstNames[idx % studentFirstNames.length]} ${studentLastNames[idx % studentLastNames.length]}`,
+          feeId: fee.id,
+          feeHeadName: fee.title,
+          amount: 25000,
+          method: seedMethod === 'NETBANKING' ? 'NET_BANKING' : seedMethod,
+          status: 'SUCCESS',
+          source: 'SCHOOL_OFFICE',
+          collectedByName: 'School Office',
+          collectedAt: when,
+          verifiedAt: when,
+          receiptNo: await mintReceiptNo(fee.schoolId),
+          note: 'Tuition Fee Q1 collection',
+          createdAt: when,
+          updatedAt: when,
         },
       })
     }

@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { parseJsonBody, idSchema, safeText } from '@/lib/security/validation'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { AppError } from '@/lib/security/errors'
 import { log } from '@/lib/observability/logger'
 
 export const runtime = 'nodejs'
@@ -175,13 +176,25 @@ Requirements:
       parsed = generateTemplateQuestions(subject, topic, gradeLevel, difficulty, count)
     }
 
+    // PIH-4c — these used to return a NESTED { ok:false, generated:[], raw }
+    // object inside the 200 { ok:true, data } envelope (and leaked the raw
+    // LLM output to the client). No client consumes this route today
+    // (grep-verified), so the failure now propagates through the standard
+    // top-level envelope: AppError EXTERNAL_SERVICE_FAILURE → 503
+    // { ok:false, error, code, requestId }; the raw model output stays in
+    // the server log.
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      return {
-        ok: false,
-        generated: [],
-        raw,
-        error: 'AI returned no valid questions. Please try again with different parameters.',
-      }
+      log('warn', 'external_service_degraded', {
+        channel: 'external',
+        errorCode: 'EXTERNAL_SERVICE_FAILURE',
+        service: 'ai-gateway',
+        reason: 'no-questions-returned',
+        detail: raw.slice(0, 500),
+      })
+      throw new AppError('EXTERNAL_SERVICE_FAILURE', {
+        publicMessage: 'AI returned no valid questions. Please try again with different parameters.',
+        internalDetail: 'generate-questions: model returned an empty question set',
+      })
     }
 
     // Validate and clean each question
@@ -196,12 +209,17 @@ Requirements:
     )
 
     if (valid.length === 0) {
-      return {
-        ok: false,
-        generated: [],
-        raw,
-        error: 'AI returned questions but none were valid. Please try again.',
-      }
+      log('warn', 'external_service_degraded', {
+        channel: 'external',
+        errorCode: 'EXTERNAL_SERVICE_FAILURE',
+        service: 'ai-gateway',
+        reason: 'all-questions-failed-validation',
+        detail: raw.slice(0, 500),
+      })
+      throw new AppError('EXTERNAL_SERVICE_FAILURE', {
+        publicMessage: 'AI returned questions but none were valid. Please try again.',
+        internalDetail: 'generate-questions: every generated question failed field validation',
+      })
     }
 
     // Optionally save to question bank if autoSave is true

@@ -1,12 +1,12 @@
 'use client'
 
+import { useMemo } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight, Search, Shield, Users, CalendarDays, UserCheck, Wallet } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { StatusBadge } from '@/components/shared/ui'
-import { departments } from '@/lib/mock/school'
 import { formatINR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { TeacherRecord } from '@/lib/store/teachers-store'
@@ -44,6 +44,13 @@ export function DirectoryTab({
   relievedCount: _relievedCount, onOpenProfile,
 }: Props) {
   const reduce = useReducedMotion()
+  // PIH-4c — department filter options derive from the hydrated roster
+  // (unique departments of the REAL loaded teachers), honest empty when
+  // none; the mock school `departments` config is no longer consulted.
+  const rosterDepartments = useMemo(
+    () => [...new Set(teachers.map((t) => t.department).filter(Boolean))].sort(),
+    [teachers],
+  )
   return (
     <div className="space-y-4">
       {/* Premium summary cards — Admission-style. Honest zeros: with no
@@ -72,8 +79,8 @@ export function DirectoryTab({
             <SelectTrigger className="w-[160px] h-9 text-xs"><SelectValue placeholder="All Departments" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Departments</SelectItem>
-              {departments.map((d) => (
-                <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>
+              {rosterDepartments.map((d) => (
+                <SelectItem key={d} value={d}>{d}</SelectItem>
               ))}
             </SelectContent>
           </Select>

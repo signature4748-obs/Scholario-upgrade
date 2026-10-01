@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { AppError } from '@/lib/security/errors'
 import { classLabelOf } from '@/lib/teacher-hub'
 import {
   applyPaymentToLedger,
@@ -8,6 +9,7 @@ import {
   audit,
   mintReceiptNo,
   pushMessage,
+  resolveFeeIdForTxn,
   toFeeTxnDto,
   TXN_STATUS,
 } from '@/lib/fee-workflow'
@@ -180,6 +182,28 @@ export async function POST(req: NextRequest) {
                 : `This payment is ${txn.status === TXN_STATUS.REJECTED ? 'rejected' : txn.status.toLowerCase()} — only pending collections can be verified.`,
             )
           }
+          // PIH-4b — feeId resolution for ledger application: when the
+          // pending collection carries no feeId (seeded demo rows, legacy
+          // callers), the target fee is resolved SERVER-SIDE through the
+          // canonical resolver (feeHeadName title match → oldest unsettled
+          // fee → minimal fee row) — the same targeting the student
+          // payment-verify and manual-transaction paths use. Before this,
+          // verifying such a row minted SUCCESS with NO ledger credit
+          // (Fee.paid never moved) — the module/dashboard divergence. The
+          // resolved id is PERSISTED on the canonical row so the audit
+          // trail always shows which Fee the money landed on.
+          const ledgerFeeId =
+            txn.feeId ??
+            (txn.studentId
+              ? await resolveFeeIdForTxn(tx, {
+                  schoolId,
+                  studentId: txn.studentId,
+                  feeId: null,
+                  feeHeadName: txn.feeHeadName,
+                  amount: txn.amount,
+                  method: txn.method,
+                })
+              : null)
           const receiptNo = await mintReceiptNo(schoolId, tx)
           const updated = await tx.feeTransaction.update({
             where: { id: txn.id },
@@ -192,13 +216,14 @@ export async function POST(req: NextRequest) {
               reconciliationStatus: 'reconciled',
               reconciledAt: new Date(),
               reconciledBy: user.name ?? 'principal',
+              ...(ledgerFeeId ? { feeId: ledgerFeeId } : {}),
             },
           })
           const ledger = await applyPaymentToLedger(
             {
               txnId: txn.id,
               schoolId,
-              feeId: txn.feeId,
+              feeId: ledgerFeeId,
               amount: txn.amount,
               method: txn.method,
             },
@@ -234,29 +259,38 @@ export async function POST(req: NextRequest) {
         if (!txnId) throw new Error('txnId is required')
         if (!reason) throw new Error('A rejection reason is required — the collector must know why.')
 
-        const txn = await db.feeTransaction.findFirst({
-          where: { id: txnId, schoolId, status: TXN_STATUS.PENDING_VERIFICATION },
+        // PIH-4b — race-free reject: the status predicate rides ON the
+        // update, inside one transaction (mirrors the verify path's
+        // pattern). updateMany → 0 rows means the txn was settled
+        // concurrently → 409 CONFLICT. The old flow pre-checked with
+        // findFirst then did an UNGUARDED update: a verify landing in that
+        // window would have been overwritten to REJECTED while the ledger
+        // had already credited Fee.paid (money-state divergence).
+        const txn = await trackedTransaction('fee-verification-reject', async (tx) => {
+          const result = await tx.feeTransaction.updateMany({
+            where: { id: txnId, schoolId, status: TXN_STATUS.PENDING_VERIFICATION },
+            data: {
+              status: TXN_STATUS.REJECTED,
+              rejectedById: user.id,
+              rejectedByName: user.name ?? 'Principal',
+              rejectedAt: new Date(),
+              rejectionReason: reason,
+            },
+          })
+          if (result.count === 0) {
+            const existing = await tx.feeTransaction.findFirst({ where: { id: txnId, schoolId } })
+            if (!existing) throw new Error('NOT_FOUND')
+            throw new AppError('CONFLICT', {
+              publicMessage:
+                existing.status === TXN_STATUS.VERIFIED
+                  ? 'This payment is already verified.'
+                  : `This payment is ${existing.status.toLowerCase()} — only pending collections can be rejected.`,
+              internalDetail: `fee-verification reject: txn ${txnId} settled concurrently (status ${existing.status})`,
+            })
+          }
+          return tx.feeTransaction.findUnique({ where: { id: txnId } })
         })
-        if (!txn) {
-          const existing = await db.feeTransaction.findFirst({ where: { id: txnId, schoolId } })
-          if (!existing) throw new Error('NOT_FOUND')
-          throw new Error(
-            existing.status === TXN_STATUS.VERIFIED
-              ? 'This payment is already verified.'
-              : `This payment is ${existing.status.toLowerCase()} — only pending collections can be rejected.`,
-          )
-        }
-
-        const updated = await db.feeTransaction.update({
-          where: { id: txn.id },
-          data: {
-            status: TXN_STATUS.REJECTED,
-            rejectedById: user.id,
-            rejectedByName: user.name ?? 'Principal',
-            rejectedAt: new Date(),
-            rejectionReason: reason,
-          },
-        })
+        if (!txn) throw new Error('NOT_FOUND')
 
         if (txn.collectedById) {
           await pushMessage(
@@ -274,7 +308,7 @@ export async function POST(req: NextRequest) {
           `Rejected ₹${txn.amount.toLocaleString('en-IN')} from ${txn.studentName ?? 'student'} — "${reason}" (txn ${txn.id})`,
         )
 
-        return { txn: toFeeTxnDto(updated) }
+        return { txn: toFeeTxnDto(txn) }
       }
 
       // ── RECORD DIRECT (Principal / School Office payment) ───────────

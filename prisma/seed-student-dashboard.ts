@@ -26,6 +26,7 @@
 // ============================================================
 
 import { db } from '../src/lib/db'
+import { mintReceiptNo } from '../src/lib/fee-workflow'
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -154,7 +155,10 @@ async function main() {
   start.setDate(start.getDate() - ((start.getDay() + 6) % 7)) // back to Monday
   for (let d = new Date(start); d < today; d = new Date(d.getTime() + DAY_MS)) {
     if (d.getDay() === 0) continue // Sunday — no school
-    attendanceRows.push({ date: new Date(d), status: 'PRESENT' })
+    // PIH-4b integrity: anchor every attendance date to midnight UTC (the
+    // canonical day key) so the (studentId, date) day-level uniqueness
+    // holds — never a time-of-day date.
+    attendanceRows.push({ date: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())), status: 'PRESENT' })
   }
   // Honest imperfections: 1 LATE, 2 ABSENT spread across the window
   if (attendanceRows.length > 20) {
@@ -170,7 +174,10 @@ async function main() {
         classId: cls.id,
         date: row.date,
         status: row.status,
-        markedBy: classTeacherUser?.id ?? null,
+        // Canonical provenance convention: the class teacher's DISPLAY
+        // NAME (same as /api/teacher/class-attendance baseline writes),
+        // never a User id.
+        markedBy: classTeacherUser?.name ?? null,
       },
     })
   }
@@ -281,6 +288,10 @@ async function main() {
     await db.payment.deleteMany({ where: { feeId: { in: oldFees.map((f) => f.id) } } })
     await db.fee.deleteMany({ where: { studentId: student.id } })
   }
+  // PIH-4b parity: the ledger reset must clear this student's canonical
+  // FeeTransaction rows too — otherwise a re-run leaves SUCCESS rows with
+  // dangling fee links and SUM(FeeTransaction) drifts above SUM(Fee.paid).
+  await db.feeTransaction.deleteMany({ where: { studentId: student.id } })
   const paid1 = await db.fee.create({
     data: {
       schoolId: school.id, studentId: student.id, title: 'Tuition Fee — Term 1',
@@ -292,6 +303,20 @@ async function main() {
     // Phase 3: Payment.schoolId is required — derived from the fee.
     data: { schoolId: paid1.schoolId, feeId: paid1.id, amount: 18000, method: 'UPI', status: 'SUCCESS', transactionId: 'pay-demo-t1', note: 'Term 1 tuition' },
   })
+  // PIH-4b parity: the canonical FeeTransaction mirror (server-minted
+  // receipt, same as the live write paths) keeps Fee.paid and the ledger
+  // equal from the first seed.
+  await db.feeTransaction.create({
+    data: {
+      schoolId: paid1.schoolId, studentId: student.id, studentName: user.name,
+      className: cls.name, feeId: paid1.id, feeHeadName: paid1.title,
+      amount: 18000, method: 'UPI', status: 'SUCCESS', source: 'SCHOOL_OFFICE',
+      collectedByName: 'School Office', collectedAt: paid1.paidDate ?? undefined,
+      verifiedAt: paid1.paidDate ?? undefined,
+      receiptNo: await mintReceiptNo(paid1.schoolId), note: 'Term 1 tuition',
+      createdAt: paid1.paidDate ?? undefined, updatedAt: paid1.paidDate ?? undefined,
+    },
+  })
   const paid2 = await db.fee.create({
     data: {
       schoolId: school.id, studentId: student.id, title: 'Tuition Fee — Term 2',
@@ -302,6 +327,17 @@ async function main() {
   await db.payment.create({
     // Phase 3: Payment.schoolId is required — derived from the fee.
     data: { schoolId: paid2.schoolId, feeId: paid2.id, amount: 18000, method: 'BANK_TRANSFER', status: 'SUCCESS', transactionId: 'pay-demo-t2', note: 'Term 2 tuition' },
+  })
+  await db.feeTransaction.create({
+    data: {
+      schoolId: paid2.schoolId, studentId: student.id, studentName: user.name,
+      className: cls.name, feeId: paid2.id, feeHeadName: paid2.title,
+      amount: 18000, method: 'BANK_TRANSFER', status: 'SUCCESS', source: 'SCHOOL_OFFICE',
+      collectedByName: 'School Office', collectedAt: paid2.paidDate ?? undefined,
+      verifiedAt: paid2.paidDate ?? undefined,
+      receiptNo: await mintReceiptNo(paid2.schoolId), note: 'Term 2 tuition',
+      createdAt: paid2.paidDate ?? undefined, updatedAt: paid2.paidDate ?? undefined,
+    },
   })
   await db.fee.create({
     data: {
@@ -315,7 +351,7 @@ async function main() {
       amount: 900, paid: 0, type: 'EXAM', status: 'UNPAID', dueDate: daysAhead(13),
     },
   })
-  console.log('  + fees: 2 paid (with Payment rows) + 2 due (₹5,400 outstanding)')
+  console.log('  + fees: 2 paid (Payment + canonical FeeTransaction rows) + 2 due (₹5,400 outstanding)')
 
   // ── 6. Messages — teacher → student (2 unread, 1 read) ────────────
   await db.message.deleteMany({ where: { OR: [{ recipientId: user.id }, { senderId: user.id }] } })

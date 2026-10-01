@@ -13,6 +13,7 @@ import {
   EXT_BY_TYPE,
   MIME_BY_TYPE,
   sanitizeDisplayFilename,
+  contentLengthExceedsUploadLimit,
 } from '@/lib/security/upload'
 
 export const runtime = 'nodejs'
@@ -64,6 +65,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // PIH-4c — EARLY size rejection BEFORE the multipart body is buffered:
+    // an oversized Content-Length answers 413 immediately without reading
+    // the stream. (The post-parse file.size guard below stays authoritative
+    // for missing/chunked lengths.)
+    if (contentLengthExceedsUploadLimit(req, ADMISSION_UPLOAD_POLICY.maxBytes)) {
+      return NextResponse.json(
+        { success: false, error: 'File is too large. Maximum size is 5 MB.' },
+        { status: 413 },
+      )
+    }
     const form = await req.formData()
     const file = form.get('file')
 

@@ -13,6 +13,8 @@ import {
 } from '@/lib/study-materials'
 import { requireStudent, authorizedMaterials, type StudentContext } from '@/lib/learning'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { AppError } from '@/lib/security/errors'
+import { contentLengthExceedsUploadLimit } from '@/lib/security/upload'
 import type { StudyMaterial } from '@prisma/client'
 
 export const runtime = 'nodejs'
@@ -118,6 +120,17 @@ export async function POST(req: NextRequest) {
 
       // Phase 1 — uploads are rate-limited (30/hour per account).
       enforceRateLimit(`rl:upload:${user.id}`, RATE_LIMITS.upload)
+
+      // PIH-4c — EARLY size rejection BEFORE the multipart body is
+      // buffered: an oversized Content-Length answers 413
+      // (PAYLOAD_TOO_LARGE) immediately without reading the stream; the
+      // post-parse file.size guard below stays authoritative.
+      if (contentLengthExceedsUploadLimit(req, STUDY_MATERIAL_MAX_BYTES)) {
+        throw new AppError('PAYLOAD_TOO_LARGE', {
+          publicMessage: 'File exceeds the 20 MB limit',
+          internalDetail: `study-materials upload: declared Content-Length exceeds ${STUDY_MATERIAL_MAX_BYTES} bytes`,
+        })
+      }
 
       const form = await req.formData().catch(() => null)
       if (!form) throw new Error('Expected multipart/form-data')

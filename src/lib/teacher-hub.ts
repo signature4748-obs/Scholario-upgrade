@@ -18,6 +18,7 @@
 import { db } from '@/lib/db'
 import { AppError } from '@/lib/security/errors'
 import { schoolScoped } from '@/lib/api'
+import { getTeacherSubjectAssignments } from '@/lib/teacher-scope'
 import type { AuthUser } from '@/lib/auth'
 import type { FollowUpItem, StudentRef } from '@/lib/teacher-hub-types'
 
@@ -37,11 +38,13 @@ export interface TeacherHubContext {
   name: string
   /** classes where this user is the class teacher (Class.classTeacherId = User.id) */
   classTeacherOf: TeacherClassInfo[]
-  /** classes where this teacher TEACHES a subject (timetable rows carrying
-   *  their name — the same permission source as the Student Directory /
-   *  Lesson Planner). A subject teacher's authorized students are the
-   *  students of these classes (spec §13: subject teachers act within
-   *  their authorized scope, never beyond it). */
+  /** classes where this teacher TEACHES a subject — resolved by the
+   *  canonical CSA-first scope (ClassSubjectAssignment(teacherUserId) ∪
+   *  Timetable(teacherUserId) ∪ legacy Timetable(teacherName only when the
+   *  row carries no teacher user id); see lib/teacher-scope). A subject
+   *  teacher's authorized students are the students of these classes
+   *  (spec §13: subject teachers act within their authorized scope, never
+   *  beyond it). */
   taughtClasses: TeacherClassInfo[]
 }
 
@@ -72,27 +75,19 @@ export async function requireTeacher(user: AuthUser): Promise<TeacherHubContext>
   const schoolId = schoolScoped(user)
   const teacher = await db.teacher.findUnique({ where: { userId: user.id } })
   if (!teacher || teacher.schoolId !== schoolId) throw new Error('NO_TEACHER_RECORD')
-  const teacherName = (user.name || '').trim().toLowerCase()
-  const [ctClasses, ttRows] = await Promise.all([
+  const [ctClasses, taughtAssignments] = await Promise.all([
     db.class.findMany({
       where: { schoolId, classTeacherId: user.id },
       select: { id: true, name: true, section: true },
       orderBy: { name: 'asc' },
     }),
-    teacherName
-      ? db.timetable.findMany({
-          where: { schoolId, teacherName: { not: null }, subjectId: { not: null } },
-          select: { classId: true, teacherName: true },
-          distinct: ['classId', 'teacherName'],
-        })
-      : Promise.resolve([]),
+    // PIH-4a — CSA-first: taught classes come from the canonical resolver
+    // (teacher-scope.ts), NOT a bare lowercased teacherName match — a
+    // same-named account used to inherit (or lose) this scope.
+    getTeacherSubjectAssignments(user, schoolId),
   ])
   const ctIds = new Set(ctClasses.map((c) => c.id))
-  const taughtIds = new Set(
-    ttRows
-      .filter((r) => (r.teacherName || '').trim().toLowerCase() === teacherName)
-      .map((r) => r.classId),
-  )
+  const taughtIds = new Set(taughtAssignments.map((a) => a.classId))
   const taught = taughtIds.size
     ? await db.class.findMany({
         where: { schoolId, id: { in: [...taughtIds] } },

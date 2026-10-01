@@ -208,64 +208,55 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
     submittingRef.current = true
     setStage('processing')
     setProcessingStep(0)
-    // Animate the 3-step indicator so the principal sees live progress,
-    // not just a static spinner. Steps: Validate → Record → Generate Receipt.
-    const t1 = setTimeout(() => setProcessingStep(1), 450)
-    const t2 = setTimeout(() => setProcessingStep(2), 950)
-    const t3 = setTimeout(() => {
-      const result = recordPayment({
-        studentId: selectedStudent.id,
-        amount,
-        mode,
-        purpose,
-        feeHead,
-        collectedBy: 'Principal',
-        // PAY-REWORK-1: the Principal/school office IS the authorised finance
-        // role — money confirmed at the counter is verified at record time
-        // (any mode). Teacher/self submissions verify through the queue.
-        collectorRole: 'principal',
-        referenceNo: referenceNo || undefined,
-        meta,
-        // The payment's financial category — Core fee / Exam fee, or
-        // ADDITIONAL when collected against an event-based charge (never
-        // silently part of Tuition/regular fee collection).
-        ...(selectedCharge ? { additionalChargeId: selectedCharge.charge.id, category: 'ADDITIONAL' as const } : {}),
-      })
-      submittingRef.current = false
-      if (result.success && result.transaction) {
-        setRecordedTxnId(result.transaction.id)
-        setStage('success')
-        onRecorded?.()
-        toast.success('Payment recorded', {
-          description: `${result.transaction.receiptNo} · ${formatINR(result.transaction.amount)} via ${result.transaction.mode}`,
-        })
 
-        // PHASE 9 — DB-backed persistence (additive, fire-and-forget).
-        //
-        // The Zustand `recordPayment` already wrote to the in-memory store
-        // (so all the existing UI surfaces stay in sync). We additionally
-        // persist the same transaction to the new Prisma `FeeTransaction`
-        // table so the Reconcile & Settlements tab can surface it.
-        //
-        // For online modes (UPI / Card / Net Banking), we also fire
-        // /api/fees/orders to create a Razorpay-style order row with
-        // notes.studentId + notes.feeHead so the webhook can later
-        // auto-reconcile when the gateway sends payment.captured.
-        //
-        // SaaS-STAGE-2A (Task 7-b) — SCHOOL GATE: when the ACTIVE school's
-        // platform configuration disables fee_online_payments, the gateway
-        // order branch is NEVER used — every payment (any mode) persists
-        // through the offline /api/fees/transactions branch (manual
-        // collection semantics) and the "Gateway order created" toast is
-        // suppressed. Modes stay selectable (gateway is a channel).
-        //
-        // Failures are non-fatal: the in-memory record is the system of
-        // record for the UI; the DB write is the audit trail. A failure
-        // just means the operator may need to manually reconcile later
-        // (which the Reconcile tab supports).
-        const isOnline = onlinePayments && (mode === 'UPI' || mode === 'Card' || mode === 'Net Banking')
-        const dbPersist = isOnline
-          ? fetch('/api/fees/orders', {
+    // PIH-4b — the server is the source of truth for offline collections.
+    //
+    // OFFLINE (any non-gateway mode, or every mode when the school's online
+    // payments are disabled): the canonical FeeTransaction row — with the
+    // server-minted SCH-YYYY-NNNNNN receipt AND the ledger credit
+    // (applyPaymentToLedger via the server-resolved feeId) — is awaited
+    // BEFORE anything is marked paid locally. On success the client store
+    // mirrors the SERVER receipt number; on failure (409 overpay, duplicate
+    // reference, network…) NOTHING is recorded locally — the old flow
+    // toasted success and fired a fire-and-forget POST without a feeId, so
+    // Fee.paid was never credited and the client receipt diverged from the
+    // server's.
+    //
+    // ONLINE (gateway modes with the school gate ON): the local record
+    // stands (the gateway PENDING order is the server's audit row; money
+    // moves on payment.captured) — but the order POST is now AWAITED and a
+    // failure surfaces an error toast instead of vanishing.
+    const submitPayment = async () => {
+      const isOnline = onlinePayments && (mode === 'UPI' || mode === 'Card' || mode === 'Net Banking')
+
+      if (isOnline) {
+        const result = recordPayment({
+          studentId: selectedStudent.id,
+          amount,
+          mode,
+          purpose,
+          feeHead,
+          collectedBy: 'Principal',
+          // PAY-REWORK-1: the Principal/school office IS the authorised finance
+          // role — money confirmed at the counter is verified at record time
+          // (any mode). Teacher/self submissions verify through the queue.
+          collectorRole: 'principal',
+          referenceNo: referenceNo || undefined,
+          meta,
+          // The payment's financial category — Core fee / Exam fee, or
+          // ADDITIONAL when collected against an event-based charge (never
+          // silently part of Tuition/regular fee collection).
+          ...(selectedCharge ? { additionalChargeId: selectedCharge.charge.id, category: 'ADDITIONAL' as const } : {}),
+        })
+        if (result.success && result.transaction) {
+          setRecordedTxnId(result.transaction.id)
+          setStage('success')
+          onRecorded?.()
+          toast.success('Payment recorded', {
+            description: `${result.transaction.receiptNo} · ${formatINR(result.transaction.amount)} via ${result.transaction.mode}`,
+          })
+          try {
+            const res = await fetch('/api/fees/orders', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -278,38 +269,105 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
                 gateway: 'razorpay',
                 notes: { studentId: selectedStudent.id, feeHead, studentName: selectedStudent.name },
               }),
-            }).then((r) => r.json()).catch(() => null)
-          : fetch('/api/fees/transactions', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                studentId: selectedStudent.id,
-                studentName: selectedStudent.name,
-                className: selectedStudent.className,
-                feeHeadName: feeHead,
-                amount,
-                method: mode,
-                receiptNo: result.transaction.receiptNo,
-                note: purpose,
-              }),
-            }).then((r) => r.json()).catch(() => null)
-        dbPersist.then((json: any) => {
-          // Gateway order toast ONLY on the online branch (suppressed when
-          // online payments are disabled for the school).
-          if (isOnline && json?.ok && json?.data?.orderId) {
-            // For online payments, surface the order id so the principal
-            // (or parent) can complete payment via the gateway. In a real
-            // deployment, the Razorpay checkout JS would auto-open here.
-            toast.info('Gateway order created', {
-              description: `Order ${json.data.orderId} · awaiting payment.captured webhook for auto-reconciliation`,
+            })
+            const json = await res.json().catch(() => null)
+            if (res.ok && json?.ok && json?.data?.orderId) {
+              // For online payments, surface the order id so the principal
+              // (or parent) can complete payment via the gateway. In a real
+              // deployment, the Razorpay checkout JS would auto-open here.
+              toast.info('Gateway order created', {
+                description: `Order ${json.data.orderId} · awaiting payment.captured webhook for auto-reconciliation`,
+              })
+            } else {
+              toast.error('Gateway order not created', {
+                description: json?.error || 'The DB audit-trail order could not be created — check the Reconcile tab before retrying.',
+              })
+            }
+          } catch {
+            toast.error('Gateway order not created', {
+              description: 'Network error — the DB audit-trail order could not be created.',
             })
           }
-        })
-      } else {
-        setError(result.error ?? 'Payment failed.')
-        setStage('failed')
+        } else {
+          setError(result.error ?? 'Payment failed.')
+          setStage('failed')
+        }
+        submittingRef.current = false
+        return
       }
-    }, 1500)
+
+      // ── OFFLINE branch: server-first, local mirror after ──
+      try {
+        const res = await fetch('/api/fees/transactions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentId: selectedStudent.id,
+            studentName: selectedStudent.name,
+            className: selectedStudent.className,
+            feeHeadName: feeHead,
+            amount,
+            method: mode,
+            referenceNumber: referenceNo || undefined,
+            note: purpose,
+          }),
+        })
+        const json = await res.json().catch(() => null)
+        if (!res.ok || !json?.ok || !json?.data?.receiptNo) {
+          throw new Error(json?.error || 'The server rejected this payment — nothing was recorded.')
+        }
+        const serverReceiptNo: string = json.data.receiptNo
+        const applied: number | undefined = json.data.ledger?.applied
+        const result = recordPayment({
+          studentId: selectedStudent.id,
+          amount,
+          mode,
+          purpose,
+          feeHead,
+          collectedBy: 'Principal',
+          collectorRole: 'principal',
+          referenceNo: referenceNo || undefined,
+          meta,
+          ...(selectedCharge ? { additionalChargeId: selectedCharge.charge.id, category: 'ADDITIONAL' as const } : {}),
+          // SERVER-AUTHORITATIVE RECEIPT — the official number always
+          // originates server-side; the client counter is not advanced.
+          receiptNo: serverReceiptNo,
+        })
+        if (result.success && result.transaction) {
+          setRecordedTxnId(result.transaction.id)
+          setStage('success')
+          onRecorded?.()
+          toast.success('Payment recorded', {
+            description: `${serverReceiptNo} · ${formatINR(result.transaction.amount)} via ${result.transaction.mode}`,
+          })
+          if (typeof applied === 'number' && applied < amount) {
+            toast.warning('Ledger partially credited', {
+              description: `Only ${formatINR(applied)} of ${formatINR(amount)} was applied to the outstanding balance — the fee was nearly settled when this payment landed.`,
+            })
+          }
+        } else {
+          // The server row exists but the store refused the local mirror —
+          // surface it honestly, never fake success.
+          throw new Error(result.error ?? 'The server recorded the payment, but the local update failed — check the Transactions tab.')
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Payment failed.')
+        setStage('failed')
+        toast.error('Payment not recorded', {
+          description: e instanceof Error
+            ? e.message
+            : 'The payment could not be recorded on the server. No money was moved; no receipt was issued.',
+        })
+      }
+      submittingRef.current = false
+    }
+
+    // Animate the 3-step indicator so the principal sees live progress,
+    // not just a static spinner. Steps: Validate → Record → Generate Receipt.
+    // The final step runs the (now async, server-first) payment flow.
+    const t1 = setTimeout(() => setProcessingStep(1), 450)
+    const t2 = setTimeout(() => setProcessingStep(2), 950)
+    const t3 = setTimeout(() => { void submitPayment() }, 1500)
     // Best-effort cleanup if the modal closes mid-flight.
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3) }
   }

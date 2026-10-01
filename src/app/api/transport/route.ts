@@ -10,9 +10,10 @@ export const runtime = 'nodejs'
 /// Before, ANY authenticated role could read the transport register,
 /// including DRIVER email + phone PII. (Client-grep: the principal
 /// Transport module renders client-store data with no fetch; the STUDENT
-/// bus-tracking module reads @/lib/mock/bus-tracking, NOT this route — so
+/// bus-tracking module reads the transport store, NOT this route — so
 /// no student/parent surface consumes it and the slim-projection
-/// alternative was unnecessary; the full P/M gate breaks no legit flow.)
+/// alternative was unnecessary; the full P/M gate breaks no legit flow.
+/// The retired mock/bus-tracking.ts corpus was deleted in PIH-4c.)
 export async function GET() {
   return withAuthz({ permission: 'school.transport.read' }, async (ctx) => {
     // PHASE 6 — platform module switch (school override ?? platform master).

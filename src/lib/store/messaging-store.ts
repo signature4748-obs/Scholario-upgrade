@@ -34,7 +34,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { teachers } from '@/lib/mock/teachers'
 import { useStudentsStore } from '@/lib/store/students-store'
-import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
+import { makeDemoSeedApplier, readIsDemoTenant } from '@/lib/store/demo-tenant'
 import { migrateLegacyScopedStore, createTenantScopedStorage } from '@/lib/tenant/tenant-storage'
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
 
@@ -496,7 +496,11 @@ export const useMessagingStore = create<MessagingState>()(
       })
     }, 800)
 
-    // Simulate auto-reply for staff/parent/group conversations after 3.5s
+    // Simulate auto-reply for staff/parent/group conversations after 3.5s.
+    // DEMO-TIER ONLY (PIH-4c): the inbound auto-reply is a fabrication — a
+    // real tenant must never see a message nobody actually sent. Gated on
+    // the server-derived demo signal exactly like the seed corpus above.
+    if (!readIsDemoTenant()) return
     const convo = state.conversations.find((c) => c.id === conversationId)
     if (convo && (convo.type === 'staff' || convo.type === 'parent' || convo.type === 'group')) {
       const replies = [

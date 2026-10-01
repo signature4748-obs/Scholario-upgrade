@@ -26,7 +26,9 @@ import { db } from '@/lib/db'
 export interface ScopedUser {
   id: string
   name: string | null
-  role: string
+  /** Optional so narrower identity shapes (id+name only) can call the
+   *  resolvers — role is never read here. */
+  role?: string
 }
 
 export interface SubjectAssignment {

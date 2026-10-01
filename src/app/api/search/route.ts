@@ -4,6 +4,7 @@ import { withUser } from '@/lib/api'
 import { requireStudent, authorizedMaterials } from '@/lib/learning'
 import { requireTeacher, authorizedStudentWhere, classLabelOf } from '@/lib/teacher-hub'
 import { notificationVisibilityWhere, audienceAllows } from '@/lib/notices'
+import { can } from '@/lib/security/permissions'
 import type { SearchResultItem } from '@/lib/search-service/types'
 
 export const runtime = 'nodejs'
@@ -107,9 +108,14 @@ export async function GET(req: NextRequest) {
     })
     } // end staff directory (teachers)
 
-    // 3. FEES — staff (P/M/T) search by fee title + student name; STUDENTS
-    //    see only THEIR OWN fee rows (RLS by studentId — never classmates')
-    if (isStaffDirectory) {
+    // 3. FEES — finance-capable staff search by fee title + student name;
+    //    STUDENTS see only THEIR OWN fee rows (RLS by studentId — never
+    //    classmates'). PIH-4a: the matrix capability school.finance.read is
+    //    PRINCIPAL/MANAGEMENT/ACCOUNTANT — TEACHER holds the staff-directory
+    //    role but NOT finance read, so fee rows (title/amount/student) are
+    //    withheld from the teacher (previously the staff-directory branch
+    //    leaked them).
+    if (can(user.role, 'school.finance.read')) {
       const fees = await db.fee.findMany({
         where: {
           schoolId,

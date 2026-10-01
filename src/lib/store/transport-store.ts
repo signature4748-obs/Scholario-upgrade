@@ -300,12 +300,18 @@ export const useTransportStore = create<TransportState>()(
     {
       name: 'scholario-transport-v1',
       storage: createTenantScopedStorage('scholario-transport-v1'),
-      version: 1,
+      // v1 → v2 (PIH-4c, stale-persist purge): the FINAL-GATE emptied the
+      // initial seed state but the version was NOT bumped then — pre-gate
+      // browsers would rehydrate the fabricated vehicle/route/driver
+      // universe forever. The bump discards stale v1 persisted state once
+      // (zustand skips hydration on version mismatch; the demo seeder
+      // re-applies the corpus for the demo tenant).
+      version: 2,
       // DATA slices only — search is UI state, actions are functions.
       // routeChange (T4-E) persists: a real notice survives reload until the
       // student dismisses it. Migration-safe: existing persisted blobs lack
       // the key, and zustand's shallow merge keeps the `routeChange: null`
-      // initial value — no version bump needed for an additive field.
+      // initial value.
       partialize: (s) => ({
         vehicles: s.vehicles,
         routes: s.routes,

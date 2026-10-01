@@ -242,6 +242,7 @@ export function IdentityTab() {
                 Official Phone
               </Label>
               <FormattedInput
+                id="identity-phone"
                 formatType="mobile"
                 value={draft.phone}
                 onChangeRaw={(raw) => set({ phone: raw })}

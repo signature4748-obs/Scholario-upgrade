@@ -93,7 +93,9 @@ const TUITION_BY_GRADE = (grade: number): number => {
 function lastWeekdays(count: number): Date[] {
   const out: Date[] = []
   const d = new Date()
-  d.setHours(0, 0, 0, 0)
+  // PIH-4b integrity: midnight UTC (the canonical attendance day key),
+  // never local midnight — time-of-day dates break the day-level unique.
+  d.setUTCHours(0, 0, 0, 0)
   while (out.length < count) {
     const day = d.getDay()
     if (day !== 0 && day !== 6) out.push(new Date(d))
@@ -128,6 +130,9 @@ async function main() {
   const principal = await db.user.findFirst({
     where: { role: 'PRINCIPAL', schoolId: school.id, email: 'principal@greenwood.edu.in' },
   })
+  // PIH-4b: class-teacher display names for the canonical attendance
+  // provenance (markedBy) — resolved once, used by Phase 4.
+  const teacherNameById = new Map(teachers.map((t) => [t.id, t.name]))
 
   const subjects = await db.subject.findMany({ where: { schoolId: school.id } })
   const subjectByCode = new Map(subjects.map((s) => [s.code ?? '', s]))
@@ -324,7 +329,12 @@ async function main() {
         const t = rnd()
         status = t < 0.3 ? 'LATE' : t < 0.8 ? 'ABSENT' : 'LEAVE'
       }
-      attendanceRows.push({ schoolId: school.id, studentId: s.id, classId: s.sectionClassId, date: d, status, markedBy: s.classTeacherId })
+      attendanceRows.push({
+        schoolId: school.id, studentId: s.id, classId: s.sectionClassId, date: d, status,
+        // PIH-4b: canonical provenance — the class teacher's DISPLAY NAME
+        // (same convention as the baseline route), never a User id.
+        markedBy: teacherNameById.get(s.classTeacherId) ?? s.classTeacherId,
+      })
     }
   }
   if (attendanceRows.length) await db.attendance.createMany({ data: attendanceRows })
@@ -418,16 +428,20 @@ async function main() {
   const feeStudentIds = new Set(
     (await db.fee.groupBy({ by: ['studentId'], where: { studentId: { in: roster.map((s) => s.id) } } })).map((g) => g.studentId),
   )
-  let receiptSeq = 2400
-  const lastReceipt = await db.feeTransaction.findFirst({
-    where: { receiptNo: { startsWith: 'RCP-2026-' } },
-    orderBy: { receiptNo: 'desc' },
+  // PIH-4b receipt scheme: canonical SCH-YYYY-NNNNNN, sequential per
+  // school-year, continuing after the school's existing max (same
+  // invariant mintReceiptNo enforces on live writes). The legacy
+  // RCP-2026-NNNN scheme is retired for new seed receipts.
+  const receiptPrefix = `SCH-${new Date().getFullYear()}-`
+  let receiptSeq = 1
+  for (const r of await db.feeTransaction.findMany({
+    where: { schoolId: school.id, receiptNo: { startsWith: receiptPrefix } },
     select: { receiptNo: true },
-  })
-  if (lastReceipt?.receiptNo) {
-    const n = Number(lastReceipt.receiptNo.split('-').pop())
-    if (Number.isFinite(n) && n >= 2400) receiptSeq = n + 1
+  })) {
+    const n = Number(r.receiptNo?.slice(receiptPrefix.length))
+    if (Number.isFinite(n) && n >= receiptSeq) receiptSeq = n + 1
   }
+  const nextReceiptNo = () => `${receiptPrefix}${String(receiptSeq++).padStart(6, '0')}`
   const methods = ['CASH', 'UPI', 'CARD', 'NET_BANKING'] as const
   let feesCreated = 0
   let ledgerCreated = 0
@@ -493,7 +507,7 @@ async function main() {
           verifiedByName: principal?.name ?? 'Principal',
           verifiedAt: txnDate,
           referenceNumber: `R150-${s.admissionNo}`,
-          receiptNo: `RCP-2026-${receiptSeq++}`,
+          receiptNo: nextReceiptNo(),
         },
       })
       ledgerCreated++
@@ -511,13 +525,26 @@ async function main() {
     if (existingCT === 0) {
       const nineAStudents = await db.student.findMany({ where: { classId: nineA }, take: 2 })
       for (const st of nineAStudents) {
+        // PIH-4b parity: the pending CT collection is LINKED to the
+        // student's oldest open fee (feeId + feeHeadName + amount ≤ its
+        // outstanding), so verifying it through /api/fees/verification
+        // credits Fee.paid for the FULL amount — an unlinked ₹5,000 row
+        // verified to SUCCESS without a ledger credit is exactly the
+        // module/dashboard divergence this pass removes.
+        const openFee = await db.fee.findFirst({
+          where: { studentId: st.id, status: { in: ['UNPAID', 'PARTIAL', 'PENDING'] } },
+          orderBy: { createdAt: 'asc' },
+        })
+        if (!openFee || openFee.amount - openFee.paid <= 0) continue
+        const ctAmount = Math.min(5000, openFee.amount - openFee.paid)
         await db.feeTransaction.create({
           data: {
             schoolId: school.id,
             studentId: st.id,
             className: 'Grade 9 - A',
-            feeHeadName: 'Tuition Fee — Term 1 (part)',
-            amount: 5000,
+            feeId: openFee.id,
+            feeHeadName: openFee.title,
+            amount: ctAmount,
             method: 'CASH',
             status: 'UNDER_VERIFICATION',
             source: 'CLASS_TEACHER',
@@ -528,7 +555,7 @@ async function main() {
           },
         })
       }
-      console.log('  +2 UNDER_VERIFICATION CT collections (9-A workflow demo)')
+      console.log('  +2 UNDER_VERIFICATION CT collections (9-A workflow demo, fee-linked)')
     }
   }
 

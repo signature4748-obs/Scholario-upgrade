@@ -224,6 +224,9 @@ export interface StudentsState {
    * Examination hydrate subject names by looking up ids in this list.
    */
   academicSubjects: import('@/lib/mock/academic').SubjectDef[]
+  /** DEMO-TIER seeder (PIH-4c/R8) — applies the STU-xxx demo corpus only
+   * for the sanctioned demo tenant (module root, pristine-guarded). */
+  ensureDemoSeed: () => void
   archiveStudent: (id: string, reason: string, by: string) => void
   restoreStudent: (id: string, by: string) => void
   transferStudent: (id: string, type: TransferRecord['type'], toClass: string, reason: string, by: string) => void

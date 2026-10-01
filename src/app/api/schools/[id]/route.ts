@@ -29,8 +29,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     if (!school) throw new Error('School not found')
 
+    // PIH-4a — project the admin-plane configuration JSON. featureFlags /
+    // settings / websiteContent are written only through the control plane
+    // and /api/school-settings; same-school TEACHER/STUDENT/PARENT/…
+    // have no business reading them (the old response returned the FULL
+    // School row). The platform plane (SUPER_ADMIN) and the school's own
+    // PRINCIPAL/MANAGEMENT keep the complete row (callers verified: this
+    // route has no client consumers — only tests + the platform boundary
+    // uses /api/platform/schools/[id]).
+    const isSchoolAdmin =
+      user.role === 'SUPER_ADMIN' || user.role === 'PRINCIPAL' || user.role === 'MANAGEMENT'
+    const { featureFlags: _ff, settings: _st, websiteContent: _wc, ...projected } = school
+
     return {
-      ...school,
+      ...(isSchoolAdmin ? { ...school } : projected),
       isDemo: Boolean(school.isDemo),
       counts: school._count,
     }

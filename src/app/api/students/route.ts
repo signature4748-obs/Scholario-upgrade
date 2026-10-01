@@ -3,7 +3,8 @@ import { db, trackedTransaction } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { withUser, schoolScoped } from '@/lib/api'
 import { resolveProvisionedPassword } from '@/lib/account-provisioning'
-import { AppError } from '@/lib/security/errors'
+import { AppError, newRequestId } from '@/lib/security/errors'
+import { auditEvent } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 
@@ -102,6 +103,16 @@ export async function POST(req: NextRequest) {
           include: { class: true, user: { select: { name: true, email: true } } },
         })
       })
+      // PIH-4a (audit-trail gap) — student creation PROVISIONS LOGIN
+      // CREDENTIALS: the account hand-over is an auditable security event
+      // (funnel + canonical vocabulary; never the password itself).
+      await auditEvent({
+        schoolId,
+        userId: user.id,
+        action: 'ACCOUNT_CREATED',
+        requestId: newRequestId(),
+        detail: `Student account created (${email}, admission no ${admNo})${generated ? ' — server-generated one-time credential' : ''}`,
+      }).catch(() => {})
       // Additive field: the ONE-TIME generated credential for the operator
       // to hand over (only present when the server generated it). No client
       // consumes this response today (grep-verified — the create flows are

@@ -15,10 +15,15 @@ const METHOD_LABELS: Record<string, string> = {
   WALLET: 'Wallet',
 }
 
-// CSV-escape a single field (quotes, commas, newlines)
+// CSV-escape a single field (quotes, commas, newlines). PIH-2b MEDIUM —
+// also neutralizes CSV formula/DDE injection (OWASP): student names and
+// fee titles are user-controlled; a cell whose trimmed value starts with
+// =, +, -, @, tab or CR gets a leading apostrophe so Excel/Sheets cannot
+// execute it.
 const csvCell = (v: unknown): string => {
   const s = v == null ? '' : String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  const guarded = /^[=+\-@\t\r]/.test(s.trim()) ? `'${s}` : s
+  return /[",\n]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded
 }
 
 // GET /api/payments-export?limit=500

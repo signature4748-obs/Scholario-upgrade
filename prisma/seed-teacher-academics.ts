@@ -610,7 +610,11 @@ async function main() {
   console.log(`  ExamMarks: 3 draft rows seeded for 9-A Mathematics`)
 
   // ── 8. Baseline attendance for Grade 9-A yesterday ────────────────────
-  const yesterday = addDays(today, -1)
+  // PIH-4b integrity: the day is anchored to midnight UTC (the canonical
+  // day key every writer agrees on — a time-of-day date would break the
+  // (studentId, date) day-level uniqueness). markedBy keeps the canonical
+  // display-name provenance (same as the baseline route's write).
+  const yesterday = parseDayKey(dayKey(addDays(today, -1)))
   if (yesterday.getUTCDay() !== 0) {
     await db.attendance.deleteMany({
       where: { classId: grade9.id, date: { gte: yesterday, lt: new Date(yesterday.getTime() + 86_400_000) } },
