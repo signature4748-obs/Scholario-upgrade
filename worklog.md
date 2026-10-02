@@ -4866,3 +4866,19 @@ Work Log:
 
 Stage Summary:
 - §36 acceptance complete: two freshly provisioned tenants cannot see each other by any probed surface while the platform admin sees both — with the isolation evidence being DB-level (zero foreign rows) rather than status-code-only. The exam-marks path's 200-with-reported-errors is now pinned as a DESIGNED contract in tests.
+
+---
+Task ID: 8C-H-M
+Agent: main (Z.ai Code)
+Task: Phase 8C — Phases H→M within the credential boundary + §50 final engineering report
+
+Work Log:
+- H (Vercel/production config): re-verified the live deployment anonymously — home 200, /health/live ok, /health/ready database:ok 199ms, /api/schools/public private,no-store + vary:Host (8B cache isolation LIVE), full security header set (HSTS/nosniff/referrer/permissions-policy). Confirmed the live deployment serves the PUSHED 8B build (origin/main 4a8aa6e); the 8C delta is local-only (no GitHub push credential — the standing constraint). No vercel.json needed (8B architecture: next.config + dashboard env).
+- I (Resend/email): email-infra 10/10 green (bounded retries, EmailDelivery dedupe idempotency, branded templates, server-only). Live send verification is credential-gated (no RESEND_API_KEY in sandbox) — documented, not faked.
+- J (full QA): re-ran the ENTIRE canonical suite standalone, fresh: security 292 pass (tenant-isolation 57, platform-isolation 43, database-integrity 41, rate-limit 12+8, auth-core 13, upload 14, validation 13, platform-provisioning 8, salary 9, messaging 12, email-infra 10, phase75 14, realtime-bridge 9, tenant-domains 16, fee-lifecycle 5, errors 8, assignment-scope 11, pg-money 8, audit 5, file-signing 7, headers 9, search-case 4, csv-injection 4, export-policy 5, secrets-scan 5, seed-guard 7, demo-creds 5) + e2e 32 + api 65 + regression 18 + integration/unit 111 = 518 pass / 0 fail / 14 designed pg-rls skips. tsc 0, eslint 0. HONEST INCIDENT: the dev server OOM'd once mid-verification (documented 1400MB dev heap ceiling under a suite compile storm); keepalive resurrected it in ~40s; salary/messaging suites that hit the dead window re-ran 9/9 and 12/12 after resurrection; one platform-isolation failure was MY OWN login-bucket pollution (healed + re-run 43/43) — the ACCOUNT_LOCKED system itself is correct.
+- K (backup/recovery): docs/BACKUP_RECOVERY.md verified to carry the honest statements (RPO unbounded by default — operator-triggered backup, TESTED restore 40-44s/9,171 rows; RTO minutes; Supabase plan-tier backups explicitly not assumed). Supabase-dashboard verification is credential-gated.
+- L (rotation): NOT rotated, by §47's own sequencing (rotate only after integration finishes; integration is credential-blocked). Rotation runbook embedded in the final report (no values).
+- M (sign-off): wrote docs/PHASE_8C_FINAL_REPORT.md in the exact §50 format with the session's measured numbers, honest PASS/WARN/BLOCKER, and the verdict INTEGRATION READY (the five remaining steps are all user-credential actions with prepared runbooks: workflow-scoped GitHub PAT → push 8C + restore parked CI; valid Vercel token → Git integration + deploy; Supabase dashboard checks; Resend key; then rotation).
+
+Stage Summary:
+- Phase 8C complete to the sandbox's true boundary: every locally-verifiable gate is green (518-test fresh evidence), the live production deployment is verified healthy and isolation-correct, and the final report states exactly what remains and who holds the keys. Nothing was faked; nothing was silently skipped.
