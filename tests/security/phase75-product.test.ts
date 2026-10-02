@@ -200,7 +200,57 @@ describe('PHASE 7.5 · gallery tenant-scoped + privacy-by-default media', () => 
   // live until afterAll — their marker must not collide with these probes.
   const GAL = `${MARKER}-gal`
 
-  test('A\'s album/image never reach B; bytes serve only while published', async () => {
+  // PHASE 8C FIX — environment adaptation: the media-bytes lifecycle needs
+  // real object storage (the upload routes have NO local-disk fallback by
+  // design — mission §27-28 — and answer 503 when Supabase Storage env is
+  // absent, which is the CI/local-PG shape). The album-scoping proofs below
+  // never needed storage and run everywhere; only the byte-serving test
+  // skips where storage cannot exist (a skip is honest; a 503-flavored
+  // failure would be a false negative — the third CI-red defect 8C found).
+  const objectStorageConfigured = Boolean(
+    process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
+  )
+
+  test("A's album scoping never reaches B across the publish lifecycle", async () => {
+    // album
+    const albumRes = await as(tokenA, '/api/school/website/gallery', {
+      method: 'POST',
+      body: JSON.stringify({ title: `${GAL} album2`, description: 'P75 isolation probe' }),
+    })
+    expect(albumRes.status).toBe(200)
+    const album = (await albumRes.json()).data.album
+    cleanup.push(() => db.galleryAlbum.deleteMany({ where: { id: album.id } }))
+
+    // unpublished album → no public gallery entry for either school
+    const beforePublish = await publicPayload(schoolA.slug)
+    expect(JSON.stringify(beforePublish.body)).not.toContain(`${GAL} album2`)
+
+    // publish → public for A only
+    const pubRes = await as(tokenA, '/api/school/website/gallery', {
+      method: 'PATCH',
+      body: JSON.stringify({ albumId: album.id, published: true }),
+    })
+    expect(pubRes.status).toBe(200)
+
+    const [pa, pb] = await Promise.all([publicPayload(schoolA.slug), publicPayload(schoolB.slug)])
+    const albumsA = (pa.body.data.gallery ?? []).map((a: any) => a.title)
+    const albumsB = (pb.body.data.gallery ?? []).map((a: any) => a.title)
+    expect(albumsA).toContain(`${GAL} album2`)
+    expect(albumsB).not.toContain(`${GAL} album2`)
+
+    // unpublish → private again
+    const unpubRes = await as(tokenA, '/api/school/website/gallery', {
+      method: 'PATCH',
+      body: JSON.stringify({ albumId: album.id, published: false }),
+    })
+    expect(unpubRes.status).toBe(200)
+    const afterUnpub = await publicPayload(schoolA.slug)
+    expect((afterUnpub.body.data.gallery ?? []).map((a: any) => a.title)).not.toContain(`${GAL} album2`)
+  }, 30000)
+
+  test.skipIf(!objectStorageConfigured)(
+    "A's album/image never reach B; bytes serve only while published",
+    async () => {
     // album
     const albumRes = await as(tokenA, '/api/school/website/gallery', {
       method: 'POST',

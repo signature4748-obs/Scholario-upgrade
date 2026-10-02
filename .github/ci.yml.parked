@@ -168,8 +168,21 @@ jobs:
       #     → tenant-isolation fixtures → website CMS → salary demo rows.
       - name: Seeds — canonical corpus (idempotent, guarded)
         run: |
+          # PHASE 8C — full canonical corpus (order matters; matches the
+          # dev-sandbox corpus the suites were authored against):
+          # database-integrity.test.ts requires ExamSubjectConfig rows that
+          # only seed-teacher-academics/seed-roster-150 provide — the old
+          # 5-seed set made CI red on that file before any test ran.
+          # seed-study-materials is EXCLUDED: it uploads real objects to
+          # Supabase Storage (no local fallback, by design) and CI never
+          # has storage credentials.
           bun prisma/seed.ts
           bun prisma/seed-platform.ts
+          bun prisma/seed-learning.ts
+          bun prisma/seed-teacher-academics.ts
+          bun prisma/seed-roster-150.ts
+          bun prisma/seed-student-dashboard.ts
+          bun prisma/seed-teacher-hub.ts
           bun prisma/seed-tenant-isolation.ts
           bun prisma/seed-website-cms.ts
           bun prisma/seed-salary.ts

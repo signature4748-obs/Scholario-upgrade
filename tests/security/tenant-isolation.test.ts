@@ -42,6 +42,7 @@ import { describe, test, expect, beforeAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
 import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
+import { resetLoginBuckets } from '../helpers/login-buckets'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -98,6 +99,25 @@ beforeAll(async () => {
     if (!u) throw new Error(`Fixture user missing: ${email} — run: bun prisma/seed-tenant-isolation.ts`)
     return u
   }
+
+  // PHASE 8C — order-independence heal (mirrors platform-isolation): the
+  // DB-backed login buckets persist across suites; rate-limit-strict and
+  // earlier login-heavy files can leave the shared loopback-IP bucket
+  // exhausted, which 429-shadows this file's DIRECT login-endpoint probes
+  // (the SUPER_ADMIN-refusal test has no direct-session fallback — the
+  // refusal itself must be observed on the real login path). Heal to a
+  // clean state for the fixture accounts (never production accounts).
+  await resetLoginBuckets([
+    'tenant.principal.a@sunrise.test',
+    'tenant.teacher.a@sunrise.test',
+    'tenant.student.a@sunrise.test',
+    'tenant.parent.a@sunrise.test',
+    'principal.b@greenvalley.test',
+    'teacher.b@greenvalley.test',
+    'student.b@greenvalley.test',
+    'parent.b@greenvalley.test',
+    'tenant.superadmin@sunrise.test',
+  ])
 
   const [pA, tA, sA, paA, sa, pB, tB, sB, paB] = await Promise.all([
     byEmail('tenant.principal.a@sunrise.test'),
@@ -591,6 +611,13 @@ describe('PHASE 2/6 · platform admin boundary', () => {
   // rejects the role outright (the platform identity migrated to the
   // separate /platform boundary — see platform-isolation.test.ts).
   test('legacy SUPER_ADMIN email is REFUSED at SCHOOL login (401, no session)', async () => {
+    // PHASE 8C — this test asserts the ROLE refusal on the REAL login path;
+    // it must not be shadowed by the shared loopback-IP login budget that
+    // the ~30 preceding login probes in this file legitimately consume
+    // (rate limiting itself is proven by rate-limit-strict.test.ts). Heal
+    // the superadmin account bucket + both loopback IP rows immediately
+    // before the probe so the observed status is the AUTHORIZATION verdict.
+    await resetLoginBuckets([fx.users.superadmin.email])
     const res = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

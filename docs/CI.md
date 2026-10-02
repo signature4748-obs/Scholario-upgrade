@@ -104,16 +104,33 @@ CI**, and no credential is printed to the log.
    place. The operator must either push with a workflow-scoped PAT or add
    the file through the GitHub web UI; the workflow itself needs no
    configuration beyond that.
-2. **`tests/security/pg-rls.test.ts` is integration-DB-specific.** Its
-   `beforeAll` asserts the Supabase integration shape
-   (`DATABASE_URL` contains the pooler host; anon + service-role keys
-   present). On the job-local postgres those assertions fail by design —
-   the suite proves Supabase PostgREST/RLS posture, which only exists on
-   the hosted platform. Until that file gains an explicit skip flag (or
-   is split out of `bun run test`), expect exactly this one file to fail
-   in CI while everything else runs. (Found during 8B-16 local
-   validation; flagged for the main agent rather than silently changing
-   test semantics.)
+2. **Supabase-only suites now SKIP cleanly instead of failing.**
+   Phase 8C fixed the four CI-red defects that the parked workflow would
+   have hit on its very first run (each was authored against a
+   Supabase-env sandbox and never CI-validated):
+   - `pg-rls.test.ts` — its file-level `beforeAll` asserted the Supabase
+     shape unconditionally → the whole file FAILED (not skipped) on
+     local PG. Now: guard wraps hooks + every describe → 14 clean skips.
+   - `realtime-bridge.test.ts` — unit derivation threw without
+     `REALTIME_CHANNEL_SECRET`, live-HTTP asserted a mode the server
+     cannot be in, publisher no-ops under `REALTIME_MODE=disabled` → 13
+     red. Now: unit + publisher layers run everywhere via synthetic
+     in-process env (restored in afterAll, fetch stubbed), live layer
+     skips unless the server can be in supabase mode, the 401 boundary
+     test runs in every mode.
+   - `phase75-product.test.ts` gallery media test — real uploads answer
+     503 without object storage (no local-disk fallback by design) → red
+     in CI. Now: album-scoping proofs run everywhere; only the
+     byte-serving test skips where storage cannot exist.
+   - **Seed set** — `database-integrity.test.ts` requires
+     `ExamSubjectConfig` rows that only `seed-teacher-academics` /
+     `seed-roster-150` create; the old 5-seed step made that file red
+     before any test ran. The step now runs the full canonical corpus
+     (10 seeds, dependency-ordered; `seed-study-materials` excluded —
+     it needs real object storage CI never has).
+   - `tenant-isolation.test.ts` now heals its login buckets in `beforeAll`
+     (the same `resetLoginBuckets` pattern platform-isolation already
+     used) so its direct login-endpoint probes are order-independent.
 3. **First-compile latency.** The dev server compiles routes lazily
    (`next dev --webpack`); the live suites already carry 45s per-test
    budgets for first-hit compilation, and the 50-minute workflow timeout
