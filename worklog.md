@@ -4853,3 +4853,16 @@ Work Log:
 
 Stage Summary:
 - The §12 guided setup experience is now complete on BOTH sides: the platform console Setup tab (Phase E) and the principal's dashboard Setup Guide (Phase F) read the SAME shared DB-computed contract. A new principal sees exactly which required steps remain with one-click deep-links; a built school sees no guide. §13 (demo tenant deterministic/isDemo) and §14 (clean school honest-empty) discipline is enforced by the live-DB assertions in both test suites.
+
+---
+Task ID: 8C-G
+Agent: main (Z.ai Code)
+Task: Phase 8C — Phase G: tenant isolation acceptance (mission §36 two-school acceptance test)
+
+Work Log:
+- WROTE tests/e2e/tenant-acceptance.test.ts (15 tests) — the mission's exact §36 procedure with BOTH schools provisioned through the real control plane in the same run (distinct from the seeded Sunrise↔GreenValley pair): STEP 1 platform provisions+activates TEST SCHOOL A and TEST SCHOOL B, both principals sign in through the real front door; STEP 2 A builds the full stack (branding/room/teacher/class/subject+CSA/student/fee/exam/marks/timetable), B builds a different identity (branding/teacher/class/student), and each school reads ITS OWN branding (§8 tenant-specific rendering, primaryColor A ≠ B); STEP 3 the cross-tenant gauntlet (A↔B): roster isolation, student-by-id 404, exam-by-id 404, marks-batch cross-tenant (audit-3-b contract: updated=0 + per-row errors + zero DB writes — setMark re-gates the exam by tenant), fee-for-foreign-student 404 + no row, attendance with foreign class 404 + nothing written, message to foreign teacher refused + no row, teacher-B hub scoped to B (classes + students cross-checked against DB); STEP 4 platform admin sees both in the ledger + readiness for each, and the safe archival purge leaves zero rows.
+- ROOT-CAUSED while writing the test (system findings, not test bugs): (1) POST /api/subjects sets the legacy Subject.classId column but does NOT create the ClassSubjectAssignment — the CSA comes from /api/principal/academic subject.add (the flow-probe's earlier alreadyConfigured came from the TIMETABLE publish's subjectConfigsEnsured, which had silently backfilled it); (2) /api/platform/schools list status filter has no ALL value (omit the param); (3) the marks-batch route deliberately returns 200 with reported per-row errors (audit 3-b) — the isolation proof is updated=0 + zero rows, which setMark's exam.findFirst({id, schoolId}) enforces.
+- VERIFIED: 15/15 GREEN; regression across every touched/neighboring suite all green (tenant-isolation 57, e2e journeys 5, empty-school 9, provisioning-acceptance 12, school-setup-readiness 5, platform-provisioning 8 — 96 tests); tsc 0; eslint 0.
+
+Stage Summary:
+- §36 acceptance complete: two freshly provisioned tenants cannot see each other by any probed surface while the platform admin sees both — with the isolation evidence being DB-level (zero foreign rows) rather than status-code-only. The exam-marks path's 200-with-reported-errors is now pinned as a DESIGNED contract in tests.
