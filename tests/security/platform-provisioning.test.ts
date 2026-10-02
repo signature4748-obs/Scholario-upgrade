@@ -81,7 +81,11 @@ function provisionBody(overrides: Record<string, unknown> = {}) {
   return {
     name: `Provision Test ${suffix}`,
     slug: `provision-${suffix}`,
-    code: `PT${suffix.slice(0, 6).toUpperCase()}`,
+    // Unique PER CALL (fresh random): the school code is a DB-unique
+    // column, so a per-run-constant code would make every provision
+    // after the first in the same run collide on the pre-check — a
+    // test artifact, not the system under test.
+    code: `PT${randomBytes(5).toString('hex').toUpperCase()}`,
     plan: 'STANDARD',
     principalName: 'Founding Principal',
     principalEmail: `principal-${suffix}@provision.test`,
@@ -93,7 +97,9 @@ function provisionBody(overrides: Record<string, unknown> = {}) {
 async function provision(token: string, body: Record<string, unknown>) {
   return fetch(`${BASE}/api/platform/schools`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    // x-platform-token — the platform transport (Authorization bearer is
+    // the SCHOOL transport and is deliberately ignored by platform routes).
+    headers: { 'content-type': 'application/json', 'x-platform-token': token },
     body: JSON.stringify(body),
   })
 }
@@ -101,7 +107,7 @@ async function provision(token: string, body: Record<string, unknown>) {
 async function activate(token: string, schoolId: string) {
   return fetch(`${BASE}/api/platform/schools/${schoolId}/activate`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}` },
+    headers: { 'x-platform-token': token },
   })
 }
 
@@ -205,10 +211,17 @@ describe('PHASE 8C · atomic provisioning + lifecycle', () => {
       })
       expect(audit).not.toBeNull()
 
-      // PENDING → principal login is REFUSED (school gate).
+      // PENDING → principal login is REFUSED by the school access
+      // policy (Phase 7.5): valid credentials, tenant not active yet —
+      // the canonical verdict is 403 SCHOOL_SUSPENDED with an honest
+      // "not active yet" message (NOT the generic 401 credential
+      // mismatch, which would leak nothing but also inform nobody).
       await resetLoginBuckets([body.principalEmail])
       const blocked = await schoolLoginAttempt(body.principalEmail, body.principalPassword)
-      expect(blocked.status).toBe(401)
+      expect(blocked.status).toBe(403)
+      const blockedBody = (await blocked.json()) as { ok: boolean; code: string }
+      expect(blockedBody.ok).toBe(false)
+      expect(blockedBody.code).toBe('SCHOOL_SUSPENDED')
 
       // Activate → audited transition → login now succeeds.
       const act = await activate(rootToken, schoolId)
@@ -301,7 +314,7 @@ describe('PHASE 8C · setup-readiness contract (DB-computed progress)', () => {
       cleanup.push(() => purgeSchool(schoolId))
 
       const read = await fetch(`${BASE}/api/platform/schools/${schoolId}/setup-readiness`, {
-        headers: { authorization: `Bearer ${rootToken}` },
+        headers: { 'x-platform-token': rootToken },
       })
       expect(read.status).toBe(200)
       const payload = (await read.json()) as {
@@ -335,7 +348,7 @@ describe('PHASE 8C · setup-readiness contract (DB-computed progress)', () => {
       const demo = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
       expect(demo).not.toBeNull()
       const read = await fetch(`${BASE}/api/platform/schools/${demo!.id}/setup-readiness`, {
-        headers: { authorization: `Bearer ${rootToken}` },
+        headers: { 'x-platform-token': rootToken },
       })
       expect(read.status).toBe(200)
       const payload = (await read.json()) as {

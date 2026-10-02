@@ -4787,3 +4787,54 @@ Stage Summary:
 - The system's repo-side truth is fully reproduced and verified locally (fresh-DB migrations + seeds + stable dev server + suite baseline); the production Vercel deployment is live and healthy per anonymous evidence; the exact credential boundary (Vercel/Supabase/Resend/GitHub-push) is documented — no live-platform mutation is possible from this sandbox, and none was faked.
 - Real defects found and queued: (1) realtime-bridge.test.ts missing off-Supabase guard → parked-CI red on first run (Phase D fix); (2) committed qa-shots/ (304 files) + Caddyfile/keepalive/spawn-detached/warm-chunks legacy infra (Phase C removal); (3) dev-server heap ceiling too small for full-suite compile storms in this sandbox class (env-side workaround documented).
 - Environment assets for all later phases: /home/z/pg16 (PG 16.4 + env.sh), CI-parity .env, double-fork daemon pattern, bucket-reset script pattern (/tmp scripts, never in repo).
+
+---
+Task ID: 8C-B
+Agent: main (Z.ai Code)
+Task: Phase 8C — Phase B: security/database hardening (mission §4-§7)
+
+Work Log:
+- (Recorded from commit aa83f67) RLS gap from 8B closed; PG-correct integrity auditor; query-pattern hot-path indexes; CI-red test fixes.
+
+Stage Summary:
+- Database hardening complete at commit aa83f67; details preserved in the commit message.
+
+---
+Task ID: 8C-C
+Agent: main (Z.ai Code)
+Task: Phase 8C — Phase C: repository cleanliness (mission §2/§45)
+
+Work Log:
+- (Recorded from commit 92f3019) qa-shots/ (304 files) retired; scaffold demo removed; engineered dev-only utilities (Caddyfile, keepalive.mjs, spawn-detached.mjs, warm-chunks.mjs, examples/, mini-services/event-stream) kept but classified.
+
+Stage Summary:
+- Repository cleanliness complete at commit 92f3019.
+
+---
+Task ID: 8C-D
+Agent: main (Z.ai Code)
+Task: Phase 8C — Phase D: GitHub CI/branching readiness (mission §3)
+
+Work Log:
+- (Recorded from commit f8ed719) Four CI-red defects fixed: login-bucket heal silent no-op root-caused (Prisma tagged-template IN binds array as ONE param — fixed with Prisma.join() + both loopback IP forms + loud warn); tenant-isolation beforeAll bucket heal for order-independence; phase75 gallery byte-serving test split (publish-lifecycle runs everywhere, byte-serving 503-skip only where storage cannot exist); ci.yml.parked seed step runs the full canonical 10-seed corpus (database-integrity requires ExamSubjectConfig from seed-teacher-academics/seed-roster-150). development branch created from main. No GitHub push credential in sandbox — CI restore requires a workflow-scoped PAT (documented in docs/CI.md).
+
+Stage Summary:
+- CI-red defects fixed at commit f8ed719; parked CI is now genuinely runnable on a GitHub runner; branch strategy in place (development → PR → CI → main).
+
+---
+Task ID: 8C-E
+Agent: main (Z.ai Code)
+Task: Phase 8C — Phase E: platform school provisioning completion (mission §9-§12 + §37)
+
+Work Log:
+- Resumed from interrupted session: found HEAD at 4b16c15 (auto-committed UUID-message commit carrying in-flight §11 atomicity repair + §12 setup-readiness API + 380-line test file, never verified). No worklog entries existed for 8C-B/C/D — appended concise records above from their commit messages.
+- ROOT-CAUSED the in-flight test failures: (1) the test used `authorization: Bearer` for platform routes — WRONG TRANSPORT (platform = x-platform-token header / scholario_platform_session cookie; Authorization bearer is the school transport, deliberately ignored by platform routes); (2) provisionBody's code field sliced the run-constant MARKER so every provision after the first in a run collided on the DB-unique school code (test artifact, not a system defect); (3) the PENDING-school login refusal is canonically 403 SCHOOL_SUSPENDED (Phase 7.5 access policy, honest "not active yet" message) — test expected 401.
+- Fixed the test file (transport + per-call unique code + 403/SCHOOL_SUSPENDED expectation); suite now 8/8 GREEN: boundary (anonymous/school-session 401), happy path (PENDING+principal+audit → login blocked → activate audited → login 200), duplicate-email 409 with transaction rollback (no orphan school), concurrent race (exactly one 200 + one 409, one school+one principal in DB), readiness contract (fresh honest-zero, demo-corpus real counts, boundary).
+- BUILT the §12 UI consumer: src/components/platform/modules/school-setup.tsx (SchoolSetupTab — summary card with required/optional progress tracks + usable/activate/suspend state callout; 11 sections with required/optional badges, done checks, honest details; skeleton loading; fail-closed error card; dark console theme; aria progressbars) wired into school-detail.tsx as a "Setup" tab (visible to all platform console viewers — matches the readiness API's schools.read permission).
+- WROTE the §37 acceptance test (tests/e2e/provisioning-acceptance.test.ts, 12 tests): platform provision → PENDING gate (403) → audited activation → principal login → dashboard → branding (school-settings identity+colors) → room/teacher/class/subject/CSA/student (all real APIs) → attendance → fees (catalogue → structure → publish → fee → payment PAID) → exam + marks → timetable publish → website hero → messaging thread → final readiness usable=true with DB-matched counts + gauntlet read-surfaces. NO manual SQL anywhere in the flow. 12/12 GREEN.
+- BROWSER-VERIFIED (agent-browser): platform MFA login (root, real TOTP; healed my own rl:pf-login bucket after the strict limiter correctly 429'd my repeated test logins), schools list → Green Valley detail → Setup tab renders the HONEST INCOMPLETE state ("ACTIVE but core sections are missing", 3/6 contact fields, zero people); Sunrise Academy → Setup tab renders 100%/100% "ACTIVE and fully usable". Screenshots /tmp/setup-tab-gv.png + /tmp/setup-tab-sa.png. Responsive check at 390px OK (tablist wraps, region intact). No console errors; only dev-log warnings were my own mangled probe URL (404 RESOURCE_NOT_FOUND, correctly handled).
+- VERIFIED: tsc 0 errors; eslint 0 errors on all changed files; the platform-provisioning suite and the acceptance suite both green standalone.
+- Dev-server note: login-buckets heal works (the 8C-D fix) — my earlier probe warning was env-related (missing DATABASE_ENV/RATE_LIMIT_DB_SYNC in that probe), the canonical test env heals cleanly.
+
+Stage Summary:
+- Phase E COMPLETE: provisioning is atomic + race-safe (verified), the lifecycle is audited, the §12 guided-setup progress surface exists end-to-end (DB-computed API + console UI, honest on both a clean and a configured tenant), and the §37 acceptance journey proves a school goes from provision to fully usable through real APIs alone. In-flight test defects root-caused and fixed (transport confusion, test-only code collision, 403-vs-401 semantics).

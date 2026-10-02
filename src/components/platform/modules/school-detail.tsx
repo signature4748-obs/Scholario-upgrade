@@ -40,6 +40,7 @@ import {
 import { usePlatformSession, platformApi, type PlatformApiError } from '../platform-client'
 import { useStepUpGate } from '../step-up-gate'
 import { SchoolDomainsTab } from './school-domains'
+import { SchoolSetupTab } from './school-setup'
 import { saveSupportToken } from '@/lib/platform-session-token'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -888,6 +889,12 @@ export function SchoolDetailModule() {
           >
             Overview
           </TabsTrigger>
+          <TabsTrigger
+            value="setup"
+            className="data-[state=active]:bg-emerald-500/10 data-[state=active]:text-emerald-300 data-[state=active]:border-emerald-500/20 text-zinc-400 px-3 py-1.5 min-h-[36px]"
+          >
+            Setup
+          </TabsTrigger>
           {canManage && (
             <TabsTrigger
               value="metadata"
@@ -1295,6 +1302,11 @@ export function SchoolDetailModule() {
         {/* ── Custom Domains tab (PHASE 8B — multi-tenant domains) ─────── */}
         <TabsContent value="domains" className="space-y-4">
           <SchoolDomainsTab schoolId={id} canManage={canManage} />
+        </TabsContent>
+
+        {/* ── Setup readiness (PHASE 8C §12 — DB-computed progress) ──── */}
+        <TabsContent value="setup" className="space-y-4">
+          <SchoolSetupTab schoolId={id} schoolStatus={data?.school.status ?? 'PENDING'} />
         </TabsContent>
 
         {/* ── Danger zone (schools.manage) ────────────────────────────── */}
