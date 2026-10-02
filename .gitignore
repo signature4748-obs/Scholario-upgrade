@@ -67,6 +67,10 @@ db/*.db-shm
 db/*.db-wal
 tool-results/
 
+# PHASE 8C — QA screenshot dumps never enter the repo (52MB/304 files removed
+# in 8C-C; browser QA evidence stays on the QA machine, not in git)
+/qa-shots/
+
 # scratch dirs (Turbopack watcher must ignore these)
 tmp-scripts/
 .zscripts/
