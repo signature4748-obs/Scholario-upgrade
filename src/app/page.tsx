@@ -7,6 +7,7 @@ import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { useCurrentUser } from '@/lib/store/current-user-store'
 import { installApiBearerInterceptor } from '@/lib/auth-session-token'
 import { AssetErrorBoundary } from '@/components/shared/asset-guard/asset-error-boundary'
+import { SubscriptionLockScreen } from '@/components/shared/subscription-lock-screen'
 
 // Install once, before any component can fire an API call. In embedded
 // (cross-site iframe) contexts the session cookie is blocked, so API auth
@@ -108,6 +109,7 @@ export default function Home() {
   // teacher-role session, which never runs the roster sync) is evicted
   // so every consumer renders its honest empty state.
   const isDemoTenant = useIsDemoTenant()
+  const me = useCurrentUser((s) => s.me)
   const meLoaded = useCurrentUser((s) => s.me !== null)
   useEffect(() => {
     if (!meLoaded) return
@@ -147,7 +149,22 @@ export default function Home() {
   // ('superadmin') matches no branch and falls through to the public
   // website; platform identity lives exclusively in the /platform
   // namespace with server-side session validation.
+  //
+  // FINAL-ACCEPTANCE Phase 10 — ACCOUNT subscription lock: once the
+  // server identity (/api/auth/me) is known, a LOCKED account renders
+  // the identity + subscription notice INSTEAD of the role panels. The
+  // gate is a UI courtesy; withUser enforces it server-side on every
+  // module API either way. Until the identity is known (or if /me
+  // errors) the normal panel path runs — its API calls will 403/401
+  // through the same server-side gate.
   if (isAuthenticated && user) {
+    if (me?.subscriptionStatus && me.subscriptionStatus !== 'ACTIVE') {
+      return (
+        <AssetErrorBoundary>
+          <SubscriptionLockScreen user={me} />
+        </AssetErrorBoundary>
+      )
+    }
     if (user.role === 'principal')
       return (
         <AssetErrorBoundary>

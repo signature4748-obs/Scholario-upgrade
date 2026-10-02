@@ -46,8 +46,8 @@ const MARKER = randomBytes(4).toString('hex')
 
 // ── resolved fixtures ──────────────────────────────────────────────────────
 let schoolId = ''
-let teacher1 = { id: '', name: '', email: 'teacher1@sunriseacademy.edu' }
-let principal = { id: '', email: 'principal@sunriseacademy.edu' }
+let teacher1 = { id: '', name: '', email: 'teacher1@hawkingshigh.edu' }
+let principal = { id: '', email: 'principal@hawkingshigh.edu' }
 let teacherToken = ''
 let principalToken = ''
 /** A fee OUTSIDE teacher1's class-teacher roster, for the overpay guard. */

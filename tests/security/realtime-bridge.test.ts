@@ -113,15 +113,15 @@ beforeAll(async () => {
   ensureUnitEnv()
   if (!serverSupabaseMode) return
 
-  const school = await db.school.findUnique({ where: { slug: 'sunrise-academy' }, select: { id: true } })
+  const school = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' }, select: { id: true } })
   if (!school) throw new Error('fixture school missing (run bun run seed:demo / seed:clean)')
   const [sa, ta] = await Promise.all([
     db.user.findUnique({
-      where: { email: 'tenant.student.a@sunrise.test' },
+      where: { email: 'tenant.student.a@hawkings.test' },
       select: { id: true, email: true, role: true, schoolId: true },
     }),
     db.user.findUnique({
-      where: { email: 'tenant.teacher.a@sunrise.test' },
+      where: { email: 'tenant.teacher.a@hawkings.test' },
       select: { id: true, email: true, role: true, schoolId: true },
     }),
   ])

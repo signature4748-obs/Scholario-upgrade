@@ -158,7 +158,7 @@ describe('PHASE 8C · provisioning boundary', () => {
   test('a SCHOOL session cannot provision (disjoint token spaces)', async () => {
     // A minted school session row (no login needed — boundary only).
     const demoPrincipal = await db.user.findFirst({
-      where: { role: 'PRINCIPAL', school: { slug: 'sunrise-academy' } },
+      where: { role: 'PRINCIPAL', school: { slug: 'hawkings-prithvipur' } },
       select: { id: true },
     })
     expect(demoPrincipal).not.toBeNull()
@@ -345,7 +345,7 @@ describe('PHASE 8C · setup-readiness contract (DB-computed progress)', () => {
   test(
     'configured corpus school (demo tenant): real DB counts, no fabrication',
     async () => {
-      const demo = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+      const demo = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
       expect(demo).not.toBeNull()
       const read = await fetch(`${BASE}/api/platform/schools/${demo!.id}/setup-readiness`, {
         headers: { 'x-platform-token': rootToken },
@@ -377,7 +377,7 @@ describe('PHASE 8C · setup-readiness contract (DB-computed progress)', () => {
     const anon = await fetch(`${BASE}/api/platform/schools/some-id/setup-readiness`)
     expect(anon.status).toBe(401)
     const demoPrincipal = await db.user.findFirst({
-      where: { role: 'PRINCIPAL', school: { slug: 'sunrise-academy' } },
+      where: { role: 'PRINCIPAL', school: { slug: 'hawkings-prithvipur' } },
       select: { id: true },
     })
     const token = randomBytes(32).toString('hex')

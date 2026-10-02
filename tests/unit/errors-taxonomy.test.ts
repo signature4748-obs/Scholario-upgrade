@@ -52,6 +52,8 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     STEP_UP_REQUIRED: 403,
     SCHOOL_SUSPENDED: 403,
     FEATURE_DISABLED: 403,
+    // FINAL-ACCEPTANCE Phase 10 — account-level subscription lock.
+    SUBSCRIPTION_REQUIRED: 403,
   }
 
   test('the table is exactly the documented taxonomy (no stray/missing codes)', () => {

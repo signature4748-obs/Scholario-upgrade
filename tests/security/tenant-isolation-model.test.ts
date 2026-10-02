@@ -164,7 +164,7 @@ describe('assertStudentInTenant (DB-backed, real tenants)', () => {
     // Phase 8A re-target: the legacy Bluebell fixture student no longer
     // exists (the clean tenant carries ZERO students) — the same-tenant
     // positive resolution is proven against the DEMO tenant's student.
-    const schoolA = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+    const schoolA = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
     const studentA = await db.student.findFirst({ where: { schoolId: schoolA!.id } })
     if (!schoolA || !studentA) throw new Error('run bun prisma/seed-tenant-isolation.ts first')
     const ctxSchoolA: Authz = { ...ctxA, schoolId: schoolA.id, tenant: { schoolId: schoolA.id } }
@@ -173,7 +173,7 @@ describe('assertStudentInTenant (DB-backed, real tenants)', () => {
   })
 
   test('foreign-school student id → NOT_FOUND (no existence oracle)', async () => {
-    const schoolA = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+    const schoolA = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
     const schoolB = await db.school.findUnique({ where: { slug: 'green-valley' } })
     const studentA = await db.student.findFirst({ where: { schoolId: schoolA!.id } })
     if (!schoolA || !schoolB || !studentA) throw new Error('fixtures missing')

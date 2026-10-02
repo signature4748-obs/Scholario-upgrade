@@ -1,6 +1,6 @@
 // ============================================================
 // seed-study-materials — RB-1 demo seed for the Study Materials
-// repository (Sunrise Academy — the Phase-8A demo tenant). L2D-1 update:
+// repository (Hawkings High School — the demo tenant). L2D-1 update:
 // rows now carry
 // the publication lifecycle (status=published + publishedAt) and target
 // the REAL class label of the demo student (resolved at runtime from the
@@ -22,7 +22,8 @@
 
 import { randomBytes } from 'crypto'
 import { assertSeedable } from './seed-guard'
-import { DEMO_SCHOOL_SLUG, PROBE_MATERIAL_TITLE } from './seed-identity'
+import { DEMO_SCHOOL_SLUG, DEMO_STUDENT_POSITION, PROBE_MATERIAL_TITLE } from './seed-identity'
+import { buildStudentRoster } from './hawkings-corpus'
 import { db } from '../src/lib/db'
 import { storageDelete, storageUpload, storedObjectLocation } from '../src/lib/storage/supabase'
 
@@ -279,10 +280,20 @@ async function main() {
   // Phase 8A — shared seed lock (fail-safe, first statement).
   assertSeedable('seed-study-materials')
 
+  // Storage availability gate (same rule as the parked CI corpus): this
+  // seed plants REAL objects in Supabase Storage — without storage
+  // credentials (local PG / CI) it SKIPS gracefully (exit 0) instead of
+  // crashing the demo pipeline. The DB rows are only meaningful with their
+  // bytes; no local-disk fallback exists by design (mission §27-28).
+  if (!(process.env.SUPABASE_URL ?? '').trim() || !(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim()) {
+    console.log('[seed-study-materials] storage credentials absent (local/CI) — skipping the materials corpus (Supabase Storage only, by design).')
+    return
+  }
+
   const school = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
     ?? await db.school.findFirst({ where: { isDemo: true } })
   if (!school) {
-    throw new Error('Demo school (sunrise-academy) not found — run prisma/seed.ts first.')
+    throw new Error('Demo school not found — run prisma/seed.ts first.')
   }
 
   // Resolve the demo school's real subjects (plain string FKs).
@@ -300,10 +311,17 @@ async function main() {
   // L2D-1 — resolve the DEMO STUDENT's real class label (the student the
   // demo login chip authenticates). Class targeting must match the exact
   // label the authorization predicate compares against (Class.name).
-  const demoStudentUser = await db.user.findUnique({
-    where: { email: 'student1@sunriseacademy.edu' },
-    include: { student: { include: { class: { select: { name: true } } } } },
-  })
+  // Featured student (DEMO_STUDENT_POSITION — 7-A roll 01), resolved from
+  // the deterministic roster.
+  const featuredDef = buildStudentRoster().find(
+    (s) => s.level === DEMO_STUDENT_POSITION.level && s.idx === DEMO_STUDENT_POSITION.idx,
+  )
+  const demoStudentUser = featuredDef
+    ? await db.user.findUnique({
+        where: { email: featuredDef.studentEmail },
+        include: { student: { include: { class: { select: { name: true } } } } },
+      })
+    : null
   const demoClassLabel = demoStudentUser?.student?.class?.name ?? null
   const targetClass = (raw: string | null): string | null =>
     raw === 'MY-CLASS' ? demoClassLabel : raw

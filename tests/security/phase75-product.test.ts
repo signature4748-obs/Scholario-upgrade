@@ -54,15 +54,15 @@ let tokenB = ''
 const cleanup: Array<() => Promise<unknown>> = []
 
 beforeAll(async () => {
-  const a = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+  const a = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
   const b = await db.school.findUnique({ where: { slug: 'green-valley' } })
   if (!a || !b) throw new Error('fixture schools missing (run bun run seed:demo / seed:clean)')
   schoolA = { id: a.id, slug: a.slug, name: a.name, themeColor: a.themeColor }
   schoolB = { id: b.id, slug: b.slug, name: b.name, themeColor: b.themeColor }
 
-  const pa = await db.user.findUnique({ where: { email: 'tenant.principal.a@sunrise.test' } })
+  const pa = await db.user.findUnique({ where: { email: 'tenant.principal.a@hawkings.test' } })
   const pb = await db.user.findUnique({ where: { email: 'principal.b@greenvalley.test' } })
-  const sa = await db.user.findUnique({ where: { email: 'tenant.superadmin@sunrise.test' } })
+  const sa = await db.user.findUnique({ where: { email: 'tenant.superadmin@hawkings.test' } })
   if (!pa || !pb || !sa) throw new Error('fixture users missing (run bun run db:seed-tenant-isolation)')
   principalB = { id: pb.id, email: pb.email }
   superadmin = { id: sa.id, email: sa.email }
@@ -125,7 +125,7 @@ describe('PHASE 7.5 · website content is tenant-scoped', () => {
     expect(pb.body?.data?.name).not.toBe(schoolA.name)
 
     // The demo school carries the seeded editorial document; Green Valley
-    // carries its honest bootstrap skeleton hero — never Sunrise's.
+    // carries its honest bootstrap skeleton hero — never the demo tenant's.
     const heroA: string = pa.body.data.websiteContent?.hero?.title ?? ''
     const heroB: string = pb.body.data.websiteContent?.hero?.title ?? ''
     expect(heroA.length).toBeGreaterThan(0)

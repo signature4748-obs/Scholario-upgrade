@@ -38,7 +38,7 @@ export const SEED_DEMO_PASSWORD = envOr('SEED_DEMO_PASSWORD', 'password123')
 /** Legacy school-side super-admin rows (admin@erpsuite.io / admin@scholario.cloud). */
 export const SEED_SUPERADMIN_PASSWORD = envOr('SEED_SUPERADMIN_PASSWORD', 'admin123')
 
-/** Sunrise showcase trio (acceptance-testing identities for the demo tenant). */
+/** Featured demo identities (principal / featured teacher / featured student) — the acceptance-testing password families for the Hawkings demo tenant. */
 export const SEED_SHOWCASE_PRINCIPAL_PASSWORD = envOr('SEED_SHOWCASE_PRINCIPAL_PASSWORD', 'principal123')
 export const SEED_SHOWCASE_TEACHER_PASSWORD = envOr('SEED_SHOWCASE_TEACHER_PASSWORD', 'teacher123')
 export const SEED_SHOWCASE_STUDENT_PASSWORD = envOr('SEED_SHOWCASE_STUDENT_PASSWORD', 'student123')
@@ -57,5 +57,5 @@ export const SEED_PLATFORM_OPS_PASSWORD = envOr('SEED_PLATFORM_OPS_PASSWORD', 'o
 export const SEED_PLATFORM_ROOT_TOTP_SECRET = envOr('SEED_PLATFORM_ROOT_TOTP', 'JBSWY3DPEHPK3PXP')
 export const SEED_PLATFORM_OPS_TOTP_SECRET = envOr('SEED_PLATFORM_OPS_TOTP', 'KRSXG5CTMVRXEZLU')
 
-/** Tenant-isolation / clean-school fixture password (tenant.*@sunrise.test, principal.b@greenvalley.test). */
+/** Tenant-isolation / clean-school fixture password (tenant.*@hawkings.test, principal.b@greenvalley.test). */
 export const SEED_TENANT_FIXTURE_PASSWORD = envOr('SEED_TENANT_FIXTURE_PASSWORD', 'ScholarioTest2026')

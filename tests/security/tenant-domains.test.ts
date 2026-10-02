@@ -8,7 +8,7 @@
  *   fallback) → www-variant resolves → cross-tenant duplicate rejected
  *   (409) → cross-tenant verify rejected (404) → role/auth boundaries.
  *
- * Fixture tenants: Sunrise Academy (demo) + Green Valley (clean). All
+ * Fixture tenants: Hawkings High School (demo) + Green Valley (clean). All
  * created rows are cleaned up in afterAll (TenantDomain rows with the
  * `it-` hostname marker only).
  */
@@ -16,12 +16,12 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'node:crypto'
 import { normalizeHostname, hostnameRejectionReason } from '../../src/lib/tenant/hostname'
 import { hashSessionToken } from '../../src/lib/auth'
-import { DEMO_PRINCIPAL_PASSWORD, TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
+import { DEMO_PRINCIPAL_PASSWORD, DEMO_TEACHER_1_PASSWORD, TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const T = 45_000
 
-const SUNRISE_PRINCIPAL = 'principal@sunriseacademy.edu'
+const DEMO_PRINCIPAL = 'principal@hawkingshigh.edu'
 const GV_PRINCIPAL = 'principal@greenvalley.test'
 
 // DB access via the SHARED test client (tests/helpers/db.ts — the
@@ -102,20 +102,20 @@ describe('Phase 8B · hostname normalization + validation (unit)', () => {
 
 describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
   let gvCookie: string // bearer session token
-  let sunriseCookie: string
+  let demoCookie: string
   let gvDomainId: string
   let gvSchoolId: string
 
   beforeAll(async () => {
     gvCookie = await login(GV_PRINCIPAL, TENANT_FIXTURE_PASSWORD)
-    sunriseCookie = await login(SUNRISE_PRINCIPAL, DEMO_PRINCIPAL_PASSWORD)
+    demoCookie = await login(DEMO_PRINCIPAL, DEMO_PRINCIPAL_PASSWORD)
     // clean any residue from an interrupted earlier run
     await db.tenantDomain.deleteMany({ where: { hostname: { startsWith: 'it-' } } })
   }, T)
 
   afterAll(async () => {
     await db.tenantDomain.deleteMany({ where: { hostname: { startsWith: 'it-' } } })
-    for (const t of [gvCookie, sunriseCookie]) {
+    for (const t of [gvCookie, demoCookie]) {
       if (t) await db.session.deleteMany({ where: { tokenHash: hashSessionToken(t) } }).catch(() => {})
     }
     // NOTE: no db.$disconnect() — the shared client serves the whole suite.
@@ -127,7 +127,7 @@ describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
   }, T)
 
   test('teacher role is rejected from domain management (403)', async () => {
-    const cookie = await login('teacher1@sunriseacademy.edu', DEMO_PRINCIPAL_PASSWORD)
+    const cookie = await login('teacher1@hawkingshigh.edu', DEMO_TEACHER_1_PASSWORD)
     const { status } = await api(cookie, '/api/school/domains')
     expect(status).toBe(403)
   }, T)
@@ -167,8 +167,8 @@ describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
     expect(j?.data?.slug).not.toBe('green-valley')
   }, T)
 
-  test('cross-tenant duplicate: Sunrise principal requests the SAME hostname → 409', async () => {
-    const { status, json } = await api(sunriseCookie, '/api/school/domains', {
+  test('cross-tenant duplicate: demo principal requests the SAME hostname → 409', async () => {
+    const { status, json } = await api(demoCookie, '/api/school/domains', {
       method: 'POST',
       body: { hostname: TEST_HOSTNAME },
     })
@@ -176,8 +176,8 @@ describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
     expect(String(json?.error ?? '')).toContain(TEST_HOSTNAME)
   }, T)
 
-  test('cross-tenant verify: Sunrise principal cannot verify GV domain (404, no oracle)', async () => {
-    const { status } = await api(sunriseCookie, `/api/school/domains/${gvDomainId}/verify`, {
+  test('cross-tenant verify: demo principal cannot verify GV domain (404, no oracle)', async () => {
+    const { status } = await api(demoCookie, `/api/school/domains/${gvDomainId}/verify`, {
       method: 'POST',
     })
     expect(status).toBe(404)

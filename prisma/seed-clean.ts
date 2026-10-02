@@ -29,7 +29,7 @@
  *
  * ensureCleanSchool() is exported so seed-tenant-isolation (the tenant
  * fixture pipeline step) can guarantee the clean tenant exists before
- * planting the Sunrise-side cross-tenant probes.
+ * planting the Hawkings-side cross-tenant probes.
  *
  * Run: bun run seed:clean   (package.json script)
  */

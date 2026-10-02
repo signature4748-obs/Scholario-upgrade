@@ -38,6 +38,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { getTeacherSubjectAssignments } from '@/lib/teacher-scope'
 import { hashSessionToken } from '@/lib/auth'
+import { DEMO_STUDENT_EMAIL } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -47,10 +48,10 @@ const MARKER = randomBytes(4).toString('hex')
 
 // ── resolved fixtures (DB truth, never hardcoded ids) ─────────────────────
 let schoolId = ''
-let teacher1 = { id: '', name: '', email: 'teacher1@sunriseacademy.edu' }
-let principal = { id: '', email: 'principal@sunriseacademy.edu' }
-let student1 = { id: '', email: 'student1@sunriseacademy.edu', classTeacherId: '' }
-let subjectOnly = { id: '', email: `pih5.subjectonly.${MARKER}@sunrise.test` }
+let teacher1 = { id: '', name: '', email: 'teacher1@hawkingshigh.edu' }
+let principal = { id: '', email: 'principal@hawkingshigh.edu' }
+let student1 = { id: '', email: DEMO_STUDENT_EMAIL, classTeacherId: '' }
+let subjectOnly = { id: '', email: `pih5.subjectonly.${MARKER}@hawkings.test` }
 let g9a = { id: '' } // NOT teacher1's class; Math taught by a colleague
 let g8a = { id: '' } // teacher1's class-teacher class; Math NOT her subject
 let g10a = { id: '' } // Science here IS teacher1's subject (positive control)
@@ -84,7 +85,7 @@ beforeAll(async () => {
 
   // student1's STUDENT row (the route takes the student id, not the user id).
   const s1row = await db.student.findFirst({ where: { schoolId, userId: s1.id }, include: { class: true } })
-  if (!s1row) throw new Error('fixture student row missing for student1@sunriseacademy.edu')
+  if (!s1row) throw new Error('fixture student row missing for the featured student')
   student1 = { ...student1, id: s1row.id, classTeacherId: s1row.class?.classTeacherId ?? '' }
 
   const classBy = async (name: string) => {
@@ -92,7 +93,8 @@ beforeAll(async () => {
     if (!c) throw new Error(`fixture class missing: ${name}`)
     return c
   }
-  const [c9, c8, c10] = await Promise.all([classBy('Grade 9 - A'), classBy('Grade 8 - A'), classBy('Grade 10 - A')])
+  // Final-acceptance corpus labels: '9-A' / '8-A' / '10-A' (Hawkings).
+  const [c9, c8, c10] = await Promise.all([classBy('9-A'), classBy('8-A'), classBy('10-A')])
   g9a = { id: c9.id }
   g8a = { id: c8.id }
   g10a = { id: c10.id }
@@ -168,7 +170,7 @@ beforeAll(async () => {
     where: { classId: c8.id, user: { status: 'ACTIVE' } },
     orderBy: { rollNo: 'asc' },
   })
-  if (!g8student) throw new Error('no ACTIVE student in Grade 8 - A')
+  if (!g8student) throw new Error('no ACTIVE student in 8-A')
   g8aStudentId = g8student.id
 
   // Direct-minted sessions (phase75 pattern) — bypasses ONLY the login

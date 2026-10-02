@@ -1,9 +1,9 @@
 // ============================================================
 // seed-learning — L2D-1 demo seed for Learning Experience 2.0
-// (Sunrise Academy — the Phase-8A demo tenant).
+// (Hawkings High School — the demo tenant).
 //
 // Seeds REAL rows for the demo student (the one behind the demo login
-// chip student1@sunriseacademy.edu — resolved at runtime, never hardcoded
+// login identity — resolved at runtime from the roster, never hardcoded
 // cuid):
 //   · 4 flashcard decks with real cards (SM-2 states start empty —
 //     every review a student does is genuinely computed from zero)
@@ -24,7 +24,8 @@
 // ============================================================
 
 import { assertSeedable } from './seed-guard'
-import { DEMO_SCHOOL_SLUG } from './seed-identity'
+import { DEMO_SCHOOL_SLUG, DEMO_STUDENT_POSITION } from './seed-identity'
+import { buildStudentRoster } from './hawkings-corpus'
 import { db } from '../src/lib/db'
 
 // ─── Flashcard decks ────────────────────────────────────────────────
@@ -157,17 +158,20 @@ async function main() {
   const school = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
     ?? await db.school.findFirst({ where: { isDemo: true } })
   if (!school) {
-    throw new Error('Demo school (sunrise-academy) not found — run prisma/seed.ts first.')
+    throw new Error('Demo school not found — run prisma/seed.ts first.')
   }
 
-  // The demo student — resolved exactly the way the APIs do (user → student).
-  const demoUser = await db.user.findUnique({
-    where: { email: 'student1@sunriseacademy.edu' },
-    include: { student: true },
-  })
+  // The demo student (featured, DEMO_STUDENT_POSITION) — resolved exactly
+  // the way the APIs do (user → student), from the deterministic roster.
+  const _featuredDef = buildStudentRoster().find(
+    (s) => s.level === DEMO_STUDENT_POSITION.level && s.idx === DEMO_STUDENT_POSITION.idx,
+  )
+  const demoUser = _featuredDef
+    ? await db.user.findUnique({ where: { email: _featuredDef.studentEmail }, include: { student: true } })
+    : null
   const demoStudent = demoUser?.student
   if (!demoStudent) {
-    throw new Error('Demo student (student1@sunriseacademy.edu) not found — run prisma/seed.ts first.')
+    throw new Error('Demo student (featured, 7-A roll 01) not found — run prisma/seed.ts first.')
   }
 
   const subjects = await db.subject.findMany({ where: { schoolId: school.id } })

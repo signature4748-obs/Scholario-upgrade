@@ -4,7 +4,7 @@
  * THE INVARIANT UNDER TEST:
  *   prisma/seed-guard.ts `assertSeedable(label)` is the shared fail-safe
  *   every seed script calls BEFORE touching the database. The demo corpus
- *   (Sunrise Academy full corpus + Green Valley clean skeleton) is
+ *   (Hawkings High School full corpus + Green Valley clean skeleton) is
  *   development/integration acceptance data — it must NEVER be writable
  *   against a production declaration, and a Supabase DATABASE_URL with
  *   DATABASE_ENV UNSET must refuse (an unset variable must never silently

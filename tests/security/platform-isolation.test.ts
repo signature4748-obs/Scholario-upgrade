@@ -231,27 +231,27 @@ let throwawaySchoolId: string | null = null
 beforeAll(async () => {
   const schools = await db.school.findMany({ select: { id: true, slug: true } })
   const bySlug = new Map(schools.map((s) => [s.slug, s.id]))
-  schoolAId = bySlug.get('sunrise-academy') ?? ''
+  schoolAId = bySlug.get('hawkings-prithvipur') ?? ''
   schoolBId = bySlug.get('green-valley') ?? ''
   if (!schoolAId || !schoolBId) throw new Error('seed schools missing — run bun prisma/seed-tenant-isolation.ts')
 
   // Phase 8A — DB-backed login buckets persist across runs; heal them so
   // this run starts from clean limiter state (fixture accounts only).
   await resetLoginBuckets([
-    'tenant.principal.a@sunrise.test',
-    'tenant.teacher.a@sunrise.test',
-    'tenant.student.a@sunrise.test',
-    'tenant.parent.a@sunrise.test',
+    'tenant.principal.a@hawkings.test',
+    'tenant.teacher.a@hawkings.test',
+    'tenant.student.a@hawkings.test',
+    'tenant.parent.a@hawkings.test',
     'principal.b@greenvalley.test',
     ROOT_EMAIL,
     OPS_EMAIL,
   ])
 
   // School sessions for every role (login API — the REAL path).
-  principalA = await schoolLogin('tenant.principal.a@sunrise.test')
-  teacherA = await schoolLogin('tenant.teacher.a@sunrise.test')
-  studentA = await schoolLogin('tenant.student.a@sunrise.test')
-  parentA = await schoolLogin('tenant.parent.a@sunrise.test')
+  principalA = await schoolLogin('tenant.principal.a@hawkings.test')
+  teacherA = await schoolLogin('tenant.teacher.a@hawkings.test')
+  studentA = await schoolLogin('tenant.student.a@hawkings.test')
+  parentA = await schoolLogin('tenant.parent.a@hawkings.test')
   principalB = await schoolLogin('principal.b@greenvalley.test')
 
   // Platform sessions (full MFA).

@@ -30,6 +30,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { DEMO_STUDENT_EMAIL } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -40,9 +41,9 @@ const MARKER = randomBytes(4).toString('hex')
 // ── fixtures ───────────────────────────────────────────────────────────────
 let schoolA = { id: '' } // demo school (the CSV seeding target)
 let schoolB = { id: '' } // green-valley (the clean tenant — suspension probe target)
-let teacher1 = { id: '', email: 'teacher1@sunriseacademy.edu' }
-let student1 = { id: '', email: 'student1@sunriseacademy.edu' }
-let principalA = { id: '', email: 'principal@sunriseacademy.edu' }
+let teacher1 = { id: '', email: 'teacher1@hawkingshigh.edu' }
+let student1 = { id: '', email: DEMO_STUDENT_EMAIL }
+let principalA = { id: '', email: 'principal@hawkingshigh.edu' }
 let principalB = { id: '', email: 'principal.b@greenvalley.test' }
 let teacherToken = ''
 let studentToken = ''
@@ -109,7 +110,7 @@ beforeAll(async () => {
   // boundary: a FRESH user owns a fresh `rl:export:${userId}` bucket.
   rateLimitUser = {
     id: '',
-    email: `pih5.export.${MARKER}@sunrise.test`,
+    email: `pih5.export.${MARKER}@hawkings.test`,
   }
   const rl = await db.user.create({
     data: {
@@ -199,7 +200,7 @@ describe('PIH-5 · export role gate (permission matrix)', () => {
 
   test('PRINCIPAL → 200 text/csv attachment; a seeded "=HYPERLINK" student name is neutralized, never an unescaped formula cell', async () => {
     // Seed a throwaway student whose NAME is a classic CSV/DDE payload.
-    const email = `pih5.csv.${MARKER}@sunrise.test`
+    const email = `pih5.csv.${MARKER}@hawkings.test`
     const user = await db.user.create({
       data: { schoolId: schoolA.id, email, name: EVIL_NAME, role: 'STUDENT', status: 'ACTIVE' },
     })

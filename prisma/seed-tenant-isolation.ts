@@ -8,15 +8,15 @@
  *                      bootstrap config + role users, ZERO business data.
  *                      Ensured here via seed-clean's ensureCleanSchool()
  *                      so a standalone run bootstraps it too.
- *   School A (DEMO)  : Sunrise Academy (slug sunrise-academy) — the full
+ *   School A (DEMO)  : Hawkings High School Prithvipur (slug hawkings-prithvipur) — the full
  *                      demo corpus. THIS seed plants the cross-tenant test
  *                      identities + probe targets INSIDE School A:
  *
- *   Users     : tenant.principal/teacher/student/parent.a@sunrise.test
+ *   Users     : tenant.principal/teacher/student/parent.a@hawkings.test
  *               (roles per account, env-driven fixture password from
  *               prisma/seed-credentials.ts) +
- *               tenant.superadmin@sunrise.test (schoolless) +
- *               tenant.student.probe@sunrise.test ('Aarav Mehta' — the
+ *               tenant.superadmin@hawkings.test (schoolless) +
+ *               tenant.student.probe@hawkings.test ('Aarav Mehta' — the
  *               probe student, equivalent of the legacy Bluebell 'Ira Rao'
  *               fixture, rebranded with a DIFFERENT name inside the demo
  *               tenant).
@@ -101,26 +101,26 @@ async function main() {
   const schoolB = await db.school.findUniqueOrThrow({ where: { slug: 'green-valley' } })
   console.log(`[tenant-fixtures] clean tenant ready: ${schoolB.name} (${schoolB.slug}) ${schoolB.id}`)
 
-  // ── School A (demo tenant — Sunrise Academy) test identities ─────────
+  // ── School A (demo tenant — Hawkings) test identities ─────────
   const schoolA = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
   if (!schoolA) {
-    console.log('[tenant-fixtures] School A (sunrise-academy) not found — skipping School A fixtures')
+    console.log('[tenant-fixtures] School A (hawkings-prithvipur) not found — skipping School A fixtures')
     return
   }
   const aid = schoolA.id
 
-  const principalA = await upsertUser({ email: 'tenant.principal.a@sunrise.test', name: 'Tenant Test Principal A', role: 'PRINCIPAL', schoolId: aid })
-  const teacherAUser = await upsertUser({ email: 'tenant.teacher.a@sunrise.test', name: 'Tenant Test Teacher A', role: 'TEACHER', schoolId: aid })
-  const studentAUser = await upsertUser({ email: 'tenant.student.a@sunrise.test', name: 'Tenant Test Student A', role: 'STUDENT', schoolId: aid })
-  const parentAUser = await upsertUser({ email: 'tenant.parent.a@sunrise.test', name: 'Tenant Test Parent A', role: 'PARENT', schoolId: aid })
+  const principalA = await upsertUser({ email: 'tenant.principal.a@hawkings.test', name: 'Tenant Test Principal A', role: 'PRINCIPAL', schoolId: aid })
+  const teacherAUser = await upsertUser({ email: 'tenant.teacher.a@hawkings.test', name: 'Tenant Test Teacher A', role: 'TEACHER', schoolId: aid })
+  const studentAUser = await upsertUser({ email: 'tenant.student.a@hawkings.test', name: 'Tenant Test Student A', role: 'STUDENT', schoolId: aid })
+  const parentAUser = await upsertUser({ email: 'tenant.parent.a@hawkings.test', name: 'Tenant Test Parent A', role: 'PARENT', schoolId: aid })
 
   // SUPER_ADMIN rows are schoolless — managed directly (the platform
   // account must NEVER be bound to a tenant).
-  let saUser = await db.user.findUnique({ where: { email: 'tenant.superadmin@sunrise.test' } })
+  let saUser = await db.user.findUnique({ where: { email: 'tenant.superadmin@hawkings.test' } })
   if (!saUser) {
     saUser = await db.user.create({
       data: {
-        email: 'tenant.superadmin@sunrise.test',
+        email: 'tenant.superadmin@hawkings.test',
         name: 'Tenant Test Super Admin',
         role: 'SUPER_ADMIN',
         schoolId: null,
@@ -160,15 +160,17 @@ async function main() {
   }
 
   // ── Probe corpus INSIDE School A (moved from the legacy Bluebell
-  //    tenant, rebranded Sunrise) ────────────────────────────────────────
+  //    tenant, rebranded Hawkings) ────────────────────────────────────────
   // The minimal fixtures that used to live in School B (class, probe
-  // subject, CSA, probe student 'Ira Rao') now exist as Sunrise-owned
+  // subject, CSA, probe student 'Ira Rao') now exist as Hawkings-owned
   // equivalents with DIFFERENT names, so cross-tenant test targets exist
   // while the clean school carries zero students/classes.
-  let probeClass = await db.class.findFirst({ where: { schoolId: aid, name: 'Grade 5 - A' } })
+  // Probe class: the CANONICAL 5-A when present (no phantom class rows in
+  // the demo tenant); fallback creates a clearly-labeled probe class.
+  let probeClass = await db.class.findFirst({ where: { schoolId: aid, name: '5-A' } })
   if (!probeClass) {
     probeClass = await db.class.create({ data: { schoolId: aid, name: 'Grade 5 - A', section: 'A' } })
-    console.log(`[tenant-fixtures] created probe class ${probeClass.id} (Grade 5 - A, School A)`)
+    console.log(`[tenant-fixtures] created fallback probe class ${probeClass.id} (Grade 5 - A, School A)`)
   }
 
   let probeSubject = await db.subject.findFirst({ where: { schoolId: aid, code: PROBE_SUBJECT_CODE } })
@@ -179,9 +181,9 @@ async function main() {
     console.log(`[tenant-fixtures] created probe subject ${probeSubject.id} (${PROBE_SUBJECT_CODE}, School A)`)
   }
 
-  // Probe student 'Aarav Mehta' (the legacy 'Ira Rao' equivalent) + its
+  // Probe student 'Aarav Mehta' (test-infra identity) + its
   // own fixture user, ward of the School A test parent.
-  const probeStudentUser = await upsertUser({ email: 'tenant.student.probe@sunrise.test', name: 'Aarav Mehta', role: 'STUDENT', schoolId: aid })
+  const probeStudentUser = await upsertUser({ email: 'tenant.student.probe@hawkings.test', name: 'Aarav Mehta', role: 'STUDENT', schoolId: aid })
   let probeStudent = await db.student.findFirst({ where: { schoolId: aid, userId: probeStudentUser.id } })
   if (!probeStudent) {
     probeStudent = await db.student.create({
@@ -206,42 +208,42 @@ async function main() {
   let feeProbe = await db.fee.findFirst({ where: { schoolId: aid, studentId: probeStudent.id } })
   if (!feeProbe) {
     feeProbe = await db.fee.create({
-      data: { schoolId: aid, studentId: probeStudent.id, title: 'Sunrise Term Fee', amount: 12000, paid: 0, status: 'UNPAID' },
+      data: { schoolId: aid, studentId: probeStudent.id, title: 'Hawkings Term Fee', amount: 12000, paid: 0, status: 'UNPAID' },
     })
   }
   probes.fee = feeProbe
 
-  let notifA = await db.notification.findFirst({ where: { schoolId: aid, title: 'Sunrise Winter Carnival' } })
+  let notifA = await db.notification.findFirst({ where: { schoolId: aid, title: 'Hawkings Winter Carnival' } })
   if (!notifA) {
     notifA = await db.notification.create({
-      data: { schoolId: aid, title: 'Sunrise Winter Carnival', message: 'Sunrise school-only announcement', audience: 'ALL', priority: 'NORMAL' },
+      data: { schoolId: aid, title: 'Hawkings Winter Carnival', message: 'Hawkings school-only announcement', audience: 'ALL', priority: 'NORMAL' },
     })
   }
   probes.notification = notifA
 
-  let eventA = await db.schoolEvent.findFirst({ where: { schoolId: aid, title: 'Sunrise Founders Day' } })
+  let eventA = await db.schoolEvent.findFirst({ where: { schoolId: aid, title: 'Hawkings Founders Day' } })
   if (!eventA) {
     eventA = await db.schoolEvent.create({
-      data: { schoolId: aid, title: 'Sunrise Founders Day', type: 'EVENT', startDate: new Date('2026-12-01T09:00:00Z'), audience: 'ALL', createdBy: principalA.id },
+      data: { schoolId: aid, title: 'Hawkings Founders Day', type: 'EVENT', startDate: new Date('2026-12-01T09:00:00Z'), audience: 'ALL', createdBy: principalA.id },
     })
   }
   probes.event = eventA
 
-  let examA = await db.exam.findFirst({ where: { schoolId: aid, name: 'Sunrise Unit Test 1' } })
+  let examA = await db.exam.findFirst({ where: { schoolId: aid, name: 'Hawkings Unit Test 1' } })
   if (!examA) {
     examA = await db.exam.create({
-      data: { schoolId: aid, name: 'Sunrise Unit Test 1', type: 'Unit Test', session: '2026-2027', status: 'Scheduled', resultStatus: 'Not Started', passPercentage: 35, createdBy: principalA.id },
+      data: { schoolId: aid, name: 'Hawkings Unit Test 1', type: 'Unit Test', session: '2026-2027', status: 'Scheduled', resultStatus: 'Not Started', passPercentage: 35, createdBy: principalA.id },
     })
   }
   probes.exam = examA
 
-  let questionA = await db.questionBank.findFirst({ where: { schoolId: aid, question: 'Sunrise probe question: simplify 2x+3?' } })
+  let questionA = await db.questionBank.findFirst({ where: { schoolId: aid, question: 'Hawkings probe question: simplify 2x+3?' } })
   if (!questionA) {
     questionA = await db.questionBank.create({
       data: {
         schoolId: aid,
         subjectId: probeSubject.id,
-        question: 'Sunrise probe question: simplify 2x+3?',
+        question: 'Hawkings probe question: simplify 2x+3?',
         optionA: '2x+3', optionB: '5x', optionC: 'x', optionD: '6',
         answer: 'A', type: 'MCQ', difficulty: 'EASY', marks: 1,
       },
@@ -249,10 +251,10 @@ async function main() {
   }
   probes.question = questionA
 
-  let roomA5 = await db.room.findFirst({ where: { schoolId: aid, name: 'Sunrise Room 5A' } })
+  let roomA5 = await db.room.findFirst({ where: { schoolId: aid, name: 'Hawkings Room P5' } })
   if (!roomA5) {
     roomA5 = await db.room.create({
-      data: { schoolId: aid, name: 'Sunrise Room 5A', code: 'SRA-5A', capacity: 30, type: 'Classroom', active: true },
+      data: { schoolId: aid, name: 'Hawkings Room P5', code: 'HHSP-P5', capacity: 30, type: 'Classroom', active: true },
     })
   }
   probes.room = roomA5
@@ -265,12 +267,12 @@ async function main() {
       data: {
         schoolId: aid,
         title: PROBE_MATERIAL_TITLE,
-        description: 'Sunrise-only worksheet (tenant-isolation probe)',
+        description: 'Hawkings-only worksheet (tenant-isolation probe)',
         subjectId: probeSubject.id,
         className: probeClass.name,
         category: 'worksheet',
-        fileName: 'sunrise-probe-worksheet.pdf',
-        originalName: 'Sunrise Maths Worksheet 1.pdf',
+        fileName: 'hawkings-probe-worksheet.pdf',
+        originalName: 'Hawkings Maths Worksheet 1.pdf',
         mimeType: 'application/pdf',
         sizeBytes: 1024,
         status: 'published',
@@ -293,7 +295,7 @@ async function main() {
     csaA = await db.classSubjectAssignment.create({
       data: { schoolId: aid, classId: probeClass.id, subjectId: probeSubject.id, teacherUserId: teacherAUser.id, isActive: true },
     })
-    console.log(`[tenant-fixtures] created CSA ${csaA.id} (teacher A → Grade 5 - A probe Mathematics)`)
+    console.log(`[tenant-fixtures] created CSA ${csaA.id} (teacher A → 5-A probe Mathematics)`)
   }
 
   // Homework probes (the one route family with no pre-existing canonical

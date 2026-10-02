@@ -3,7 +3,7 @@ import { db } from '../helpers/db'
  * PHASE 8A — MONEY PRECISION PROOFS (mission §5): paise-exact NUMERIC
  * ledgers, LIVE against the API + the database.
  *
- * THE INVARIANTS UNDER TEST (Sunrise Academy demo tenant):
+ * THE INVARIANTS UNDER TEST (Hawkings demo tenant):
  *   1. Fee amounts survive the full API→Prisma→NUMERIC(12,2) round trip
  *      paise-exactly: ₹1.11, ₹999.99, ₹10,000.00, ₹1,00,000.00 echo back
  *      as EXACT numbers and the DB stores EXACT strings ('1.11' …).
@@ -47,10 +47,10 @@ const MARKER = randomBytes(4).toString('hex')
 const RUN_IP = `10.238.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 const DEMO_PW = DEMO_PRINCIPAL_PASSWORD
 const PRINCIPAL_EMAIL = DEMO_PRINCIPAL_EMAIL
-const TEACHER_EMAIL = 'teacher1@sunriseacademy.edu'
+const TEACHER_EMAIL = 'teacher1@hawkingshigh.edu'
 
 const STUDENT_NAME = `Paise Probe ${MARKER}`
-const STUDENT_EMAIL = `paise.${MARKER}@sunrise.test`
+const STUDENT_EMAIL = `paise.${MARKER}@hawkings.test`
 const STUDENT_PW = 'PaiseProbe2026'
 const ADMISSION_NO = `PAISE-${MARKER}`
 

@@ -50,147 +50,155 @@ async function main() {
   }
 
   // ── 1. Identity columns (only fill what is not already configured) ──
-  // Phase 8A rebrand: Greenwood identity → Sunrise Academy.
+  // Final-acceptance rebrand: Sunrise → Hawkings High School Prithvipur.
   const identity = {
-    shortName: school.shortName ?? 'Sunrise',
-    tagline: school.tagline ?? 'Excellence in Education & Innovation',
-    affiliation: school.affiliation ?? 'CBSE — Affiliation No. 1730456',
-    website: school.website ?? 'https://sunriseacademy.edu',
-    principalName: school.principalName ?? 'Dr. Ananya Iyer',
-    established: school.established ?? '1995',
+    shortName: school.shortName ?? 'Hawkings High',
+    tagline: school.tagline ?? 'Knowledge · Character · Service',
+    affiliation: school.affiliation ?? 'CBSE (Patna Region)',
+    website: school.website ?? 'https://hawkingshigh.edu',
+    principalName: school.principalName ?? 'Dr. (Smt.) Sunita Verma',
+    established: school.established ?? '2004',
   }
 
   // ── 2. Website CMS document (current public-site copy, verbatim) ────
   const websiteContent: Record<string, unknown> = {
     hero: {
       badgePrefix: 'Admissions open for',
-      title: 'Empowering Minds,',
-      titleAccent: 'Inspiring Excellence',
+      title: 'Rooted in Prithvipur,',
+      titleAccent: 'Rising with Knowledge',
       description:
-        'A future-ready learning community where tradition meets innovation. Discover an education that nurtures intellect, character, and curiosity.',
+        'Hawkings High School Prithvipur has served the families of Ghazipur since 2004 — an English-medium, CBSE-pattern education from Nursery to Class 12, grounded in discipline, character and hard work.',
       ctaPrimary: { label: 'Apply for Admission' },
-      ctaSecondary: { label: 'Explore Campus Life' },
+      ctaSecondary: { label: 'Visit the School' },
     },
     pillars: [
       {
         icon: 'target',
-        title: 'Academic Excellence',
-        description: 'A rigorous, NEP-aligned curriculum that consistently produces top-tier board results.',
+        title: 'Strong Academics',
+        description: 'A CBSE-pattern curriculum with small classes, regular assessments and consistent board results.',
       },
       {
         icon: 'heart',
-        title: 'Holistic Growth',
-        description: 'Sports, arts, and life-skills programs that shape confident, well-rounded individuals.',
-      },
-      {
-        icon: 'building',
-        title: 'Modern Facilities',
-        description: 'Smart classrooms, advanced labs, and digital libraries built for 21st-century learning.',
+        title: 'Caring Faculty',
+        description: 'Sixteen dedicated teachers who know every child by name — and every parent by face.',
       },
       {
         icon: 'shield',
-        title: 'Safe & Inclusive',
-        description: 'A nurturing, secure campus where every child feels seen, heard, and valued.',
+        title: 'Value-Based Education',
+        description: 'Discipline, honesty and respect woven into the school day — from morning assembly to the last bell.',
+      },
+      {
+        icon: 'building',
+        title: 'Affordable Quality',
+        description: 'Reasonable fees with sibling concessions — a good education within every family\'s reach.',
       },
     ],
     journey: {
-      title: 'A journey built for every stage',
-      subtitle: 'From first steps to final boards — a program for each phase of growth.',
+      title: 'Nursery to Class 12 — one school, one family',
+      subtitle: 'A program for each stage of growth, on one campus.',
       stages: [
         {
-          title: 'Primary',
-          grades: 'Grade 1–5',
-          years: 'Ages 6–11',
+          title: 'Pre-Primary',
+          grades: 'Nursery – IKG',
+          years: 'Ages 3–6',
           description:
-            'Play-based foundations, phonics, numeracy, and curiosity-driven discovery in warm, colorful spaces.',
+            'Play-based foundations — rhymes, colours, numbers and confidence in a warm, caring first classroom.',
           icon: 'sprout',
         },
         {
-          title: 'Middle',
-          grades: 'Grade 6–8',
-          years: 'Ages 11–14',
+          title: 'Primary',
+          grades: 'Classes 1–5',
+          years: 'Ages 6–11',
           description:
-            'Concept depth, lab sciences, collaborative projects, and the independence to own their learning.',
+            'Reading, writing and numeracy built carefully by class teachers who stay with their class through the year.',
           icon: 'compass',
         },
         {
-          title: 'Senior',
-          grades: 'Grade 9–12',
+          title: 'Middle',
+          grades: 'Classes 6–8',
+          years: 'Ages 11–14',
+          description:
+            'Subject specialists take over — Mathematics, Science, Sanskrit and Computer Education alongside the core.',
+          icon: 'compass',
+        },
+        {
+          title: 'Secondary & Senior',
+          grades: 'Classes 9–12',
           years: 'Ages 14–18',
           description:
-            'Board-focused rigor, career mentoring, and streams that open every university pathway.',
+            'Board-focused rigour with a Science stream (PCM/PCB), regular tests, remedial support and career guidance.',
           icon: 'rocket',
         },
       ],
     },
     facilities: {
       title: 'Campus & Facilities',
-      subtitle: 'Spaces designed for curiosity, movement, and quiet focus.',
+      subtitle: 'Everything a child of Prithvipur needs — nothing unnecessary.',
       items: [
         {
           icon: 'library',
           title: 'The Library',
-          description: 'A sunlit reading haven with curated titles and a digital research hub.',
+          description: 'Over 3,000 Hindi and English titles — from Premchand to NCERT reference.',
         },
         {
           icon: 'flask',
-          title: 'Science Labs',
-          description: 'Physics, chemistry, and biology labs built for hands-on experimentation.',
-        },
-        {
-          icon: 'trophy',
-          title: 'Sports Complex',
-          description: 'Courts, fields, and indoor facilities that keep every season active.',
+          title: 'Science Laboratory',
+          description: 'A working lab for Physics, Chemistry and Biology practicals up to Class 12.',
         },
         {
           icon: 'monitor',
-          title: 'Smart Classrooms',
-          description: 'Interactive panels and AV tools in every classroom.',
+          title: 'Computer Lab',
+          description: 'Computer Education periods for Classes 9–12 — typing to basics of coding.',
+        },
+        {
+          icon: 'trophy',
+          title: 'Playground',
+          description: 'A large school ground for games periods, sports day and the annual function.',
         },
       ],
     },
     admissions: {
       title: 'Admissions',
-      subtitle: 'Joining our community',
-      heading: 'A place for every ambition',
+      subtitle: 'Joining our family',
+      heading: 'A seat for every child of Prithvipur',
       description:
-        'We look forward to meeting your family. Submit an inquiry below and our admissions office will reach out with next steps, campus visit options, and the application checklist.',
+        'Registrations for the 2027-28 session open in January. Visit the school office with your child\'s birth certificate, Aadhaar and the previous Transfer Certificate — our staff will help with the rest.',
       highlights: [
-        'Campus tours every Saturday, 10 am – 1 pm',
-        'Interaction-based assessment — no entrance exam stress',
-        'Sibling and merit scholarships available',
+        'Registration at the school office — 10:00 AM to 2:00 PM',
+        'Friendly interaction with the child — no stressful entrance exam',
+        'Sibling concession on tuition; merit scholarships from Class 9',
       ],
-      officeHours: 'Admissions office: Monday to Saturday, 9 am – 4 pm',
+      officeHours: 'School office: Monday to Saturday, 8:00 AM – 2:00 PM',
     },
     contact: {
       title: 'Visit us',
-      subtitle: "We'd love to show you around.",
+      subtitle: 'We would be glad to show you around.',
     },
     footer: {
       about:
-        'Nurturing minds, shaping character, and inspiring excellence.',
+        'Hawkings High School Prithvipur — Knowledge, Character, Service. Serving Prithvipur, Ghazipur since 2004.',
       social: {
-        facebook: 'https://facebook.com/sunriseacademyedu',
-        instagram: 'https://instagram.com/sunriseacademyedu',
-        youtube: 'https://youtube.com/@sunriseacademyedu',
-        twitter: 'https://x.com/sunriseacademyedu',
+        facebook: 'https://facebook.com/hawkingshighprithvipur',
+        instagram: 'https://instagram.com/hawkingshigh',
+        youtube: 'https://youtube.com/@hawkingshighschool',
+        twitter: 'https://x.com/hawkingshigh',
       },
     },
     seo: {
-      title: 'Sunrise Academy — Excellence in Education',
+      title: 'Hawkings High School Prithvipur — Ghazipur, Uttar Pradesh',
       description:
-        'A future-ready learning community where tradition meets innovation. Admissions open.',
+        'CBSE-pattern English-medium school in Prithvipur, Ghazipur (UP) — Nursery to Class 12. Admissions open. Knowledge · Character · Service.',
     },
   }
 
   // ── 3. Canonical settings JSON (timetable ladder mirror) ────────────
   const settings: Record<string, unknown> = {
     timetable: {
-      dayStart: '08:30 AM',
-      dayEnd: '02:45 PM',
+      dayStart: '08:00 AM',
+      dayEnd: '03:00 PM',
       periodMinutes: 45,
       shortBreakAfterPeriod: 3,
-      shortBreakMinutes: 15,
+      shortBreakMinutes: 30,
       lunchAfterPeriod: 6,
       lunchMinutes: 30,
       workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
@@ -199,6 +207,30 @@ async function main() {
       lateAfterMinutes: 15,
       notifyGuardianOnAbsent: true,
     },
+  }
+
+  // ── 2b. The school CREST — repo branding asset → public-media storage,
+  //        registered as an UploadedFile (scope 'website'), referenced by
+  //        School.logoUrl (the fileId the media route serves).
+  const crestPath = path.join(process.cwd(), 'public', 'images', 'branding', 'hawkings-crest.png')
+  try {
+    const crestBytes = await readFile(crestPath)
+    const crestId = 'seed-hawkings-crest.png'
+    await storageUpload('website', crestId, crestBytes, 'image/png', school.id)
+    await db.uploadedFile.upsert({
+      where: { id: crestId },
+      update: { schoolId: school.id, scope: 'website' },
+      create: {
+        id: crestId,
+        schoolId: school.id,
+        scope: 'website',
+        uploadedById: (await db.user.findFirst({ where: { schoolId: school.id, role: 'PRINCIPAL' }, select: { id: true } }))?.id ?? 'seed',
+      },
+    })
+    await db.school.update({ where: { id: school.id }, data: { logoUrl: crestId } })
+    console.log('[seed-website-cms] crest registered (logoUrl → seed-hawkings-crest.png)')
+  } catch (e) {
+    console.warn(`[seed-website-cms] crest skipped: ${(e as Error).message}`)
   }
 
   await db.school.update({
@@ -213,10 +245,10 @@ async function main() {
 
   // ── 4. Gallery: campus images → registered files + published album ──
   const images = [
-    { src: 'library.jpg', caption: 'The Library', description: '30,000+ titles & a digital research hub', order: 1 },
-    { src: 'science-lab.jpg', caption: 'Science Labs', description: 'Hands-on experimentation spaces', order: 2 },
-    { src: 'sports.jpg', caption: 'Sports Complex', description: 'Courts, fields & indoor facilities', order: 3 },
-    { src: 'classroom.jpg', caption: 'Smart Classrooms', description: 'Interactive learning environments', order: 4 },
+    { src: 'hawkings-campus.png', caption: 'The School Campus', description: 'Main building & courtyard, Prithvipur', order: 1 },
+    { src: 'library.jpg', caption: 'The Library', description: '3,000+ Hindi & English titles', order: 2 },
+    { src: 'science-lab.jpg', caption: 'Science Laboratory', description: 'Practicals up to Class 12', order: 3 },
+    { src: 'classroom.jpg', caption: 'Classrooms', description: 'Small classes, caring teachers', order: 4 },
   ]
 
   const principal = await db.user.findFirst({

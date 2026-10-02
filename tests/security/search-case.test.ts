@@ -14,11 +14,11 @@ import { db } from '../helpers/db'
  *       results (search stays tenant-isolated — case-insensitivity must
  *       never widen the school scope).
  *
- * Live suite: dev server (default :3000), REAL logins (Sunrise principal +
+ * Live suite: dev server (default :3000), REAL logins (demo principal +
  * Green Valley principal) with resetLoginBuckets + a unique X-Forwarded-For
  * RUN_IP per run (DB-backed limiter, Phase 8A). The searched name is
  * resolved from the DB at runtime — a student whose name prefix matches
- * EXACTLY ONE Sunrise student (search returns up to 6 rows per section),
+ * EXACTLY ONE demo-tenant student (search returns up to 6 rows per section),
  * so the target provably appears in the result set.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
@@ -34,7 +34,7 @@ const T = 45_000
 
 const RUN_IP = `10.236.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 const PW = TENANT_FIXTURE_PASSWORD
-const SUNRISE_PRINCIPAL = 'principal@sunriseacademy.edu'
+const DEMO_PRINCIPAL = 'principal@hawkingshigh.edu'
 const GV_PRINCIPAL = 'principal.b@greenvalley.test'
 
 const tokens: Record<string, string> = {}
@@ -92,18 +92,18 @@ interface SearchBody {
 }
 
 let studentName = ''
-let prefix = '' // lowercase, ≥ 3 chars, UNIQUELY matching that one Sunrise student
+let prefix = '' // lowercase, ≥ 3 chars, UNIQUELY matching that one demo-tenant student
 
 beforeAll(async () => {
-  const school = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
-  if (!school) throw new Error('sunrise-academy missing — run the canonical corpus seeds')
+  const school = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
+  if (!school) throw new Error('hawkings-prithvipur missing — run the canonical corpus seeds')
 
   // Phase 8A — DB-backed login buckets persist across runs; heal them so
   // this run starts from clean limiter state (fixture accounts only).
-  await resetLoginBuckets([SUNRISE_PRINCIPAL, GV_PRINCIPAL])
+  await resetLoginBuckets([DEMO_PRINCIPAL, GV_PRINCIPAL])
 
   // Resolve a student whose name prefix matches EXACTLY ONE active
-  // Sunrise student (case-insensitively) — search caps at 6 rows per
+  // demo-tenant student (case-insensitively) — search caps at 6 rows per
   // section, so a unique match is guaranteed to appear in results.
   const students = await db.student.findMany({
     where: { schoolId: school.id, user: { status: 'ACTIVE' } },
@@ -128,7 +128,7 @@ beforeAll(async () => {
   if (!prefix) throw new Error('no uniquely-prefix-matching student found — corpus state unexpected')
 
   // Real logins (both tenants) — the searches below ride these sessions.
-  await login(SUNRISE_PRINCIPAL, DEMO_PRINCIPAL_PASSWORD)
+  await login(DEMO_PRINCIPAL, DEMO_PRINCIPAL_PASSWORD)
   await login(GV_PRINCIPAL, PW)
 }, 60_000)
 
@@ -145,7 +145,7 @@ afterAll(async () => {
 
 describe('Phase 8A · /api/search is case-insensitive (SQLite parity, ILIKE + pg_trgm)', () => {
   test('lowercase q (prefix of a real student name from DB) finds the mixed-case student', async () => {
-    const res = await as(SUNRISE_PRINCIPAL, `/api/search?q=${encodeURIComponent(prefix)}`)
+    const res = await as(DEMO_PRINCIPAL, `/api/search?q=${encodeURIComponent(prefix)}`)
     expect(res.status).toBe(200)
     const body = (await res.json()) as SearchBody
     expect(body.ok).toBe(true)
@@ -157,7 +157,7 @@ describe('Phase 8A · /api/search is case-insensitive (SQLite parity, ILIKE + pg
   }, T)
 
   test(`UPPERCASE q finds the same student (ILIKE, not LIKE)`, async () => {
-    const res = await as(SUNRISE_PRINCIPAL, `/api/search?q=${encodeURIComponent(prefix.toUpperCase())}`)
+    const res = await as(DEMO_PRINCIPAL, `/api/search?q=${encodeURIComponent(prefix.toUpperCase())}`)
     expect(res.status).toBe(200)
     const body = (await res.json()) as SearchBody
     expect(body.ok).toBe(true)
@@ -172,7 +172,7 @@ describe('Phase 8A · /api/search is case-insensitive (SQLite parity, ILIKE + pg
       .split('')
       .map((c, i) => (i % 2 === 0 ? c.toLowerCase() : c.toUpperCase()))
       .join('')
-    const res = await as(SUNRISE_PRINCIPAL, `/api/search?q=${encodeURIComponent(mixed)}`)
+    const res = await as(DEMO_PRINCIPAL, `/api/search?q=${encodeURIComponent(mixed)}`)
     expect(res.status).toBe(200)
     const body = (await res.json()) as SearchBody
     const results = body.data?.results ?? []

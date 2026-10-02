@@ -25,7 +25,7 @@ import { db } from '../helpers/db'
  *
  * Isolation discipline: a DEDICATED test teacher (User + Teacher rows,
  * marker-suffixed) is created in beforeAll and fully removed in afterAll —
- * demo-seed salary rows (Sunrise structures + 2026-08/2026-09 payments)
+ * demo-seed salary rows (Hawkings structures + recent-month payments)
  * are NEVER touched. Payments use far-past months (2001-01/2001-02) so no
  * unique key can ever collide with the demo corpus, and cleanup deletes
  * exact row ids only — never a sweep.
@@ -58,14 +58,14 @@ const cleanup: Array<() => Promise<unknown>> = []
 
 beforeAll(async () => {
   const [a, b] = await Promise.all([
-    db.school.findUnique({ where: { slug: 'sunrise-academy' } }),
+    db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } }),
     db.school.findUnique({ where: { slug: 'green-valley' } }),
   ])
   if (!a || !b) throw new Error('fixture schools missing (run bun run seed:demo / seed:clean)')
   schoolA = { id: a.id }
   schoolB = { id: b.id }
 
-  const pa = await db.user.findUnique({ where: { email: 'tenant.principal.a@sunrise.test' } })
+  const pa = await db.user.findUnique({ where: { email: 'tenant.principal.a@hawkings.test' } })
   const tb = await db.user.findUnique({ where: { email: 'teacher.b@greenvalley.test' } })
   if (!pa) throw new Error('fixture users missing (run bun run db:seed-tenant-isolation)')
   if (!tb) throw new Error('green-valley teacher fixture user missing (run bun run seed:clean)')
@@ -73,7 +73,7 @@ beforeAll(async () => {
   // Dedicated test teacher in the PRINCIPAL'S tenant (this suite's own rows).
   const teacherUser = await db.user.create({
     data: {
-      email: `salary.probe.${MARKER.toLowerCase()}@sunrise.test`,
+      email: `salary.probe.${MARKER.toLowerCase()}@hawkings.test`,
       name: `Salary Probe Teacher ${MARKER}`,
       role: 'TEACHER',
       schoolId: schoolA.id,

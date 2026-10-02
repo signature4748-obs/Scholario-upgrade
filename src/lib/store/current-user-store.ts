@@ -29,6 +29,10 @@ export interface MeUser {
   avatarUrl: string | null
   phone: string | null
   status: string
+  /** Phase 10 — account-level subscription lock ('ACTIVE' | 'LOCKED').
+   *  LOCKED accounts see their identity + a subscription notice instead
+   *  of module surfaces; module APIs reject them server-side. */
+  subscriptionStatus?: string
   /** SD-3 — server-resolved enrollment context (STUDENT role only).
    *  Extended identity: every particular the student-facing surfaces
    *  display (profile, ID card, module headers) — the DB is the single

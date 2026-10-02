@@ -111,7 +111,7 @@ export async function api(handler: () => Promise<unknown>): Promise<Response> {
 
 export async function withUser(
   handler: (user: AuthUser) => Promise<unknown>,
-  opts?: { roles?: string[] },
+  opts?: { roles?: string[]; allowLockedSubscription?: boolean },
 ) {
   return api(async () => {
     const user = await getCurrentUser()
@@ -138,6 +138,23 @@ export async function withUser(
           internalDetail: `withUser: school access denied (tenant status ${access.status})`,
         })
       }
+    }
+    // FINAL-ACCEPTANCE Phase 10 — ACCOUNT-level subscription lock.
+    // A LOCKED account authenticates and may read its own identity
+    // surfaces (auth/me/logout/sessions/change-password opt in via
+    // allowLockedSubscription), but every protected module API rejects
+    // it here — server-side, regardless of what the client renders.
+    // Fail-closed: unknown states other than ACTIVE are treated as
+    // locked, never open.
+    if (
+      user.schoolId &&
+      user.role !== 'SUPER_ADMIN' &&
+      (user.subscriptionStatus ?? 'ACTIVE') !== 'ACTIVE' &&
+      !opts?.allowLockedSubscription
+    ) {
+      throw new AppError('SUBSCRIPTION_REQUIRED', {
+        internalDetail: `withUser: account subscriptionStatus ${user.subscriptionStatus}`,
+      })
     }
     if (opts?.roles && !opts.roles.includes(user.role)) {
       throw new AppError('FORBIDDEN', {

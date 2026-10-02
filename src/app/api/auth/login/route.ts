@@ -188,6 +188,9 @@ export async function POST(req: NextRequest) {
       role: user.role,
       schoolId: user.schoolId,
       avatarUrl: user.avatarUrl,
+      // Phase 10 — account-level subscription lock (identity stays readable;
+      // module APIs gate separately in withUser).
+      subscriptionStatus: user.subscriptionStatus ?? 'ACTIVE',
       // DEV PREVIEW ONLY (isDevSessionBearerEnabled): the sandbox preview
       // renders this app inside a cross-site iframe where the browser
       // refuses the SameSite=Lax cookie — the client persists this token

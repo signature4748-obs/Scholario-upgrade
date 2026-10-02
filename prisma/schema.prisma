@@ -193,6 +193,16 @@ model User {
   avatar       String?
   avatarUrl    String?
   status       String    @default("ACTIVE")
+  /// ACCOUNT-level subscription state (Phase 10 — FINAL acceptance):
+  /// 'ACTIVE'  → full access (the default for every account).
+  /// 'LOCKED'  → the account authenticates normally and may read its own
+  ///             identity surfaces (name, guardian, contact, photo), but
+  ///             every protected module API rejects it server-side with
+  ///             SUBSCRIPTION_REQUIRED (403). Enforced in withUser — never
+  ///             by hiding buttons. Distinct from School.status (tenant
+  ///             lifecycle): a LOCKED account on an ACTIVE tenant keeps
+  ///             login/session; a suspended tenant blocks everyone.
+  subscriptionStatus String @default("ACTIVE")
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

@@ -2,7 +2,8 @@
  * seed-salary — canonical payroll demo data for the DEMO tenant (Phase 8B,
  * Task 8B-7-c salary persistence).
  *
- * ONLY for Sunrise Academy (the isDemo school — verified before any write).
+ * ONLY for the Hawkings demo tenant (the isDemo school — verified before
+ * any write).
  * Gives the salary module its live demo corpus:
  *
  *   · SalaryStructure — one fixed MONTHLY amount per existing Teacher
@@ -37,12 +38,20 @@ import { DEMO_SCHOOL_SLUG } from './seed-identity'
 const db = new PrismaClient()
 
 /** Demo principal — the canonical author of every seeded payroll row. */
-const DEMO_PRINCIPAL_EMAIL = 'principal@sunriseacademy.edu'
+const DEMO_PRINCIPAL_EMAIL = 'principal@hawkingshigh.edu'
 
-/** Fixed monthly-salary ladder: ₹28,000 → ₹52,000 by roster index. */
-const SALARY_BASE = 28_000
-const SALARY_STEP = 6_000
-const SALARY_MAX = 52_000
+/** Fixed monthly amounts per teacher — from the Hawkings corpus (the
+ * realistic small-school scale: pre-primary ₹8–8.5k, primary ₹11–13.5k,
+ * specialists ₹21–26k). Resolved by faculty position, not roster order. */
+import { FACULTY } from './hawkings-corpus'
+const salaryForTeacher = (employeeId: string | null): number => {
+  const m = employeeId?.match(/HHS-T-(\d+)/)
+  if (m) {
+    const f = FACULTY.find((x) => x.n === Number(m[1]))
+    if (f) return f.salaryMonthly
+  }
+  return 12_000 // honest default for a teacher the corpus does not know
+}
 
 /** Deterministic method cycle for the demo payment rows. */
 const METHODS = ['BANK_TRANSFER', 'UPI', 'CASH'] as const
@@ -95,11 +104,14 @@ async function main() {
     throw new Error(`[seed-salary] demo principal ${DEMO_PRINCIPAL_EMAIL} not found`)
   }
 
-  const teachers = await db.teacher.findMany({
+  const allTeachers = await db.teacher.findMany({
     where: { schoolId: school.id },
     orderBy: { createdAt: 'asc' },
     select: { id: true, employeeId: true, user: { select: { name: true } } },
   })
+  // Test infrastructure (the tenant-isolation fixture teacher, TT-A-*) is
+  // NOT payroll: the demo faculty is the 15 corpus teachers only.
+  const teachers = allTeachers.filter((t) => !/^TT-/.test(t.employeeId ?? ''))
   if (teachers.length === 0) {
     console.log('[seed-salary] no teachers on the roster — nothing to plant (honest empty payroll)')
     return
@@ -110,8 +122,8 @@ async function main() {
 
   // ── 1. Structures — skip-if-exists per teacher (never overwrites) ──────
   let structuresPlanted = 0
-  for (const [i, t] of teachers.entries()) {
-    const monthlyAmount = Math.min(SALARY_BASE + SALARY_STEP * i, SALARY_MAX)
+  for (const t of teachers) {
+    const monthlyAmount = salaryForTeacher(t.employeeId)
     const exists = await db.salaryStructure.findUnique({ where: { teacherId: t.id }, select: { id: true } })
     if (exists) continue
     await db.salaryStructure.create({

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import Image from 'next/image'
 import { Eye, EyeOff, Info, AlertTriangle } from 'lucide-react'
 import { useAuth, type Role } from '@/lib/store/auth-store'
+import { useCurrentUser } from '@/lib/store/current-user-store'
 import { saveSessionToken } from '@/lib/auth-session-token'
 import { isValidHexColor } from '@/lib/branding-contrast'
 import { LoadingPhase } from './loading-phase'
@@ -169,7 +170,14 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       const payload = (await res.json().catch(() => null)) as {
         ok?: boolean
         error?: string
-        data?: { id?: string; email?: string; name?: string; role?: string; sessionToken?: string }
+        data?: {
+          id?: string
+          email?: string
+          name?: string
+          role?: string
+          sessionToken?: string
+          subscriptionStatus?: string
+        }
       } | null
 
       if (!res.ok || !payload?.ok) {
@@ -193,6 +201,15 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       // this, the freshly mounted panel's first 401 would trigger the
       // dead-session policy and bounce straight back to this screen.
       if (payload.data?.sessionToken) saveSessionToken(payload.data.sessionToken)
+
+      // FINAL-ACCEPTANCE Phase 10 — subscription-locked account: hydrate
+      // the server identity BEFORE the panel mounts so the lock screen
+      // renders with the full profile (guardian, contact, enrollment
+      // context) and no module surface ever fires — their APIs reject
+      // LOCKED accounts server-side (403 SUBSCRIPTION_REQUIRED) anyway.
+      if (payload.data?.subscriptionStatus && payload.data.subscriptionStatus !== 'ACTIVE') {
+        await useCurrentUser.getState().refresh().catch(() => undefined)
+      }
 
       // 3) Navigate ONLY after the session cookie exists. `login()` flips
       //    isAuthenticated → Home swaps the login screen for the role's

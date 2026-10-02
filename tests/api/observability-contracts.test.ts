@@ -290,7 +290,7 @@ describe('error envelopes', () => {
   }, T)
 
   test('known route, missing resource → 404 RESOURCE_NOT_FOUND envelope', async () => {
-    const res = await as('tenant.principal.a@sunrise.test', '/api/students/nonexistent-student-xyz')
+    const res = await as('tenant.principal.a@hawkings.test', '/api/students/nonexistent-student-xyz')
     expect(res.status).toBe(404)
     const body = await expectFailureEnvelope(res)
     expect(body.code).toBe('RESOURCE_NOT_FOUND')
@@ -335,7 +335,7 @@ describe('error envelopes', () => {
 
 describe('success envelope + role gating', () => {
   test('GET /api/fees as principal → {ok:true, data array}', async () => {
-    const res = await as('tenant.principal.a@sunrise.test', '/api/fees')
+    const res = await as('tenant.principal.a@hawkings.test', '/api/fees')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: unknown[] }
     expect(body.ok).toBe(true)
@@ -352,14 +352,14 @@ describe('success envelope + role gating', () => {
   }, T)
 
   test('STUDENT role on a staff route → 403 FORBIDDEN envelope (students use /api/student/*)', async () => {
-    const res = await as('tenant.student.a@sunrise.test', '/api/students')
+    const res = await as('tenant.student.a@hawkings.test', '/api/students')
     expect(res.status).toBe(403)
     const body = await expectFailureEnvelope(res)
     expect(body.code).toBe('FORBIDDEN')
   }, T)
 
   test('STUDENT on /api/teachers (staff read) → 403 FORBIDDEN', async () => {
-    const res = await as('tenant.student.a@sunrise.test', '/api/teachers')
+    const res = await as('tenant.student.a@hawkings.test', '/api/teachers')
     expect(res.status).toBe(403)
     const body = await expectFailureEnvelope(res)
     expect(body.code).toBe('FORBIDDEN')
@@ -369,7 +369,7 @@ describe('success envelope + role gating', () => {
     const res = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
-      body: JSON.stringify({ email: 'nobody.test-p4@sunrise.test', password: 'wrong-password-1' }),
+      body: JSON.stringify({ email: 'nobody.test-p4@hawkings.test', password: 'wrong-password-1' }),
     })
     expect(res.status).toBe(401)
     const body = await expectFailureEnvelope(res)

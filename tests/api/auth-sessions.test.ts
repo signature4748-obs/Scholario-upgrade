@@ -34,6 +34,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { randomBytes, scryptSync } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { DEMO_STUDENT_EMAIL } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -50,8 +51,8 @@ const NEW_PW = 'Pih5NewPass2'
 const RUN_IP = `10.247.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 
 let schoolId = ''
-let student1 = { id: '', email: 'student1@sunriseacademy.edu' }
-let principal = { id: '', email: 'principal@sunriseacademy.edu' }
+let student1 = { id: '', email: DEMO_STUDENT_EMAIL }
+let principal = { id: '', email: 'principal@hawkingshigh.edu' }
 let principalToken = ''
 const suiteStart = new Date()
 
@@ -194,7 +195,7 @@ describe('PIH-5 · change-password rotates the token and revokes every other ses
   test('two live sessions → change password → both old tokens 401; new password logs in, old one does not', async () => {
     // Throwaway TEACHER account (created + deleted by this suite; its hash
     // is minted in the exact src/lib/auth.ts format).
-    const email = `pih5.auth.${MARKER}@sunrise.test`
+    const email = `pih5.auth.${MARKER}@hawkings.test`
     const throwaway = await db.user.create({
       data: {
         schoolId,

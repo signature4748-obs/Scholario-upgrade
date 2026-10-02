@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "NODE_OPTIONS=--max-old-space-size=1400 next dev --webpack -p 3000 2>&1 | tee -a dev.log",
+    "dev": "NODE_OPTIONS=--max-old-space-size=3000 next dev --webpack -p 3000 2>&1 | tee -a dev.log",
     "build": "NODE_ENV=production NODE_OPTIONS=--max-old-space-size=3072 next build --webpack && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",

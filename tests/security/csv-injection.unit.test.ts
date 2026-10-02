@@ -85,8 +85,8 @@ beforeAll(async () => {
   if (!school) throw new Error('demo school missing (run the canonical seeds)')
   schoolId = school.id
 
-  const principal = await db.user.findUnique({ where: { email: 'principal@sunriseacademy.edu' } })
-  if (!principal) throw new Error('fixture user missing: principal@sunriseacademy.edu')
+  const principal = await db.user.findUnique({ where: { email: 'principal@hawkingshigh.edu' } })
+  if (!principal) throw new Error('fixture user missing: principal@hawkingshigh.edu')
   principalToken = randomBytes(32).toString('hex')
   await db.session.create({
     data: {
@@ -107,7 +107,7 @@ beforeAll(async () => {
     const user = await db.user.create({
       data: {
         schoolId,
-        email: `pih5.inj.${MARKER}.${spec.admissionNo}@sunrise.test`,
+        email: `pih5.inj.${MARKER}.${spec.admissionNo}@hawkings.test`,
         name: spec.name,
         role: 'STUDENT',
         status: 'ACTIVE',
@@ -178,7 +178,7 @@ describe('PIH-5 · /api/payments-export csvCell guard — fee title payload (rou
     const studentUser = await db.user.create({
       data: {
         schoolId,
-        email: `pih5.pay.${MARKER}@sunrise.test`,
+        email: `pih5.pay.${MARKER}@hawkings.test`,
         name: `=EVILPAY-${MARKER}`,
         role: 'STUDENT',
         status: 'ACTIVE',

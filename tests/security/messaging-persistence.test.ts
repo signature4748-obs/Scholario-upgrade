@@ -55,14 +55,14 @@ const createdMessageIds: string[] = []
 const cleanup: Array<() => Promise<unknown>> = []
 
 beforeAll(async () => {
-  const a = await db.school.findUnique({ where: { slug: 'sunrise-academy' } })
+  const a = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
   if (!a) throw new Error('fixture school missing (run bun run seed:demo / seed:clean)')
 
   const [sa, ta, pa, probe, pb] = await Promise.all([
-    db.user.findUnique({ where: { email: 'tenant.student.a@sunrise.test' } }),
-    db.user.findUnique({ where: { email: 'tenant.teacher.a@sunrise.test' } }),
-    db.user.findUnique({ where: { email: 'tenant.principal.a@sunrise.test' } }),
-    db.user.findUnique({ where: { email: 'tenant.student.probe@sunrise.test' } }),
+    db.user.findUnique({ where: { email: 'tenant.student.a@hawkings.test' } }),
+    db.user.findUnique({ where: { email: 'tenant.teacher.a@hawkings.test' } }),
+    db.user.findUnique({ where: { email: 'tenant.principal.a@hawkings.test' } }),
+    db.user.findUnique({ where: { email: 'tenant.student.probe@hawkings.test' } }),
     db.user.findUnique({ where: { email: 'principal.b@greenvalley.test' } }),
   ])
   if (!sa || !ta || !pa || !probe || !pb) {

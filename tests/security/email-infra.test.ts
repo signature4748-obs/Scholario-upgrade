@@ -356,7 +356,7 @@ describe('email infrastructure — pre-transport failures', () => {
 
 describe('email infrastructure — template rendering', () => {
   test('admission template: school branding present, dynamic values HTML-escaped', () => {
-    const branding = { schoolName: 'Sunrise Academy', primaryColor: '#0f766e' }
+    const branding = { schoolName: 'Hawkings High School Prithvipur', primaryColor: '#0f766e' }
     const rendered = renderTemplate(
       'admission-enquiry-received',
       {
@@ -368,23 +368,23 @@ describe('email infrastructure — template rendering', () => {
       branding,
     )
 
-    expect(rendered.subject).toBe('We received your admission enquiry — Sunrise Academy')
-    expect(rendered.html).toContain('Sunrise Academy')
-    expect(rendered.html).toContain('Sent by Sunrise Academy via Scholario')
+    expect(rendered.subject).toBe('We received your admission enquiry — Hawkings High School Prithvipur')
+    expect(rendered.html).toContain('Hawkings High School Prithvipur')
+    expect(rendered.html).toContain('Sent by Hawkings High School Prithvipur via Scholario')
     // The injected markup is neutralized — no raw <script> survives.
     expect(rendered.html).toContain('&lt;script&gt;')
     expect(rendered.html).not.toContain('<script>')
   })
 
   test('salary template: fixed-payment language only, amount + month present', () => {
-    const branding = { schoolName: 'Sunrise Academy', primaryColor: '#0f766e' }
+    const branding = { schoolName: 'Hawkings High School Prithvipur', primaryColor: '#0f766e' }
     const rendered = renderTemplate(
       'salary-payment-recorded',
       { teacherName: 'Rohan Mehta', month: '2026-01', amount: '12345.00' },
       branding,
     )
 
-    expect(rendered.subject).toBe('Salary recorded for 2026-01 — Sunrise Academy')
+    expect(rendered.subject).toBe('Salary recorded for 2026-01 — Hawkings High School Prithvipur')
     expect(rendered.html).toContain('Rohan Mehta')
     expect(rendered.html).toContain('12345.00')
     expect(rendered.html).toContain('fixed monthly salary')

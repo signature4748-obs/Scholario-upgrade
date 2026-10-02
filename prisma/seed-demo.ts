@@ -1,13 +1,13 @@
 /**
  * seed-demo — the Phase-8A DEMO-TENANT pipeline orchestrator.
  *
- * Runs the full Sunrise Academy corpus in dependency order, each step a
+ * Runs the full Hawkings High School Prithvipur corpus in dependency order, each step a
  * guarded child process with a per-script log line:
  *
  *   1. prisma/seed.ts                  base corpus (scoped hard-wipe + plant)
  *   2. prisma/seed-platform.ts         platform plane (admins, settings)
  *   3. prisma/seed-tenant-isolation.ts tenant fixtures (clean school ensure +
- *                                      Sunrise cross-tenant probes)
+ *                                      Hawkings cross-tenant probes)
  *   4. prisma/seed-teacher-academics   academic config (classes/CSA/timetable/
  *                                      curriculum/PA1) — preserves probe CSA
  *   5. prisma/seed-teacher-hub         parent connect + behavior corpus
@@ -15,8 +15,8 @@
  *   7. prisma/seed-study-materials     materials + files — preserves probe
  *                                      material
  *   8. prisma/seed-learning            flashcards/groups/tasks/activities
- *   9. prisma/seed-roster-150          ~150-student roster (fees/payments/
- *                                      ledger parity, attendance, PA1 marks)
+ *   9. prisma/seed-roster-150          Hawkings academic history (attendance,
+ *                                      PA1/Half-Yearly marks, fees+ledger)
  *  10. prisma/seed-website-cms         branding + CMS + gallery
  *  11. prisma/seed-exam-ops            exam schedule/seats/attendance
  *  12. prisma/seed-salary               canonical payroll (structures +
@@ -44,15 +44,19 @@ import { assertSeedable } from './seed-guard'
 const PROJECT_ROOT = path.resolve(__dirname, '..')
 
 const PIPELINE: { script: string; label: string }[] = [
-  { script: 'prisma/seed.ts', label: 'base corpus — Sunrise Academy (scoped hard-wipe + plant)' },
+  { script: 'prisma/seed.ts', label: 'base corpus — Hawkings High School Prithvipur (scoped hard-wipe + plant)' },
   { script: 'prisma/seed-platform.ts', label: 'platform plane — admins, settings, announcement' },
-  { script: 'prisma/seed-tenant-isolation.ts', label: 'tenant fixtures — clean school ensure + Sunrise probes' },
+  { script: 'prisma/seed-tenant-isolation.ts', label: 'tenant fixtures — clean school ensure + Hawkings probes' },
   { script: 'prisma/seed-teacher-academics.ts', label: 'academic config — classes, CSA, timetable, curriculum, PA1' },
   { script: 'prisma/seed-teacher-hub.ts', label: 'teacher hub — parent connect + behavior corpus' },
-  { script: 'prisma/seed-student-dashboard.ts', label: 'student dashboard — demo student corpus' },
   { script: 'prisma/seed-study-materials.ts', label: 'study materials — rows + real files' },
   { script: 'prisma/seed-learning.ts', label: 'learning — flashcards, groups, tasks, activities' },
-  { script: 'prisma/seed-roster-150.ts', label: 'roster 150 — students, fees, payments, ledger parity' },
+  // Final-acceptance order note: the roster/history seed must run BEFORE
+  // the student-dashboard seed (it plants the Half-Yearly exam + marks the
+  // dashboard's legacy Result rows anchor to) and BEFORE exam-ops (which
+  // rebuilds the schedule/seats for PA1/HY/PA2).
+  { script: 'prisma/seed-roster-150.ts', label: 'roster — attendance, exams, marks, fees, ledger' },
+  { script: 'prisma/seed-student-dashboard.ts', label: 'student dashboard — legacy results + messages + notices' },
   { script: 'prisma/seed-website-cms.ts', label: 'website cms — branding, settings, gallery' },
   { script: 'prisma/seed-exam-ops.ts', label: 'exam ops — schedule, seats, invigilation attendance' },
   // PHASE 8B (Task 8B-7-c) — canonical payroll for the demo tenant. AFTER
@@ -99,7 +103,7 @@ async function main() {
   assertSeedable('seed-demo')
 
   const startedAt = Date.now()
-  console.log('🌱 seed-demo: running the full demo-tenant pipeline (Sunrise Academy)…')
+  console.log('🌱 seed-demo: running the full demo-tenant pipeline (Hawkings High School Prithvipur)…')
   console.log('   Deterministic: re-running resets the demo tenant to canonical state.')
   console.log('   The clean tenant (green-valley) is preserved — plant it with `bun run seed:clean`.')
 
@@ -109,7 +113,7 @@ async function main() {
 
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
   console.log(`\n✅ seed-demo complete — ${PIPELINE.length} steps in ${seconds}s.`)
-  console.log('   Demo tenant: sunrise-academy (full corpus). Clean tenant: green-valley (untouched).')
+  console.log('   Demo tenant: hawkings-prithvipur (full corpus). Clean tenant: green-valley (untouched).')
   console.log('   Demo & fixture credentials are env-driven (prisma/seed-credentials.ts,')
   console.log('   overridable via SEED_* vars — see .env.example) and are intentionally')
   console.log('   NOT printed: seed output must never disclose credentials.')

@@ -75,6 +75,10 @@ export type AppErrorCode =
   | 'STEP_UP_REQUIRED' // 403 — destructive action needs recent MFA
   | 'SCHOOL_SUSPENDED' // 403 — school tenant suspended by the platform
   | 'FEATURE_DISABLED' // 403 — module disabled by platform/school flags
+  | 'SUBSCRIPTION_REQUIRED' // 403 — ACCOUNT-level subscription lock (Phase 10):
+                             // the account authenticates and may read its
+                             // identity surfaces, but protected module APIs
+                             // reject it server-side.
   // deprecated aliases (legacy typed throws; classify to themselves)
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
@@ -130,6 +134,7 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   STEP_UP_REQUIRED: 403,
   SCHOOL_SUSPENDED: 403,
   FEATURE_DISABLED: 403,
+  SUBSCRIPTION_REQUIRED: 403,
 }
 
 const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
@@ -150,6 +155,8 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   DATABASE_FAILURE: 'Internal server error',
   INTERNAL_ERROR: 'Internal server error',
   EXTERNAL_SERVICE_FAILURE: 'An external service is temporarily unavailable',
+  SUBSCRIPTION_REQUIRED:
+    'Subscription required. Your account can access profile information only until the subscription is renewed. Please contact your school office.',
   MFA_REQUIRED: 'Enter your authenticator code',
   MFA_INVALID: 'Invalid authenticator code',
   STEP_UP_REQUIRED: 'This action requires recent multi-factor verification',

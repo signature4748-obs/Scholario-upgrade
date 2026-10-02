@@ -142,7 +142,7 @@ describe('E2E Journey 1 · principal (login → modules → logout, one session)
 
 describe('E2E Journey 2 · teacher (login → dashboard → class-hub → logout)', () => {
   test('fixture teacher completes the teaching chain', async () => {
-    const j = await loginJourney('tenant.teacher.a@sunrise.test', FIXTURE_PW)
+    const j = await loginJourney('tenant.teacher.a@hawkings.test', FIXTURE_PW)
 
     const me = await step(j, '/api/auth/me')
     const meBody = await expectOkData(me, 'me')
@@ -165,7 +165,7 @@ describe('E2E Journey 2 · teacher (login → dashboard → class-hub → logout
 
 describe('E2E Journey 3 · student (login → dashboard → timetable → logout)', () => {
   test('fixture student completes the student chain', async () => {
-    const j = await loginJourney('tenant.student.a@sunrise.test', FIXTURE_PW)
+    const j = await loginJourney('tenant.student.a@hawkings.test', FIXTURE_PW)
 
     const me = await step(j, '/api/auth/me')
     const meBody = await expectOkData(me, 'me')

@@ -1,41 +1,12 @@
-/**
- * seed-teacher-academics — v3: the PRINCIPAL-CONFIGURED academic setup for
- * the Demo School (Sunrise Academy), session 2026-27, feeding the Teacher
- * academics modules (Lesson Planner / Class Attendance / Marks Entry).
- *
- * ═══ WHAT THIS SEED ESTABLISHES (the config → planner chain) ═══
- *
- *  1. CLASSES (principal's academic setup): Grade 6-A → 12-B, i.e. the
- *     middle school (6–8), secondary (9–10) and senior-secondary streams
- *     (11-A/12-A Science, 11-B/12-B Commerce).
- *  2. SUBJECTS OFFERED per class — ACTIVE ClassSubjectAssignments. Grade
- *     9-A/10-A offer the standard CBSE set: Mathematics, Science, Social
- *     Science, English, Hindi + the skill subject Computer Applications
- *     (code 165). The separate Physics/Chemistry/Biology assignments of
- *     the old demo are retired (history — exam marks — remains valid).
- *  3. SUBJECT-TEACHER ASSIGNMENTS — the timetable cells. Only (class,
- *     subject) pairs a teacher actually teaches ever reach her planner.
- *  4. CURRICULUM — instantiated automatically from the GLOBAL 2026-27
- *     NCERT/CBSE library (src/lib/curriculum/2026-27) for every ACTIVE
- *     assignment: the new NCF-SE books for 6–9 (Ganita Prakash/Curiosity/
- *     Exploring Society/Poorvi/Malhar/Ganita Manjari/Exploration/
- *     Understanding Society/Kaveri/गंगा), rationalized books for 10–12.
- *  5. COMPLETION HISTORY — every topic whose timetable-derived window
- *     ended before today is marked completed ON that date (the same
- *     scheduler the API runs). Honest progress, mid-session.
- *  6. Periodic Assessment 1 exam + sample marks (9-A/10-A, new subject
- *     set) and the class-teacher baseline attendance for 9-A.
- *
- * Principles (unchanged): runtime-resolved ids only; idempotent; relative
- * dates so the demo never goes stale; honest data — every number the
- * modules render comes from these rows.
- *
- * Run: bun run db:seed-teacher-academics
- */
-
 import { PrismaClient } from '@prisma/client'
 import { assertSeedable } from './seed-guard'
-import { DEMO_SCHOOL_SLUG, PROBE_SUBJECT_CODE } from './seed-identity'
+import {
+  DEMO_SCHOOL_SLUG,
+  DEMO_CLASS_LEVELS,
+  PROBE_SUBJECT_CODE,
+  DEMO_STUDENT_POSITION,
+} from './seed-identity'
+import { CSA_MATRIX, FACULTY, SUBJECTS, facultyEmail } from './hawkings-corpus'
 import { HOLIDAY_SEED } from './holiday-data'
 import {
   computeSchedule,
@@ -52,139 +23,60 @@ import {
 
 const db = new PrismaClient()
 
-const SCHOOL_SLUG = DEMO_SCHOOL_SLUG
+/**
+ * seed-teacher-academics — v4: the PRINCIPAL-CONFIGURED academic setup for
+ * HAWKINGS HIGH SCHOOL PRITHVIPUR (final-acceptance corpus), session
+ * 2026-27.
+ *
+ * WHAT THIS SEED ESTABLISHES:
+ *  1. CSA — the full ClassSubjectAssignment matrix from
+ *     prisma/hawkings-corpus.ts (86 assignments across the 15 classes:
+ *     pre-primary + primary taught by their class teachers; classes 6–12
+ *     by the subject specialists; DRW/GPE non-examinable).
+ *  2. TIMETABLES — a conflict-free 6-day × 8-period grid (Mon–Sat,
+ *     08:00–15:00) placed with the same most-constrained-teacher-first
+ *     greedy fill as v3: no teacher is ever in two places at one slot
+ *     (the DB-level unique guarantees it), and every class gets its
+ *     periodsPerWeek quota.
+ *  3. CURRICULUM — instantiated automatically from the GLOBAL 2026-27
+ *     NCERT/CBSE library for every 6–12 (class, subject) that matches
+ *     (Mathematics/Science/English/Hindi/Social Science + senior
+ *     Physics/Chemistry/Biology). Primary and custom subjects (EVS,
+ *     Sanskrit, Computer Education, Drawing, Games) keep the honest
+ *     "no board curriculum — build your own plan" planner state.
+ *  4. COMPLETION HISTORY — every topic whose timetable-derived window
+ *     ended before today is marked completed ON that date (the same
+ *     scheduler the API runs). 10-A Social Science keeps two overdue
+ *     topics uncompleted (the honest "Needs Rescheduling" state).
+ *  5. PERIODIC ASSESSMENT 1 (July 2026, COMPLETED, declared) for
+ *     classes 1–12 with per-subject max-mark configs (PA = 50), plus a
+ *     few draft marks rows for 9-A Mathematics (the marks-entry grid
+ *     opens with data).
+ *  6. Baseline attendance for the FEATURED student's class (7-A)
+ *     yesterday — the class-teacher workflow's canonical write.
+ *
+ * Principles (unchanged from v3): runtime-resolved ids only; idempotent
+ * (wipe-and-replant its own slices); relative dates where history
+ * allows; honest data — every number the modules render comes from
+ * these rows.
+ *
+ * Run: bun run db:seed-teacher-academics
+ */
+
 const PERIOD_TIMES: { period: number; start: string; end: string }[] = [
-  { period: 1, start: '08:30', end: '09:15' },
-  { period: 2, start: '09:15', end: '10:00' },
-  { period: 3, start: '10:00', end: '10:45' },
-  { period: 4, start: '11:00', end: '11:45' },
-  { period: 5, start: '11:45', end: '12:30' },
-  { period: 6, start: '13:15', end: '14:00' },
-  { period: 7, start: '14:00', end: '14:45' },
+  { period: 1, start: '08:00', end: '08:45' },
+  { period: 2, start: '08:45', end: '09:30' },
+  { period: 3, start: '09:30', end: '10:15' },
+  { period: 4, start: '10:45', end: '11:30' },
+  { period: 5, start: '11:30', end: '12:15' },
+  { period: 6, start: '12:15', end: '13:00' },
+  { period: 7, start: '13:30', end: '14:15' },
+  { period: 8, start: '14:15', end: '15:00' },
 ]
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const
 
-// ─── The principal's configuration (single source for this seed) ────────
-// Order = scheduling priority: secondary + senior-secondary place their
-// cells first, middle school fills the teachers' remaining free slots.
-
-/** Teacher emails → the faculty of the demo school (Sunrise Academy). */
-const TEACHERS = {
-  rohan: 'rohan.mehta@sunriseacademy.edu',
-  kavita: 'teacher1@sunriseacademy.edu',
-  arjun: 'teacher2@sunriseacademy.edu',
-  priya: 'teacher3@sunriseacademy.edu',
-} as const
-
-interface ClassConfig {
-  /** "Grade 6 - A" naming — the section rides inside the name. */
-  name: string
-  section: string
-  stream?: string
-  classTeacher: keyof typeof TEACHERS
-  /** Subjects the principal has configured for this class. */
-  subjects: { name: string; code: string; teacher: keyof typeof TEACHERS; periodsPerWeek: number }[]
-}
-
-const CONFIG: ClassConfig[] = [
-  // ── Secondary — CBSE 9/10 subject scheme ──────────────────────────────
-  {
-    name: 'Grade 9 - A', section: 'A', classTeacher: 'rohan',
-    subjects: [
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 7 },
-      { name: 'Science', code: 'SCI', teacher: 'kavita', periodsPerWeek: 7 },
-      { name: 'Social Science', code: 'SST', teacher: 'arjun', periodsPerWeek: 5 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 5 },
-      { name: 'Hindi', code: 'HIN', teacher: 'arjun', periodsPerWeek: 4 },
-      { name: 'Computer Applications', code: 'CA165', teacher: 'rohan', periodsPerWeek: 3 },
-    ],
-  },
-  {
-    name: 'Grade 10 - A', section: 'A', classTeacher: 'priya',
-    subjects: [
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 6 },
-      { name: 'Science', code: 'SCI', teacher: 'kavita', periodsPerWeek: 7 },
-      { name: 'Social Science', code: 'SST', teacher: 'arjun', periodsPerWeek: 5 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 5 },
-      { name: 'Hindi', code: 'HIN', teacher: 'arjun', periodsPerWeek: 4 },
-      { name: 'Computer Applications', code: 'CA165', teacher: 'rohan', periodsPerWeek: 3 },
-    ],
-  },
-  // ── Senior secondary — Science stream ─────────────────────────────────
-  {
-    name: 'Grade 11 - A', section: 'A', stream: 'Science', classTeacher: 'kavita',
-    subjects: [
-      { name: 'Physics', code: 'PHY', teacher: 'kavita', periodsPerWeek: 5 },
-      { name: 'Chemistry', code: 'CHE', teacher: 'kavita', periodsPerWeek: 5 },
-      { name: 'Biology', code: 'BIO', teacher: 'priya', periodsPerWeek: 4 },
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 4 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 4 },
-    ],
-  },
-  {
-    name: 'Grade 12 - A', section: 'A', stream: 'Science', classTeacher: 'priya',
-    subjects: [
-      { name: 'Physics', code: 'PHY', teacher: 'kavita', periodsPerWeek: 5 },
-      { name: 'Chemistry', code: 'CHE', teacher: 'kavita', periodsPerWeek: 5 },
-      { name: 'Biology', code: 'BIO', teacher: 'priya', periodsPerWeek: 4 },
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 4 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 4 },
-    ],
-  },
-  // ── Senior secondary — Commerce stream ────────────────────────────────
-  {
-    name: 'Grade 11 - B', section: 'B', stream: 'Commerce', classTeacher: 'arjun',
-    subjects: [
-      { name: 'Accountancy', code: 'ACC', teacher: 'arjun', periodsPerWeek: 4 },
-      { name: 'Business Studies', code: 'BST', teacher: 'arjun', periodsPerWeek: 4 },
-      { name: 'Economics', code: 'ECO', teacher: 'arjun', periodsPerWeek: 3 },
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 0 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 3 },
-    ],
-  },
-  {
-    name: 'Grade 12 - B', section: 'B', stream: 'Commerce', classTeacher: 'arjun',
-    subjects: [
-      { name: 'Accountancy', code: 'ACC', teacher: 'arjun', periodsPerWeek: 4 },
-      { name: 'Business Studies', code: 'BST', teacher: 'arjun', periodsPerWeek: 4 },
-      { name: 'Economics', code: 'ECO', teacher: 'arjun', periodsPerWeek: 3 },
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 0 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 3 },
-    ],
-  },
-  // ── Middle school — new NCERT books; Mathematics staffed, the rest
-  //    configured (CSA) but awaiting teacher assignment (no cells yet) ──
-  {
-    name: 'Grade 6 - A', section: 'A', classTeacher: 'arjun',
-    subjects: [
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 3 },
-      { name: 'Science', code: 'SCI', teacher: 'kavita', periodsPerWeek: 0 },
-      { name: 'Social Science', code: 'SST', teacher: 'arjun', periodsPerWeek: 0 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 0 },
-      { name: 'Hindi', code: 'HIN', teacher: 'arjun', periodsPerWeek: 0 },
-    ],
-  },
-  {
-    name: 'Grade 7 - A', section: 'A', classTeacher: 'priya',
-    subjects: [
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 3 },
-      { name: 'Science', code: 'SCI', teacher: 'kavita', periodsPerWeek: 0 },
-      { name: 'Social Science', code: 'SST', teacher: 'arjun', periodsPerWeek: 0 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 0 },
-      { name: 'Hindi', code: 'HIN', teacher: 'arjun', periodsPerWeek: 0 },
-    ],
-  },
-  {
-    name: 'Grade 8 - A', section: 'A', classTeacher: 'kavita',
-    subjects: [
-      { name: 'Mathematics', code: 'MAT', teacher: 'rohan', periodsPerWeek: 3 },
-      { name: 'Science', code: 'SCI', teacher: 'kavita', periodsPerWeek: 0 },
-      { name: 'Social Science', code: 'SST', teacher: 'arjun', periodsPerWeek: 0 },
-      { name: 'English', code: 'ENG', teacher: 'priya', periodsPerWeek: 0 },
-      { name: 'Hindi', code: 'HIN', teacher: 'arjun', periodsPerWeek: 0 },
-    ],
-  },
-]
+/** Placement priority: senior classes place their cells first. */
+const LEVEL_ORDER = ['12', '11', '10', '9', '8', '7', '6', '5', '4', '3', '2', '1', 'IKG', 'LKG', 'Nursery']
 
 async function main() {
   // Phase 8A — shared seed lock (fail-safe, first statement).
@@ -195,21 +87,21 @@ async function main() {
     throw new Error(`Curriculum registry invalid — refusing to seed: ${JSON.stringify(registryIssues.slice(0, 5))}`)
   }
 
-  const school = await db.school.findUnique({ where: { slug: SCHOOL_SLUG } })
+  const school = await db.school.findUnique({ where: { slug: DEMO_SCHOOL_SLUG } })
   if (!school) throw new Error('Demo school not found — run the base seed first.')
   console.log(`School: ${school.name} (${school.board})`)
 
   const teacherRows = await db.teacher.findMany({
     where: { schoolId: school.id },
-    include: { user: { select: { name: true, email: true } } },
+    include: { user: { select: { id: true, name: true, email: true } } },
   })
+  const teacherByUserId = new Map(teacherRows.map((t) => [t.user.id, t]))
   const teacherByEmail = new Map(teacherRows.map((t) => [t.user.email, t]))
-  const teacherOf = (k: keyof typeof TEACHERS) => {
-    const t = teacherByEmail.get(TEACHERS[k])
-    if (!t) throw new Error(`Teacher row missing for ${k} (${TEACHERS[k]})`)
+  const teacherOfN = (n: number) => {
+    const t = teacherByEmail.get(facultyEmail(n))
+    if (!t) throw new Error(`Teacher row missing for faculty #${n} (${facultyEmail(n)})`)
     return t
   }
-  const rohan = teacherOf('rohan')
 
   // ── 0. Session anchor ─────────────────────────────────────────────────
   await db.school.update({
@@ -217,143 +109,122 @@ async function main() {
     data: { academicYear: '2026-2027', board: 'CBSE' },
   })
 
-  // ── 1. Classes (create any the principal has added; keep existing) ────
-  // room is the class HOMEROOM (canonical scheme `Room {grade}0{section}`)
-  // — timetable rows always meet the class in its homeroom, so rooms can
-  // never collide across classes (one class → one room, by construction).
-  const classByName = new Map<string, { id: string; name: string; section: string; room: string }>()
-  for (const cfg of CONFIG) {
-    const gradeNo = cfg.name.match(/\d+/)?.[0] ?? ''
-    const homeroom = `Room ${gradeNo}0${cfg.section}`
-    const existing = await db.class.findFirst({
-      where: { schoolId: school.id, name: cfg.name },
-    })
-    const row =
-      existing ??
-      (await db.class.create({
+  // ── 1. Classes (ensure the 15-level skeleton; base seed owns identity) ─
+  const classByLevel = new Map<string, { id: string; label: string; room: string; classTeacherUserId: string }>()
+  for (const lv of DEMO_CLASS_LEVELS) {
+    const facultyN = FACULTY.find((f) => f.classTeacherOf === lv.key)?.n ?? 1
+    const classTeacher = teacherOfN(facultyN)
+    let existing = await db.class.findFirst({ where: { schoolId: school.id, name: lv.label } })
+    if (!existing) {
+      existing = await db.class.create({
         data: {
           schoolId: school.id,
-          name: cfg.name,
-          section: cfg.section,
-          gradeLevel: gradeNo,
-          stream: cfg.stream,
-          capacity: 40,
-          room: homeroom,
-          classTeacherId: teacherOf(cfg.classTeacher).userId,
+          name: lv.label,
+          section: 'A',
+          gradeLevel: lv.level,
+          stream: lv.key === '11' || lv.key === '12' ? 'Science' : null,
+          capacity: lv.capacity,
+          room: lv.room,
+          classTeacherId: classTeacher.userId,
         },
-      }))
-    if (existing) {
+      })
+    } else {
       await db.class.update({
         where: { id: existing.id },
         data: {
-          classTeacherId: teacherOf(cfg.classTeacher).userId,
-          stream: cfg.stream ?? existing.stream,
-          // Homeroom normalisation — heals legacy labels ("101", "201")
-          // so every class follows the one scheme.
-          room: homeroom,
+          gradeLevel: lv.level,
+          section: 'A',
+          stream: lv.key === '11' || lv.key === '12' ? 'Science' : null,
+          capacity: lv.capacity,
+          room: lv.room,
+          classTeacherId: classTeacher.userId,
         },
       })
     }
-    classByName.set(cfg.name, {
-      id: row.id,
-      name: row.name,
-      section: row.section ?? cfg.section,
-      room: homeroom,
+    classByLevel.set(lv.key, {
+      id: existing.id,
+      label: lv.label,
+      room: lv.room,
+      classTeacherUserId: classTeacher.userId,
     })
   }
+  console.log(`  Classes: ${classByLevel.size} (Nursery → 12, one section each)`)
 
   // ── 2. Subjects + ClassSubjectAssignments (the permission layer) ──────
-  // Phase 8A carve-out: the tenant-isolation probe appointment (subject
-  // SR-MATH, planted by seed-tenant-isolation) is TEST INFRASTRUCTURE, not
-  // principal-configured academics — the matrix rebuild below preserves it
-  // so the canonical pipeline (tenant fixtures → this seed) stays
-  // deterministic across re-runs.
+  // The tenant-isolation probe appointment (subject HH-PROBE-MATH, planted
+  // by seed-tenant-isolation) is TEST INFRASTRUCTURE — preserved by the
+  // matrix rebuild so the pipeline stays deterministic across re-runs.
   await db.classSubjectAssignment.deleteMany({
     where: { schoolId: school.id, subject: { OR: [{ code: { not: PROBE_SUBJECT_CODE } }, { code: null }] } },
   })
-  const subjectByKey = new Map<string, { id: string; name: string }>()
-  for (const cfg of CONFIG) {
-    for (const subj of cfg.subjects) {
-      if (subjectByKey.has(subj.code)) continue
-      const existing = await db.subject.findFirst({
-        where: { schoolId: school.id, code: subj.code },
-      })
-      const row =
-        existing ??
-        (await db.subject.create({
-          data: { schoolId: school.id, name: subj.name, code: subj.code, status: 'Active' },
-        }))
-      if (existing && (existing.name !== subj.name || existing.status === 'Archived')) {
-        await db.subject.update({
-          where: { id: existing.id },
-          data: { name: subj.name, status: 'Active' },
-        })
-      }
-      subjectByKey.set(subj.code, { id: row.id, name: subj.name })
+  const subjectIdByCode = new Map<string, string>()
+  for (const s of SUBJECTS) {
+    let row = await db.subject.findFirst({ where: { schoolId: school.id, code: s.code } })
+    if (!row) {
+      row = await db.subject.create({ data: { schoolId: school.id, name: s.name, code: s.code, status: 'Active' } })
+    } else {
+      row = await db.subject.update({ where: { id: row.id }, data: { name: s.name, status: 'Active' } })
     }
+    subjectIdByCode.set(s.code, row.id)
   }
+  const subjectNameByCode = new Map(SUBJECTS.map((s) => [s.code, s.name]))
 
   let csaOrder = 0
-  for (const cfg of CONFIG) {
-    const cls = classByName.get(cfg.name)!
-    for (const subj of cfg.subjects) {
-      csaOrder += 1
-      await db.classSubjectAssignment.create({
-        data: {
-          schoolId: school.id,
-          classId: cls.id,
-          subjectId: subjectByKey.get(subj.code)!.id,
-          isCore: true,
-          isActive: true,
-          examinable: true,
-          displayOrder: csaOrder,
-        },
-      })
-    }
+  for (const csa of CSA_MATRIX) {
+    csaOrder += 1
+    await db.classSubjectAssignment.create({
+      data: {
+        schoolId: school.id,
+        classId: classByLevel.get(csa.level)!.id,
+        subjectId: subjectIdByCode.get(csa.code)!,
+        teacherUserId: teacherOfN(csa.teacherN).userId,
+        isCore: true,
+        isActive: true,
+        examinable: SUBJECTS.find((s) => s.code === csa.code)?.examinable ?? true,
+        displayOrder: csaOrder,
+      },
+    })
   }
-  console.log(`  CSA: ${csaOrder} ACTIVE assignments across ${CONFIG.length} classes`)
+  console.log(`  CSA: ${csaOrder} ACTIVE assignments (teachers appointed per subject-class)`)
 
-  // ── 3. Timetables (subject-teacher assignments, conflict-free) ────────
-  // BUSINESS RULE: one teacher + one day + one period = at most one class.
-  // Greedy fill with a most-constrained-teacher-first rule: at every grid
-  // slot the class claims the queued item whose teacher is the BUSIEST
-  // (tightest faculty pack first), which prevents a light teacher from
-  // monopolising consecutive slots and starving the tight ones later.
+  // ── 3. Timetables (subject-teacher cells, conflict-free) ─────────────
+  // BUSINESS RULE (DB-enforced): one teacher + one day + one period = at
+  // most one class. Greedy fill, most-constrained-teacher-first, senior
+  // classes placing first.
   await db.timetable.deleteMany({ where: { schoolId: school.id } })
-  const busy = new Set<string>() // `${teacherEmail}|${day}|${period}`
-  const busyCount = new Map<string, number>() // teacherEmail → placed cells
-  const cellsByClassSubject = new Map<string, number>() // `${classId}|${subjectId}` → periods/wk
-  const teacherNameByEmail = new Map(teacherRows.map((t) => [t.user.email, t.user.name ?? 'Faculty']))
+  const busy = new Set<string>() // `${teacherUserId}|${day}|${period}`
+  const busyCount = new Map<string, number>()
+  const cellsByClassSubject = new Map<string, number>()
 
   const grid: { day: string; period: number }[] = []
-  for (const day of DAYS) for (const period of [1, 2, 3, 4, 5, 6, 7]) grid.push({ day, period })
+  for (const day of DAYS) for (const period of [1, 2, 3, 4, 5, 6, 7, 8]) grid.push({ day, period })
 
-  let classIdx = 0
-  for (const cfg of CONFIG) {
-    const cls = classByName.get(cfg.name)!
-    classIdx += 1
-    // The queue of (subject, teacher) cells this class needs, expanded.
-    const queue: { code: string; teacherEmail: string }[] = []
-    for (const subj of cfg.subjects) {
-      const teacher = teacherOf(subj.teacher)
-      for (let i = 0; i < subj.periodsPerWeek; i += 1) {
-        queue.push({ code: subj.code, teacherEmail: teacher.user.email })
+  for (const level of LEVEL_ORDER) {
+    const cls = classByLevel.get(level)
+    if (!cls) continue
+    const queue: { code: string; teacherUserId: string; teacherName: string }[] = []
+    for (const csa of CSA_MATRIX.filter((c) => c.level === level)) {
+      const teacher = teacherOfN(csa.teacherN)
+      for (let i = 0; i < csa.periodsPerWeek; i += 1) {
+        queue.push({
+          code: csa.code,
+          teacherUserId: teacher.userId,
+          teacherName: teacher.user.name ?? 'Faculty',
+        })
       }
     }
     if (queue.length === 0) continue
 
-    const cells: { day: string; period: number; code: string; teacherEmail: string }[] = []
-    const rotation = (classIdx * 5) % grid.length
+    const cells: { day: string; period: number; code: string; teacherUserId: string; teacherName: string }[] = []
+    const rotation = (LEVEL_ORDER.indexOf(level) * 7) % grid.length
     for (let i = 0; i < grid.length && queue.length > 0; i += 1) {
       const slot = grid[(i + rotation) % grid.length]
-      // Most-constrained-first: among items whose teacher is free at this
-      // slot, pick the one whose teacher has the MOST cells already placed.
       let best = -1
       let bestLoad = -1
       for (let qi = 0; qi < queue.length; qi += 1) {
         const q = queue[qi]
-        if (busy.has(`${q.teacherEmail}|${slot.day}|${slot.period}`)) continue
-        const load = busyCount.get(q.teacherEmail) ?? 0
+        if (busy.has(`${q.teacherUserId}|${slot.day}|${slot.period}`)) continue
+        const load = busyCount.get(q.teacherUserId) ?? 0
         if (load > bestLoad) {
           bestLoad = load
           best = qi
@@ -361,40 +232,35 @@ async function main() {
       }
       if (best === -1) continue
       const q = queue.splice(best, 1)[0]
-      busy.add(`${q.teacherEmail}|${slot.day}|${slot.period}`)
-      busyCount.set(q.teacherEmail, (busyCount.get(q.teacherEmail) ?? 0) + 1)
-      cells.push({ ...slot, code: q.code, teacherEmail: q.teacherEmail })
+      busy.add(`${q.teacherUserId}|${slot.day}|${slot.period}`)
+      busyCount.set(q.teacherUserId, (busyCount.get(q.teacherUserId) ?? 0) + 1)
+      cells.push({ ...slot, code: q.code, teacherUserId: q.teacherUserId, teacherName: q.teacherName })
     }
     if (queue.length > 0) {
-      const left = queue.reduce((acc, q) => `${acc}${q.code}(${q.teacherEmail}) `, '')
-      throw new Error(
-        `Timetable overflow for ${cfg.name}: could not place ${queue.length} cells [${left.trim()}].`,
-      )
+      const left = queue.reduce((acc, q) => `${acc}${q.code} `, '')
+      throw new Error(`Timetable overflow for ${cls.label}: could not place ${queue.length} cells [${left.trim()}].`)
     }
 
     await db.timetable.createMany({
       data: cells.map((c) => ({
         schoolId: school.id,
         classId: cls.id,
-        subjectId: subjectByKey.get(c.code)!.id,
+        subjectId: subjectIdByCode.get(c.code)!,
         day: c.day,
         period: c.period,
         startTime: PERIOD_TIMES.find((p) => p.period === c.period)!.start,
         endTime: PERIOD_TIMES.find((p) => p.period === c.period)!.end,
-        teacherName: teacherNameByEmail.get(c.teacherEmail) ?? 'Faculty',
-        // Homeroom rule — the class stays put, teachers move. Period-indexed
-        // rooms (Room 201/202/…) double-booked every room across classes;
-        // the homeroom is the only structurally conflict-free choice.
-        room: classByName.get(cfg.name)?.room ?? null,
+        teacherUserId: c.teacherUserId,
+        teacherName: c.teacherName,
+        // Homeroom rule — the class stays put, teachers move.
+        room: cls.room,
       })),
     })
     for (const c of cells) {
-      const k = `${cls.id}|${subjectByKey.get(c.code)!.id}`
+      const k = `${cls.id}|${subjectIdByCode.get(c.code)!}`
       cellsByClassSubject.set(k, (cellsByClassSubject.get(k) ?? 0) + 1)
     }
-    console.log(
-      `  Timetable ${cfg.name}: ${cells.length} cells — ${[...new Set(cells.map((c) => c.code))].join(', ')}`,
-    )
+    console.log(`  Timetable ${cls.label}: ${cells.length} cells — ${[...new Set(cells.map((c) => c.code))].join(', ')}`)
   }
 
   // ── 4. School calendar holidays ───────────────────────────────────────
@@ -431,59 +297,58 @@ async function main() {
   let topicCount = 0
   let libraryMisses = 0
 
-  for (const cfg of CONFIG) {
-    const cls = classByName.get(cfg.name)!
-    for (const subj of cfg.subjects) {
-      const subject = subjectByKey.get(subj.code)!
-      const found = findCurriculumForClassSubject(cfg.name, subj.name)
-      if (!found) {
-        // Not an error: schools may configure subjects the library does not
-        // carry — the planner shows its honest build-your-own empty state.
-        libraryMisses += 1
-        console.log(`  Curriculum: NO library match for ${cfg.name} · ${subj.name} (custom plan)`)
-        continue
-      }
-      const curriculum = found.curriculum
-      const teacher = teacherOf(subj.teacher)
-      const created: PlanAccum['topics'] = []
-      let topicNo = 0
-      for (const unit of curriculum.units) {
-        for (const chapter of unit.topics) {
-          topicNo += 1
-          const row = await db.curriculumTopic.create({
-            data: {
-              schoolId: school.id,
-              classId: cls.id,
-              subjectId: subject.id,
-              sourceBoard: curriculum.sourceBoard,
-              unitNo: unit.unitNo,
-              unitName: unit.unitName,
-              topicNo,
-              topicName: chapter.name,
-              description: chapter.description,
-              periodsNeeded: chapter.periods,
-              orderIndex: topicNo,
-            },
-          })
-          created.push({
-            id: row.id,
-            periodsNeeded: chapter.periods,
-            topicName: chapter.name,
+  for (const csa of CSA_MATRIX) {
+    // Only classes 6–12 carry board-library curricula; primary and
+    // custom subjects keep the honest build-your-own state.
+    const numeric = Number(csa.level)
+    if (!Number.isFinite(numeric) || numeric < 6) continue
+    const cls = classByLevel.get(csa.level)!
+    const subjectName = subjectNameByCode.get(csa.code)!
+    const found = findCurriculumForClassSubject(cls.label, subjectName)
+    if (!found) {
+      libraryMisses += 1
+      continue
+    }
+    const curriculum = found.curriculum
+    const teacher = teacherOfN(csa.teacherN)
+    const created: PlanAccum['topics'] = []
+    let topicNo = 0
+    for (const unit of curriculum.units) {
+      for (const chapter of unit.topics) {
+        topicNo += 1
+        const row = await db.curriculumTopic.create({
+          data: {
+            schoolId: school.id,
+            classId: cls.id,
+            subjectId: subjectIdByCode.get(csa.code)!,
+            sourceBoard: curriculum.sourceBoard,
             unitNo: unit.unitNo,
             unitName: unit.unitName,
-          })
-        }
+            topicNo,
+            topicName: chapter.name,
+            description: chapter.description,
+            periodsNeeded: chapter.periods,
+            orderIndex: topicNo,
+          },
+        })
+        created.push({
+          id: row.id,
+          periodsNeeded: chapter.periods,
+          topicName: chapter.name,
+          unitNo: unit.unitNo,
+          unitName: unit.unitName,
+        })
       }
-      topicCount += created.length
-      plans.push({
-        classId: cls.id,
-        subjectId: subject.id,
-        teacherId: teacher.id,
-        classLabel: cfg.name,
-        subjectName: subj.name,
-        topics: created,
-      })
     }
+    topicCount += created.length
+    plans.push({
+      classId: cls.id,
+      subjectId: subjectIdByCode.get(csa.code)!,
+      teacherId: teacher.id,
+      classLabel: cls.label,
+      subjectName,
+      topics: created,
+    })
   }
   console.log(
     `  Curriculum: ${topicCount} chapters instantiated across ${plans.length} assignments` +
@@ -495,10 +360,7 @@ async function main() {
   let completionCount = 0
   for (const plan of plans) {
     const periodsPerWeek = cellsByClassSubject.get(`${plan.classId}|${plan.subjectId}`) ?? 0
-    if (periodsPerWeek === 0) {
-      // Configured but not yet timetabled — brand new course, no history.
-      continue
-    }
+    if (periodsPerWeek === 0) continue
     const scheduled = computeSchedule({
       topics: plan.topics.map((t, i) => ({
         id: t.id,
@@ -522,9 +384,9 @@ async function main() {
     })
 
     const overdue = scheduled.filter((s) => s.endDate < todayKey)
-    // Grade 10-A Social Science keeps its last two overdue topics
-    // uncompleted — the honest "Needs Rescheduling" demo state.
-    const isSst10 = plan.classLabel === 'Grade 10 - A' && plan.subjectName === 'Social Science'
+    // 10-A Social Science keeps its last two overdue topics uncompleted —
+    // the honest "Needs Rescheduling" demo state.
+    const isSst10 = plan.classLabel === '10-A' && plan.subjectName === 'Social Science'
     const skipLast = isSst10 ? 2 : 0
     const toComplete = overdue.slice(0, Math.max(0, overdue.length - skipLast))
 
@@ -541,10 +403,6 @@ async function main() {
       })
       completionCount += 1
     }
-    const todayTopic = scheduled.find((s) => s.status === 'today' || s.status === 'in-progress')
-    console.log(
-      `    ${plan.classLabel} · ${plan.subjectName}: ${toComplete.length}/${scheduled.length} completed, today → ${todayTopic ? todayTopic.topicName : '—'}`,
-    )
   }
   console.log(`  Completions: ${completionCount} seeded (history preserved)`)
 
@@ -559,7 +417,6 @@ async function main() {
     await db.examScheduleItem.deleteMany({ where: { examId: existingPa.id } })
     await db.exam.delete({ where: { id: existingPa.id } }).catch(() => undefined)
   }
-  const secondaryCfg = CONFIG.filter((c) => c.name === 'Grade 9 - A' || c.name === 'Grade 10 - A')
   const pa1 = await db.exam.create({
     data: {
       schoolId: school.id,
@@ -567,39 +424,53 @@ async function main() {
       term: 'Term 1',
       type: 'Class Test',
       session: '2026-2027',
-      startDate: addDays(today, -7),
-      endDate: addDays(today, -5),
+      startDate: new Date('2026-07-13'),
+      endDate: new Date('2026-07-17'),
       status: 'COMPLETED',
-      resultStatus: 'In Progress',
+      resultStatus: 'Declared',
       passPercentage: 33,
+      declaredAt: new Date('2026-07-25'),
+      declaredBy: teacherByUserId.get(classByLevel.get('9')!.classTeacherUserId)?.userId ?? null,
+      createdBy: classByLevel.get('9')!.classTeacherUserId,
     },
   })
-  for (const cfg of secondaryCfg) {
-    const cls = classByName.get(cfg.name)!
-    await db.examClass.create({ data: { examId: pa1.id, classId: cls.id } })
-    for (const subj of cfg.subjects) {
-      await db.examSubjectConfig.create({
-        data: {
-          examId: pa1.id,
-          classId: cls.id,
-          subjectId: subjectByKey.get(subj.code)!.id,
-          maxMarks: 50,
-          passMarks: 17,
-          theoryMarks: 50,
-          practicalMarks: 0,
-        },
-      })
+  let escCount = 0
+  const pa1Classes = new Set<string>()
+  for (const csa of CSA_MATRIX) {
+    const numeric = Number(csa.level)
+    if (!Number.isFinite(numeric)) continue // no formal exams for pre-primary
+    const examinable = SUBJECTS.find((s) => s.code === csa.code)?.examinable ?? true
+    if (!examinable) continue
+    const cls = classByLevel.get(csa.level)!
+    if (!pa1Classes.has(cls.id)) {
+      pa1Classes.add(cls.id)
+      await db.examClass.create({ data: { examId: pa1.id, classId: cls.id } })
     }
+    await db.examSubjectConfig.create({
+      data: {
+        examId: pa1.id,
+        classId: cls.id,
+        subjectId: subjectIdByCode.get(csa.code)!,
+        maxMarks: 50,
+        passMarks: 17,
+        theoryMarks: 50,
+        practicalMarks: 0,
+      },
+    })
+    escCount++
   }
-  console.log(`  Exam: Periodic Assessment 1 seeded for 9-A/10-A (6 subjects × 2 classes, max 50)`)
+  console.log(`  Exam: Periodic Assessment 1 (July, COMPLETED + Declared) — ${escCount} subject configs across classes 1–12`)
 
-  // A few real marks for Grade 9-A Mathematics so the grid opens with data.
-  const grade9 = classByName.get('Grade 9 - A')!
-  const mathSubject = subjectByKey.get('MAT')!
+  // A few DRAFT marks rows for 9-A Mathematics so the grid opens with
+  // data (the marks-entry workflow's in-progress state).
+  const grade9 = classByLevel.get('9')!
+  const mathSubject = subjectIdByCode.get('MAT')!
   const students9 = await db.student.findMany({
     where: { classId: grade9.id },
     orderBy: { rollNo: 'asc' },
   })
+  const nineATeacher = CSA_MATRIX.find((c) => c.level === '9' && c.code === 'MAT')!
+  const marksTeacher = teacherOfN(nineATeacher.teacherN)
   const preset: Record<string, number> = {}
   students9.slice(0, 3).forEach((s, i) => {
     preset[s.id] = [42, 38, 45][i] ?? 40
@@ -609,42 +480,43 @@ async function main() {
       data: {
         examId: pa1.id,
         classId: grade9.id,
-        subjectId: mathSubject.id,
+        subjectId: mathSubject,
         studentId,
         marksObtained: marks,
         status: 'PRESENT',
         workflowStatus: 'DRAFT',
-        enteredBy: rohan.user.name ?? 'Teacher',
+        enteredBy: marksTeacher.user.name ?? 'Teacher',
         enteredAt: addDays(today, -1),
       },
     })
   }
   console.log(`  ExamMarks: 3 draft rows seeded for 9-A Mathematics`)
 
-  // ── 8. Baseline attendance for Grade 9-A yesterday ────────────────────
-  // PIH-4b integrity: the day is anchored to midnight UTC (the canonical
-  // day key every writer agrees on — a time-of-day date would break the
-  // (studentId, date) day-level uniqueness). markedBy keeps the canonical
-  // display-name provenance (same as the baseline route's write).
+  // ── 8. Baseline attendance for the FEATURED student's class (7-A) ────
+  // PIH-4b integrity: midnight-UTC day anchor; markedBy carries the class
+  // teacher's DISPLAY NAME (the canonical provenance convention).
+  const featuredClass = classByLevel.get(DEMO_STUDENT_POSITION.level)!
   const yesterday = parseDayKey(dayKey(addDays(today, -1)))
   if (yesterday.getUTCDay() !== 0) {
     await db.attendance.deleteMany({
-      where: { classId: grade9.id, date: { gte: yesterday, lt: new Date(yesterday.getTime() + 86_400_000) } },
+      where: { classId: featuredClass.id, date: { gte: yesterday, lt: new Date(yesterday.getTime() + 86_400_000) } },
     })
-    const statuses = ['PRESENT', 'PRESENT', 'PRESENT', 'ABSENT', 'PRESENT', 'PRESENT', 'LATE', 'PRESENT', 'PRESENT', 'PRESENT', 'PRESENT']
-    for (let i = 0; i < students9.length; i += 1) {
+    const students7 = await db.student.findMany({ where: { classId: featuredClass.id }, orderBy: { rollNo: 'asc' } })
+    const classTeacherName = teacherByUserId.get(featuredClass.classTeacherUserId)?.user.name ?? 'Class Teacher'
+    const statuses = ['PRESENT', 'PRESENT', 'ABSENT', 'PRESENT', 'LATE', 'PRESENT']
+    for (let i = 0; i < students7.length; i += 1) {
       await db.attendance.create({
         data: {
           schoolId: school.id,
-          studentId: students9[i].id,
-          classId: grade9.id,
+          studentId: students7[i].id,
+          classId: featuredClass.id,
           date: yesterday,
           status: statuses[i % statuses.length],
-          markedBy: rohan.user.name ?? 'Class Teacher',
+          markedBy: classTeacherName,
         },
       })
     }
-    console.log(`  Baseline attendance: ${students9.length} rows for 9-A on ${dayKey(yesterday)}`)
+    console.log(`  Baseline attendance: ${students7.length} rows for 7-A on ${dayKey(yesterday)}`)
   }
 
   console.log('Done.')

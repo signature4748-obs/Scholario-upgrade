@@ -136,3 +136,38 @@ phase:
 The Phase 6 suite additionally pins: suspend revokes sessions, login
 blocks, MFA/step-up gates the suspend action itself, and school sessions
 never mint platform sessions.
+
+---
+
+## 7. ACCOUNT-level subscription lock (final acceptance, Phase 10)
+
+A second, INDEPENDENT access axis exists at the account level:
+`User.subscriptionStatus` (`'ACTIVE' | 'LOCKED'`, default `'ACTIVE'`).
+
+| Axis | Field | Question it answers | Owner |
+| --- | --- | --- | --- |
+| Tenant lifecycle | `School.status` + `evaluateSchoolAccess` | may this TENANT use the product? | platform control plane |
+| Account lock | `User.subscriptionStatus` | may this ACCOUNT use the modules? | per-seat (school office / platform) |
+
+Contract (enforced SERVER-SIDE in `withUser`, never by hiding buttons):
+
+1. A `LOCKED` account **authenticates normally** — login issues a session
+   (`/api/auth/login` reports `subscriptionStatus`), `/api/auth/me`,
+   `/api/auth/logout`, `/api/auth/sessions` and `/api/auth/change-password`
+   stay open (identity surfaces: name, guardian/father, contact, photo,
+   enrollment context).
+2. Every other school-scoped API rejects the account with
+   **403 `SUBSCRIPTION_REQUIRED`** (canonical error code, safe public
+   message). Rejections happen in `withUser` — the single boundary every
+   module API routes through.
+3. The gate is **fail-closed** (unknown states ≠ ACTIVE are treated as
+   locked) and **data-driven** (unlocking restores access on the very next
+   request — no cache, no restart; verified by
+   `tests/security/subscription-lock.test.ts`).
+4. Platform admins and schoolless identities are unaffected (their
+   boundary is the platform session, not `withUser`).
+
+Client surface: `src/components/shared/subscription-lock-screen.tsx`
+renders the identity + subscription notice instead of the role panels
+when `/api/auth/me` reports the lock — a courtesy surface; the API gate
+above is the enforcement.

@@ -293,6 +293,10 @@ export type AuthUser = {
   avatarUrl: string | null
   phone: string | null
   status: string
+  /** ACCOUNT-level subscription lock (Phase 10): 'ACTIVE' | 'LOCKED'.
+   *  LOCKED accounts authenticate and read identity surfaces only —
+   *  protected module APIs reject them with SUBSCRIPTION_REQUIRED. */
+  subscriptionStatus: string
   school?: {
     id: string
     name: string
@@ -336,6 +340,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     avatarUrl: u.avatarUrl,
     phone: u.phone,
     status: u.status,
+    subscriptionStatus: u.subscriptionStatus ?? 'ACTIVE',
     school: u.school
       ? {
           id: u.school.id,

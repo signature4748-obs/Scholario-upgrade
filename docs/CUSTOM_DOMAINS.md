@@ -105,3 +105,40 @@ Domains settings (or via the Vercel API using the deployment token).
 DNS records are the school's responsibility; verification state lives in
 the database. Do not store user-provided URLs as trusted hostnames —
 always go through the normalization + validation + TXT proof pipeline.
+
+---
+
+## Final acceptance: the two tenants' URLs
+
+The production deployment serves BOTH permanent acceptance tenants from
+the ONE Vercel project (no per-school deployments):
+
+| Tenant | URL (until the school attaches a real domain) | What it is |
+| --- | --- | --- |
+| Hawkings High School Prithvipur | `https://scholario-production.vercel.app/?slug=hawkings-prithvipur` | the realistic demo tenant (full corpus) |
+| Green Valley Public School | `https://scholario-production.vercel.app/?slug=green-valley` | the clean/real-school acceptance tenant (honest-empty) |
+| Platform control plane | `https://scholario-production.vercel.app/platform` | provisioning, lifecycle, domains, readiness, audit |
+
+The `?slug=` route is the SAFE TEMPORARY school-facing URL: it selects
+PUBLIC CONTENT ONLY (public website + login branding — the tenant
+resolution pipeline in `src/lib/tenant/resolution.ts`). It is NEVER an
+authorization mechanism: authenticated data paths derive the tenant from
+the server-side session (`withUser`), and a Host header that matches no
+tenant fails closed. The bare deployment URL resolves the demo tenant
+(the marketing default); an explicit unknown slug 404s.
+
+**Attaching the real school domains later** (per-school DNS action, then):
+
+1. The school's DNS admin points `hawkingshighschool.in` (example) at the
+   Vercel project (CNAME or A records from the Vercel dashboard).
+2. The platform console adds the hostname to the school
+   (`POST /api/platform/schools/[id]/domains`) → the platform (or school)
+   verifies ownership via the TXT record → the mapping flips to VERIFIED.
+3. Host-header resolution then routes that domain to the tenant with zero
+   code changes (the resolver checks VERIFIED TenantDomain rows first).
+4. The `?slug=` routes keep working (they are the fallback while DNS is
+   pending).
+
+The legacy `School.domain` column remains as the admin-set pre-8B path
+(`hawkings-high.scholario.app` on the demo tenant — a platform namespace
+that carries no DNS authority).

@@ -9,7 +9,7 @@
  *   access. Expected: A cannot see B, B cannot see A, Platform Admin
  *   sees both. Delete test data safely afterwards.
  *
- * Unlike the seeded Sunrise↔GreenValley suite (tests/security/
+ * Unlike the seeded Hawkings↔GreenValley suite (tests/security/
  * tenant-isolation.test.ts), BOTH schools here are provisioned through
  * the real control plane in the same run — proving isolation between
  * two FRESHLY provisioned tenants, not just the seed corpus pair.

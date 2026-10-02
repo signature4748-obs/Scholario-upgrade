@@ -1,5 +1,5 @@
 /**
- * seed-teacher-hub — demo data for the Teacher Hub modules
+ * seed-teacher-hub — demo data for the Teacher Hub modules (Hawkings)
  * (Parent Connect / Student Behavior).
  *
  * Principles (same as seed-student-dashboard.ts):
@@ -32,42 +32,29 @@ async function main() {
   const school = await db.school.findFirst({ where: { slug: DEMO_SCHOOL_SLUG } })
   if (!school) throw new Error(`${DEMO_SCHOOL_SLUG} not found`)
 
-  const teacherUser = await db.user.findFirst({ where: { email: 'rohan.mehta@sunriseacademy.edu' } })
-  if (!teacherUser) throw new Error('Demo teacher user (rohan.mehta@sunriseacademy.edu) not found')
+  // HAWKINGS corpus: the hub teacher is the 1-A class teacher (faculty #1,
+  // Smt. Kavita Singh — teacher1@hawkingshigh.edu); the co-teacher is
+  // faculty #2 (2-A). The roster's guardians already carry proper names.
+  const teacherUser = await db.user.findFirst({ where: { email: 'teacher1@hawkingshigh.edu' } })
+  if (!teacherUser) throw new Error('Demo teacher user (teacher1@hawkingshigh.edu) not found')
   const teacher = await db.teacher.findUnique({ where: { userId: teacherUser.id } })
   if (!teacher) throw new Error('Teacher profile row not found for demo teacher')
 
-  const kavitaUser = await db.user.findFirst({ where: { email: 'teacher1@sunriseacademy.edu' } })
+  const coTeacherUser = await db.user.findFirst({ where: { email: 'teacher2@hawkingshigh.edu' } })
 
-  // 1. The demo teacher becomes the class teacher of Grade 9-A (idempotent).
-  const grade9 = await db.class.findFirst({
-    // Phase 8A PG-compat: mode 'insensitive' keeps SQLite-era matching
-    // semantics after the provider flip (PG LIKE is case-sensitive).
-    where: { schoolId: school.id, name: { contains: '9', mode: 'insensitive' } },
-    include: { students: { where: { guardianId: { not: null } }, orderBy: { rollNo: 'asc' } } },
+  // 1. The hub teacher IS the class teacher of 1-A (corpus-owned —
+  // re-asserted idempotently).
+  const class1A = await db.class.findFirst({
+    where: { schoolId: school.id, name: '1-A' },
+    include: { students: { where: { guardianId: { not: null } }, orderBy: { rollNo: 'asc' }, include: { user: { select: { name: true } } } } },
   })
-  if (!grade9) throw new Error('Grade 9 class not found')
-  await db.class.update({ where: { id: grade9.id }, data: { classTeacherId: teacherUser.id } })
+  if (!class1A) throw new Error('Class 1-A not found')
+  await db.class.update({ where: { id: class1A.id }, data: { classTeacherId: teacherUser.id } })
 
-  const students = grade9.students
+  const students = class1A.students
   const byRoll = new Map(students.map((s) => [s.rollNo ?? '', s]))
+  const firstNameOf = (roll: string) => (byRoll.get(roll)?.user?.name ?? 'Student').split(' ')[0]
   const studentName = (roll: string) => byRoll.get(roll)?.id
-
-  // 2. Give Grade 9-A's guardian users proper display names (display-only).
-  const parentNames: Record<string, string> = {
-    'parent2@sunriseacademy.edu': 'Mrs. Sneha Patel',
-    'parent3@sunriseacademy.edu': 'Mr. Karthik Reddy',
-    'parent4@sunriseacademy.edu': 'Mrs. Meera Gupta',
-    'parent5@sunriseacademy.edu': 'Mr. Ravindra Singh',
-    'parent6@sunriseacademy.edu': 'Mrs. Lakshmi Nair',
-    'parent7@sunriseacademy.edu': 'Mr. Rajesh Iyer',
-    'parent8@sunriseacademy.edu': 'Mrs. Anita Verma',
-    'parent9@sunriseacademy.edu': 'Mr. Sandeep Joshi',
-    'parent10@sunriseacademy.edu': 'Mrs. Priya Mehta',
-  }
-  for (const [email, name] of Object.entries(parentNames)) {
-    await db.user.updateMany({ where: { email, schoolId: school.id, role: 'PARENT' }, data: { name } })
-  }
   const _guardianUser = async (roll: string) => {
     const student = byRoll.get(roll)
     if (!student?.guardianId) throw new Error(`No guardian user for roll ${roll}`)
@@ -144,7 +131,8 @@ async function main() {
     data: templates.map((t) => ({ ...t, schoolId: school.id, kind: 'parent-connect' })),
   })
 
-  // 6. Parent conversations + threads.
+  // 6. Parent conversations + threads (bodies parametrised with the REAL
+  //    roster names — resolved at runtime, never hardcoded).
   interface SeedMessage {
     fromParent: boolean
     body: string
@@ -164,19 +152,19 @@ async function main() {
       messages: [
         {
           fromParent: true,
-          body: 'Good morning Mr. Mehta. Aarav mentioned the maths olympiad selection is coming up — could you share how he is tracking against the class?',
+          body: 'Namaste Kavita miss. {S} ke padhai mein sudhaar ho raha hai — ghar par hum roz 20 minute practice karate hain. Kuchh aur salah dijiye.',
           at: daysAgo(3, 9, 14),
           read: true,
         },
         {
           fromParent: false,
-          body: 'Good morning! Aarav is doing very well — he is consistently in the top three for problem-solving this term. I have shared two extra practice sets with him. Selection is in two weeks; he is on track.',
+          body: 'Namaste. {S} is doing very well — recognises all the letters and is counting confidently to 50 now. Continue the daily practice; reading picture books together at home will help most.',
           at: daysAgo(3, 11, 42),
           read: true,
         },
         {
           fromParent: true,
-          body: 'That is wonderful to hear. Thank you for the extra practice sets — he has been enjoying them!',
+          body: 'Bahut achha sun kar khushi hui. Dhanyavaad miss.',
           at: daysAgo(2, 8, 30),
           read: true,
         },
@@ -188,19 +176,19 @@ async function main() {
       messages: [
         {
           fromParent: true,
-          body: 'Hello Sir, Diya has been reaching school late this week even though she leaves home at the usual time. Is the school bus running behind schedule?',
+          body: 'Namaste miss, {S} is hafte mein do baar late pahunch raha hai — cycle puncture ho jata hai raaste mein. Kya kuchh salah de sakte hain?',
           at: daysAgo(6, 18, 45),
           read: true,
         },
         {
           fromParent: false,
-          body: 'Thank you for flagging this, Mrs. Patel. I checked the arrival register — the bus on Route A has been arriving 10–12 minutes late since Monday. I am taking this up with the transport office tomorrow and will confirm by Friday.',
+          body: 'Thank you for flagging this. {S} reaches by the second bell, so no class time is missed — but let us keep an eye on it together. Leaving ten minutes earlier usually solves the puncture problem, or the school cycle stand can hold a spare tube.',
           at: daysAgo(6, 19, 30),
           read: true,
         },
         {
           fromParent: true,
-          body: 'Thank you for the quick response. One more thing — could we also get the revised pickup time once it is fixed?',
+          body: 'Theek hai miss, hum thoda pehle bhejenge. Dhanyavaad.',
           at: daysAgo(2, 9, 5),
         },
       ],
@@ -211,19 +199,19 @@ async function main() {
       messages: [
         {
           fromParent: true,
-          body: 'Mr. Mehta, Vivaan mentioned there was an incident in class yesterday. Could you let us know what happened?',
+          body: 'Miss, {S} ne bataya ki kal class mein koi baat hui thi. Kya hua tha?',
           at: daysAgo(10, 20, 10),
           read: true,
         },
         {
           fromParent: false,
-          body: 'Hello Mr. Reddy — some talking during the revision period, nothing serious. I spoke with Vivaan after class and he understood. He has been participating well since. No cause for concern.',
+          body: 'Some playing during the revision period, nothing serious. I spoke with {S} after class and everything is fine. Participation has actually been very good since. No cause for concern.',
           at: daysAgo(9, 8, 25),
           read: true,
         },
         {
           fromParent: true,
-          body: 'Thank you for handling it so well, Sir.',
+          body: 'Aapne aise sambhala isliye dhanyavaad miss.',
           at: daysAgo(9, 12, 0),
           read: true,
         },
@@ -235,60 +223,31 @@ async function main() {
       messages: [
         {
           fromParent: false,
-          body: 'Dear Mrs. Gupta,\n\nI wanted to share something wonderful — Ananya scored the highest in the class on the Physics unit test and helped two classmates prepare before the exam. She should be really proud!\n\nRegards,\nRohan Mehta',
+          body: 'Namaste,\n\nAaj aapko batana chahti thi — {S} ne aaj ki writing test mein sabse sundar copy banayi aur do doston ki madad ki. Bahut achha kaam kiya hai!\n\n regards,\nKavita Singh (Class Teacher, 1-A)',
           at: daysAgo(5, 16, 0),
           read: true,
         },
       ],
     },
     {
-      roll: '09',
-      category: 'general',
-      messages: [
-        {
-          fromParent: false,
-          body: 'Dear Mr. Joshi,\n\nA gentle reminder that Reyansh has two pending homework submissions this week. Your support in ensuring completion would be appreciated.\n\nRegards,\nRohan Mehta',
-          at: daysAgo(8, 15, 30),
-          read: true,
-        },
-        {
-          fromParent: true,
-          body: 'Thank you Sir. We have set a fixed homework hour at home from today.',
-          at: daysAgo(7, 9, 15),
-          read: true,
-        },
-      ],
-    },
-    {
-      roll: '10',
+      roll: '05',
       category: 'wellbeing',
       messages: [
         {
           fromParent: true,
-          body: 'Hello Sir, Myra has been quite anxious about the upcoming exams — difficulty sleeping and some mornings of tears. Could we talk about how she is coping in school?',
+          body: 'Namaste miss, {S} kuchh din se school jaane mein hijhak kar raha hai. Kya class mein sab theek hai? Aapse baat karke mann halka ho jayega.',
           at: daysAgo(1, 20, 40),
         },
       ],
     },
-    {
-      roll: '05',
-      category: 'general',
-      messages: [
-        {
-          fromParent: false,
-          body: 'Dear Mr. Singh,\n\nThe Parent-Teacher Meeting is scheduled soon. Please book a convenient slot through the PTM scheduler. I look forward to discussing Aditya\'s progress.\n\nRegards,\nRohan Mehta',
-          at: daysAgo(14, 12, 0),
-          read: true,
-        },
-        {
-          fromParent: true,
-          body: 'Noted, thank you Sir. We will book for the Saturday morning slot.',
-          at: daysAgo(13, 10, 30),
-          read: true,
-        },
-      ],
-    },
   ]
+  // Interpolate the REAL student first names into the message bodies.
+  for (const c of conversationsToSeed) {
+    const fn = firstNameOf(c.roll)
+    for (const m of c.messages) {
+      m.body = m.body.replace(/\{S\}/g, fn)
+    }
+  }
 
   const conversationIds = new Map<string, string>() // roll -> conversation id
   for (const c of conversationsToSeed) {
@@ -335,7 +294,7 @@ async function main() {
     privateNote?: string
     status?: 'open' | 'monitoring' | 'resolved'
     parentNotified?: boolean
-    byKavita?: boolean
+    byCoTeacher?: boolean
   }
   const records: SeedRecord[] = [
     {
@@ -343,7 +302,7 @@ async function main() {
       daysAgo: 5,
       category: 'leadership',
       type: 'positive',
-      description: 'Led the four-member science fair project team — allocated work, tracked progress and presented the results confidently.',
+      description: 'Led the four-member group during the class project — shared the colours, helped friends spell their names and presented the chart confidently.',
       parentNotified: true,
     },
     {
@@ -351,108 +310,108 @@ async function main() {
       daysAgo: 20,
       category: 'academic-effort',
       type: 'positive',
-      description: 'Consistent effort in Mathematics — completed both extension problem sets without prompting.',
+      description: 'Consistent effort in Mathematics — completed both extension counting worksheets without prompting.',
     },
     {
       roll: '02',
       daysAgo: 7,
       category: 'collaboration',
       type: 'positive',
-      description: 'Helped two classmates with the titration setup during the Chemistry lab without being asked.',
+      description: 'Helped two classmates tidy the activity corner after the drawing period without being asked.',
     },
     {
       roll: '03',
       daysAgo: 9,
       category: 'classroom-concern',
       type: 'concern',
-      description: 'Talking and distracting peers during the revision period before the unit test.',
-      actionTaken: 'Spoke with Vivaan after class; he apologised and agreed to move seats during revision.',
+      description: 'Playing and distracting peers during the revision period before the unit test.',
+      actionTaken: 'Spoke with the student after class; agreed to sit near the front during revision.',
       followUpRequired: true,
       followUpInDays: 3,
       status: 'monitoring',
       parentNotified: true,
-      privateNote: 'Watch for attention-seeking during high-pressure weeks; coordinate with the counsellor if repeated.',
+      privateNote: 'Watch during high-pressure weeks; the guardian is supportive — coordinate if repeated.',
     },
     {
       roll: '03',
       daysAgo: 15,
       category: 'class-participation',
       type: 'observation',
-      description: 'Participation has been improving — volunteered twice to solve problems on the board.',
-    },
-    {
-      roll: '10',
-      daysAgo: 3,
-      category: 'respect-conduct',
-      type: 'positive',
-      description: 'Volunteered to help the class librarian reorganise the reading corner during the activity period.',
-    },
-    {
-      roll: '09',
-      daysAgo: 12,
-      category: 'attendance-concern',
-      type: 'concern',
-      description: 'Three late arrivals this week (Mon, Wed, Thu) — missing the first ten minutes of Mathematics.',
-      followUpRequired: true,
-      followUpInDays: -1, // overdue
-      status: 'open',
-      privateNote: 'Bus Route A timing suspected as the cause — parent raised the same issue separately. Confirm with transport office.',
-    },
-    {
-      roll: '09',
-      daysAgo: 25,
-      category: 'academic-effort',
-      type: 'observation',
-      description: 'Homework quality improving steadily since the fixed homework hour was set at home.',
-    },
-    {
-      roll: '06',
-      daysAgo: 4,
-      category: 'class-participation',
-      type: 'positive',
-      description: 'Excellent contributions during the debate on renewable energy — well-researched arguments.',
-    },
-    {
-      roll: '07',
-      daysAgo: 18,
-      category: 'leadership',
-      type: 'positive',
-      description: 'Captained the inter-house quiz team and organised practice sessions for the junior members.',
-      parentNotified: true,
-    },
-    {
-      roll: '08',
-      daysAgo: 9,
-      category: 'collaboration',
-      type: 'observation',
-      description: 'Prefers working alone during group activities — gently encouraged to pair up this week.',
-      byKavita: true,
+      description: 'Participation has been improving — volunteered twice to recite in the morning assembly.',
     },
     {
       roll: '04',
-      daysAgo: 30,
-      category: 'academic-effort',
+      daysAgo: 3,
+      category: 'respect-conduct',
       type: 'positive',
-      description: 'Scored the highest in the class on the Physics unit test and helped two classmates prepare.',
-      byKavita: true,
-      parentNotified: true,
+      description: 'Volunteered to help the class monitor distribute the mid-day meal plates during the lunch period.',
     },
     {
-      roll: '06',
-      daysAgo: 11,
-      category: 'safety-concern',
+      roll: '05',
+      daysAgo: 12,
+      category: 'attendance-concern',
       type: 'concern',
-      description: 'Used the lab equipment without supervision while the class was being dismissed.',
-      actionTaken: 'Safety briefing given immediately; re-demonstrated the correct waiting protocol.',
-      status: 'resolved',
+      description: 'Three late arrivals this week (Mon, Wed, Thu) — missing the first ten minutes of the English period.',
+      followUpRequired: true,
+      followUpInDays: -1, // overdue
+      status: 'open',
+      privateNote: 'Cycle punctures suspected — the guardian raised the same issue separately. Ask about leaving earlier.',
+    },
+    {
+      roll: '05',
+      daysAgo: 25,
+      category: 'academic-effort',
+      type: 'observation',
+      description: 'Homework quality improving steadily since the fixed evening study hour was set at home.',
+    },
+    {
+      roll: '02',
+      daysAgo: 4,
+      category: 'class-participation',
+      type: 'positive',
+      description: 'Excellent contributions during the Hindi story-telling activity — retold the whole Panchatantra tale in order.',
+    },
+    {
+      roll: '04',
+      daysAgo: 18,
+      category: 'leadership',
+      type: 'positive',
+      description: 'Captained the house team in the inter-class races on Sports Day and helped the younger runners at the finish line.',
       parentNotified: true,
     },
     {
       roll: '05',
+      daysAgo: 9,
+      category: 'collaboration',
+      type: 'observation',
+      description: 'Prefers playing alone during the games period — gently encouraged to join the group this week.',
+      byCoTeacher: true,
+    },
+    {
+      roll: '01',
+      daysAgo: 30,
+      category: 'academic-effort',
+      type: 'positive',
+      description: 'Scored the highest in the class on the English dictation test and helped two classmates practise the tricky words.',
+      byCoTeacher: true,
+      parentNotified: true,
+    },
+    {
+      roll: '02',
+      daysAgo: 11,
+      category: 'safety-concern',
+      type: 'concern',
+      description: 'Climbed the gate railings while waiting for the bus at dismissal.',
+      actionTaken: 'Safety briefing given immediately; re-explained the waiting protocol with the class.',
+      status: 'resolved',
+      parentNotified: true,
+    },
+    {
+      roll: '03',
       daysAgo: 6,
       category: 'respect-conduct',
       type: 'positive',
-      description: 'Consistently courteous — remembered to thank the support staff after the sports period.',
+      description: 'Consistently courteous — remembered to thank the didi after the mid-day meal without prompting.',
     },
   ]
 
@@ -460,7 +419,7 @@ async function main() {
   for (const r of records) {
     const student = byRoll.get(r.roll)
     if (!student) continue
-    const recordedById = r.byKavita && kavitaUser ? kavitaUser.id : teacherUser.id
+    const recordedById = r.byCoTeacher && coTeacherUser ? coTeacherUser.id : teacherUser.id
     const row = await db.behaviorRecord.create({
       data: {
         schoolId: school.id,
@@ -484,24 +443,25 @@ async function main() {
 
   // 9. Follow-ups (unified queue) — linked to their sources.
   const studentIdOf = (roll: string) => byRoll.get(roll)?.id ?? null
+  const nameOf = (roll: string) => firstNameOf(roll)
 
   const pcFollowUps: { roll: string; reason: string; dueInDays: number; priority: string; note?: string }[] = [
     {
       roll: '02',
-      reason: "Confirm revised bus pickup time with Diya's parent",
+      reason: "Confirm the revised leaving time with {N}'s guardian",
       dueInDays: 2,
       priority: 'high',
-      note: 'Transport office expects the Route A review by Friday.',
+      note: 'The cycle-puncture suggestion — confirm it worked this week.',
     },
     {
-      roll: '10',
-      reason: "Share wellbeing resources with Myra's parent",
+      roll: '05',
+      reason: "Share the wellbeing observation with {N}'s guardian (PTM)",
       dueInDays: 1,
       priority: 'high',
     },
     {
       roll: '01',
-      reason: 'Send assessment summary notes to Mr. Desai',
+      reason: 'Send the alphabet practice chart to the guardian',
       dueInDays: -1, // overdue
       priority: 'normal',
     },
@@ -514,7 +474,7 @@ async function main() {
         kind: 'parent-connect',
         studentId: studentIdOf(f.roll),
         conversationId: conversationIds.get(f.roll) ?? null,
-        reason: f.reason,
+        reason: f.reason.replace('{N}', nameOf(f.roll)),
         note: f.note ?? null,
         dueDate: daysAhead(f.dueInDays, 15, 0),
         priority: f.priority,
@@ -549,7 +509,7 @@ async function main() {
     templates: await db.messageTemplate.count({ where: { schoolId: school.id } }),
   }
   console.log('TEACHER-HUB SEED COMPLETE:', JSON.stringify(counts, null, 2))
-  console.log(`Class teacher of Grade 9-A → ${teacherUser.name}`)
+  console.log(`Hub corpus anchored on 1-A (class teacher ${teacherUser.name})`)
 }
 
 main()
