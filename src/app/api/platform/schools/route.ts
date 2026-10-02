@@ -108,6 +108,16 @@ const provisionSchema = strictBody({
  * cannot sign in until an explicit `activate` action (separate audit
  * event, separate permission path).
  *
+ * PHASE 8C — ATOMICITY REPAIR (mission §11): School + Principal are now
+ * created in ONE database transaction. The previous two-write flow could
+ * orphan the School row (principal-email race → P2002 AFTER the school
+ * insert committed — exactly the forbidden "school created + principal
+ * creation fails = orphan school" state). Race safety: the pre-checks
+ * below are UX fast-path only; the DATABASE uniques are the authority,
+ * and any P2002 (concurrent duplicate slug/code/email) now maps to a
+ * typed CONFLICT instead of surfacing as a raw 500 — with the whole
+ * transaction rolled back either way.
+ *
  * Permission: schools.provision.
  */
 export async function POST(req: NextRequest) {
@@ -117,7 +127,8 @@ export async function POST(req: NextRequest) {
       const body = await parseJsonBody(req, provisionSchema)
       const ip = clientIpFromHeaders(req.headers)
 
-      // Uniqueness guards (school-side identity space).
+      // UX fast-path pre-checks (the transaction's DB uniques are the
+      // authority under concurrency — see the P2002 mapping below).
       const [slugTaken, codeTaken, emailTaken] = await Promise.all([
         db.school.findUnique({ where: { slug: body.slug } }),
         db.school.findUnique({ where: { code: body.code } }),
@@ -127,30 +138,62 @@ export async function POST(req: NextRequest) {
       if (codeTaken) throw new AppError('CONFLICT', { publicMessage: 'School code is already in use' })
       if (emailTaken) throw new AppError('CONFLICT', { publicMessage: 'Principal email is already registered' })
 
-      const school = await db.school.create({
-        data: {
-          name: body.name,
-          slug: body.slug,
-          code: body.code,
-          domain: body.domain || null,
-          city: body.city || null,
-          plan: body.plan,
-          board: body.board,
-          status: 'PENDING', // sign-in blocked until platform activation
-          featureFlags: '{}',
-        },
-      })
+      const principalEmail = body.principalEmail.toLowerCase()
+      let school: { id: string; name: string; slug: string; code: string; status: string; plan: string }
+      let principal: { id: string; email: string; name: string | null }
 
-      const principal = await db.user.create({
-        data: {
-          schoolId: school.id,
-          email: body.principalEmail.toLowerCase(),
-          passwordHash: hashPassword(body.principalPassword),
-          name: body.principalName,
-          role: 'PRINCIPAL',
-          status: 'ACTIVE',
-        },
-      })
+      try {
+        ;({ school, principal } = await db.$transaction(async (tx) => {
+          const createdSchool = await tx.school.create({
+            data: {
+              name: body.name,
+              slug: body.slug,
+              code: body.code,
+              domain: body.domain || null,
+              city: body.city || null,
+              plan: body.plan,
+              board: body.board,
+              status: 'PENDING', // sign-in blocked until platform activation
+              featureFlags: '{}',
+            },
+          })
+          // Same transaction: a principal-creation failure (concurrent
+          // email claim) rolls the School row back — no orphans, ever.
+          const createdPrincipal = await tx.user.create({
+            data: {
+              schoolId: createdSchool.id,
+              email: principalEmail,
+              passwordHash: hashPassword(body.principalPassword),
+              name: body.principalName,
+              role: 'PRINCIPAL',
+              status: 'ACTIVE',
+            },
+          })
+          return {
+            school: createdSchool,
+            principal: createdPrincipal,
+          }
+        }))
+      } catch (err) {
+        // Concurrent duplicate — the DB unique won; map it to the same
+        // typed CONFLICT the fast path returns (never a raw 500).
+        const code = (err as { code?: string }).code
+        if (code === 'P2002') {
+          const target = String(
+            (err as { meta?: { target?: string[] | string } }).meta?.target ?? '',
+          )
+          if (target.includes('slug')) {
+            throw new AppError('CONFLICT', { publicMessage: 'School slug is already in use' })
+          }
+          if (target.includes('code')) {
+            throw new AppError('CONFLICT', { publicMessage: 'School code is already in use' })
+          }
+          if (target.includes('email')) {
+            throw new AppError('CONFLICT', { publicMessage: 'Principal email is already registered' })
+          }
+        }
+        throw err
+      }
 
       await platformAuditEvent({
         adminId: ctx.admin.id,
@@ -160,7 +203,7 @@ export async function POST(req: NextRequest) {
         schoolId: school.id,
         ip,
         reason: `provisioned ${body.name} (${body.slug}) with plan ${body.plan}`,
-        metadata: { plan: body.plan, principalEmail: body.principalEmail.toLowerCase(), principalId: principal.id },
+        metadata: { plan: body.plan, principalEmail, principalId: principal.id },
       })
 
       return {
