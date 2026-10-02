@@ -1,0 +1,235 @@
+{
+  "report": "SCHOLARIO FINAL FORENSIC PRODUCTION ACCEPTANCE",
+  "mode": "READ \u2192 VERIFY \u2192 CLASSIFY \u2192 REPAIR \u2192 REVERIFY \u2192 CERTIFY",
+  "startedAt": "2026-10-02T16:37:00Z",
+  "expectedGitSha": "64b93b4b5b6b113a587c64eb78ef4fbe015045b9",
+  "phase": "COMPLETE",
+  "phases": {
+    "0-preflight": {
+      "status": "PASS",
+      "localHead": "64b93b4b5b6b113a587c64eb78ef4fbe015045b9 (main, clean working tree)",
+      "githubRemoteHead": "64b93b4b5b6b113a587c64eb78ef4fbe015045b9 (api.github.com, verified via public branch API + live fetch)",
+      "vercelToken": "valid (GET /v2/user 200)",
+      "githubToken": "valid (login signature4748-obs)",
+      "vercelProductionDeployments": [
+        {
+          "uid": "dpl_AqpB12mA",
+          "state": "READY",
+          "sha": "64b93b4b5b6b113a",
+          "matchesExpected": true
+        },
+        {
+          "uid": "dpl_awgTvMCd",
+          "state": "READY",
+          "sha": "64b93b4b5b6b113a",
+          "matchesExpected": true
+        }
+      ],
+      "supabaseProject": {
+        "ref": "kbyknezedewvgrnqervj",
+        "name": "scholario-production",
+        "region": "ap-south-1",
+        "status": "ACTIVE_HEALTHY",
+        "mgmtToken": "valid"
+      },
+      "prodRuntime": {
+        "healthReady": "ready/database:ok/14ms",
+        "appVersion": "2.14.0",
+        "csp": "post-rotation realtime config live (wss://kbyknezedewvgrnqervj.supabase.co)"
+      },
+      "resendDomainsApi": "401 on /domains with mission vault key \u2014 TO RECONCILE (likely send-restricted key scope)",
+      "dbDirect": "connected via Supavisor transaction pooler (aws-0-ap-south-1.pooler.supabase.com:6543, user postgres.<ref>) with rotated DB password \u2014 9/9 migrations applied",
+      "devServerLocal": "port 3000 responding 200 (local mirror corpus)"
+    },
+    "1-census": {
+      "status": "PASS",
+      "schools": [
+        {
+          "name": "Green Valley Public School",
+          "slug": "green-valley",
+          "status": "ACTIVE",
+          "isDemo": false
+        },
+        {
+          "name": "Hawkings High School Prithvipur",
+          "slug": "hawkings-prithvipur",
+          "status": "ACTIVE",
+          "isDemo": true
+        }
+      ],
+      "tenantDomains": "NONE configured (documented external DNS action; slug-based resolution verified in prior acceptance)",
+      "migrations": "9/9 applied",
+      "keyCounts": {
+        "User": 186,
+        "Teacher": 16,
+        "Student": 82,
+        "Class": 15,
+        "Subject": 14,
+        "ClassSubjectAssignment": 87,
+        "Exam": 4,
+        "ExamMark": 653,
+        "Fee": 328,
+        "Payment": 218,
+        "Attendance": 3280,
+        "Timetable": 396,
+        "FeeTransaction": 226,
+        "SalaryPayment": 30,
+        "SalaryStructure": 15,
+        "CurriculumTopic": 518,
+        "LessonTopicCompletion": 419,
+        "PlatformAdmin": 2,
+        "PlatformAuditLog": 629
+      }
+    },
+    "2-duplicates": {
+      "status": "PASS",
+      "findings": "ZERO duplicate groups across: student admissionNo (in-school), rollNo (in-class), student/teacher userId mappings, teacher employeeId (in-school), user email, school slug/code/domain, tenant domain hostname, fee receiptNo, feeTx referenceNumber, gatewayPaymentId, payment transactionId, canonical payments per fee, impossible payment states (overpay), attendance studentId+date, conflicting attendance class/status, examMark exam+class+subject+student, timetable slot (school+class+day+period), teacher collision, room collision, salary monthly (school+teacher+month), salary reference, message id, email dedupeKey"
+    },
+    "3-crossTenant": {
+      "status": "PASS",
+      "findings": "ZERO cross-tenant violations across 35 probed relation surfaces (student\u2194class, CSA\u2194class/subject/teacher, classTeacher, classRoom, fee\u2194student, payment\u2194fee, feeTx\u2194student/fee, attendance\u2194student/class, examMark\u2194exam/student/class, examClass\u2194exam/class, salary\u2194teacher, timetable\u2194class/subject/teacher, message sender/recipient, homework class/teacher, curriculum/lesson completion, parentConversation, homeworkSubmission, session-user-suspension, uploadedFile user, bookIssue, notificationRead)"
+    },
+    "4-qaTempForensics": {
+      "status": "CLASSIFIED",
+      "deleteList": [
+        {
+          "entity": "User tenant.superadmin@sunrise.test",
+          "class": "STALE LEGACY",
+          "evidence": "pre-transform Sunrise universe leftover (created Oct-1 14:45), SUSPENDED, schoolId NULL, zero sessions/messages/notifications, not recreated by any current seed (verified prisma/*.ts scripts/*.ts), blocked from all logins (platform auth lives in PlatformAdmin)",
+          "count": 1
+        },
+        {
+          "entity": "StudyMaterial (schoolId=cmupmxxz7 = dead old-Sunrise school)",
+          "class": "STALE LEGACY",
+          "evidence": "11 rows \u2014 dead copies of the live Hawkings set (same titles/business timestamps; live replacements verified under Hawkings schoolId); zero inbound references (StudyMaterialTarget total=0, LearningActivity/Bookmark point at live IDs only); includes old 'Sunrise Maths Worksheet 1' branding",
+          "count": 11
+        },
+        {
+          "entity": "FlashcardDeck (schoolId=cmupmxxz7) + child FlashcardCard",
+          "class": "STALE LEGACY",
+          "evidence": "4 decks + 32 cards; zero FlashcardReviewState on orphan decks; live 4 decks exist under Hawkings",
+          "count": 36
+        },
+        {
+          "entity": "StudyGroup (schoolId=cmupmxxz7)",
+          "class": "STALE LEGACY",
+          "evidence": "3 old groups (Math Masters/Science Explorers/Reading Circle) \u2014 live Hawkings equivalents exist with new IDs; zero members/questions reference orphans (all 15 members point at live groups)",
+          "count": 3
+        }
+      ],
+      "keepList": [
+        {
+          "entity": "User admin@erpsuite.io + admin@scholario.cloud (SUSPENDED, schoolId NULL)",
+          "class": "LEGITIMATE BY DESIGN",
+          "evidence": "prisma/seed-platform.ts documented legacy-migration design (migrated to PlatformAdmin, suspended in place); recreated by prisma/seed.ts lines 147/159 on re-seed"
+        },
+        {
+          "entity": "User tenant.superadmin@hawkings.test (ACTIVE, schoolId NULL)",
+          "class": "DELIBERATE FIXTURE",
+          "evidence": "prisma/seed-tenant-isolation.ts documented schoolless SUPER_ADMIN test identity (proves PLATFORM_LOGIN_BLOCKED \u2014 37 audit entries)"
+        },
+        {
+          "entity": ".a@hawkings.test family (5) + tenant.student.probe",
+          "class": "DELIBERATE FIXTURE / CANONICAL CORPUS",
+          "evidence": "seed-tenant-isolation.ts probe corpus; documented in credential report (177 accounts incl. fixture family)"
+        },
+        {
+          "entity": ".b@greenvalley.test family (5) + Room 101 + GradeScale(7) + ExamTypeConfig(1) in Green Valley",
+          "class": "DELIBERATE CLEAN-TENANT BOOTSTRAP",
+          "evidence": "prisma/seed-clean.ts documented: 'real school account with bootstrap configuration and ZERO business data'; cross-tenant test identities with env-driven fixture password"
+        },
+        {
+          "entity": "ActivityLog 296 rows in GV + 65 null-school rows",
+          "class": "LEGITIMATE AUDIT TRAIL",
+          "evidence": "append-only audit surface (src/lib/security/audit.ts); consumed only by audit endpoints, not principal dashboard business data; records real events (test logins/exports/domain requests)"
+        },
+        {
+          "entity": "Sessions (13), RateLimitBucket (43), SupportSession (17), PlatformAuditLog (629)",
+          "class": "OPERATIONAL/AUDIT",
+          "evidence": "live operational state; sessions expire 2026-10-09; rate buckets self-expire; platform audit trail"
+        }
+      ],
+      "notaBene": "FA-2/3 worklog claimed deletion of 3 legacy SUPER_ADMIN users (erpsuite/sunrise.test/hawkings.test) \u2014 live state contradicts this for 3 of 4 (only accurate in intent). Current live state classified above; deletions executed only where evidence is strong and re-seed cannot recreate."
+    },
+    "5-hawkingsAudit": {
+      "status": "PASS",
+      "structure": "15 classes (Nursery-A\u202612-A), 82 students (5-6/class), 16 teachers, 87 CSAs, classTeacher coverage 100%, usersByRole: 2 PRINCIPAL (1 real + 1 documented fixture) + 1 MANAGEMENT + 16 TEACHER + 82 STUDENT + 76 PARENT",
+      "marks": "653 rows, range 27-88, zero negatives, zero over-maxMarks violations",
+      "fees": "PAID 198 (\u20b9550300) + PARTIAL 20 (\u20b995200/\u20b945520) + UNPAID 110 (\u20b9380100) = total \u20b91025600; payments 218 SUCCESS \u20b9595820 (exact KPI parity)",
+      "attendance": "3280 (PRESENT 2933, ABSENT 185, LATE 110, LEAVE 52)"
+    },
+    "6-greenValleyAudit": {
+      "status": "PASS",
+      "state": "bootstrap-only per seed-clean.ts design: 5 role users (no Teacher/Student/Parent profiles), Room 101, GradeScale 7, ExamTypeConfig 1; ZERO business data (students 0, teachers 0, classes 0, subjects 0, fees 0, attendance 0, exams 0, timetable 0, messages 0, salary 0)"
+    },
+    "7-thirdSchool": {
+      "status": "PASS",
+      "evidence": "full lifecycle via real control plane on current deployment: provision PENDING -> login gate 403 -> activate (audited) -> login 200 -> honest readiness usable=false -> foreign student 404 -> step-up -> suspend -> typed-confirm DELETE -> ledger back to 2. Interrupted first run left a PENDING temp school; resume-safe logic REUSED it (no duplicate)."
+    },
+    "8-rbac": {
+      "status": "PASS",
+      "live": "45 live probes all PASS (12 lifecycle + 24 RBAC matrix + 5 gauntlet + 2 cookie + 2 login-failure); records in /home/z/prod-verify/live-tests.ndjson + session evidence"
+    },
+    "9-invariants": {
+      "status": "PASS",
+      "db": "fees exact parity (1025600/595820/110); marks 27-88 zero violations; attendance canonical zero dups; salary zero dups",
+      "suite": "fee-lifecycle + salary-persistence + pg-money + assignment-scope all green in fresh matrix"
+    },
+    "10-isolation": {
+      "status": "PASS",
+      "live": "forged schoolId ignored; foreign student 404; GV roster honest-empty; new-tenant denied",
+      "suite": "tenant-isolation 57/57 + tenant-acceptance e2e green"
+    },
+    "11-rls": {
+      "status": "PASS",
+      "advisors": "103 = 102 rls_enabled_no_policy INFO (deny-all design) + 1 extension_in_public WARN (pg_trgm, documented)",
+      "anonProbe": "0 rows on every probed table via PostgREST"
+    },
+    "12-infra": {
+      "vercel": "PASS (prod READY at 64b93b4, 9 env vars non-empty encrypted, health ok)",
+      "supabase": "PASS (ACTIVE_HEALTHY, 9/9 migrations, pooler verified)",
+      "resend": "PASS-with-documented-gap (key ACTIVE, real delivery to owner verified provider-id; NO custom domain = owner DNS action)",
+      "ci": "HONEST: parked (.github/ci.yml.parked, PAT scope constraint) \u2014 NOT claimed active",
+      "realtime": "PASS (websocket connected + live broadcast received in UI on production)",
+      "backup": "PASS (documented TESTED restore 97 tables / 9171 rows)"
+    },
+    "13-browserqa": {
+      "status": "PASS",
+      "viewports": "320/390/1440 no overflow, footer visible, zero console errors",
+      "screenshots": "/home/z/prod-verify/mobile-320-dashboard.png + desktop-1440-dashboard.png",
+      "mobileSafari": "contract-level verified (HttpOnly+Secure+SameSite, logout dead-session); real iOS hardware NOT TESTED (no device in sandbox)"
+    },
+    "28-mockdata": {
+      "status": "PASS",
+      "findings": "Sunrise=0; fake KPIs=comments-only; mock-exams = sanctioned isDemo-gated demo tier; all live modules DB-driven (KPI parity proven)"
+    },
+    "31-rotation": {
+      "status": "PASS",
+      "INC-1": "3 featured families rotated: pre-hash-match verified, 11 sessions revoked, live OLD=401/NEW=200 x3, vault updated, report regenerated + rotation log"
+    },
+    "20-reposcan": {
+      "status": "PASS",
+      "result": "working tree + ALL history blobs x 23 live/rotated/dead values = 0 true hits (4 false positives: SEED_* doc tokens, public slug, public supabase URL); 27 token-shape matches = documentation pattern names; tracked images = public website assets"
+    },
+    "33-testmatrix": {
+      "status": "PASS",
+      "local": "622 pass / 0 fail / 17 designed skips (exact canonical parity)",
+      "live": "45 pass / 0 fail",
+      "typecheck": "0 errors",
+      "lint": "0 errors / 59 pre-existing warnings"
+    }
+  },
+  "incidents": [
+    {
+      "id": "INC-1",
+      "phase": "1-census",
+      "description": "head -30 of /home/z/.sec/scholario-demo-credentials.md printed 3 demo password values (featured principal/teacher/student families) into tool output \u2014 sed redaction missed backticked table cells (same failure class as FA-3/3 incident (a))",
+      "mitigation": "PLANNED: rotate the 3 exposed families in final credential-rotation phase (surgical DB update + report regen + old-value failure verification); no further raw reads of the report",
+      "status": "MITIGATED \u2014 families rotated, old values verified dead (live 401), report regenerated"
+    }
+  ],
+  "unresolved": [],
+  "nextStep": "NONE \u2014 acceptance complete. Owner actions documented in report \u00a723.",
+  "finalVerdict": "GO",
+  "completedAt": "2026-10-02T18:05:00Z"
+}
