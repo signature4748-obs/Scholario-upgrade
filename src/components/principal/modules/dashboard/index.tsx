@@ -20,6 +20,7 @@
 
 import { PageTransition } from '@/components/shared/ui'
 import { WelcomeBanner } from './shared'
+import { SetupGuide } from './setup-guide'
 import { KpiRow } from './kpi-row'
 import { LiveAlerts } from './live-alerts'
 import { ChartsRow1 } from './charts-row'
@@ -39,6 +40,9 @@ export function PrincipalDashboard({ onNavigate }: PrincipalDashboardProps) {
   return (
     <PageTransition className="space-y-4">
       <WelcomeBanner onNavigate={handleNavigate} />
+      {/* PHASE 8C-F — guided setup (§12): appears only while required
+          setup is incomplete; self-removes when the school is built. */}
+      <SetupGuide onNavigate={handleNavigate} />
       <KpiRow onNavigate={handleNavigate} />
       <LiveAlerts onNavigate={handleNavigate} />
       <ChartsRow1 onNavigate={handleNavigate} />

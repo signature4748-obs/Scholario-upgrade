@@ -4838,3 +4838,18 @@ Work Log:
 
 Stage Summary:
 - Phase E COMPLETE: provisioning is atomic + race-safe (verified), the lifecycle is audited, the §12 guided-setup progress surface exists end-to-end (DB-computed API + console UI, honest on both a clean and a configured tenant), and the §37 acceptance journey proves a school goes from provision to fully usable through real APIs alone. In-flight test defects root-caused and fixed (transport confusion, test-only code collision, 403-vs-401 semantics).
+
+---
+Task ID: 8C-F
+Agent: main (Z.ai Code)
+Task: Phase 8C — Phase F: school setup wizard (mission §12 principal surface + §13/§14 tenant discipline)
+
+Work Log:
+- EXTRACTED the readiness computation from the platform route into src/lib/school/setup-readiness.ts (computeSetupReadiness — one batched counts round + school read; identical section/summary contract). Platform route refactored to delegate; verified by re-running tests/security/platform-provisioning.test.ts → 8/8 GREEN (no regression).
+- NEW GET /api/school/setup-readiness — the principal's own readiness document, session-derived tenant (client schoolId never read), roles PRINCIPAL/MANAGEMENT (teachers/students/parents 403, anonymous 401), fail-closed empty-document branch.
+- NEW SetupGuide dashboard card (src/components/principal/modules/dashboard/setup-guide.tsx) wired into the dashboard composition: renders ONLY while required setup is incomplete; 3/5-style progress line + aria progressbar; required-section checklist with deep-links into the completing modules (SECTION_MODULES map) and honest DB-computed details; session-only Hide (never persisted — data-driven, not a preference); skeleton loading; honest retry on fetch failure; the all-required-done-but-not-ACTIVE state explains the platform lifecycle gate instead of inventing more steps; self-removes when requiredComplete.
+- NEW tests/api/school-setup-readiness.test.ts (5 tests GREEN): session-derived tenant (green-valley counts cross-checked against live DB), teacher 403, student 403, anonymous 401, and PLATFORM PARITY — the school document and the platform document for the same school agree (shared lib proven end-to-end).
+- BROWSER-VERIFIED (agent-browser, real password logins): GV principal dashboard shows the guide ("3/5 required steps done — computed from your live data", progressbar 60, checklist "0 teachers · 0 students", "0 structures · 0 student fees"); deep-link click "Add teachers and students" navigates to the Teachers module (honest empty faculty directory with "Add Teacher" CTA); Sunrise principal (fully configured demo) — guide correctly ABSENT; mobile 390px guide renders; no console errors; dev.log clean.
+
+Stage Summary:
+- The §12 guided setup experience is now complete on BOTH sides: the platform console Setup tab (Phase E) and the principal's dashboard Setup Guide (Phase F) read the SAME shared DB-computed contract. A new principal sees exactly which required steps remain with one-click deep-links; a built school sees no guide. §13 (demo tenant deterministic/isDemo) and §14 (clean school honest-empty) discipline is enforced by the live-DB assertions in both test suites.

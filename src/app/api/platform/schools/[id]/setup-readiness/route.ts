@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
 import { AppError } from '@/lib/security/errors'
 import { withPlatform } from '@/lib/platform/authz'
+import { computeSetupReadiness } from '@/lib/school/setup-readiness'
 
 export const runtime = 'nodejs'
 
@@ -17,203 +17,20 @@ export const runtime = 'nodejs'
  * platform admin always knows what remains before a school is usable.
  *
  * Permission: schools.read (same as the school ledger).
+ *
+ * PHASE 8C-F: the computation now lives in lib/school/setup-readiness
+ * (shared verbatim with the principal's own /api/school/setup-readiness
+ * — one source of truth for the progress contract).
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withPlatform(
     { permission: 'schools.read' },
     async () => {
-      const school = await db.school.findUnique({
-        where: { id },
-        select: {
-          id: true,
-          name: true,
-          status: true,
-          // identity completeness
-          address: true,
-          city: true,
-          phone: true,
-          email: true,
-          website: true,
-          principalName: true,
-          // branding
-          logoUrl: true,
-          faviconUrl: true,
-          shortName: true,
-          tagline: true,
-          // academic
-          academicYear: true,
-          // website CMS
-          websiteContent: true,
-          // domain
-          domain: true,
-        },
-      })
-      if (!school) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
-
-      // One batched round of live counts — grouped where the model allows.
-      const [
-        classCount,
-        subjectCount,
-        teacherCount,
-        studentCount,
-        roomCount,
-        feeStructureCount,
-        feeCount,
-        examCount,
-        timetableCount,
-        announcementCount,
-        principalCount,
-        domainCount,
-      ] = await Promise.all([
-        db.class.count({ where: { schoolId: id } }),
-        db.subject.count({ where: { schoolId: id } }),
-        db.teacher.count({ where: { schoolId: id } }),
-        db.student.count({ where: { schoolId: id } }),
-        db.room.count({ where: { schoolId: id } }),
-        db.feeStructure.count({ where: { schoolId: id } }),
-        db.fee.count({ where: { schoolId: id } }),
-        db.exam.count({ where: { schoolId: id } }),
-        db.timetable.count({ where: { schoolId: id } }),
-        db.notification.count({ where: { schoolId: id, status: 'PUBLISHED' } }),
-        db.user.count({ where: { schoolId: id, role: 'PRINCIPAL', status: 'ACTIVE' } }),
-        db.tenantDomain.count({ where: { schoolId: id, status: 'VERIFIED' } }),
-      ])
-
-      const identityFields = [
-        school.address,
-        school.city,
-        school.phone,
-        school.email,
-        school.website,
-        school.principalName,
-      ]
-      const identitySet = identityFields.filter(Boolean).length
-      const brandingSet = [school.logoUrl, school.faviconUrl, school.shortName, school.tagline].filter(
-        Boolean,
-      ).length
-      const hasCustomBrand = brandingSet > 0
-      const websiteContent: Record<string, unknown> = safeParseJson(school.websiteContent)
-      const websiteKeys = Object.keys(websiteContent).filter((k) => websiteContent[k] != null)
-      const hasDomain = domainCount > 0 || Boolean(school.domain)
-
-      const sections = [
-        {
-          id: 'identity',
-          label: 'Identity',
-          required: true,
-          done: true, // name/slug/code exist by construction post-provision
-          detail: `${identitySet}/6 contact fields · ${school.status}`,
-          counts: { contactFields: identitySet, contactTotal: 6 },
-        },
-        {
-          id: 'principal',
-          label: 'Principal',
-          required: true,
-          done: principalCount > 0,
-          detail: principalCount > 0 ? 'active principal account' : 'no principal account',
-          counts: { principals: principalCount },
-        },
-        {
-          id: 'branding',
-          label: 'Branding',
-          required: false,
-          done: hasCustomBrand,
-          detail: hasCustomBrand ? `${brandingSet}/4 brand assets` : 'defaults in use',
-          counts: { brandAssets: brandingSet, brandTotal: 4 },
-        },
-        {
-          id: 'academic',
-          label: 'Academic setup',
-          required: true,
-          done: (school.academicYear ? 1 : 0) + classCount > 0,
-          detail: `${school.academicYear ?? 'no session'} · ${classCount} classes · ${subjectCount} subjects`,
-          counts: { classes: classCount, subjects: subjectCount },
-        },
-        {
-          id: 'people',
-          label: 'People',
-          required: true,
-          done: teacherCount > 0 && studentCount > 0,
-          detail: `${teacherCount} teachers · ${studentCount} students`,
-          counts: { teachers: teacherCount, students: studentCount },
-        },
-        {
-          id: 'rooms',
-          label: 'Rooms',
-          required: false,
-          done: roomCount > 0,
-          detail: `${roomCount} rooms`,
-          counts: { rooms: roomCount },
-        },
-        {
-          id: 'fees',
-          label: 'Fees',
-          required: true,
-          done: feeStructureCount > 0 || feeCount > 0,
-          detail: `${feeStructureCount} structures · ${feeCount} student fees`,
-          counts: { feeStructures: feeStructureCount, fees: feeCount },
-        },
-        {
-          id: 'exams',
-          label: 'Examinations',
-          required: false,
-          done: examCount > 0,
-          detail: `${examCount} exams`,
-          counts: { exams: examCount },
-        },
-        {
-          id: 'timetable',
-          label: 'Timetable',
-          required: false,
-          done: timetableCount > 0,
-          detail: `${timetableCount} slots`,
-          counts: { timetableSlots: timetableCount },
-        },
-        {
-          id: 'website',
-          label: 'Website',
-          required: false,
-          done: websiteKeys.length > 0 || announcementCount > 0,
-          detail: `${websiteKeys.length} content sections · ${announcementCount} published announcements`,
-          counts: { contentSections: websiteKeys.length, announcements: announcementCount },
-        },
-        {
-          id: 'domain',
-          label: 'Domain',
-          required: false,
-          done: hasDomain,
-          detail: hasDomain ? 'custom domain connected' : 'default tenant URL',
-          counts: { verifiedDomains: domainCount },
-        },
-      ]
-
-      const requiredSections = sections.filter((s) => s.required)
-      const completedRequired = requiredSections.filter((s) => s.done).length
-
-      return {
-        school: { id: school.id, name: school.name, status: school.status },
-        sections,
-        summary: {
-          requiredTotal: requiredSections.length,
-          requiredDone: completedRequired,
-          requiredComplete: completedRequired === requiredSections.length,
-          optionalDone: sections.filter((s) => !s.required && s.done).length,
-          optionalTotal: sections.filter((s) => !s.required).length,
-          // PENDING schools are not usable regardless of content readiness.
-          usable: school.status === 'ACTIVE' && completedRequired === requiredSections.length,
-        },
-      }
+      const readiness = await computeSetupReadiness(id)
+      if (!readiness) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
+      return readiness
     },
     { method: 'GET' },
   )
-}
-
-function safeParseJson(raw: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
-  } catch {
-    return {}
-  }
 }
