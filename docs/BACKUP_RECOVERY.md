@@ -106,3 +106,31 @@ RESTORE VERIFY PASSED — every backed-up row round-tripped; parity exact; scrat
 - Automation: a cron/CI job for `bun scripts/db-backup.ts` + off-box upload (S3/Supabase Storage) once the package.json freeze lifts.
 - Off-box archive copies are manual today (the archive lives on the sandbox disk only — same blast radius as the DB).
 - Consider `pg_dump` as a belt-and-braces physical-logical complement before any production cutover (the JSONL path stays the app-verifiable one).
+
+---
+
+## VERIFIED RESTORE EXERCISE (Phase 8C-N, 2026-10-02 — production data)
+
+A real logical backup of the production database was taken (44-table
+census, 8,501 rows, 2.9 MB JSONL — never committed to the repository) and
+restored into a fresh local PostgreSQL:
+
+- **Schema reproducibility** — fresh database + `prisma migrate deploy`
+  (8 migrations, including the function-security closure) succeeded clean;
+  the drift gate command stays silent.
+- **Row parity** — every table's restored row count matched the backup
+  census exactly (`ROW PARITY: ALL TABLES MATCH`).
+- **Financial parity** — `SUM(Fee.amount)` / `SUM(Payment.amount)` /
+  `SUM(SalaryPayment.amount)` matched production to the cent
+  (3,012,400 / 2,162,650 / 400,000).
+- **Tenant parity** — exactly 2 schools, correct `isDemo` flags
+  (Sunrise=true, Green Valley=false), both ACTIVE.
+- **Guard integrity after restore** — a cross-tenant `Student` insert
+  (school B student → school A class) was REJECTED by the `tenant-guard`
+  trigger on the restored database; the same-tenant control insert was
+  accepted. Restores do not weaken tenant isolation.
+- **RTO (observed)** — migration + restore + verify cycle for the full
+  production corpus completed in under two minutes at this data size.
+
+RPO remains as documented below (operator-triggered backup); Supabase
+plan-tier automatic backups are explicitly NOT assumed for this project.

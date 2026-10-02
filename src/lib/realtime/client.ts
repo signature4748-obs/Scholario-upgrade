@@ -282,6 +282,15 @@ export function startRealtimeBridge(opts: StartRealtimeBridgeOptions): RealtimeB
         logLevel: 'warn',
       })
       for (const topic of opts.channels) {
+        // Topic-format note (Phase 8C-N, verified against the live Supabase
+        // Realtime service): realtime-js AUTO-PREFIXES the topic with
+        // `realtime:` when it creates the phoenix channel, so the RAW
+        // capability name (`t:…`/`u:…`) is the correct input here — the
+        // server joins `realtime:t:…`. The server-side REST publisher
+        // (publish.ts) keys its broadcast messages by the same raw subtopic,
+        // and the server pushes deliveries on the full `realtime:`-prefixed
+        // topic. (Do NOT pre-prefix here: that produces a double-prefixed
+        // join channel which silently misses the server's deliveries.)
         // broadcast.self=false: a client never receives its own sends —
         // only server-side (REST) publishes reach this subscription.
         const ch: RealtimeChannelT = client.channel(topic, {

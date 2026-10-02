@@ -142,13 +142,15 @@ export async function POST(req: NextRequest) {
       // publishAt). Payload = the same ids/title/120-char detail the legacy
       // event-stream carried.
       if (status === 'PUBLISHED' && (!publishAt || publishAt.getTime() <= Date.now())) {
-        void publishToSchool(schoolId, 'all', 'announcement', {
+        // AWAITED (Phase 8C-N fix — Vercel freezes the function after the
+        // response; un-awaited publish fetches never complete).
+        await publishToSchool(schoolId, 'all', 'announcement', {
           id: notification.id,
           at: notification.createdAt.toISOString(),
           schoolId,
           title,
           detail: message.slice(0, 120),
-        }).catch(() => {})
+        })
       }
 
       return {

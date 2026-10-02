@@ -136,13 +136,15 @@ export async function PATCH(
         updated.status === 'PUBLISHED' &&
         (!updated.publishAt || updated.publishAt.getTime() <= Date.now())
       ) {
-        void publishToSchool(schoolId, 'all', 'announcement', {
+        // AWAITED (Phase 8C-N fix — Vercel freezes the function after the
+        // response; un-awaited publish fetches never complete).
+        await publishToSchool(schoolId, 'all', 'announcement', {
           id: updated.id,
           at: updated.updatedAt.toISOString(),
           schoolId,
           title: updated.title,
           detail: updated.message.slice(0, 120),
-        }).catch(() => {})
+        })
       }
 
       return {

@@ -6,11 +6,15 @@
  * Contract:
  *  - fire-SAFE: never throws to the caller (realtime is optional; the DB
  *    is the source of truth and all surfaces work without events)
- *  - bounded: single attempt by default (REST broadcast is best-effort;
- *    clients dedupe by event id and refetch canonical state)
+ *  - bounded: single attempt, 3s abort
  *  - payload discipline: notification signals only (ids/counts/hints),
  *    never row data
  *  - structured logging via the observability logger
+ *  - NOTE for callers (Phase 8C-N): AWAIT every publish before returning
+ *    the response. Vercel freezes the serverless function the moment the
+ *    response is sent — a fire-and-forget publish is killed mid-flight
+ *    and never delivers. The await is bounded (3s worst case) and cannot
+ *    throw (this module's fire-safe contract).
  */
 
 import { log } from '@/lib/observability/logger'

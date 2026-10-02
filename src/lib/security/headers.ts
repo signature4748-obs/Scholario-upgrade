@@ -58,9 +58,29 @@ export function buildCsp(opts: { isProd: boolean; embedOrigins?: string }): stri
   // fixed port 3777) talks to the browser over an EventSource from a
   // localhost port — 'self' (port 3000) does not cover it. Production
   // builds never lazy-compile, so the prod CSP stays strict.
-  const connectSrc = isProd
-    ? "'self'"
-    : "'self' ws: wss: http://localhost:* http://127.0.0.1:*"
+  //
+  // PRODUCTION + Supabase Realtime (Phase 8C-N fix): the realtime client
+  // bridge opens a WEBSOCKET to the project's Supabase origin
+  // (wss://<ref>.supabase.co) and realtime-js performs the channel
+  // authorization REST POST there as well. `connect-src 'self'` alone
+  // silently blocked that handshake in every real browser — the bridge
+  // could only ever show RECONNECTING. The origin is derived from the
+  // SAME SUPABASE_URL env the server uses to hand the client its config
+  // (never a wildcard, never a second source of truth): local/CI env
+  // without SUPABASE_URL keeps the strict 'self'-only policy.
+  const connectSrcList = ["'self'"]
+  if (isProd) {
+    const supabaseOrigin = (process.env.SUPABASE_URL ?? '')
+      .trim()
+      .replace(/\/+$/, '')
+      .replace(/^https:\/\//, '')
+    if (/^[a-z0-9.-]+(:\d+)?$/i.test(supabaseOrigin)) {
+      connectSrcList.push(`https://${supabaseOrigin}`, `wss://${supabaseOrigin}`)
+    }
+  } else {
+    connectSrcList.push('ws:', 'wss:', 'http://localhost:*', 'http://127.0.0.1:*')
+  }
+  const connectSrc = connectSrcList.join(' ')
 
   return [
     "default-src 'self'",

@@ -79,12 +79,86 @@ describe('security headers — dev profile (preview must keep working)', () => {
     expect(csp).toContain('http://127.0.0.1:*')
   })
 
-
   test('frame-ancestors includes the sandbox preview origins (required preview functionality)', () => {
     const csp = dev['Content-Security-Policy']
     for (const origin of PREVIEW_EMBED_ORIGINS) {
       expect(csp).toContain(origin)
     }
     expect(csp).toContain('http://localhost:*')
+  })
+})
+
+describe('security headers — production connect-src derives the Supabase realtime origin (Phase 8C-N fix)', () => {
+  // The realtime client bridge opens wss://<ref>.supabase.co and realtime-js
+  // authorizes channels over https on the same origin. A connect-src of
+  // bare 'self' silently killed the bridge in every real browser
+  // (stuck RECONNECTING) — regression-pinned here.
+  test('with SUPABASE_URL set, prod connect-src allows exactly that origin (https+wss) and nothing else', () => {
+    const prev = process.env.SUPABASE_URL
+    process.env.SUPABASE_URL = 'https://kbyknezedewvgrnqervj.supabase.co'
+    try {
+      const csp = buildCsp({ isProd: true })
+      const connect = /connect-src ([^;]+)/.exec(csp)?.[1] ?? ''
+      expect(connect).toBe("'self' https://kbyknezedewvgrnqervj.supabase.co wss://kbyknezedewvgrnqervj.supabase.co")
+      // Still strict: no localhost, no bare ws:/wss: wildcards, no other hosts
+      expect(connect).not.toContain('localhost')
+      expect(connect).not.toMatch(/(^|\s)ws:(\s|$)/)
+      expect(connect).not.toMatch(/(^|\s)wss:(\s|$)/)
+    } finally {
+      if (prev === undefined) delete process.env.SUPABASE_URL
+      else process.env.SUPABASE_URL = prev
+    }
+  })
+
+  test('trailing-slash SUPABASE_URL normalizes to the same origin', () => {
+    const prev = process.env.SUPABASE_URL
+    process.env.SUPABASE_URL = 'https://kbyknezedewvgrnqervj.supabase.co/'
+    try {
+      const csp = buildCsp({ isProd: true })
+      expect(csp).toContain('connect-src \'self\' https://kbyknezedewvgrnqervj.supabase.co wss://kbyknezedewvgrnqervj.supabase.co')
+    } finally {
+      if (prev === undefined) delete process.env.SUPABASE_URL
+      else process.env.SUPABASE_URL = prev
+    }
+  })
+
+  test('malformed SUPABASE_URL is ignored — prod CSP stays strict self-only (no injection surface)', () => {
+    for (const junk of ['', 'not a url', "javascript:alert(1)", 'https://evil.example.com/path?x=1', "https://host with spaces"]) {
+      const prev = process.env.SUPABASE_URL
+      process.env.SUPABASE_URL = junk
+      try {
+        const connect = /connect-src ([^;]+)/.exec(buildCsp({ isProd: true }))?.[1] ?? ''
+        expect(connect.trim()).toBe("'self'")
+      } finally {
+        if (prev === undefined) delete process.env.SUPABASE_URL
+        else process.env.SUPABASE_URL = prev
+      }
+    }
+  })
+
+  test('without SUPABASE_URL (local/CI production build) prod CSP stays strict self-only', () => {
+    const prev = process.env.SUPABASE_URL
+    delete process.env.SUPABASE_URL
+    try {
+      const connect = /connect-src ([^;]+)/.exec(buildCsp({ isProd: true }))?.[1] ?? ''
+      expect(connect.trim()).toBe("'self'")
+    } finally {
+      if (prev !== undefined) process.env.SUPABASE_URL = prev
+    }
+  })
+
+  test('dev profile is unaffected by SUPABASE_URL (dev CSP has its own transport set)', () => {
+    const prev = process.env.SUPABASE_URL
+    process.env.SUPABASE_URL = 'https://kbyknezedewvgrnqervj.supabase.co'
+    try {
+      const csp = buildCsp({ isProd: false })
+      const connect = /connect-src ([^;]+)/.exec(csp)?.[1] ?? ''
+      expect(connect).toContain('http://localhost:*')
+      expect(connect).toContain('wss:')
+      expect(connect).not.toContain('kbyknezedewvgrnqervj')
+    } finally {
+      if (prev === undefined) delete process.env.SUPABASE_URL
+      else process.env.SUPABASE_URL = prev
+    }
   })
 })

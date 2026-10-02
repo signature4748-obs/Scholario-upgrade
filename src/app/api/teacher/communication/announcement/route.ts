@@ -154,13 +154,15 @@ export async function POST(req: NextRequest) {
       // gates VISIBILITY in every feed, so only due-now rows broadcast
       // (mirrors the legacy event-stream's create-time emission).
       if (!publishAt || publishAt.getTime() <= Date.now()) {
-        void publishToSchool(schoolId, 'all', 'announcement', {
+        // AWAITED (Phase 8C-N fix — Vercel freezes the function after the
+        // response; un-awaited publish fetches never complete).
+        await publishToSchool(schoolId, 'all', 'announcement', {
           id: notification.id,
           at: notification.createdAt.toISOString(),
           schoolId,
           title,
           detail: message.slice(0, 120),
-        }).catch(() => {})
+        })
       }
 
       await auditTeacherAction(

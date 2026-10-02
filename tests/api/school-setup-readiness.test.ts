@@ -23,7 +23,6 @@ import { randomBytes } from 'crypto'
 import { db } from '../helpers/db'
 import { hashSessionToken } from '@/lib/auth'
 import { resetLoginBuckets } from '../helpers/login-buckets'
-import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
 const T = 45_000

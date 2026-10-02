@@ -190,7 +190,9 @@ export async function POST(
       // ids + 80-char preview only — the same discipline as the
       // /api/messaging/threads publish). The recipient's user channel is the
       // addressee's alone: message content never rides a school channel.
-      void publishToUser(ctx.schoolId, counterpart.id, 'message', {
+      // AWAITED (Phase 8C-N fix — Vercel freezes the function after the
+      // response; un-awaited publish fetches never complete).
+      await publishToUser(ctx.schoolId, counterpart.id, 'message', {
         id: created.id,
         at: created.createdAt.toISOString(),
         schoolId: ctx.schoolId,
@@ -198,7 +200,7 @@ export async function POST(
         senderName: ctx.name,
         subject,
         preview: messageBody.slice(0, 80),
-      }).catch(() => {})
+      })
 
       return {
         message: {

@@ -259,13 +259,18 @@ export async function POST(req: NextRequest) {
       // the "master schedule changed" moment the legacy event-stream emitted
       // from this exact ActivityLog row. Student/teacher timetable views bump
       // their version counter and live-refresh on receipt.
-      void publishToSchool(schoolId, 'all', 'timetable', {
+      // AWAITED (Phase 8C-N fix): Vercel freezes the function the moment
+      // the response is returned — a fire-and-forget publish fetch was
+      // silently killed mid-flight and never delivered. publishToSchool is
+      // fire-safe (never throws) and bounded (3s abort), so awaiting only
+      // guarantees completion before the freeze.
+      await publishToSchool(schoolId, 'all', 'timetable', {
         id: published.id,
         at: published.createdAt.toISOString(),
         schoolId,
         detail: `${writtenCount} slots across ${classByKey.size} classes (replaced ${removedCount} rows)`,
         actor: user.name ?? null,
-      }).catch(() => {})
+      })
 
       return {
         rowsWritten: writtenCount,

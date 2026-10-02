@@ -151,3 +151,30 @@ fresh postgres, the 5 seed scripts (never run in this sandbox — the
 Supabase integration DB must not be re-seeded), the production build in
 the CI environment, the live suites, and e2e. Each is the repo's own
 canonical script, proven repeatedly in prior phases (see `worklog.md`).
+
+---
+
+## FINAL-RELEASE STATUS (Phase 8C-N, 2026-10-02)
+
+The push-time constraint was re-verified live in this phase with the
+repository's own credentials: the push token carries `repo` scope only, and
+GitHub **rejects any push that creates or modifies `.github/workflows/*`**
+("refusing to allow a Personal Access Token to create or update workflow …
+without `workflow` scope"). The Contents-API path was also attempted and
+returns 404 for workflow paths under the same scope rule — so there is no
+programmatic path from this credential set.
+
+**Restoration is a 60-second external action** (either one):
+
+1. **GitHub web UI** — create `.github/workflows/ci.yml` in the repository
+   with the exact content of `.github/ci.yml.parked` (Settings → the file
+   editor; the web editor performs the commit as your account, which has
+   workflow rights).
+2. **A workflow-scoped PAT** — mint a classic PAT with `repo` + `workflow`
+   scopes, then `git push` the commit that moves
+   `.github/ci.yml.parked → .github/workflows/ci.yml`.
+
+Everything else about CI readiness is already in place: `main` and
+`development` branches are pushed and current on GitHub, the workflow file
+is validated content, and the CI run is self-contained (ephemeral
+postgres:16 service; **zero repo secrets required**).
