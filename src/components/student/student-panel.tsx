@@ -203,9 +203,13 @@ export function StudentPanel() {
   // LR-1 — the same mount hydrates the REAL school announcements
   // (/api/student/notices) so the Notices module shows published rows,
   // never static demo content.
+  // 8B-7-d — the server-canonical direct threads hydrate too, so the
+  // Messages badge and the feed's "new message" item reflect real
+  // Message rows before the module itself is opened.
   useEffect(() => {
     void hydrateNotifPrefsFromServer()
     void useServerNotices.getState().refresh()
+    void useStudentMessagingStore.getState().refresh()
   }, [])
 
   // Live nav badges — ALL derived from real stores/data, zero constants.

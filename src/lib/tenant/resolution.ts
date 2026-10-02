@@ -1,32 +1,35 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
+import { isSandboxHost, normalizeHostname } from './hostname'
 
 /**
  * tenant/resolution — the PUBLIC tenant resolution pipeline.
  *
- *   host (domain) → School.domain match
+ * PHASE 8B (§10/§11) canonical order:
+ *
+ *   Host header → VERIFIED TenantDomain row (hostname unique per tenant)
+ *               → legacy School.domain exact match (admin-set)
  *   → explicit ?slug=
  *   → single-school tenant inference (one ACTIVE school in the DB)
  *   → registered demo school (sandbox / marketing default)
  *
- * This is the architecture-level hook for "the domain identifies the
- * school tenant": when a school's DNS domain points at the deployment,
- * the request Host header resolves the tenant BEFORE any content is
- * served — no user selection, no client-provided tenant id. Until real
- * domains are wired (Supabase/Vercel phase), resolution falls back to
- * the single-tenant/demo conventions the sandbox needs.
- *
- * Every consumer (public website payload, login branding, RSS, public
- * media) resolves the tenant HERE — the client never gets to choose a
- * school id, and School B's content can never resolve for School A's
- * domain.
+ * Security properties:
+ *  - The Host header is normalized (lowercase, no protocol/port, no
+ *    leading www., no trailing dots) BEFORE any lookup — a hostile Host
+ *    value can only fail to resolve, never select another tenant.
+ *  - Only VERIFIED TenantDomain rows participate: an unverified mapping
+ *    never routes traffic, so a domain cannot be squat-served by pointing
+ *    DNS at the deployment before the platform confirms ownership.
+ *  - Hostnames are globally unique per tenant (storage constraint), so
+ *    there is no cross-tenant ambiguity to resolve.
+ *  - Every consumer (public website payload, login branding, RSS, public
+ *    media) resolves the tenant HERE — the client never gets to choose a
+ *    school id, and School B's content can never resolve for School A's
+ *    domain.
+ *  - Resolution only selects PUBLIC BRANDING/CONTENT. Authenticated data
+ *    paths derive the tenant from the server-side session (withUser), so
+ *    domain resolution is never an authorization mechanism.
  */
-
-/** Strip port + lowercase a Host header value. */
-function normalizeHost(host: string | null | undefined): string | null {
-  if (!host) return null
-  return host.split(':')[0].trim().toLowerCase() || null
-}
 
 export interface ResolvedTenant {
   schoolId: string
@@ -37,28 +40,31 @@ export interface ResolvedTenant {
 /**
  * Resolve the public tenant for an anonymous request.
  *
- * Priority: Host-header domain match → ?slug= → exactly-one-school DB →
- * the registered demo school. Returns null only when nothing can be
- * resolved safely (multi-school DB with no matching slug/domain).
+ * Priority: Host-header domain match (verified mapping or legacy column)
+ * → ?slug= → exactly-one-school DB → the registered demo school. Returns
+ * null only when nothing can be resolved safely (multi-school DB with no
+ * matching slug/domain).
  */
 export async function resolvePublicSchool(req: NextRequest): Promise<ResolvedTenant | null> {
-  // 1. Domain (Host header) — the future production path.
-  const host = normalizeHost(req.headers.get('host'))
-  if (host) {
-    // Sandbox hosts (localhost / 127.0.0.1 / gateway ports) never resolve
-    // a school — only real configured domains do.
-    const isLocalHost =
-      host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local')
-    if (!isLocalHost) {
-      const byDomain = await db.school.findFirst({
-        where: { domain: host, status: 'ACTIVE' },
-        select: { id: true, slug: true },
-      })
-      if (byDomain) return { schoolId: byDomain.id, slug: byDomain.slug, via: 'domain' }
-      // A subdomain-style host (school.domain.tld) may match a stored
-      // domain value of "school.domain.tld" — exact match only. No
-      // suffix guessing: cross-tenant ambiguity is never tolerated.
+  // 1. Domain (Host header) — the production custom-domain path.
+  const host = normalizeHostname(req.headers.get('host'))
+  if (host && !isSandboxHost(host)) {
+    // 1a. VERIFIED TenantDomain mapping (canonical, Phase 8B).
+    const byMapping = await db.tenantDomain.findFirst({
+      where: { hostname: host, status: 'VERIFIED' },
+      select: { school: { select: { id: true, slug: true, status: true } } },
+    })
+    if (byMapping?.school && byMapping.school.status === 'ACTIVE') {
+      return { schoolId: byMapping.school.id, slug: byMapping.school.slug, via: 'domain' }
     }
+
+    // 1b. Legacy admin-set School.domain exact match (pre-8B path,
+    //     kept for compatibility — platform-managed value).
+    const byDomain = await db.school.findFirst({
+      where: { domain: host, status: 'ACTIVE' },
+      select: { id: true, slug: true },
+    })
+    if (byDomain) return { schoolId: byDomain.id, slug: byDomain.slug, via: 'domain' }
   }
 
   // 2. Explicit slug (tenant-chosen link identity).

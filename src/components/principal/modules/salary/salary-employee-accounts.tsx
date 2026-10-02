@@ -4,14 +4,11 @@
  * SalaryEmployeeAccountsSection — the payroll-side twin of
  * Fee Management → Student Accounts.
  *
- * Opens straight into the workspace (no explanatory copy — the interface
- * explains itself): live summary → search + filters → employee cards.
- * Each card is one staff member's payroll position — identity, monthly
- * salary, this-month payable, session paid and what's still due — and the
- * whole card opens the existing employee account drawer.
- *
- * Every figure comes from the SAME store the Payments/Payslips tabs read;
- * no second employee database exists.
+ * PHASE 8B: one card per roster teacher showing the canonical payroll
+ * position — configured Monthly Salary, what is RECORDED this month, the
+ * total RECORDED across the loaded ledger and the payment count. Every
+ * figure comes from the SAME server cache the Payments/Payslips tabs
+ * read; no second employee database exists.
  */
 
 import { useMemo, useState } from 'react'
@@ -25,156 +22,126 @@ import {
 } from '@/components/ui/select'
 import {
   useSalaryStore, useSalaryData, currentPeriodKey, periodOptions,
-  netPayableFor, confirmedPaidFor, CURRENT_SESSION, sessionLabelOf,
+  sessionLabelOf, CURRENT_SESSION,
 } from '@/lib/store/salary-store'
-import type { Employee, EmployeeStatus } from '@/lib/store/salary-store'
 import { useSalaryUI } from './salary-ui-context'
-import { moneyMy, fmtDayYear } from './salary-shared'
+import { moneyMy } from './salary-shared'
 import { cn } from '@/lib/utils'
 
-const STATUS_TONE: Record<EmployeeStatus, string> = {
-  Active: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-  'On Leave': 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
-  Suspended: 'bg-rose-500/10 text-rose-700 dark:text-rose-300',
-  Resigned: 'bg-slate-500/10 text-slate-600 dark:text-slate-300',
-  Retired: 'bg-slate-500/10 text-slate-600 dark:text-slate-300',
-  Inactive: 'bg-muted text-muted-foreground',
-}
-
 /** Avatar gradient follows the payroll position — same language as the
- *  student fee cards: clear → emerald, something due → amber/rose. */
-function avatarTone(due: number, paid: number): string {
-  if (due <= 0) return 'bg-gradient-to-br from-emerald-500 to-teal-600'
-  if (paid > 0) return 'bg-gradient-to-br from-amber-500 to-orange-600'
+ *  student fee cards: clear → emerald, something to pay → amber/rose. */
+function avatarTone(dueThisMonth: number, recorded: number): string {
+  if (dueThisMonth <= 0) return 'bg-gradient-to-br from-emerald-500 to-teal-600'
+  if (recorded > 0) return 'bg-gradient-to-br from-amber-500 to-orange-600'
   return 'bg-gradient-to-br from-rose-500 to-pink-600'
 }
 
 interface AccountRow {
-  employee: Employee
-  /** Simple salary model (one fixed monthly amount) — honest labels. */
-  isSimple: boolean
-  grossMonthly: number
-  payableCurrent: number
-  paidSession: number
-  pendingAmount: number
-  outstanding: number
+  teacherId: string
+  name: string
+  employeeId: string
+  department: string
+  /** Configured Monthly Salary (0 = not set). */
+  monthly: number
+  /** RECORDED total this month. */
+  recordedCurrent: number
+  /** RECORDED total across the loaded ledger (bounded take-500 view). */
+  recordedTotal: number
+  /** Un-recorded monthly salary for the current month (honest due). */
+  dueThisMonth: number
   paymentsCount: number
 }
 
 export function SalaryEmployeeAccountsSection() {
   const { openEmployee } = useSalaryUI()
-  const employees = useSalaryStore((s) => s.employees)
-  const salaries = useSalaryStore((s) => s.salaries)
-  const adjustments = useSalaryStore((s) => s.adjustments)
+  const teachers = useSalaryStore((s) => s.teachers)
+  const structures = useSalaryStore((s) => s.structures)
   const payments = useSalaryStore((s) => s.payments)
-  const rows = useSalaryData().rows
+  const data = useSalaryData()
 
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
 
   const periodKey = currentPeriodKey()
-  // Bounded payroll lookback — the last 6 monthly periods up to the
-  // current one. Months before the employee's joining date are excluded
-  // so nobody accrues "due" for months they weren't employed.
+  // Bounded lookback — the last 6 monthly periods up to the current one
+  // (the ledger view the workspace caches; totals are sums of RECORDED
+  // amounts only — no payable arithmetic is invented).
   const lookbackPeriods = useMemo(() => periodOptions(6), [])
-  const sessionLabel = sessionLabelOf(CURRENT_SESSION.id)
 
   const accountRows = useMemo<AccountRow[]>(() => {
-    return employees.map((e) => {
-      const state = salaries[e.id]
-      // True gross = every earning line (basic + allowances), not just basic pay.
-      const grossMonthly = state ? state.salary.earnings.reduce((s, c) => s + c.amount, 0) : 0
-      // Simple mode: the single line IS the Monthly Salary — label it honestly.
-      const isSimple = state ? (state.salary.mode ?? 'detailed') === 'simple' : false
-      const row = rows.find((r) => r.employee.id === e.id)
-      const payableCurrent = row?.payable ?? 0
-
-      const empPayments = payments.filter((p) => p.employeeId === e.id)
-      const paidSession = empPayments.filter((p) => p.status === 'Confirmed').reduce((s, p) => s + p.amount, 0)
-      const pendingAmount = empPayments.filter((p) => p.status === 'Pending Receipt' || p.status === 'Not Received').reduce((s, p) => s + p.amount, 0)
-
-      // Outstanding = unpaid payroll across the last 6 periods (current
-      // month included), for periods after the joining date. Uses the same
-      // netPayable/confirmedPaid helpers as the Payments tab — one source.
-      let outstanding = 0
-      for (const pk of lookbackPeriods) {
-        if (pk > periodKey) continue
-        const joinKey = e.joiningDate?.slice(0, 7) ?? ''
-        if (joinKey && pk < joinKey) continue
-        const payable = netPayableFor({ salaries, adjustments }, e.id, pk)
-        if (payable <= 0) continue
-        const confirmed = confirmedPaidFor(payments, e.id, pk)
-        outstanding += Math.max(0, payable - confirmed)
-      }
+    return teachers.map((t) => {
+      const monthly = structures.find((s) => s.teacherId === t.id)?.monthlyAmount ?? 0
+      const empPayments = payments.filter((p) => p.teacherId === t.id)
+      const recordedCurrent = empPayments
+        .filter((p) => p.month === periodKey && p.status === 'RECORDED')
+        .reduce((s, p) => s + p.amount, 0)
+      const recordedTotal = empPayments
+        .filter((p) => lookbackPeriods.includes(p.month) && p.status === 'RECORDED')
+        .reduce((s, p) => s + p.amount, 0)
+      const dueThisMonth = monthly > 0 ? Math.max(0, monthly - recordedCurrent) : 0
 
       return {
-        employee: e,
-        grossMonthly,
-        isSimple,
-        payableCurrent,
-        paidSession,
-        pendingAmount,
-        outstanding,
-        paymentsCount: empPayments.filter((p) => p.status !== 'Reversed').length,
+        teacherId: t.id,
+        name: t.name,
+        employeeId: t.employeeId,
+        department: t.department,
+        monthly,
+        recordedCurrent,
+        recordedTotal,
+        dueThisMonth,
+        paymentsCount: empPayments.filter((p) => p.status === 'RECORDED').length,
       }
     })
-  }, [employees, salaries, adjustments, payments, rows, lookbackPeriods, periodKey])
+  }, [teachers, structures, payments, periodKey, lookbackPeriods])
 
   const deptOptions = useMemo(
-    () => Array.from(new Set(employees.map((e) => e.department).filter(Boolean))).sort(),
-    [employees],
-  )
-  const statusOptions = useMemo(
-    () => Array.from(new Set(employees.map((e) => e.status))),
-    [employees],
+    () => Array.from(new Set(teachers.map((t) => t.department).filter(Boolean))).sort(),
+    [teachers],
   )
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return accountRows
       .filter((r) => {
-        if (deptFilter !== 'all' && r.employee.department !== deptFilter) return false
-        if (statusFilter !== 'all' && r.employee.status !== statusFilter) return false
+        if (deptFilter !== 'all' && r.department !== deptFilter) return false
         if (q) {
-          const hay = `${r.employee.name} ${r.employee.employeeId} ${r.employee.designation} ${r.employee.department} ${r.employee.email}`.toLowerCase()
+          const hay = `${r.name} ${r.employeeId} ${r.department}`.toLowerCase()
           if (!hay.includes(q)) return false
         }
         return true
       })
       .sort((a, b) => {
-        // Active staff first, then by name — Student Accounts ordering spirit.
-        const active = (e: Employee) => (e.status === 'Active' ? 0 : e.status === 'On Leave' ? 1 : 2)
-        return active(a.employee) - active(b.employee) || a.employee.name.localeCompare(b.employee.name)
+        // Un-set salaries first (they need attention), then by name.
+        const aSet = a.monthly > 0 ? 1 : 0
+        const bSet = b.monthly > 0 ? 1 : 0
+        return aSet - bSet || a.name.localeCompare(b.name)
       })
-  }, [accountRows, search, deptFilter, statusFilter])
+  }, [accountRows, search, deptFilter])
 
   const totals = useMemo(() => ({
-    employees: filtered.length,
-    grossMonthly: filtered.reduce((s, r) => s + r.grossMonthly, 0),
-    paidSession: filtered.reduce((s, r) => s + r.paidSession, 0),
-    outstanding: filtered.reduce((s, r) => s + r.outstanding, 0),
-    pending: filtered.reduce((s, r) => s + r.pendingAmount, 0),
+    teachers: filtered.length,
+    monthly: filtered.reduce((s, r) => s + r.monthly, 0),
+    recordedCurrent: filtered.reduce((s, r) => s + r.recordedCurrent, 0),
+    dueThisMonth: filtered.reduce((s, r) => s + r.dueThisMonth, 0),
   }), [filtered])
 
   const clearFilters = () => {
     setSearch('')
     setDeptFilter('all')
-    setStatusFilter('all')
   }
 
   return (
     <div className="space-y-4">
       {/* Summary strip — where the session's payroll stands right now */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <AccountTile label="Employees" value={String(totals.employees)} icon={<Users className="h-3 w-3" />} />
-        <AccountTile label="Monthly Payout" value={moneyMy(totals.grossMonthly)} icon={<Wallet className="h-3 w-3" />} />
-        <AccountTile label={`Paid · ${sessionLabel}`} value={moneyMy(totals.paidSession)} tone="emerald" icon={<CheckCircle2 className="h-3 w-3" />} />
+        <AccountTile label="Teachers" value={String(totals.teachers)} icon={<Users className="h-3 w-3" />} />
+        <AccountTile label="Monthly Payout" value={moneyMy(totals.monthly)} icon={<Wallet className="h-3 w-3" />} />
+        <AccountTile label={`Recorded · ${periodKey === data.periodKey ? data.monthLabel : periodKey.slice(0, 7)}`} value={moneyMy(totals.recordedCurrent)} tone="emerald" icon={<CheckCircle2 className="h-3 w-3" />} />
         <AccountTile
-          label="Outstanding"
-          value={moneyMy(totals.outstanding)}
-          tone={totals.outstanding > 0 ? 'rose' : undefined}
-          hint={totals.pending > 0 ? `${moneyMy(totals.pending)} awaiting confirmation` : undefined}
+          label="To Record · this month"
+          value={moneyMy(totals.dueThisMonth)}
+          tone={totals.dueThisMonth > 0 ? 'amber' : undefined}
+          hint={totals.dueThisMonth > 0 ? 'salaries set but not yet recorded' : undefined}
           icon={<Banknote className="h-3 w-3" />}
         />
       </div>
@@ -186,9 +153,9 @@ export function SalaryEmployeeAccountsSection() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, employee ID, designation…"
+            placeholder="Search name, employee ID, department…"
             className="pl-9 pr-8 h-9 text-xs"
-            aria-label="Search employees"
+            aria-label="Search teachers"
           />
           {search && (
             <button aria-label="Clear search" onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
@@ -199,7 +166,7 @@ export function SalaryEmployeeAccountsSection() {
 
         <div className="flex items-center gap-2">
           <span role="status" className="hidden sm:block text-[11px] text-muted-foreground whitespace-nowrap tabular-nums">
-            {employees.length} employee{employees.length === 1 ? '' : 's'} · showing {filtered.length}
+            {teachers.length} teacher{teachers.length === 1 ? '' : 's'} · showing {filtered.length}
           </span>
 
           <Select value={deptFilter} onValueChange={setDeptFilter}>
@@ -211,32 +178,22 @@ export function SalaryEmployeeAccountsSection() {
               ))}
             </SelectContent>
           </Select>
-
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-9 text-[11px] w-[130px] text-xs" aria-label="Employment status filter"><SelectValue placeholder="All Statuses" /></SelectTrigger>
-            <SelectContent className="z-[70]">
-              <SelectItem value="all" className="text-xs">All Statuses</SelectItem>
-              {statusOptions.map((st) => (
-                <SelectItem key={st} value={st} className="text-xs">{st}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
       </div>
 
-      {/* Employee cards */}
+      {/* Teacher cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
         {filtered.map((r, i) => (
-          <EmployeeCard key={r.employee.id} row={r} index={i} onOpen={() => openEmployee(r.employee.id)} />
+          <EmployeeCard key={r.teacherId} row={r} index={i} onOpen={() => openEmployee(r.teacherId)} />
         ))}
         {filtered.length === 0 && (
           <div className="col-span-full flex flex-col items-center justify-center py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted/40 text-muted-foreground/60 mb-3">
               <Users className="h-5 w-5" />
             </div>
-            {/* PHASE 7 — honest copy: an empty school roster is different
-                from over-strict filters (no fabricated staff pool exists). */}
-            {employees.length === 0 ? (
+            {/* Honest copy: an empty server roster is different from
+                over-strict filters (no fabricated staff pool exists). */}
+            {teachers.length === 0 ? (
               <>
                 <p className="text-sm font-semibold text-muted-foreground">No staff on the payroll yet</p>
                 <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">
@@ -246,9 +203,9 @@ export function SalaryEmployeeAccountsSection() {
               </>
             ) : (
               <>
-                <p className="text-sm font-semibold text-muted-foreground">No employees match this view</p>
-                <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">Try a different name or employee ID, or relax the department and status filters.</p>
-                {(search || deptFilter !== 'all' || statusFilter !== 'all') && (
+                <p className="text-sm font-semibold text-muted-foreground">No teachers match this view</p>
+                <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">Try a different name or employee ID, or relax the department filter.</p>
+                {(search || deptFilter !== 'all') && (
                   <button
                     type="button"
                     onClick={clearFilters}
@@ -270,7 +227,7 @@ function AccountTile({ label, value, hint, tone, icon }: {
   label: string
   value: string
   hint?: string
-  tone?: 'emerald' | 'rose'
+  tone?: 'emerald' | 'amber'
   icon?: React.ReactNode
 }) {
   return (
@@ -281,7 +238,7 @@ function AccountTile({ label, value, hint, tone, icon }: {
       <p className={cn(
         'text-lg font-bold tabular-nums leading-tight mt-0.5',
         tone === 'emerald' && 'text-emerald-600 dark:text-emerald-400',
-        tone === 'rose' && 'text-rose-600 dark:text-rose-400',
+        tone === 'amber' && 'text-amber-600 dark:text-amber-400',
       )}>{value}</p>
       {hint && <p className="text-[9px] text-amber-600 dark:text-amber-400 truncate">{hint}</p>}
     </motion.div>
@@ -289,9 +246,8 @@ function AccountTile({ label, value, hint, tone, icon }: {
 }
 
 function EmployeeCard({ row, index, onOpen }: { row: AccountRow; index: number; onOpen: () => void }) {
-  const { employee: e } = row
-  const initials = e.name.split(' ').map((n) => n[0]).slice(0, 2).join('')
-  const settled = row.outstanding === 0
+  const initials = row.name.split(' ').map((n) => n[0]).slice(0, 2).join('')
+  const settled = row.monthly === 0 || row.dueThisMonth === 0
 
   return (
     <motion.button
@@ -300,7 +256,7 @@ function EmployeeCard({ row, index, onOpen }: { row: AccountRow; index: number; 
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: Math.min(index * 0.02, 0.28) }}
       onClick={onOpen}
-      aria-label={`Open account for ${e.name}`}
+      aria-label={`Open account for ${row.name}`}
       className="group rounded-xl border border-border bg-card p-4 text-left hover:border-emerald-500/40 hover:shadow-md transition-all"
     >
       {/* Identity */}
@@ -308,50 +264,59 @@ function EmployeeCard({ row, index, onOpen }: { row: AccountRow; index: number; 
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white text-xs font-semibold',
-            avatarTone(row.outstanding, row.paidSession),
+            avatarTone(row.dueThisMonth, row.recordedTotal),
           )}>
             {initials}
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold truncate">{e.name}</p>
-            {/* PHASE 7 — honest empties: un-recorded designation / department /
-                joining date never render broken "· ·" fragments. */}
+            <p className="text-sm font-semibold truncate">{row.name}</p>
+            {/* Honest empties: un-recorded fields never render broken fragments. */}
             <p className="text-[10px] text-muted-foreground font-mono truncate">
-              {[e.employeeId, e.designation].filter(Boolean).join(' · ') || '—'}
+              {row.employeeId || '—'}
             </p>
             <p className="text-[10px] text-muted-foreground/80 truncate">
-              {e.joiningDate ? `${e.department ? `${e.department} · ` : ''}joined ${fmtDayYear(e.joiningDate)}` : e.department || 'Joining date not recorded'}
+              {row.department || 'Department not recorded'}
             </p>
           </div>
         </div>
-        <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold shrink-0 mt-0.5', STATUS_TONE[e.status])}>
-          {e.status}
+        <span className={cn(
+          'inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold shrink-0 mt-0.5',
+          row.monthly > 0
+            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+            : 'bg-muted text-muted-foreground',
+        )}>
+          {row.monthly > 0 ? 'Salary set' : 'No salary'}
         </span>
       </div>
 
       {/* Payroll position — 2×2, mirrors the student card's stat tiles.
-          PHASE 7: a "—" means NO salary is configured for this employee
-          yet (never a measured ₹0). */}
+          PHASE 8B: a "—" means NO monthly salary is configured (never a
+          measured ₹0). */}
       <div className="grid grid-cols-2 gap-2">
-        <CardStat label={row.isSimple ? "Monthly Salary" : "Gross / Month"} value={row.grossMonthly > 0 ? moneyMy(row.grossMonthly) : '—'} />
-        <CardStat label="Payable" value={row.payableCurrent > 0 ? moneyMy(row.payableCurrent) : '—'} sub="this month" />
+        <CardStat label="Monthly Salary" value={row.monthly > 0 ? moneyMy(row.monthly) : '—'} />
         <CardStat
-          label="Paid"
-          value={moneyMy(row.paidSession)}
-          sub={row.pendingAmount > 0 ? `${moneyMy(row.pendingAmount)} in review` : `${sessionLabelOf(CURRENT_SESSION.id)}`}
-          tone={row.paidSession > 0 ? 'emerald' : 'default'}
-          icon={row.pendingAmount > 0 ? <Clock className="h-2.5 w-2.5" /> : undefined}
+          label="Recorded"
+          value={row.recordedCurrent > 0 ? moneyMy(row.recordedCurrent) : '—'}
+          sub="this month"
+          tone={row.recordedCurrent > 0 ? 'emerald' : 'default'}
         />
         <CardStat
-          label="Due"
-          value={settled ? 'Clear' : moneyMy(row.outstanding)}
-          tone={settled ? 'emerald' : 'rose'}
+          label="Paid"
+          value={moneyMy(row.recordedTotal)}
+          sub={sessionLabelOf(CURRENT_SESSION.id)}
+          tone={row.recordedTotal > 0 ? 'emerald' : 'default'}
+          icon={<Clock className="h-2.5 w-2.5" />}
+        />
+        <CardStat
+          label="To Record"
+          value={row.monthly === 0 ? '—' : settled ? 'Clear' : moneyMy(row.dueThisMonth)}
+          tone={settled ? 'emerald' : 'amber'}
         />
       </div>
 
       {/* Footer */}
       <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-border/40 text-[10px] text-muted-foreground">
-        <span className="truncate">{row.paymentsCount} payment{row.paymentsCount === 1 ? '' : 's'} this session</span>
+        <span className="truncate">{row.paymentsCount} payment{row.paymentsCount === 1 ? '' : 's'} recorded</span>
         <span className="inline-flex items-center gap-0.5 group-hover:text-emerald-600 transition-colors shrink-0">
           Open Account <ChevronRight className="h-3 w-3" />
         </span>
@@ -361,12 +326,12 @@ function EmployeeCard({ row, index, onOpen }: { row: AccountRow; index: number; 
 }
 
 /** Student-accounts StatTile chrome: muted tile, micro uppercase label,
- *  bold tabular value. Kept local — identical rules, employee content. */
+ *  bold tabular value. Kept local — identical rules, teacher content. */
 function CardStat({ label, value, sub, tone = 'default', icon }: {
   label: string
   value: string
   sub?: string
-  tone?: 'default' | 'emerald' | 'rose'
+  tone?: 'default' | 'emerald' | 'rose' | 'amber'
   icon?: React.ReactNode
 }) {
   return (
@@ -378,6 +343,7 @@ function CardStat({ label, value, sub, tone = 'default', icon }: {
         'text-sm font-bold tabular-nums mt-0.5',
         tone === 'emerald' && 'text-emerald-600 dark:text-emerald-400',
         tone === 'rose' && 'text-rose-600 dark:text-rose-400',
+        tone === 'amber' && 'text-amber-600 dark:text-amber-400',
       )}>{value}</p>
       {sub && <p className="text-[9px] text-muted-foreground mt-0.5 truncate">{sub}</p>}
     </div>

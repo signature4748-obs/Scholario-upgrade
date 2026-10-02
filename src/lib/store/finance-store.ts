@@ -18,7 +18,7 @@
 import { useMemo } from 'react'
 import { useFeeData, useFeeStore, CURRENT_ACADEMIC_YEAR } from './fee-store'
 import {
-  useSalaryData, currentPeriodKey, periodOptions, netPayableFor, confirmedPaidFor,
+  useSalaryData, currentPeriodKey, periodOptions, recordedPaidFor, salaryEventsOf, useSalaryStore,
 } from './salary-store'
 import { formatINR } from '@/lib/format'
 import {
@@ -48,6 +48,9 @@ export const FINANCE_PERIODS: FinancePeriod[] = [
 export function useFinanceData(periodId: string = 'fy25-26') {
   const feeData = useFeeData(CURRENT_ACADEMIC_YEAR)
   const salaryData = useSalaryData()
+  // PHASE 8B — canonical payment events + teacher names for the honest
+  // activity feed (derived from the server ledger, never a local log).
+  const teacherNames = useSalaryStore((s) => s.teacherNames)
 
   return useMemo(() => {
     // ── Revenue ────────────────────────────────────────────────────
@@ -81,32 +84,25 @@ export function useFinanceData(periodId: string = 'fy25-26') {
 
     // ── LIVE PAYROLL LEDGER (Employee Accounts parity) ─────────────
     // Operational payroll cash metrics mirrored from the Salary & Payroll
-    // module's Employee Accounts tab — the Finance Dashboard and the
-    // payroll workspace always agree. Balance-sheet panels keep their
-    // static reconciliation sources; these are the REAL numbers.
+    // module — the Finance Dashboard and the payroll workspace always
+    // agree. PHASE 8B: the model is a fixed monthly salary per teacher;
+    // "outstanding" = configured salaries minus RECORDED payments across
+    // the last 6 periods; "paid" = the sum of RECORDED amounts.
     const payrollPeriods = periodOptions(6)
     const payrollCurrentPeriod = currentPeriodKey()
     let payrollOutstanding = 0
-    for (const e of salaryData.employees) {
-      if (e.status !== 'Active' && e.status !== 'On Leave') continue
-      const joinKey = e.joiningDate?.slice(0, 7) ?? ''
+    for (const r of salaryData.rows) {
+      if (r.monthly <= 0) continue
       for (const pk of payrollPeriods) {
         if (pk > payrollCurrentPeriod) continue
-        if (joinKey && pk < joinKey) continue // not employed yet — no accrual
-        const payable = netPayableFor(
-          { salaries: salaryData.salaries, adjustments: salaryData.adjustments }, e.id, pk,
-        )
-        if (payable <= 0) continue
-        const confirmed = confirmedPaidFor(salaryData.payments, e.id, pk)
-        payrollOutstanding += Math.max(0, payable - confirmed)
+        const recorded = recordedPaidFor(salaryData.payments, r.teacher.id, pk)
+        payrollOutstanding += Math.max(0, r.monthly - recorded)
       }
     }
-    const payrollPendingReceipts = salaryData.payments
-      .filter((p) => p.status === 'Pending Receipt' || p.status === 'Not Received')
-      .reduce((s, p) => s + p.amount, 0)
     const payrollPaidSession = salaryData.payments
-      .filter((p) => p.status === 'Confirmed')
+      .filter((p) => p.status === 'RECORDED')
       .reduce((s, p) => s + p.amount, 0)
+    const payrollUnrecordedCount = salaryData.currentMonth.unrecorded.length
 
     // ── FEE-PLAN SESSION HEALTH (Fee Structures parity) ────────────
     // How many per-class fee plans for the active session are published
@@ -209,8 +205,8 @@ export function useFinanceData(periodId: string = 'fy25-26') {
     if (techBudget && techBudget.actual > techBudget.budget) {
       alerts.push({ id: 'tech-overrun', title: 'Technology Budget Exceeded', description: `${formatINR(techBudget.actual - techBudget.budget, true)} over budget`, severity: 'critical', action: 'View Budget', actionModule: 'reports' })
     }
-    if (salaryData.analytics.pendingAdjustments > 0) {
-      alerts.push({ id: 'payroll-pending', title: 'Salary Changes Awaiting Approval', description: `${salaryData.analytics.pendingAdjustments} salary change${salaryData.analytics.pendingAdjustments > 1 ? 's' : ''} awaiting employee approval`, severity: 'warning', action: 'View Payroll', actionModule: 'salary' })
+    if (payrollUnrecordedCount > 0) {
+      alerts.push({ id: 'payroll-unrecorded', title: 'Salary Payments Not Recorded', description: `${payrollUnrecordedCount} salary payment${payrollUnrecordedCount > 1 ? 's' : ''} not recorded for ${salaryData.monthLabel}`, severity: 'warning', action: 'Open Payroll', actionModule: 'salary' })
     }
     if (collectionRate < 85) {
       alerts.push({ id: 'collection-low', title: 'Fee Collection Below Target', description: `${collectionRate}% collected — target 85%`, severity: 'warning', action: 'View Fee Management', actionModule: 'fees' })
@@ -226,10 +222,10 @@ export function useFinanceData(periodId: string = 'fy25-26') {
         description: `Fee payment from ${t.studentName}`,
         amount: t.amount, status: t.status,
       })),
-      ...salaryData.audit.slice(0, 2).map((a) => ({
-        id: a.id, date: a.timestamp.split('T')[0], type: a.action.includes('payment') ? 'payroll' as const : 'adjustment' as const,
-        description: a.detail,
-        amount: 0, status: 'Recorded',
+      ...salaryEventsOf(salaryData.payments, teacherNames).slice(0, 2).map((e) => ({
+        id: e.id, date: e.at.split('T')[0], type: 'payroll' as const,
+        description: `${e.kind === 'payment.voided' ? 'Salary payment voided' : 'Salary payment recorded'} — ${e.teacherName} · ${e.month}`,
+        amount: e.amount, status: e.kind === 'payment.voided' ? 'Voided' : 'Recorded',
       })),
       // A couple of expense entries from P&L
       { id: 'exp-1', date: '2025-11-28', type: 'expense' as const, description: 'Vendor payment — Lab equipment supplier', amount: 840000, status: 'Paid' },
@@ -282,10 +278,11 @@ export function useFinanceData(periodId: string = 'fy25-26') {
       monthlyPayroll,
       annualizedPayroll,
 
-      // Live payroll ledger (Employee Accounts parity)
+      // Live payroll ledger (Employee Accounts parity) — PHASE 8B:
+      // fixed monthly salaries + RECORDED payments (server canonical).
       payrollPaidSession,
-      payrollPendingReceipts,
       payrollOutstanding,
+      payrollUnrecordedCount,
 
       // Fee-plan session health (Fee Structures parity)
       structureSession,
@@ -352,7 +349,7 @@ export function useFinanceData(periodId: string = 'fy25-26') {
       balanceSheet,
       cashflow,
     }
-  }, [feeData, salaryData, periodId])
+  }, [feeData, salaryData, teacherNames, periodId])
 }
 
 // ─── Format helpers ──────────────────────────────────────────────────
@@ -398,40 +395,18 @@ export function useFinanceAttention(): FinanceAttentionItem[] {
     const items: FinanceAttentionItem[] = []
     const { analytics } = feeData
 
-    // 1 — Payroll still unpaid for the current month (money the school owes its staff).
-    const payrollBalance = salaryData.rows.reduce((s, r) => s + r.balance, 0)
-    const unpaidStaff = salaryData.rows.filter((r) => r.balance > 0).length
+    // 1 — Salary payments not recorded for the current month (money the
+    //     school owes its staff; fixed monthly salary minus RECORDED
+    //     payments — the canonical server ledger, PHASE 8B).
+    const payrollBalance = salaryData.currentMonth.payable - salaryData.currentMonth.recorded
+    const unpaidStaff = salaryData.currentMonth.unrecorded.length
     if (payrollBalance > 0) {
       items.push({
         id: 'payroll-unpaid',
         severity: 'critical',
-        title: 'Payroll unpaid',
-        description: `${formatINR(payrollBalance, true)} still unpaid for ${salaryData.monthLabel} · ${unpaidStaff} staff`,
+        title: 'Payroll not recorded',
+        description: `${formatINR(payrollBalance, true)} of ${salaryData.monthLabel} payroll not recorded · ${unpaidStaff} staff`,
         cta: 'Open Payroll',
-        module: 'salary',
-      })
-    }
-
-    // 2 — Salary change requests waiting on the Principal.
-    if (salaryData.pendingChangeRequests.length > 0) {
-      items.push({
-        id: 'salary-changes',
-        severity: 'warning',
-        title: 'Salary changes awaiting approval',
-        description: `${salaryData.pendingChangeRequests.length} request${salaryData.pendingChangeRequests.length > 1 ? 's' : ''} pending — applies to next payroll once approved`,
-        cta: 'Review',
-        module: 'salary',
-      })
-    }
-
-    // 3 — Cash/cheque handed out, receipt not confirmed yet.
-    if (salaryData.currentMonth.pending.count > 0) {
-      items.push({
-        id: 'salary-receipts',
-        severity: 'warning',
-        title: 'Salary receipts pending',
-        description: `${salaryData.currentMonth.pending.count} payment${salaryData.currentMonth.pending.count > 1 ? 's' : ''} (${formatINR(salaryData.currentMonth.pending.amount, true)}) awaiting confirmation`,
-        cta: 'Confirm',
         module: 'salary',
       })
     }

@@ -39,6 +39,9 @@ import {
 } from '@/lib/store/finance-store'
 import { useFeeData, CURRENT_ACADEMIC_YEAR } from '@/lib/store/fee-store'
 import { useSalaryData, CURRENT_SESSION, sessionOfPeriod } from '@/lib/store/salary-store'
+// PHASE 8B — salary figures are the canonical server payroll: payable =
+// the sum of configured monthly salaries; "paid" = the sum of RECORDED
+// payment amounts (status RECORDED, month 'YYYY-MM').
 import { formatINR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { CHART_PALETTE } from '@/components/shared/premium-charts'
@@ -73,7 +76,7 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
 
   const { analytics } = feeData
   const { currentMonth, monthLabel } = salaryData
-  const payrollBalance = currentMonth.payable - currentMonth.confirmed
+  const payrollBalance = currentMonth.payable - currentMonth.recorded
 
   // ── REAL monthly series: fees in (collections) vs salary out (confirmed
   //    payments this session), month-aligned, trimmed at the current month.
@@ -85,9 +88,9 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
     const fyIndexOf = (calendarMonth: number) => (calendarMonth - 3 + 12) % 12
     const outByIdx = new Map<number, number>()
     for (const p of salaryData.payments) {
-      if (p.status !== 'Confirmed') continue
-      if (sessionOfPeriod(p.periodKey) !== CURRENT_SESSION.id) continue
-      const m = Number(p.periodKey.split('-')[1])
+      if (p.status !== 'RECORDED') continue
+      if (sessionOfPeriod(p.month) !== CURRENT_SESSION.id) continue
+      const m = Number(p.month.split('-')[1])
       if (!Number.isFinite(m)) continue
       const idx = fyIndexOf(m - 1)
       outByIdx.set(idx, (outByIdx.get(idx) ?? 0) + p.amount)
@@ -114,28 +117,28 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
         amount: t.amount,
       }))
     const salaryRows = salaryData.payments
-      .filter((p) => p.status === 'Confirmed')
-      .sort((a, b) => b.date.localeCompare(a.date))
+      .filter((p) => p.status === 'RECORDED')
+      .sort((a, b) => b.paidOn.localeCompare(a.paidOn))
       .slice(0, 5)
       .map((p) => ({
         id: `sal-${p.id}`,
         kind: 'out' as const,
-        title: p.employeeName,
-        sub: `Salary · ${p.monthLabel} · ${p.method}`,
-        date: p.date,
+        title: salaryData.teachers.find((t) => t.id === p.teacherId)?.name ?? 'Teacher',
+        sub: `Salary · ${p.month} · ${p.method ?? '—'}`,
+        date: p.paidOn,
         amount: p.amount,
       }))
     return [...feeRows, ...salaryRows]
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 8)
-  }, [analytics.recentCollections, salaryData.payments])
+  }, [analytics.recentCollections, salaryData.payments, salaryData.teachers])
 
   // Annual expense picture (P&L baseline; salaries line is live payroll).
   const expenseBars = data.expenseBreakdown.slice(0, 6).map((e) => ({
     label: e.name, value: e.value, color: e.color,
   }))
 
-  const netThisMonth = analytics.monthCollection - currentMonth.confirmed
+  const netThisMonth = analytics.monthCollection - currentMonth.recorded
 
   return (
     <div className="space-y-4">
@@ -166,8 +169,8 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
           value={formatINR(currentMonth.payable, true)}
           sub={
             payrollBalance > 0
-              ? `${currentMonth.paid}/${salaryData.rows.length} paid · ${formatINR(payrollBalance, true)} unpaid`
-              : `${currentMonth.paid}/${salaryData.rows.length} paid · clear`
+              ? `${currentMonth.recordedCount}/${salaryData.rows.length} paid · ${formatINR(payrollBalance, true)} to record`
+              : `${currentMonth.recordedCount}/${salaryData.rows.length} paid · clear`
           }
           tone={payrollBalance > 0 ? 'amber' : 'teal'}
           delay={0.1}
@@ -227,7 +230,7 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
           <div className="space-y-3">
             <div className="grid grid-cols-3 gap-2">
               <FinanceStat label="Money In" value={`+${formatINR(analytics.monthCollection, true)}`} accent="emerald" />
-              <FinanceStat label="Salary Out" value={`-${formatINR(currentMonth.confirmed, true)}`} accent="rose" />
+              <FinanceStat label="Salary Out" value={`-${formatINR(currentMonth.recorded, true)}`} accent="rose" />
               <FinanceStat
                 label="Net"
                 value={`${netThisMonth >= 0 ? '+' : '-'}${formatINR(Math.abs(netThisMonth), true)}`}
@@ -418,8 +421,8 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
                 <p className="text-xs font-semibold">Salary &amp; Payroll</p>
                 <p className="text-[10px] text-muted-foreground truncate">
                   {payrollBalance > 0
-                    ? <><span className="text-amber-600 font-semibold">{formatINRCompact(payrollBalance)}</span> unpaid · {monthLabel}</>
-                    : <>{monthLabel} payroll clear · {currentMonth.paid} receipts</>}
+                    ? <><span className="text-amber-600 font-semibold">{formatINRCompact(payrollBalance)}</span> to record · {monthLabel}</>
+                    : <>{monthLabel} payroll clear · {currentMonth.recordedCount} payments</>}
                 </p>
               </div>
             </div>

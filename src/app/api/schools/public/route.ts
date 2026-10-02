@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
       auditRateLimit('public-school-profile', ip, requestId)
       return NextResponse.json(
         { success: false, error: `Too many requests. Please try again in ${verdict.retryAfterSec}s.` },
-        { status: 429, headers: { 'Retry-After': String(verdict.retryAfterSec), 'X-Request-Id': requestId } },
+        { status: 429, headers: { 'Retry-After': String(verdict.retryAfterSec), 'X-Request-Id': requestId, 'Cache-Control': 'private, no-store', Vary: 'Host' } },
       )
     }
 
@@ -89,7 +89,7 @@ export async function GET(req: NextRequest) {
     if (!resolved) {
       return NextResponse.json(
         { success: false, error: 'School not found.' },
-        { status: 404, headers: { 'X-Request-Id': requestId } },
+        { status: 404, headers: { 'X-Request-Id': requestId, 'Cache-Control': 'private, no-store', Vary: 'Host' } },
       )
     }
     const school = await db.school.findUnique({
@@ -100,7 +100,7 @@ export async function GET(req: NextRequest) {
       // Suspended tenants have no public website presence.
       return NextResponse.json(
         { success: false, error: 'School not found.' },
-        { status: 404, headers: { 'X-Request-Id': requestId } },
+        { status: 404, headers: { 'X-Request-Id': requestId, 'Cache-Control': 'private, no-store', Vary: 'Host' } },
       )
     }
 
@@ -167,12 +167,12 @@ export async function GET(req: NextRequest) {
           })),
         },
       },
-      { headers: { 'X-Request-Id': requestId } },
+      { headers: { 'X-Request-Id': requestId, 'Cache-Control': 'private, no-store', Vary: 'Host' } },
     )
   } catch {
     return NextResponse.json(
       { success: false, error: 'Unable to load school profile.' },
-      { status: 500, headers: { 'X-Request-Id': requestId } },
+      { status: 500, headers: { 'X-Request-Id': requestId, 'Cache-Control': 'private, no-store', Vary: 'Host' } },
     )
   }
 }

@@ -7,7 +7,7 @@
  * conversation list, chat header, contact sheet, composer picker, drafts
  * and groups panel. Soft solid type colors (no loud gradients) keep the
  * module calm; type stays distinguishable at a glance:
- *   staff → emerald · parent → amber · group → violet
+ *   staff → emerald · parent → amber · student → amber · group → violet
  */
 
 import { cn } from '@/lib/utils'
@@ -16,6 +16,7 @@ import type { ConversationType } from '@/lib/store/messaging-store'
 const TYPE_BG: Record<ConversationType, string> = {
   staff: 'bg-emerald-600/90 dark:bg-emerald-600',
   parent: 'bg-amber-500/90 dark:bg-amber-600',
+  student: 'bg-amber-500/90 dark:bg-amber-600',
   group: 'bg-violet-600/90 dark:bg-violet-600',
 }
 

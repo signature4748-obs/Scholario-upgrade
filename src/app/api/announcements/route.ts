@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { audienceAllows, notificationVisibilityWhere } from '@/lib/notices'
+import { publishToSchool } from '@/lib/realtime/publish'
 
 export const runtime = 'nodejs'
 
@@ -133,6 +134,22 @@ export async function POST(req: NextRequest) {
         },
         include: { sender: { select: { name: true, role: true } } },
       })
+
+      // PHASE 8B — realtime announcement frame (school-wide, fire-and-forget,
+      // never blocks the response). Live broadcasts only: a DRAFT row emits
+      // nothing (its future publish transition is the emit moment) and a
+      // scheduled row stays silent until due (readers already filter by
+      // publishAt). Payload = the same ids/title/120-char detail the legacy
+      // event-stream carried.
+      if (status === 'PUBLISHED' && (!publishAt || publishAt.getTime() <= Date.now())) {
+        void publishToSchool(schoolId, 'all', 'announcement', {
+          id: notification.id,
+          at: notification.createdAt.toISOString(),
+          schoolId,
+          title,
+          detail: message.slice(0, 120),
+        }).catch(() => {})
+      }
 
       return {
         id: notification.id,

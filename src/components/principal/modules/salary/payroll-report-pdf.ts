@@ -3,40 +3,41 @@
 /**
  * payroll-report-pdf — Principal-ready payroll session report (PDF).
  *
- * Follows the app's established export architecture (jsPDF + autotable,
- * same as the attendance monthly register) so the output looks like an
- * official school document, not a database dump:
+ * PHASE 8B: the report renders the CANONICAL server payroll — fixed
+ * monthly salaries + RECORDED payments. Totals are sums of RECORDED
+ * amounts (no payable/outstanding arithmetic is invented: "payroll" is
+ * the configured monthly commitment, "paid" is what was actually
+ * recorded). Follows the app's established export architecture (jsPDF +
+ * autotable, same as the attendance monthly register):
  *   - Official header: school name, report title, academic session
- *   - Summary block: employees · payroll · paid · outstanding · payments
- *   - Employee register table (identity + frozen session totals)
+ *   - Summary block: employees · monthly payroll · recorded · payments
+ *   - Employee register table (identity + recorded totals)
  *   - Payment history table (every payment with method/reference/status)
  *   - Page numbers, repeated table headers, print-ready A4
- *
- * Works for BOTH sources of truth:
- *   - an archived session (frozen SessionPayrollArchive), and
- *   - the in-progress session (live SessionPayrollSnapshot),
- * labelled accordingly.
  */
 
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { getSchoolProfile } from '@/lib/school-profile'
-import type { ArchivedEmployeeRecord, SalaryPayment } from '@/lib/store/salary-store'
+import type { SalaryPayment, SalaryTeacher } from '@/lib/store/salary-store'
+import { METHOD_LABELS } from '@/lib/store/salary-store'
 
 export interface PayrollReportInput {
   sessionId: string
   sessionLabel: string
-  /** 'archived' = frozen historical record · 'live' = session in progress. */
-  kind: 'archived' | 'live'
-  archivedAt?: string
-  archivedBy?: string
-  records: ArchivedEmployeeRecord[]
+  /** True when the session month range includes the current month. */
+  isCurrent: boolean
+  /** Teacher-month scope of the report (for the header line). */
+  monthRangeLabel?: string
+  teachers: SalaryTeacher[]
+  structures: Array<{ teacherId: string; monthlyAmount: number }>
   payments: SalaryPayment[]
   summary: {
     employees: number
-    totalPayroll: number
-    totalPaid: number
-    totalOutstanding: number
+    /** Sum of configured monthly salaries (the payroll commitment). */
+    monthlyPayroll: number
+    /** Sum of RECORDED amounts in the session. */
+    recordedTotal: number
     paymentsCount: number
   }
 }
@@ -51,15 +52,14 @@ const fmtDate = (iso: string): string => {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-const STATUS_LABEL: Record<SalaryPayment['status'], string> = {
-  'Confirmed': 'Confirmed',
-  'Pending Receipt': 'Pending',
-  'Not Received': 'Not Received',
-  'Reversed': 'Reversed',
+const STATUS_LABEL: Record<string, string> = {
+  RECORDED: 'Recorded',
+  VOIDED: 'Voided',
 }
 
-const paymentNotes = (p: SalaryPayment): string =>
-  p.rejectionReason ? `Not received: ${p.rejectionReason}` : p.reversalReason ? `Reversed: ${p.reversalReason}` : ''
+function methodLabel(method: string | null): string {
+  return method && method in METHOD_LABELS ? METHOD_LABELS[method as keyof typeof METHOD_LABELS] : (method ?? '—')
+}
 
 export function downloadPayrollReport(input: PayrollReportInput): void {
   // Report letterhead — the identity cascade (server → settings →
@@ -70,7 +70,7 @@ export function downloadPayrollReport(input: PayrollReportInput): void {
   const pageHeight = doc.internal.pageSize.getHeight()
   const marginX = 36
 
-  const kindLabel = input.kind === 'archived' ? 'Archived record — read-only' : 'Session in progress'
+  const kindLabel = input.isCurrent ? 'Session in progress' : 'Historical record — read-only'
   const generatedAt = new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 
   const drawHeader = () => {
@@ -96,7 +96,7 @@ export function downloadPayrollReport(input: PayrollReportInput): void {
     doc.setFontSize(9)
     doc.setTextColor(71, 85, 105)
     doc.text(`Academic Session ${input.sessionLabel}  ·  ${kindLabel}`, marginX, 96)
-    doc.text(`Generated ${generatedAt}${input.kind === 'archived' && input.archivedAt ? `  ·  Archived ${fmtDate(input.archivedAt)} by ${input.archivedBy ?? 'Principal'}` : ''}`, marginX, 108)
+    doc.text(`Generated ${generatedAt}`, marginX, 108)
   }
 
   const drawFooter = (page: number, total: number) => {
@@ -116,47 +116,48 @@ export function downloadPayrollReport(input: PayrollReportInput): void {
     styles: { fontSize: 8.5, cellPadding: 5, lineColor: [226, 232, 240], lineWidth: 0.5 },
     headStyles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', fontSize: 7.5 },
     bodyStyles: { fontStyle: 'bold', textColor: [16, 24, 40], halign: 'center' },
-    head: [['Employees', 'Total Payroll', 'Total Paid', 'Outstanding', 'Payments']],
+    head: [['Teachers', 'Monthly Payroll', 'Recorded Paid', 'Payments']],
     body: [[
       String(input.summary.employees),
-      inr(input.summary.totalPayroll),
-      inr(input.summary.totalPaid),
-      inr(input.summary.totalOutstanding),
+      inr(input.summary.monthlyPayroll),
+      inr(input.summary.recordedTotal),
       String(input.summary.paymentsCount),
     ]],
   })
 
   // ── Employee register ────────────────────────────────────────────────
+  const structureByTeacher = new Map(input.structures.map((s) => [s.teacherId, s]))
+  const teacherById = new Map(input.teachers.map((t) => [t.id, t]))
+
   autoTable(doc, {
     margin: { left: marginX, right: marginX, top: 118 },
     theme: 'striped',
     styles: { fontSize: 7.2, cellPadding: 3.5, lineColor: [226, 232, 240], lineWidth: 0.4, overflow: 'linebreak' },
     headStyles: { fillColor: [22, 101, 80], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7 },
     alternateRowStyles: { fillColor: [248, 250, 252] },
-    head: [['#', 'Employee', 'ID', 'Department', 'Designation', 'Salary / mo', 'Payable', 'Paid', 'Outstanding', 'Status']],
-    body: input.records.map((r, i) => [
-      String(i + 1),
-      r.name,
-      r.employeeCode,
-      r.department,
-      r.designation,
-      r.monthlySalary ? inr(r.monthlySalary) : '—',
-      inr(r.totalPayable),
-      inr(r.totalPaid),
-      r.outstanding > 0 ? inr(r.outstanding) : 'Clear',
-      r.employmentStatus,
-    ]),
+    head: [['#', 'Teacher', 'ID', 'Department', 'Salary / mo', 'Recorded', 'Payments']],
+    body: Array.from(new Set(input.payments.map((p) => p.teacherId))).map((teacherId, i) => {
+      const t = teacherById.get(teacherId)
+      const monthly = structureByTeacher.get(teacherId)?.monthlyAmount ?? 0
+      const empPayments = input.payments.filter((p) => p.teacherId === teacherId && p.status === 'RECORDED')
+      return [
+        String(i + 1),
+        t?.name ?? '—',
+        t?.employeeId ?? '—',
+        t?.department ?? '—',
+        monthly > 0 ? inr(monthly) : '—',
+        inr(empPayments.reduce((s, p) => s + p.amount, 0)),
+        String(empPayments.length),
+      ]
+    }),
     columnStyles: {
       0: { cellWidth: 14, halign: 'center' },
-      1: { cellWidth: 78 },
-      2: { cellWidth: 42 },
-      3: { cellWidth: 62 },
-      4: { cellWidth: 66 },
-      5: { cellWidth: 46, halign: 'right' },
-      6: { cellWidth: 50, halign: 'right' },
-      7: { cellWidth: 50, halign: 'right' },
-      8: { cellWidth: 54, halign: 'right' },
-      9: { cellWidth: 40 },
+      1: { cellWidth: 96 },
+      2: { cellWidth: 52 },
+      3: { cellWidth: 84 },
+      4: { cellWidth: 54, halign: 'right' },
+      5: { cellWidth: 54, halign: 'right' },
+      6: { cellWidth: 42, halign: 'center' },
     },
     didDrawPage: (data) => {
       if (data.pageNumber === 1) return // title block already drawn
@@ -179,31 +180,31 @@ export function downloadPayrollReport(input: PayrollReportInput): void {
     styles: { fontSize: 7.5, cellPadding: 3.5, lineColor: [226, 232, 240], lineWidth: 0.4, overflow: 'linebreak' },
     headStyles: { fillColor: [22, 101, 80], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7 },
     alternateRowStyles: { fillColor: [248, 250, 252] },
-    head: [['Date', 'Employee', 'Salary Period', 'Payable', 'Paid', 'Method', 'Reference', 'Status', 'Notes']],
+    head: [['Date', 'Teacher', 'Salary Month', 'Amount', 'Method', 'Reference', 'Status', 'Note']],
     body: input.payments
-      // Reversed payments are kept deliberately — a truthful audit trail
-      // must show them (with their reversal reason), not hide them.
+      // VOIDED payments are kept deliberately — a truthful audit trail
+      // must show them, not hide them.
+      .slice()
+      .sort((a, b) => b.paidOn.localeCompare(a.paidOn))
       .map((p) => [
-        fmtDate(p.date),
-        p.employeeName,
-        p.monthLabel,
-        p.netPayable ? inr(p.netPayable) : '—',
+        fmtDate(p.paidOn),
+        teacherById.get(p.teacherId)?.name ?? '—',
+        p.month,
         inr(p.amount),
-        p.method,
+        methodLabel(p.method),
         p.reference ?? '—',
-        STATUS_LABEL[p.status],
-        paymentNotes(p),
+        STATUS_LABEL[p.status] ?? p.status,
+        p.note ?? '',
       ]),
     columnStyles: {
       0: { cellWidth: 56 },
-      1: { cellWidth: 78 },
-      2: { cellWidth: 50 },
+      1: { cellWidth: 90 },
+      2: { cellWidth: 54 },
       3: { cellWidth: 52, halign: 'right' },
-      4: { cellWidth: 52, halign: 'right' },
-      5: { cellWidth: 58 },
-      6: { cellWidth: 62 },
-      7: { cellWidth: 52 },
-      8: { cellWidth: 70 },
+      4: { cellWidth: 58 },
+      5: { cellWidth: 62 },
+      6: { cellWidth: 44 },
+      7: { cellWidth: 66 },
     },
   })
 

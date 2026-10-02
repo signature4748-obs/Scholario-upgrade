@@ -1,11 +1,14 @@
 'use client'
 
 /**
- * RecordPaymentDialog — Principal records a payment for an employee-month.
+ * RecordPaymentDialog — Principal records one monthly salary payment.
  *
- * Layout: header → employee & month → payable summary → amount / date /
- * method / reference / bank → status note. The status note is a single
- * icon-first line (no sentences): "Pending employee receipt".
+ * PHASE 8B: fixed-MONTHLY-salary model — the dialog carries exactly the
+ * canonical fields: teacher, month (YYYY-MM), amount (defaults to the
+ * teacher's configured monthly salary), paid-on date, method, reference
+ * and note. Submitting writes the canonical row via POST /api/salary/
+ * payments; a 409 SALARY_PAYMENT_DUPLICATE response (the same teacher +
+ * month already RECORDED) is surfaced with the existing row's details.
  *
  * The date picker is a Popover-portal calendar with collision flipping:
  * it opens below when there is room and above when there is not, never
@@ -13,7 +16,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarIcon, Clock, IndianRupee } from 'lucide-react'
+import { CalendarIcon, IndianRupee } from 'lucide-react'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
 
@@ -29,11 +32,11 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { useSalaryStore, type PaymentMethod } from '@/lib/store/salary-store'
-import { netPayableFor, confirmedPaidFor, periodOptions, periodLabel, nextCashReference } from '@/lib/store/salary-store'
+import {
+  useSalaryStore, type SalaryMethod, type SalaryApiError,
+  METHOD_KEYS, METHOD_LABELS, periodOptions, periodLabel,
+} from '@/lib/store/salary-store'
 import { moneyMy } from './salary-shared'
-
-const METHODS: PaymentMethod[] = ['Bank Transfer', 'UPI', 'Cash', 'Cheque']
 
 // ─── Date field (portal calendar, collision-safe) ────────────────────
 
@@ -57,8 +60,8 @@ function PaymentDateField({ value, onChange, id }: { value: string; onChange: (i
       const below = window.innerHeight - r.bottom - 16
       const above = r.top - 16
       // Prefer opening upward so the calendar never covers the fields
-      // below the date (method / reference / bank). Fall back downward
-      // only when the top genuinely lacks room, clamped to the viewport.
+      // below the date (method / reference). Fall back downward only when
+      // the top genuinely lacks room, clamped to the viewport.
       const side: 'top' | 'bottom' = above >= 240 ? 'top' : 'bottom'
       const space = side === 'bottom' ? below : above
       setPlacement({ side, maxHeight: Math.max(200, Math.min(320, space)) })
@@ -81,7 +84,7 @@ function PaymentDateField({ value, onChange, id }: { value: string; onChange: (i
           )}
         >
           <CalendarIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          {value ? format(new Date(`${value}T00:00:00`), 'dd MMM yyyy') : <span>Payment date</span>}
+          {value ? format(new Date(`${value}T00:00:00`), 'dd MMM yyyy') : <span>Paid on</span>}
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -117,104 +120,100 @@ function PaymentDateField({ value, onChange, id }: { value: string; onChange: (i
 interface RecordPaymentDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  employeeId?: string
-  periodKey?: string
+  teacherId?: string
+  /** Pre-selected salary month ('YYYY-MM') — e.g. from a month cell. */
+  month?: string
 }
 
-export function RecordPaymentDialog({ open, onOpenChange, employeeId, periodKey }: RecordPaymentDialogProps) {
-  const employees = useSalaryStore((s) => s.employees)
-  const salaries = useSalaryStore((s) => s.salaries)
-  const adjustments = useSalaryStore((s) => s.adjustments)
+export function RecordPaymentDialog({ open, onOpenChange, teacherId, month: presetMonth }: RecordPaymentDialogProps) {
+  const teachers = useSalaryStore((s) => s.teachers)
+  const structures = useSalaryStore((s) => s.structures)
   const payments = useSalaryStore((s) => s.payments)
-  const settings = useSalaryStore((s) => s.settings)
   const recordPayment = useSalaryStore((s) => s.recordPayment)
 
-  const activeEmployees = useMemo(
-    () => employees.filter((e) => e.status === 'Active' || e.status === 'On Leave'),
-    [employees],
-  )
   const months = useMemo(() => periodOptions(6), [])
 
   const [empId, setEmpId] = useState('')
   const [month, setMonth] = useState('')
   const [amount, setAmount] = useState('')
   const [date, setDate] = useState('')
-  const [method, setMethod] = useState<PaymentMethod>(settings.defaultMethod)
+  const [method, setMethod] = useState<SalaryMethod>('BANK_TRANSFER')
   const [reference, setReference] = useState('')
-  const [bank, setBank] = useState('')
+  const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [duplicate, setDuplicate] = useState<string | null>(null)
 
   // Reset / prefill each time the dialog opens.
   useEffect(() => {
     if (!open) return
-    const emp = employeeId ?? activeEmployees[0]?.id ?? ''
+    const emp = teacherId ?? teachers[0]?.id ?? ''
     setEmpId(emp)
-    setMonth(periodKey ?? months[0])
+    setMonth(presetMonth ?? months[0])
     setDate(format(new Date(), 'yyyy-MM-dd'))
-    setMethod(settings.defaultMethod)
+    setMethod('BANK_TRANSFER')
     setReference('')
-    setBank('')
+    setNote('')
     setSubmitting(false)
-  }, [open, employeeId, periodKey])
+    setDuplicate(null)
+  }, [open, teacherId, presetMonth, teachers, months])
 
-  const employee = employees.find((e) => e.id === empId)
+  const teacher = teachers.find((t) => t.id === empId)
 
-  // Payable summary for the selected employee-month.
-  const payable = useMemo(
-    () => (empId && month ? netPayableFor({ salaries, adjustments }, empId, month) : 0),
-    [empId, month, salaries, adjustments],
+  // The teacher's configured monthly salary — the default amount.
+  const monthly = useMemo(
+    () => structures.find((s) => s.teacherId === empId)?.monthlyAmount ?? 0,
+    [structures, empId],
   )
-  const confirmed = useMemo(
-    () => (empId && month ? confirmedPaidFor(payments, empId, month) : 0),
-    [empId, month, payments],
+  // Already RECORDED this teacher-month? (Duplicate protection is
+  // server-authoritative; this is the honest pre-flight signal.)
+  const alreadyRecorded = useMemo(
+    () => payments.some((p) => p.teacherId === empId && p.month === month && p.status === 'RECORDED'),
+    [payments, empId, month],
   )
-  const balance = Math.max(0, payable - confirmed)
 
-  // Default the amount to the remaining balance.
+  // Default the amount to the configured monthly salary.
   useEffect(() => {
-    setAmount(balance > 0 ? String(balance) : '')
-  }, [empId, month, balance])
+    if (monthly > 0) setAmount(String(monthly))
+  }, [empId, monthly])
 
-  const refRequired = settings.referenceRequired[method]
-  const showBank = method === 'Bank Transfer'
   const amountNum = Number(amount) || 0
-  const overBalance = amountNum > balance
 
-  // Cash carries no external transaction number — Scholario assigns the
-  // school's internal payment reference automatically (CASH-YYYY-NNNN).
-  // The preview below becomes the persisted value when submitted.
-  const cashReference = useMemo(
-    () => nextCashReference(
-      payments.map((p) => p.reference),
-      Number(date.slice(0, 4)) || new Date().getFullYear(),
-    ),
-    [payments, date],
-  )
-
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (submitting) return
     setSubmitting(true)
+    setDuplicate(null)
     try {
-      recordPayment({
-        employeeId: empId,
-        periodKey: month,
+      const row = await recordPayment({
+        teacherId: empId,
+        month,
         amount: amountNum,
-        date,
+        paidOn: date ? new Date(`${date}T12:00:00`).toISOString() : undefined,
         method,
-        reference: reference || undefined,
-        bankAccount: bank || undefined,
+        reference: reference.trim() || undefined,
+        note: note.trim() || undefined,
       })
       toast.success('Payment recorded', {
-        description: `${employee?.name} · ${moneyMy(amountNum)} · ${periodLabel(month)} — pending receipt`,
+        description: `${teacher?.name ?? 'Teacher'} · ${moneyMy(row.amount)} · ${periodLabel(month)}`,
         classNames: {
           description: '!text-xs !font-medium !text-zinc-700 dark:!text-zinc-300',
         },
       })
       onOpenChange(false)
     } catch (err) {
-      toast.error('Could not record payment', {
-        description: err instanceof Error ? err.message : 'Check the payment details.',
-      })
+      const apiErr = err as SalaryApiError
+      if (apiErr && typeof apiErr === 'object' && apiErr.code === 'SALARY_PAYMENT_DUPLICATE') {
+        // Server-authoritative duplicate: show the existing row clearly.
+        const ex = apiErr.existing
+        const detail = ex
+          ? `${ex.teacher?.user?.name ?? teacher?.name ?? 'Teacher'} · ${periodLabel(ex.month)} · ${moneyMy(ex.amount)} — recorded ${ex.paidOn.slice(0, 10)}${ex.method ? ` · ${ex.method}` : ''}. Void it first to re-record.`
+          : apiErr.message
+        setDuplicate(detail)
+        toast.error('Payment already recorded', { description: detail })
+      } else {
+        toast.error('Could not record payment', {
+          description: err instanceof Error ? err.message : 'Check the payment details.',
+        })
+      }
     } finally {
       setSubmitting(false)
     }
@@ -231,23 +230,23 @@ export function RecordPaymentDialog({ open, onOpenChange, employeeId, periodKey 
             Record Payment
           </DialogTitle>
           <DialogDescription>
-            {employee ? `${employee.name} · ${employee.designation}` : 'Salary payment'}
+            {teacher ? `${teacher.name}${teacher.employeeId ? ` · ${teacher.employeeId}` : ''}` : 'Monthly salary payment'}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Employee & month */}
+          {/* Teacher & month */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Employee</Label>
+              <Label className="text-xs">Teacher</Label>
               <Select value={empId} onValueChange={setEmpId}>
                 <SelectTrigger className="h-9 w-full text-xs">
-                  <SelectValue placeholder="Select employee" />
+                  <SelectValue placeholder="Select teacher" />
                 </SelectTrigger>
                 <SelectContent className="z-[70] max-h-72">
-                  {activeEmployees.map((e) => (
-                    <SelectItem key={e.id} value={e.id} className="text-xs">
-                      {e.name}
+                  {teachers.map((t) => (
+                    <SelectItem key={t.id} value={t.id} className="text-xs">
+                      {t.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -270,19 +269,23 @@ export function RecordPaymentDialog({ open, onOpenChange, employeeId, periodKey 
             </div>
           </div>
 
-          {/* Payable summary */}
-          <div className="grid grid-cols-3 gap-2">
+          {/* Monthly salary context */}
+          <div className="grid grid-cols-2 gap-2">
             <div className="rounded-lg bg-muted/40 px-2.5 py-2">
-              <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Net Payable</p>
-              <p className="text-sm font-bold tabular-nums mt-0.5">{moneyMy(payable)}</p>
+              <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Monthly Salary</p>
+              <p className="text-sm font-bold tabular-nums mt-0.5">{monthly > 0 ? moneyMy(monthly) : 'Not set'}</p>
             </div>
-            <div className="rounded-lg bg-emerald-500/[0.07] px-2.5 py-2">
-              <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Confirmed</p>
-              <p className="text-sm font-bold tabular-nums mt-0.5 text-emerald-600 dark:text-emerald-400">{moneyMy(confirmed)}</p>
-            </div>
-            <div className="rounded-lg bg-muted/40 px-2.5 py-2">
-              <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Balance</p>
-              <p className="text-sm font-bold tabular-nums mt-0.5">{moneyMy(balance)}</p>
+            <div className={cn(
+              'rounded-lg px-2.5 py-2',
+              alreadyRecorded ? 'bg-amber-500/[0.07]' : 'bg-emerald-500/[0.07]',
+            )}>
+              <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">This Month</p>
+              <p className={cn(
+                'text-sm font-bold mt-0.5',
+                alreadyRecorded ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400',
+              )}>
+                {alreadyRecorded ? 'Already recorded' : 'Not recorded yet'}
+              </p>
             </div>
           </div>
 
@@ -296,19 +299,14 @@ export function RecordPaymentDialog({ open, onOpenChange, employeeId, periodKey 
                   id="rp-amount"
                   inputMode="numeric"
                   className="pl-7 h-9 tabular-nums"
-                  placeholder={balance > 0 ? String(balance) : '0'}
+                  placeholder={monthly > 0 ? String(monthly) : '0'}
                   value={amount}
                   onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
                 />
               </div>
-              {overBalance && (
-                <p className="text-[10px] text-amber-600 dark:text-amber-400">
-                  Exceeds balance by {moneyMy(amountNum - balance)}
-                </p>
-              )}
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs" htmlFor="rp-date">Date</Label>
+              <Label className="text-xs" htmlFor="rp-date">Paid On</Label>
               <PaymentDateField id="rp-date" value={date} onChange={setDate} />
             </div>
           </div>
@@ -317,63 +315,58 @@ export function RecordPaymentDialog({ open, onOpenChange, employeeId, periodKey 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Payment Method</Label>
-              <Select value={method} onValueChange={(v) => setMethod(v as PaymentMethod)}>
+              <Select value={method} onValueChange={(v) => setMethod(v as SalaryMethod)}>
                 <SelectTrigger className="h-9 w-full text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="z-[70]">
-                  {METHODS.map((m) => (
-                    <SelectItem key={m} value={m} className="text-xs">{m}</SelectItem>
+                  {METHOD_KEYS.map((m) => (
+                    <SelectItem key={m} value={m} className="text-xs">{METHOD_LABELS[m]}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs" htmlFor={method === 'Cash' ? undefined : 'rp-ref'}>
-                Reference No.{method !== 'Cash' && refRequired ? <span className="text-rose-500"> *</span> : null}
-              </Label>
-              {method === 'Cash' ? (
-                <div className="space-y-1">
-                  <Input
-                    aria-label="Cash payment reference"
-                    readOnly
-                    tabIndex={-1}
-                    className="h-9 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 bg-muted/50 cursor-default select-none focus-visible:ring-0"
-                    value={cashReference}
-                  />
-                  <p className="text-[10px] leading-none text-muted-foreground">Auto-generated</p>
-                </div>
-              ) : (
-                <Input
-                  id="rp-ref"
-                  className="h-9 text-xs"
-                  placeholder={method === 'Cheque' ? 'CHQ-5521' : method === 'UPI' ? 'UPI-77213' : 'NEFT-88341'}
-                  value={reference}
-                  onChange={(e) => setReference(e.target.value)}
-                />
-              )}
-            </div>
-          </div>
-
-          {/* Bank account — only for bank transfers */}
-          {showBank && (
-            <div className="space-y-1.5">
-              <Label className="text-xs" htmlFor="rp-bank">Bank Account</Label>
+              <Label className="text-xs" htmlFor="rp-ref">Reference No.</Label>
               <Input
-                id="rp-bank"
-                className="h-9 text-xs tabular-nums"
-                placeholder={employee?.bankAccount ?? '****0000'}
-                value={bank}
-                onChange={(e) => setBank(e.target.value)}
+                id="rp-ref"
+                className="h-9 text-xs"
+                placeholder={method === 'CHEQUE' ? 'CHQ-5521' : method === 'UPI' ? 'UPI-77213' : 'NEFT-88341'}
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
               />
             </div>
-          )}
-
-          {/* Status note — one icon line, no sentences */}
-          <div className="flex items-center gap-2 rounded-lg bg-amber-500/[0.07] border border-amber-500/20 px-3 py-2">
-            <Clock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-            <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Pending employee receipt</p>
           </div>
+
+          {/* Note */}
+          <div className="space-y-1.5">
+            <Label className="text-xs" htmlFor="rp-note">Note</Label>
+            <Input
+              id="rp-note"
+              className="h-9 text-xs"
+              placeholder="Optional — e.g. includes arrears"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </div>
+
+          {/* Duplicate / state note — one icon line, no sentences */}
+          {duplicate ? (
+            <div role="alert" className="flex items-start gap-2 rounded-lg bg-amber-500/[0.07] border border-amber-500/20 px-3 py-2">
+              <IndianRupee className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">{duplicate}</p>
+            </div>
+          ) : alreadyRecorded ? (
+            <div className="flex items-center gap-2 rounded-lg bg-amber-500/[0.07] border border-amber-500/20 px-3 py-2">
+              <CalendarIcon className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+              <p className="text-xs font-medium text-amber-700 dark:text-amber-300">A payment is already recorded for this month</p>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg bg-emerald-500/[0.07] border border-emerald-500/20 px-3 py-2">
+              <IndianRupee className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <p className="text-xs font-medium text-emerald-700 dark:text-emerald-300">Saved to the school&apos;s payroll ledger</p>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="gap-2">
@@ -381,10 +374,10 @@ export function RecordPaymentDialog({ open, onOpenChange, employeeId, periodKey 
           <Button
             size="sm"
             className="bg-emerald-600 hover:bg-emerald-700 text-white"
-            onClick={handleSubmit}
-            disabled={!empId || !month || !amountNum || !date || (method !== 'Cash' && refRequired && !reference.trim())}
+            onClick={() => void handleSubmit()}
+            disabled={!empId || !month || !amountNum || !date || !!duplicate}
           >
-            Record Payment
+            {submitting ? 'Recording…' : 'Record Payment'}
           </Button>
         </DialogFooter>
       </DialogContent>

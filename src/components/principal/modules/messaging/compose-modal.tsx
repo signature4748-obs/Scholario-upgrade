@@ -40,6 +40,9 @@ export function ComposeModal({ open, onClose, prefill }: Props) {
   const sendMessage = useMessagingStore((s) => s.sendMessage)
   const conversations = useMessagingStore((s) => s.conversations)
   const groups = useMessagingStore((s) => s.groups)
+  // 8B-7-d — the recipient picker reads the real same-school directory
+  // (server-synced with the threads) + the local groups.
+  const directory = useMessagingStore((s) => s.directory)
   const openConversation = useMessagingStore((s) => s.openConversation)
   const setActiveFolder = useMessagingStore((s) => s.setActiveFolder)
   const saveNewDraft = useMessagingStore((s) => s.saveNewDraft)
@@ -47,10 +50,11 @@ export function ComposeModal({ open, onClose, prefill }: Props) {
   const [search, setSearch] = useState('')
   const [recipient, setRecipient] = useState<string | null>(null)
   const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const recipients = useMemo(() => getRecipientOptions(), [groups])
+  const recipients = useMemo(() => getRecipientOptions(), [groups, directory])
 
   const filtered = useMemo(() => {
     if (!search.trim()) return recipients
@@ -60,14 +64,16 @@ export function ComposeModal({ open, onClose, prefill }: Props) {
     )
   }, [recipients, search])
 
-  // Sectioned list: Staff / Parents / Groups with their filtered subsets
+  // Sectioned list: Staff / Parents / Students / Groups with their filtered subsets
   const sections = useMemo(() => {
     const staff = filtered.filter((r) => r.type === 'staff')
     const parents = filtered.filter((r) => r.type === 'parent')
+    const students = filtered.filter((r) => r.type === 'student')
     const grp = filtered.filter((r) => r.type === 'group')
     return [
       { id: 'staff', label: 'Staff', items: staff },
       { id: 'parents', label: 'Parents', items: parents },
+      { id: 'students', label: 'Students', items: students },
       { id: 'groups', label: 'Groups', items: grp },
     ].filter((s) => s.items.length > 0)
   }, [filtered])
@@ -119,21 +125,39 @@ export function ComposeModal({ open, onClose, prefill }: Props) {
     onClose()
   }
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!recipient) { toast.error('Select a recipient first'); return }
     if (!text.trim()) { toast.error('Write a message first'); return }
-
-    const existing = conversations.find((c) => c.name === recipient && !c.archived)
-    if (existing) {
-      sendMessage(existing.id, text)
-      openConversation(existing.id)
-      if (existing.type === 'group') setActiveFolder('groups')
-      else setActiveFolder('inbox')
-    } else {
-      composeNew(recipient, text)
+    setSending(true)
+    try {
+      // 8B-7-d — threads are keyed by the counterpart USER id; the
+      // existing conversation (if any) matches by id, else by name.
+      const recipientData = recipients.find((r) => r.name === recipient)
+      const existing =
+        (recipientData?.userId && conversations.find((c) => c.id === recipientData.userId)) ||
+        conversations.find((c) => c.name === recipient && !c.archived)
+      const result = existing
+        ? await sendMessage(existing.id, text)
+        : await composeNew(recipient, text)
+      if (!result.ok) {
+        toast.error('Message not sent', { description: result.error })
+        return
+      }
+      if (existing) {
+        openConversation(existing.id)
+        setActiveFolder(existing.type === 'group' ? 'groups' : existing.archived ? 'archive' : 'inbox')
+      }
+      if (result.skipped && result.skipped > 0) {
+        toast.success('Message sent', {
+          description: `To ${recipient} · ${result.skipped} member${result.skipped === 1 ? '' : 's'} without messaging accounts were skipped`,
+        })
+      } else {
+        toast.success('Message sent', { description: `To ${recipient}` })
+      }
+      onClose()
+    } finally {
+      setSending(false)
     }
-    toast.success('Message sent', { description: `To ${recipient}` })
-    onClose()
   }
 
   const handleSaveDraft = () => {
@@ -218,7 +242,7 @@ export function ComposeModal({ open, onClose, prefill }: Props) {
                       value={search}
                       onChange={(e) => { setSearch(e.target.value); setActiveIndex(0) }}
                       onKeyDown={handleSearchKeyDown}
-                      placeholder="Search teachers, parents, or groups…"
+                      placeholder="Search staff, parents, students, or groups…"
                       aria-label="Search recipients"
                       className="h-9 w-full rounded-lg border border-border bg-card pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/25"
                     />
@@ -339,7 +363,7 @@ export function ComposeModal({ open, onClose, prefill }: Props) {
                   </button>
                   <button
                     onClick={handleSend}
-                    disabled={!text.trim()}
+                    disabled={!text.trim() || sending}
                     className="inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-xs transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <Send className="h-3.5 w-3.5" /> Send

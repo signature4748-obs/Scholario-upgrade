@@ -29,6 +29,7 @@ import {
 } from '@/lib/store/school-settings-store'
 import { patchSchoolSettings } from './server-api'
 import { SettingsTab, FieldGroup, SyncGate, SyncChip } from './shared'
+import { CustomDomainCard } from './custom-domain-card'
 
 interface IdentityDraft {
   name: string
@@ -345,6 +346,10 @@ export function IdentityTab() {
             {error}
           </div>
         )}
+
+        {/* PHASE 8B — custom-domain onboarding (server-backed, principal
+            self-service request + DNS verify; platform remains admin). */}
+        <CustomDomainCard />
 
         <div className="flex items-center justify-end gap-2 pt-1">
           <Button

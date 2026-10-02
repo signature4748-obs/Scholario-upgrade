@@ -1,0 +1,202 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Scholario-OS — CI (Phase 8B, Task 8B-16: CI restoration, PostgreSQL era)
+#
+# WHAT THIS IS: the modern successor of the parked Phase-4/7-era workflow
+# (.github/ci.yml.disabled — SQLite DATABASE_URL, pre-8A seed set; DELETED).
+# Every gate the repo closeout protocol ran by hand is now enforced on
+# push/PR against an EPHEMERAL job-local PostgreSQL 16 service container.
+#
+#   · type errors      → bun run typecheck (tsc --noEmit)
+#   · lint errors      → bun run lint (0-error gate; warnings do not fail)
+#   · migration chain  → prisma migrate deploy on a FRESH postgres
+#   · schema drift     → prisma migrate diff DB ↔ datamodel (trgm-aware gate)
+#   · build            → bun run build (the canonical standalone build)
+#   · tests            → bun run test + bun run test:e2e against a live
+#                        `bun run dev` server on :3000 seeded with the
+#                        canonical corpus (seed*.ts pipeline below)
+#
+# SECRETS: NONE. CI never touches Supabase, never reads production env —
+# the job-local postgres is the only database that exists here.
+# REALTIME_MODE=disabled keeps the Supabase realtime layer off (it would
+# otherwise default on when the Supabase platform env is present — it is not, in CI).
+#
+# The one caveat documented in docs/CI.md: enabling this workflow on GitHub
+# requires a push made with a workflow-scoped token (the repo's 2026-09-30
+# push token lacked the `workflow` scope, which is why CI was parked).
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# One CI run per ref; a new push supersedes the stale run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Hard ceiling for the whole run (suite + e2e comfortably fit; flaky hangs die here).
+timeout-minutes: 50
+
+# Least privilege: CI only ever reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck · Lint · Migrations · Build · Tests
+    runs-on: ubuntu-latest
+
+    # Ephemeral throwaway PostgreSQL — the ONLY database CI ever sees.
+    # Never a hosted/production URL: no Supabase keys, no drift risk.
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Job-local postgres (service container above). Bounded pool: the dev
+      # server + the shared test client both stay well under postgres 16's
+      # default max_connections on a 2-core runner.
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres?connection_limit=6&pool_timeout=60"
+      # Explicit non-production declaration → the Phase-8A seed guards
+      # (prisma/seed-guard.ts assertSeedable) pass; 'production' refuses.
+      DATABASE_ENV: test
+      # Realtime must be explicitly OFF in CI: the default flips to
+      # 'supabase' whenever the Supabase platform env is present
+      # (src/lib/realtime/mode.ts), and none of it is (or should ever be)
+      # set here.
+      REALTIME_MODE: disabled
+      # Phase-8A rate-limit DB backend ON (its documented default) so the
+      # login-rate-limit surfaces behave exactly as in dev/integration.
+      RATE_LIMIT_DB_SYNC: "on"
+
+    steps:
+      # 1. Shallow checkout — CI needs the working tree, not history.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 2. Bun toolchain (canonical action; default version = latest, matching bun.lock).
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # 3. Reproducible install — bun.lock is the source of truth.
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      # 4. Prisma Client must exist before any TS/DB step compiles or runs.
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      # 5. Gate 1 — TypeScript strict typecheck.
+      - name: Typecheck (tsc --noEmit)
+        run: bun run typecheck
+
+      # 6. Gate 2 — ESLint: 0 errors required (59-warning baseline is OK,
+      #    documented burn-down in docs/OBSERVABILITY.md).
+      - name: Lint (error-level gate)
+        run: bun run lint
+
+      # 7. Gate 3 — the FULL migration chain applies cleanly to the fresh
+      #    CI postgres: proves 0_init → 00000000000001 → …_02 → …_03 →
+      #    20261002_phase8b is end-to-end applicable (idempotent deploy).
+      - name: Migrations — deploy full chain to fresh CI postgres
+        run: bunx prisma migrate deploy
+
+      # 8. Gate 3b — drift: the migrated DB must equal the datamodel, with
+      #    ONE sanctioned exception: migration 00000000000002 plants pg_trgm
+      #    GIN indexes via raw SQL that are intentionally absent from the
+      #    datamodel (they are DB-level search accelerators, not Prisma
+      #    schema objects). Verified output shape (prisma 6.11, validated
+      #    against the fully-migrated integration DB):
+      #        -- DropIndex
+      #        DROP INDEX "User_name_trgm";
+      #    so the gate allows exactly `DROP INDEX "…_trgm";` statements plus
+      #    their `-- DropIndex` comment headers and blank lines — anything
+      #    else (an ALTER, a CREATE, a non-trgm DROP) is drift → fail.
+      - name: Migrations — schema drift gate (trgm-aware)
+        id: drift-gate
+        shell: bash
+        run: |
+          bunx prisma migrate diff \
+            --from-schema-datasource prisma/schema.prisma \
+            --to-schema-datamodel prisma/schema.prisma \
+            --script > /tmp/drift.sql
+
+          # Drop the sanctioned trgm index statements, their comment
+          # headers, and blank separators; whatever SURVIVES is drift.
+          # (trailing `|| true`: in the CLEAN case the final grep selects
+          # zero lines and exits 1 — GitHub's default `bash -e` would
+          # otherwise abort the step on the happy path.)
+          UNEXPECTED="$(grep -vE '^DROP INDEX "[^"]*_trgm";$' /tmp/drift.sql \
+            | grep -vE '^-- DropIndex$' \
+            | grep -vE '^[[:space:]]*$' || true)"
+
+          if [ -n "$UNEXPECTED" ]; then
+            echo "::error::Schema drift — the migrated database does not match prisma/schema.prisma (beyond the sanctioned _trgm raw-SQL indexes):"
+            echo "$UNEXPECTED"
+            exit 1
+          fi
+          echo "Drift gate clean: only the sanctioned _trgm index drops (raw SQL from migration 00000000000002) differ."
+          TRGM_COUNT="$(grep -cE '^DROP INDEX "[^"]*_trgm";$' /tmp/drift.sql || true)"
+          echo "sanctioned _trgm drops: ${TRGM_COUNT}"
+
+      # 9. Gate 4 — the canonical production build (standalone server).
+      #    No DB connection is needed; memory headroom for next build.
+      - name: Production build (standalone)
+        run: bun run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+
+      # 10. Canonical seed corpus into the CI postgres (guards pass under
+      #     DATABASE_ENV=test; all credentials come from
+      #     prisma/seed-credentials.ts with dev-safe defaults — no secrets).
+      #     Order matters: base demo/clean tenants → platform control plane
+      #     → tenant-isolation fixtures → website CMS → salary demo rows.
+      - name: Seeds — canonical corpus (idempotent, guarded)
+        run: |
+          bun prisma/seed.ts
+          bun prisma/seed-platform.ts
+          bun prisma/seed-tenant-isolation.ts
+          bun prisma/seed-website-cms.ts
+          bun prisma/seed-salary.ts
+
+      # 11. Live server for the HTTP suites: bun run dev on :3000, wait up
+      #     to 300s for /health/ready (60 × 5s), then prove it one last time
+      #     so a never-ready server fails THIS step, not the first test.
+      - name: Start dev server and wait for readiness
+        run: |
+          nohup bun run dev > dev.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000/health/ready && break || sleep 5
+          done
+          curl -sf http://localhost:3000/health/ready
+
+      # 12. Gates 5-8 — unit + integration + API + regression + security.
+      #     Live-HTTP suites default to http://localhost:3000 (the server
+      #     above); DB-backed suites use the job-level DATABASE_URL.
+      - name: Test suite (unit · integration · API · regression · security)
+        run: bun run test
+
+      # 13. Gate 9 — live-server user journeys (auth → dashboards → data).
+      - name: E2E journeys (live server)
+        run: bun run test:e2e
+
+      # 14. Post-mortem: the dev-server tail is the first thing needed when
+      #     any later gate fails (compile error, boot crash, port clash).
+      - name: Dev server log tail (on failure)
+        if: failure()
+        run: tail -n 200 dev.log || true

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { auditEvent } from '@/lib/security/audit'
+import { publishToSchool } from '@/lib/realtime/publish'
 
 export const runtime = 'nodejs'
 
@@ -124,6 +125,25 @@ export async function PATCH(
         action: 'ANNOUNCEMENT_UPDATED',
         detail: `Announcement "${updated.title}" updated (${Object.keys(patch).filter((k) => k !== 'updatedById').join(', ') || 'no-op'}) by ${user.name}`,
       }).catch(() => {})
+
+      // PHASE 8B — re-broadcast LIVE announcements through the realtime
+      // bridge (fire-and-forget): the draft → PUBLISHED transition AND
+      // content edits of already-published rows (the docblock publish-flow
+      // contract above). DRAFT/ARCHIVED rows and not-yet-due scheduled rows
+      // never emit. Payload = ids + title + 120-char detail, same frame
+      // discipline as the create site.
+      if (
+        updated.status === 'PUBLISHED' &&
+        (!updated.publishAt || updated.publishAt.getTime() <= Date.now())
+      ) {
+        void publishToSchool(schoolId, 'all', 'announcement', {
+          id: updated.id,
+          at: updated.updatedAt.toISOString(),
+          schoolId,
+          title: updated.title,
+          detail: updated.message.slice(0, 120),
+        }).catch(() => {})
+      }
 
       return {
         id: updated.id,

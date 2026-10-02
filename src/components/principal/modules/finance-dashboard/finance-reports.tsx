@@ -143,7 +143,7 @@ function buildReportCsv(
       rows: [
         ['Monthly Payroll', data.monthlyPayroll, data.monthlyPayroll * 12],
         ['Annualized Payroll', '', data.annualizedPayroll],
-        ['Pending Adjustments', data.alerts.find((a) => a.id === 'payroll-pending') ? 'Pending' : 0, ''],
+        ['Not Recorded (this month)', data.alerts.find((a) => a.id === 'payroll-unrecorded') ? `${data.payrollUnrecordedCount} payment(s)` : 0, ''],
       ],
     }
   }
@@ -261,7 +261,7 @@ function ReportBody({ type, data }: { type: ReportType; data: ReturnType<typeof 
         rows={[
           ['Monthly Payroll', formatINR(data.monthlyPayroll, true), formatINR(data.monthlyPayroll * 12, true)],
           ['Annualized Payroll', '—', formatINR(data.annualizedPayroll, true)],
-          ['Pending Adjustments', String(data.alerts.find((a) => a.id === 'payroll-pending') ? 'Pending' : '0'), '—'],
+          ['Not Recorded (this month)', String(data.alerts.find((a) => a.id === 'payroll-unrecorded') ? `${data.payrollUnrecordedCount} payment(s)` : '0'), '—'],
         ]}
       />
     )

@@ -3,21 +3,21 @@
 /**
  * salary-shared — Shared primitives for the Salary & Payroll workspace.
  *
- * Status language is icon-first:
- *   ✓ Confirmed · 🕐 Pending · × Rejected · ↩ Reversed · 🔒 Locked
+ * PHASE 8B (Task 8B-7-c): the workspace renders the CANONICAL server
+ * payroll — fixed monthly salary + principal-recorded payments
+ * (RECORDED | VOIDED). Status language is icon-first:
+ *   ✓ Recorded · ↩ Voided
  * Primary actions keep text labels; status chips never use sentences.
  */
 
-import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Check, Clock, X, Undo2, Lock, Ban } from 'lucide-react'
+import { Check, Undo2, Ban, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatINR } from '@/lib/format'
-import type { PaymentStatus, ChangeRequestStatus } from '@/lib/store/salary-store'
-import { editPermissionLive, formatCountdown, useSalaryStore } from '@/lib/store/salary-store'
+import type { PaymentStatus } from '@/lib/store/salary-store'
 import { Panel } from '../shared/panel'
 
-// ─── Tab type (7 tabs) ───────────────────────────────────────────────
+// ─── Tab type ────────────────────────────────────────────────────────
 
 export type SalaryTab =
   | 'overview'
@@ -50,12 +50,10 @@ export function fmtDayYear(iso: string): string {
 
 export function PaymentStatusBadge({ status, className }: { status: PaymentStatus; className?: string }) {
   const map: Record<PaymentStatus, { cls: string; icon: React.ReactNode; label: string }> = {
-    'Confirmed': { cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300', icon: <Check className="h-3 w-3" strokeWidth={3} />, label: 'Confirmed' },
-    'Pending Receipt': { cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-300', icon: <Clock className="h-3 w-3" />, label: 'Pending Receipt' },
-    'Not Received': { cls: 'bg-rose-500/10 text-rose-700 dark:text-rose-300', icon: <X className="h-3 w-3" strokeWidth={3} />, label: 'Not Received' },
-    'Reversed': { cls: 'bg-slate-500/10 text-slate-600 dark:text-slate-300', icon: <Undo2 className="h-3 w-3" />, label: 'Reversed' },
+    'RECORDED': { cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300', icon: <Check className="h-3 w-3" strokeWidth={3} />, label: 'Recorded' },
+    'VOIDED': { cls: 'bg-slate-500/10 text-slate-600 dark:text-slate-300', icon: <Undo2 className="h-3 w-3" />, label: 'Voided' },
   }
-  const m = map[status]
+  const m = map[status] ?? map.RECORDED
   return (
     <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap', m.cls, className)}>
       {m.icon}{m.label}
@@ -63,67 +61,53 @@ export function PaymentStatusBadge({ status, className }: { status: PaymentStatu
   )
 }
 
-export function RequestStatusBadge({ status }: { status: ChangeRequestStatus }) {
-  const map: Record<ChangeRequestStatus, { cls: string; icon: React.ReactNode; label: string }> = {
-    'Pending': { cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-300', icon: <Clock className="h-3 w-3" />, label: 'Awaiting Approval' },
-    'Accepted': { cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300', icon: <Check className="h-3 w-3" strokeWidth={3} />, label: 'Accepted' },
-    'Declined': { cls: 'bg-rose-500/10 text-rose-700 dark:text-rose-300', icon: <X className="h-3 w-3" strokeWidth={3} />, label: 'Declined' },
-  }
-  const m = map[status]
-  return (
-    <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap', m.cls)}>
-      {m.icon}{m.label}
-    </span>
-  )
-}
-
-export function PayslipStateBadge({ state, label }: { state: 'Unpaid' | 'Pending' | 'Paid'; label?: string }) {
+export function PayslipStateBadge({ state, label }: { state: 'Unpaid' | 'Recorded'; label?: string }) {
   const map = {
-    'Paid': { cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300', icon: <Check className="h-3 w-3" strokeWidth={3} /> },
-    'Pending': { cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-300', icon: <Clock className="h-3 w-3" /> },
+    'Recorded': { cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300', icon: <Check className="h-3 w-3" strokeWidth={3} /> },
     'Unpaid': { cls: 'bg-muted text-muted-foreground', icon: <Ban className="h-3 w-3" /> },
   } as const
-  const m = map[state]
+  const m = map[state] ?? map.Unpaid
   return (
     <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap', m.cls)}>
-      {m.icon}{label ?? state}
+      {m.icon}{label ?? (state === 'Recorded' ? 'Paid' : 'Unpaid')}
     </span>
   )
 }
 
-export function LockedBadge({ label = 'Locked' }: { label?: string }) {
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-muted text-muted-foreground">
-      <Lock className="h-3 w-3" />{label}
-    </span>
-  )
-}
-
-export function SessionSalaryBadge() {
+export function MonthlySalaryBadge() {
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-violet-500/10 text-violet-700 dark:text-violet-300">
-      <Lock className="h-3 w-3" />Session Salary
+      <Check className="h-3 w-3" strokeWidth={3} />Monthly Salary
     </span>
   )
 }
 
-// ─── Editing-window live hook (drives every lock indicator) ──────────
+// ─── Sync state strip (honest loading / error affordances) ───────────
 
-export function useEditingWindow(): { allowed: boolean; msLeft: number; label: string } {
-  const editPermission = useSalaryStore((s) => s.editPermission)
-  const normalize = useSalaryStore((s) => s.normalizeEditPermission)
-  const [, setTick] = useState(0)
-
-  useEffect(() => {
-    const iv = setInterval(() => {
-      setTick((t) => t + 1)
-      normalize() // flips to OFF + records the audit entry the moment it expires
-    }, 1000)
-    return () => clearInterval(iv)
-  }, [normalize])
-
-  const live = editPermissionLive(editPermission)
-  return { allowed: live.allowed, msLeft: live.msLeft, label: formatCountdown(live.msLeft) }
+/** Quiet one-line strip for a failed canonical sync — offers retry. */
+export function SyncErrorStrip({ onRetry }: { onRetry: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      role="alert"
+      className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-3 py-2.5"
+    >
+      <div className="flex items-center gap-2.5 min-w-0">
+        <Clock className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+        <p className="text-xs font-medium text-rose-700 dark:text-rose-300 truncate">
+          Salary data could not be loaded from the server. Showing the last synced state.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="shrink-0 rounded-md border border-border px-2.5 py-1 text-[11px] font-medium hover:bg-muted/60 transition-colors"
+      >
+        Retry
+      </button>
+    </motion.div>
+  )
 }
 
 // ─── Panel (shared flat container) ───────────────────────────────────

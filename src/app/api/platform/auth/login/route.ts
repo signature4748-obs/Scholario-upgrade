@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import {
   RATE_LIMITS,
-  checkRateLimit,
+  checkRateLimitStrict,
   resetRateLimit,
   clientIpFromHeaders,
   loginAccountKey,
@@ -53,7 +53,8 @@ export async function POST(req: NextRequest) {
     const ip = clientIpFromHeaders(req.headers)
 
     // ── Rate limits: stricter than the school plane (privileged) ──────
-    const ipVerdict = checkRateLimit(`rl:pf-login:ip:${ip}`, RATE_LIMITS.platformLogin)
+    // PHASE 8B (§21) — strict shared-budget gate (platform credential surface).
+    const ipVerdict = await checkRateLimitStrict(`rl:pf-login:ip:${ip}`, RATE_LIMITS.platformLogin)
     if (!ipVerdict.allowed) {
       await platformAuditEvent({
         action: 'platform.login.locked',
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
     }
 
     const accountKey = loginAccountKey(email)
-    const accountVerdict = checkRateLimit(accountKey, RATE_LIMITS.platformLoginAccount)
+    const accountVerdict = await checkRateLimitStrict(accountKey, RATE_LIMITS.platformLoginAccount)
     if (!accountVerdict.allowed) {
       await platformAuditEvent({
         action: 'platform.login.locked',

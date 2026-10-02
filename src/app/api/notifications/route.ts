@@ -4,6 +4,7 @@ import { withUser, schoolScoped } from '@/lib/api'
 import { notificationVisibilityWhere } from '@/lib/notices'
 import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 import { AppError } from '@/lib/security/errors'
+import { publishToSchool } from '@/lib/realtime/publish'
 
 export const runtime = 'nodejs'
 
@@ -89,6 +90,16 @@ export async function POST(req: NextRequest) {
           senderId: user.id,
         },
       })
+
+      // PHASE 8B — realtime announcement frame (school-wide, fire-and-forget):
+      // rows default to PUBLISHED, no scheduling on this surface.
+      void publishToSchool(schoolId, 'all', 'announcement', {
+        id: n.id,
+        at: n.createdAt.toISOString(),
+        schoolId,
+        title,
+        detail: message.slice(0, 120),
+      }).catch(() => {})
 
       // Audit trail (ActivityLog — the same school-scoped domain journal the
       // teacher announcement route writes to; auditEvent's canonical

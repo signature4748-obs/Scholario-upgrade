@@ -4,18 +4,19 @@
  * salary-ui-context — shared UI actions across the Salary workspace tabs.
  *
  * Lets any tab open the employee drawer or the Record Payment dialog
- * without prop-drilling.
+ * without prop-drilling. PHASE 8B: the payroll universe is teachers (the
+ * canonical Teacher rows), so targets carry a teacherId.
  */
 
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 
 export interface RecordTarget {
-  employeeId?: string
-  periodKey?: string
+  teacherId?: string
+  month?: string
 }
 
 interface SalaryUIState {
-  drawerEmployeeId: string | null
+  drawerTeacherId: string | null
   openEmployee: (id: string) => void
   closeEmployee: () => void
   recordOpen: boolean
@@ -27,12 +28,12 @@ interface SalaryUIState {
 const SalaryUIContext = createContext<SalaryUIState | null>(null)
 
 export function SalaryUIProvider({ children }: { children: React.ReactNode }) {
-  const [drawerEmployeeId, setDrawerEmployeeId] = useState<string | null>(null)
+  const [drawerTeacherId, setDrawerTeacherId] = useState<string | null>(null)
   const [recordOpen, setRecordOpen] = useState(false)
   const [recordTarget, setRecordTarget] = useState<RecordTarget | null>(null)
 
-  const openEmployee = useCallback((id: string) => setDrawerEmployeeId(id), [])
-  const closeEmployee = useCallback(() => setDrawerEmployeeId(null), [])
+  const openEmployee = useCallback((id: string) => setDrawerTeacherId(id), [])
+  const closeEmployee = useCallback(() => setDrawerTeacherId(null), [])
   const openRecordPayment = useCallback((target?: RecordTarget) => {
     setRecordTarget(target ?? null)
     setRecordOpen(true)
@@ -43,9 +44,9 @@ export function SalaryUIProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const value = useMemo<SalaryUIState>(() => ({
-    drawerEmployeeId, openEmployee, closeEmployee,
+    drawerTeacherId, openEmployee, closeEmployee,
     recordOpen, recordTarget, openRecordPayment, closeRecordPayment,
-  }), [drawerEmployeeId, openEmployee, closeEmployee, recordOpen, recordTarget, openRecordPayment, closeRecordPayment])
+  }), [drawerTeacherId, openEmployee, closeEmployee, recordOpen, recordTarget, openRecordPayment, closeRecordPayment])
 
   return <SalaryUIContext.Provider value={value}>{children}</SalaryUIContext.Provider>
 }

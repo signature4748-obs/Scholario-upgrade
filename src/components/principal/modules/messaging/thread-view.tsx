@@ -19,7 +19,7 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import {
   Send, Star, Archive, MoreHorizontal, AlertCircle, ArrowLeft,
-  Check, CheckCheck, Settings2, RotateCcw, Info, ChevronDown, MailX,
+  Check, Settings2, RotateCcw, Info, ChevronDown, MailX,
 } from 'lucide-react'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -57,6 +57,7 @@ export function ThreadView({ onBack, onManageGroup, onContactMember }: Props) {
   const getGroupByConversationId = useMessagingStore((s) => s.getGroupByConversationId)
 
   const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -107,15 +108,28 @@ export function ThreadView({ onBack, onManageGroup, onContactMember }: Props) {
     el.style.height = `${Math.min(el.scrollHeight, 132)}px`
   }, [text])
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!text.trim() || !activeId) return
-    sendMessage(activeId, text)
+    setSending(true)
+    // 8B-7-d — server POST: optimistic bubble in the store, the server
+    // row replaces it (group threads fan out real direct messages).
+    const result = await sendMessage(activeId, text)
+    setSending(false)
+    if (!result.ok) {
+      toast.error('Message not sent', { description: result.error })
+      return
+    }
     setText('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     // Reply drafts are removed once sent
     const draft = useMessagingStore.getState().drafts.find((d) => d.conversationId === activeId)
     if (draft) deleteDraft(draft.id)
-    toast.success('Message sent')
+    toast.success(
+      'Message sent',
+      result.skipped && result.skipped > 0
+        ? { description: `${result.skipped} member${result.skipped === 1 ? '' : 's'} without messaging accounts were skipped` }
+        : undefined,
+    )
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -260,7 +274,7 @@ export function ThreadView({ onBack, onManageGroup, onContactMember }: Props) {
           />
           <button
             onClick={handleSend}
-            disabled={!text.trim()}
+            disabled={!text.trim() || sending}
             aria-label="Send message"
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xs transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -371,8 +385,7 @@ function MessageRow({ msg, first, last }: { msg: Message; first: boolean; last: 
             )}
           >
             <span className="text-[9px] tabular-nums">{formatMessageTime(msg.timestamp)}</span>
-            {isMe && msg.status === 'sent' && <Check className="h-2.5 w-2.5" />}
-            {isMe && msg.status === 'delivered' && <CheckCheck className="h-2.5 w-2.5" />}
+            {isMe && msg.status === 'sent' && <Check className="h-2.5 w-2.5" aria-label="Sent" />}
           </div>
         )}
       </div>

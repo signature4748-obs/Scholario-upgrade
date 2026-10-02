@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { requireTeacher, parseString, auditTeacherAction } from '@/lib/teacher-hub'
 import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
+import { publishToUser } from '@/lib/realtime/publish'
 import type { DirectThreadPayload } from '@/components/teacher/modules/communication/types'
 
 export const runtime = 'nodejs'
@@ -184,6 +185,20 @@ export async function POST(
           body: messageBody,
         },
       })
+
+      // PHASE 8B — realtime 'message' hint to the recipient (fire-and-forget,
+      // ids + 80-char preview only — the same discipline as the
+      // /api/messaging/threads publish). The recipient's user channel is the
+      // addressee's alone: message content never rides a school channel.
+      void publishToUser(ctx.schoolId, counterpart.id, 'message', {
+        id: created.id,
+        at: created.createdAt.toISOString(),
+        schoolId: ctx.schoolId,
+        recipientId: counterpart.id,
+        senderName: ctx.name,
+        subject,
+        preview: messageBody.slice(0, 80),
+      }).catch(() => {})
 
       return {
         message: {

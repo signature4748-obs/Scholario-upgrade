@@ -103,7 +103,7 @@ ${items}
       status: 200,
       headers: {
         'Content-Type': 'application/rss+xml; charset=utf-8',
-        'Cache-Control': 'public, max-age=300, s-maxage=300',
+        'Cache-Control': 'private, max-age=60', 'Vary': 'Host',
       },
     })
   } catch {
@@ -124,7 +124,7 @@ ${items}
       status: 200,
       headers: {
         'Content-Type': 'application/rss+xml; charset=utf-8',
-        'Cache-Control': 'public, max-age=60',
+        'Cache-Control': 'private, max-age=60', 'Vary': 'Host',
       },
     })
   }

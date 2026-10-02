@@ -1,306 +1,171 @@
 'use client'
 
 /**
- * Salary & Payroll store — Principal's payroll workspace + employee trust model.
+ * Salary store — SERVER-SYNCED client cache for the canonical payroll
+ * (Phase 8B, Task 8B-7-c).
  *
- * Employees come from the canonical teacher records + administrative staff.
- * Every rupee flows through one monthly pipeline:
+ * PostgreSQL is the single source of truth. The old localStorage ledger
+ * (zustand persist, key 'scholario-salary-v4' + tenant-scoped variants)
+ * is RETIRED: nothing is persisted client-side any more — the store is a
+ * per-session cache hydrated once from GET /api/salary, and every mutation
+ * calls the API and then folds the server's canonical response back into
+ * the cache (the teachers-store server-sync pattern).
  *
- *   Session Salary (locked net base)
- *     + monthly adjustments
- *     = Net Payable for the month
- *     → Principal records payment(s)
- *     → 🕐 Pending Receipt
- *     → employee confirms ✓ Received (receipt issued, counts as paid)
- *       or reports × Not Received (no receipt, principal notified)
+ * BUSINESS MODEL (strict, school's chosen workflow):
+ *   · FIXED MONTHLY salary only — one SalaryStructure row per teacher
+ *     (monthlyAmount + optional effectiveFrom/note).
+ *   · NO HRA, NO PF, NO tax, NO deductions, NO gross/basic/net arithmetic.
+ *     No field for any of those exists in this store.
+ *   · The principal configures the monthly salary and records payments;
+ *     the teacher sees the SAME canonical rows (their own only).
+ *   · Payment status: RECORDED | VOIDED. Totals are sums of RECORDED
+ *     amounts — never recomputed payroll math.
  *
- * Salary changes are never applied directly: the Principal sends a change
- * request while the temporary editing window is open, and the employee
- * accepts or declines it. The editing window expiry is persisted and
- * enforced inside every mutation — an expired window always fails, even
- * if a stale screen is still open.
+ * Honest states: syncStatus 'syncing' | 'synced' | 'error' — a failed
+ * fetch keeps the current cache and flags the error so surfaces can offer
+ * a retry; mutations throw the server's safe error message (including
+ * SALARY_PAYMENT_DUPLICATE with the existing row) so dialogs can surface
+ * them. Nothing is ever fabricated while loading.
  */
 
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import { useMemo } from 'react'
-// PHASE 7 (Task 7-a) — the fabricated staff universe is RETIRED. The
-// employee roster derives from the hydrated teachers-store (server
-// truth: GET /api/teachers); payments/adjustments/receipts/audit start
-// EMPTY and only ever contain real actions recorded in this store.
-import { useTeachersStore, type TeacherRecord } from '@/lib/store/teachers-store'
-import { useAuth } from '@/lib/store/auth-store'
-// SaaS-STAGE-2A — tenant-scoped persistence (per-school payroll dataset).
-import { migrateLegacyScopedStore, createTenantScopedStorage, TENANT_SCOPED_BASES } from '@/lib/tenant/tenant-storage'
-import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
 
 // ─── Types ───────────────────────────────────────────────────────────
 
-export type EmployeeStatus = 'Active' | 'On Leave' | 'Suspended' | 'Resigned' | 'Retired' | 'Inactive'
-export type EmployeeType = 'Teaching' | 'Administration' | 'Support' | 'Transport' | 'Finance' | 'Other'
-export type PaymentMethod = 'Bank Transfer' | 'UPI' | 'Cash' | 'Cheque'
-export type PaymentStatus = 'Pending Receipt' | 'Confirmed' | 'Not Received' | 'Reversed'
-export type ChangeRequestStatus = 'Pending' | 'Accepted' | 'Declined'
-export type StructureStatus = 'Active' | 'Archived'
+/** Canonical payment method keys (server enum). */
+export type SalaryMethod = 'CASH' | 'BANK_TRANSFER' | 'UPI' | 'CHEQUE' | 'OTHER'
 
-export interface Employee {
+/** Display labels for the method keys (UI order). */
+export const METHOD_KEYS: SalaryMethod[] = ['BANK_TRANSFER', 'UPI', 'CASH', 'CHEQUE', 'OTHER']
+export const METHOD_LABELS: Record<SalaryMethod, string> = {
+  CASH: 'Cash',
+  BANK_TRANSFER: 'Bank Transfer',
+  UPI: 'UPI',
+  CHEQUE: 'Cheque',
+  OTHER: 'Other',
+}
+
+/** RECORDED | VOIDED — the canonical payment lifecycle. */
+export type PaymentStatus = 'RECORDED' | 'VOIDED'
+
+/** A roster teacher as the salary module sees them (server truth). */
+export interface SalaryTeacher {
   id: string
-  employeeId: string
   name: string
-  avatar: string
-  designation: string
+  employeeId: string
   department: string
-  employeeType: EmployeeType
-  email: string
-  phone: string
-  joiningDate: string
-  status: EmployeeStatus
-  salary: number
-  attendance: number
-  bloodGroup: string
-  address: string
-  /** 'Other' = not recorded in the school records (never guessed). */
-  gender: 'Male' | 'Female' | 'Other'
-  bankAccount?: string
-  bankIfsc?: string
 }
 
-/** A component line inside a reusable structure template. */
-export interface StructureComponent {
+/** One teacher's fixed monthly salary (server truth). */
+export interface SalaryStructure {
   id: string
-  name: string
-  type: 'Earning' | 'Deduction'
-  basis: 'Fixed' | 'Percentage'
-  /** ₹ when Fixed, % of base when Percentage. */
-  value: number
+  teacherId: string
+  monthlyAmount: number
+  /** ISO date or null (informational provenance). */
+  effectiveFrom: string | null
+  note: string | null
+  updatedAt: string
 }
 
-/** How a salary structure pays an employee.
- *
- *   'simple'   — ONE fixed monthly salary (the default school workflow:
- *                "Monthly Salary ₹25,000"). No gross/deductions/net
- *                breakdown is computed or displayed.
- *   'detailed' — the Principal has EXPLICITLY configured salary
- *                components (Basic / HRA / PF / Tax …); only the
- *                configured components are ever shown.
- *
- * Absence of the field (legacy persisted data) is treated as 'detailed'
- * to preserve records created before this distinction existed. */
-export type SalaryStructureMode = 'simple' | 'detailed'
-
-export interface SalaryStructureTemplate {
-  id: string
-  name: string
-  description: string
-  applicableTo: EmployeeType | 'All'
-  /** SIMPLE mode: the monthly salary itself. DETAILED mode: the Basic Pay
-   *  base the percentage/fixed components resolve against. */
-  baseAmount: number
-  mode: SalaryStructureMode
-  components: StructureComponent[]
-  status: StructureStatus
-  createdAt: string
-}
-
-/** A component line with a resolved ₹ amount (employee's applied salary). */
-export interface AppliedComponent {
-  name: string
-  type: 'Earning' | 'Deduction'
-  amount: number
-}
-
-export interface SessionSalary {
-  structureId: string
-  structureName: string
-  /** 'simple' → a single Monthly Salary; 'detailed' → component lines. */
-  mode: SalaryStructureMode
-  base: number
-  netBase: number
-  earnings: AppliedComponent[]
-  deductions: AppliedComponent[]
-  effectiveFrom: string
-}
-
-export interface SalaryHistoryEntry {
-  id: string
-  date: string
-  fromNet?: number
-  toNet: number
-  note?: string
-  by: string
-}
-
-export interface EmployeeSalaryState {
-  employeeId: string
-  session: string
-  salary: SessionSalary
-  history: SalaryHistoryEntry[]
-}
-
-export interface SalaryChangeRequest {
-  id: string
-  employeeId: string
-  employeeName: string
-  currentNet: number
-  proposedNet: number
-  structureId?: string
-  structureName?: string
-  effectiveFrom: string
-  note?: string
-  status: ChangeRequestStatus
-  requestedBy: string
-  requestedAt: string
-  respondedAt?: string
-  respondedBy?: string
-  declineReason?: string
-}
-
-export interface MonthlyAdjustment {
-  id: string
-  employeeId: string
-  employeeName: string
-  periodKey: string // '2026-08'
-  label: string
-  /** Signed: positive adds to the month's payable, negative reduces it. */
-  amount: number
-  createdAt: string
-  createdBy: string
-}
-
+/** One canonical monthly payment (server truth). */
 export interface SalaryPayment {
   id: string
-  employeeId: string
-  employeeName: string
-  periodKey: string
-  monthLabel: string
-  netPayable: number
+  teacherId: string
+  /** 'YYYY-MM' salary month. */
+  month: string
   amount: number
-  date: string // YYYY-MM-DD
-  method: PaymentMethod
-  reference?: string
-  bankAccount?: string
+  /** ISO datetime the payment was made. */
+  paidOn: string
+  method: SalaryMethod | null
+  reference: string | null
+  note: string | null
   status: PaymentStatus
-  recordedBy: string
-  recordedAt: string
-  confirmedAt?: string
-  confirmedBy?: string
-  rejectedAt?: string
-  rejectedBy?: string
-  rejectionReason?: string
-  /** Only exists once the employee confirms receipt. */
-  receiptNo?: string
-  reversedAt?: string
-  reversalReason?: string
-  followedUpAt?: string
+  createdAt: string
+  updatedAt: string
 }
 
-export interface PaymentReceipt {
-  receiptNo: string
-  paymentId: string
-  employeeId: string
-  employeeName: string
-  monthLabel: string
+export interface SetStructureInput {
+  teacherId: string
+  monthlyAmount: number
+  effectiveFrom?: string
+  note?: string
+}
+
+export interface RecordPaymentInput {
+  teacherId: string
+  /** 'YYYY-MM' */
+  month: string
   amount: number
-  method: PaymentMethod
-  date: string
-  confirmedAt: string
+  paidOn?: string
+  method?: SalaryMethod
   reference?: string
+  note?: string
 }
 
-// ─── Session payroll archive (frozen, read-only snapshots) ───────────
-
-/** One employee's session totals, FROZEN at archive time — later salary
- *  changes can never rewrite these numbers. */
-export interface ArchivedEmployeeRecord {
-  employeeId: string
-  employeeCode: string // EMP-… / T-…
-  name: string
-  designation: string
-  department: string
-  employmentStatus: EmployeeStatus
-  /** Net monthly salary as it stood when the session was archived. */
-  monthlySalary: number
-  totalPayable: number
-  totalPaid: number
-  outstanding: number
-  paymentsCount: number
+/** Enriched API error — carries the typed duplicate payload when 409. */
+export interface ExistingPaymentInfo extends SalaryPayment {
+  teacher?: { id: string; user: { name: string } }
 }
 
-/** A completed session's payroll, preserved exactly as it happened.
- *  Payments are frozen copies of the original records (which already
- *  snapshot netPayable at record time) — never recomputed. */
-export interface SessionPayrollArchive {
-  sessionId: string
-  sessionLabel: string
-  archivedAt: string
-  archivedBy: string
-  records: ArchivedEmployeeRecord[]
-  payments: SalaryPayment[]
-  summary: {
-    employees: number
-    totalPayroll: number
-    totalPaid: number
-    totalOutstanding: number
-    paymentsCount: number
+export class SalaryApiError extends Error {
+  readonly status: number
+  readonly code?: string
+  readonly existing?: ExistingPaymentInfo | null
+  constructor(message: string, status: number, code?: string, existing?: ExistingPaymentInfo | null) {
+    super(message)
+    this.name = 'SalaryApiError'
+    this.status = status
+    this.code = code
+    this.existing = existing
   }
 }
 
-/** Same shape as an archive, but computed from the LIVE store — used for
- *  the in-progress session's read-only overview and for the archive action. */
-export interface SessionPayrollSnapshot {
-  sessionId: string
-  sessionLabel: string
-  records: ArchivedEmployeeRecord[]
-  payments: SalaryPayment[]
-  summary: SessionPayrollArchive['summary']
+// ─── Server DTOs (mirror src/app/api/salary/serialize.ts) ───────────
+
+interface StructureDto extends SalaryStructure {
+  teacher: { id: string; employeeId: string | null; department: string | null; user: { name: string; email?: string | null } }
 }
 
-export type AuditAction =
-  | 'payment.recorded'
-  | 'payment.confirmed'
-  | 'payment.not_received'
-  | 'payment.reversed'
-  | 'payment.followed_up'
-  | 'session.archived'
-  | 'salary.change_requested'
-  | 'salary.change_accepted'
-  | 'salary.change_declined'
-  | 'adjustment.added'
-  | 'structure.created'
-  | 'structure.updated'
-  | 'structure.archived'
-  | 'structure.restored'
-  | 'editing.enabled'
-  | 'editing.expired'
-  | 'settings.updated'
-
-export interface AuditEntry {
-  id: string
-  action: AuditAction
-  title: string
-  detail: string
-  actor: string
-  timestamp: string // ISO
+interface PaymentDto extends SalaryPayment {
+  teacher: { id: string; employeeId: string | null; user: { name: string } }
 }
 
-export interface EditPermission {
-  enabled: boolean
-  expiresAt: number | null
-  enabledBy?: string
-  enabledAt?: string
+interface SalaryBootstrap {
+  role: 'PRINCIPAL' | 'MANAGEMENT' | 'TEACHER'
+  teachers?: Array<{ id: string; name: string; employeeId: string; department: string }>
+  structures?: StructureDto[]
+  payments?: PaymentDto[]
+  /** TEACHER view only — the signed-in teacher's own identity. */
+  me?: SalaryTeacher | null
+  structure?: StructureDto | null
 }
 
-export interface PaymentSettings {
-  defaultMethod: PaymentMethod
-  referenceRequired: Record<PaymentMethod, boolean>
+// ─── Period helpers (the honest 'YYYY-MM' universe) ──────────────────
+
+export function currentPeriodKey(now = new Date()): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
-// ─── Academic session mapping (Indian academic year: April – March) ───
+export function periodLabel(periodKey: string): string {
+  const [y, m] = periodKey.split('-').map(Number)
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return periodKey
+  return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+}
 
-/** Maps a monthly period key ('2026-08') to its academic session id
- *  ('2026-27'). April–December belong to the session that starts that
- *  calendar year; January–March belong to the session started a year
- *  earlier. This is how the archive groups real records by session. */
+/** The last `count` monthly keys ending at the current month. */
+export function periodOptions(count = 6, now = new Date()): string[] {
+  const out: string[] = []
+  for (let i = 0; i < count; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    out.push(currentPeriodKey(d))
+  }
+  return out
+}
+
+// ─── Academic session mapping (Indian academic year: April – March) ──
+
+/** Maps a 'YYYY-MM' period key to its academic session id ('2026-27'). */
 export function sessionOfPeriod(periodKey: string): string {
   const [y, m] = periodKey.split('-').map(Number)
   if (!Number.isFinite(y) || !Number.isFinite(m)) return CURRENT_SESSION.id
@@ -313,1012 +178,397 @@ export function sessionLabelOf(sessionId: string): string {
   return sessionId.replace('-', '–')
 }
 
-/** All monthly period keys of an academic session, in order. `upTo`
- *  (inclusive) caps the range — the live session only counts months that
- *  have actually begun, so future months never inflate payroll figures. */
-export function sessionPeriodRange(sessionId: string, upTo?: string): string[] {
-  const [a, b] = sessionId.split('-').map(Number)
-  // '2026-27' → start 2026, end 2027. Accept 4-digit or 2-digit parts.
-  const startYear = a >= 100 ? a : 2000 + a
-  const endYear = b >= 100 ? b : startYear + 1
-  const endMonthCal = 3 // March of the following calendar year
-  const out: string[] = []
-  for (let y = startYear, m = 4; ; m++) {
-    if (m > 12) { m = 1; y++ }
-    const pk = `${y}-${String(m).padStart(2, '0')}`
-    if (upTo && pk > upTo) break
-    out.push(pk)
-    if (y === endYear && m === endMonthCal) break
-    if (out.length > 24) break // safety net — never loops unbounded
-  }
-  return out
-}
-
-/**
- * Builds a session payroll snapshot from REAL store data — the single
- * source used both by the in-progress session's read-only overview and by
- * `archiveSession` when freezing a completed session. Per employee, every
- * month of the session (up to `upTo`) contributes net payable via the same
- * helpers the Payments tab uses, so the numbers always match the running
- * payroll. Payment rows are the original records — netPayable was already
- * snapshotted when each payment was recorded.
- */
-export function buildSessionPayrollSnapshot(
-  state: Pick<SalaryState, 'employees' | 'salaries' | 'adjustments' | 'payments'>,
-  sessionId: string,
-  upTo?: string,
-): SessionPayrollSnapshot {
-  const periods = sessionPeriodRange(sessionId, upTo)
-  const inSession = (pk: string) => periods.includes(pk)
-  const sessionPayments = state.payments.filter((p) => inSession(p.periodKey))
-
-  const records: ArchivedEmployeeRecord[] = []
-  for (const e of state.employees) {
-    const state_ = state.salaries[e.id]
-    const empPayments = sessionPayments.filter((p) => p.employeeId === e.id)
-    if (!state_ && empPayments.length === 0) continue // never on payroll this session
-    const joinKey = e.joiningDate?.slice(0, 7) ?? ''
-    let totalPayable = 0
-    for (const pk of periods) {
-      if (joinKey && pk < joinKey) continue // not employed yet that month
-      const payable = netPayableFor(state, e.id, pk)
-      if (payable > 0) totalPayable += payable
-    }
-    const totalPaid = empPayments.filter((p) => p.status === 'Confirmed').reduce((s, p) => s + p.amount, 0)
-    const livePayments = empPayments.filter((p) => p.status !== 'Reversed')
-    records.push({
-      employeeId: e.id,
-      employeeCode: e.employeeId,
-      name: e.name,
-      designation: e.designation,
-      department: e.department,
-      employmentStatus: e.status,
-      monthlySalary: state_?.salary.netBase ?? 0,
-      totalPayable,
-      totalPaid,
-      outstanding: Math.max(0, totalPayable - totalPaid),
-      paymentsCount: livePayments.length,
-    })
-  }
-  records.sort((x, y) => y.totalPayable - x.totalPayable || x.name.localeCompare(y.name))
-
-  const paid = sessionPayments.filter((p) => p.status === 'Confirmed')
-  return {
-    sessionId,
-    sessionLabel: sessionLabelOf(sessionId),
-    records,
-    payments: [...sessionPayments].sort((a, b) => b.date.localeCompare(a.date)),
-    summary: {
-      employees: records.length,
-      totalPayroll: records.reduce((s, r) => s + r.totalPayable, 0),
-      totalPaid: paid.reduce((s, p) => s + p.amount, 0),
-      totalOutstanding: records.reduce((s, r) => s + r.outstanding, 0),
-      paymentsCount: sessionPayments.filter((p) => p.status !== 'Reversed').length,
-    },
-  }
-}
-
-// ─── Constants ───────────────────────────────────────────────────────
-
-/** The acting principal's REAL name, resolved from the signed-in session
- *  (Phase 7: the fabricated "Dr. Ananya Iyer" persona is retired — new
- *  payments / audit entries are attributed to the actual signed-in
- *  principal). Falls back to the role label when the session is not
- *  resolvable. */
-function principalActor(): string {
-  const user = useAuth.getState().user
-  return user?.name?.trim() || 'Principal'
-}
-
-export const EDIT_WINDOW_MS = 3 * 60 * 60 * 1000 // 3 hours
 export const CURRENT_SESSION = { id: '2026-27', label: 'Session 2026–27' }
 
-const METHODS: PaymentMethod[] = ['Bank Transfer', 'UPI', 'Cash', 'Cheque']
+// ─── Derived read helpers (single calculation path) ──────────────────
 
-// ─── Salary scales ───────────────────────────────────────────────────
-//
-// DEFAULT = SIMPLE MONTHLY SALARY (the school's chosen workflow):
-// every seeded structure pays one fixed monthly amount — no HRA / PF /
-// Professional Tax components are invented. The Principal can build a
-// DETAILED structure later (the UI supports it); nothing detailed is
-// seeded.
-
-const _ded = (id: string, name: string, basis: 'Fixed' | 'Percentage', value: number): StructureComponent =>
-  ({ id, name, type: 'Deduction', basis, value })
-const _earn = (id: string, name: string, basis: 'Fixed' | 'Percentage', value: number): StructureComponent =>
-  ({ id, name, type: 'Earning', basis, value })
-
-const SEED_STRUCTURES: SalaryStructureTemplate[] = [
-  {
-    id: 'STR-01', name: 'Primary Teaching', applicableTo: 'Teaching',
-    description: 'Nursery to Class 5 · monthly salary', baseAmount: 7500, mode: 'simple', status: 'Active', createdAt: '2026-04-01T09:00:00.000Z',
-    components: [],
-  },
-  {
-    id: 'STR-02', name: 'Middle School Teaching', applicableTo: 'Teaching',
-    description: 'Class 6 to Class 9 · monthly salary', baseAmount: 11800, mode: 'simple', status: 'Active', createdAt: '2026-04-01T09:05:00.000Z',
-    components: [],
-  },
-  {
-    id: 'STR-03', name: 'HOD & Senior Teaching', applicableTo: 'Teaching',
-    description: 'HODs · Class 9–12 · monthly salary', baseAmount: 26500, mode: 'simple', status: 'Active', createdAt: '2026-04-01T09:10:00.000Z',
-    components: [],
-  },
-  {
-    id: 'STR-04', name: 'Senior Leadership', applicableTo: 'Administration',
-    description: 'Principal and leadership · monthly salary', baseAmount: 35000, mode: 'simple', status: 'Active', createdAt: '2026-04-01T09:15:00.000Z',
-    components: [],
-  },
-  {
-    id: 'STR-05', name: 'Office & Administration', applicableTo: 'Administration',
-    description: 'Office and accounts staff · monthly salary', baseAmount: 12500, mode: 'simple', status: 'Active', createdAt: '2026-04-01T09:20:00.000Z',
-    components: [],
-  },
-  {
-    id: 'STR-06', name: 'Support Staff', applicableTo: 'Support',
-    description: 'Lab and security staff · monthly salary', baseAmount: 8400, mode: 'simple', status: 'Active', createdAt: '2026-04-01T09:25:00.000Z',
-    components: [],
-  },
-  {
-    id: 'STR-07', name: 'Transport Staff', applicableTo: 'Transport',
-    description: 'Drivers and conductors · monthly salary', baseAmount: 9600, mode: 'simple', status: 'Active', createdAt: '2026-04-01T09:30:00.000Z',
-    components: [],
-  },
-  {
-    id: 'STR-08', name: 'Legacy 2019 Scale', applicableTo: 'All',
-    description: 'Retired scale from an earlier session', baseAmount: 4500, mode: 'simple', status: 'Archived', createdAt: '2019-04-01T09:00:00.000Z',
-    components: [],
-  },
-]
-
-// ─── Employees (derived from the hydrated teachers-store) ──────────
-
-/** Map one hydrated TeacherRecord onto the payroll Employee shape.
- *  Fields with no source in the teacher's record map to EMPTY values —
- *  bank details are NEVER fabricated (Phase 7). */
-export function employeeFromTeacher(t: TeacherRecord): Employee {
-  const status: EmployeeStatus =
-    t.status === 'On Leave' ? 'On Leave'
-    : t.status === 'Suspended' ? 'Suspended'
-    : t.status === 'Relieved' ? 'Inactive'
-    : 'Active'
-  return {
-    id: t.id, // canonical DB teacher id — same universe as the Teachers module
-    employeeId: t.employeeId,
-    name: t.name,
-    avatar: t.avatar,
-    designation: t.designation,
-    department: t.department,
-    employeeType: 'Teaching',
-    email: t.email,
-    phone: t.phone,
-    joiningDate: t.joiningDate,
-    status,
-    salary: t.salary,
-    attendance: t.attendance,
-    bloodGroup: t.bloodGroup,
-    address: t.currentAddress,
-    gender: t.gender === 'Male' ? 'Male' : t.gender === 'Female' ? 'Female' : 'Other',
-    // No bank details on file — recorded only when the principal enters them.
-    bankAccount: undefined,
-    bankIfsc: undefined,
-  }
+/** The teacher's configured monthly salary (0 when not configured). */
+export function monthlyAmountFor(structures: SalaryStructure[], teacherId: string): number {
+  return structures.find((s) => s.teacherId === teacherId)?.monthlyAmount ?? 0
 }
 
-function employeesFromTeachers(teachers: TeacherRecord[]): Employee[] {
-  return teachers
-    .filter((t) => t.status !== 'Relieved') // relieved staff are off the payroll pool
-    .map(employeeFromTeacher)
-}
-
-// ─── Apply a scale ──────────────────────────────────────────────────
-
-function buildSession(template: SalaryStructureTemplate, base: number, effectiveFrom: string, exactNet?: number): SessionSalary {
-  const mode = template.mode ?? 'detailed'
-
-  // SIMPLE — one fixed Monthly Salary. The monthly amount IS the salary:
-  // no Basic/HRA/PF components are invented, nothing is derived.
-  if (mode === 'simple') {
-    const monthly = exactNet ?? base
-    return {
-      structureId: template.id,
-      structureName: template.name,
-      mode,
-      base: monthly,
-      netBase: monthly,
-      earnings: [{ name: 'Monthly Salary', type: 'Earning', amount: monthly }],
-      deductions: [],
-      effectiveFrom,
-    }
-  }
-
-  const earnings: AppliedComponent[] = [
-    { name: 'Basic Pay', type: 'Earning', amount: base },
-    ...template.components
-      .filter((c) => c.type === 'Earning')
-      .map((c) => ({ name: c.name, type: 'Earning' as const, amount: c.basis === 'Percentage' ? Math.round(base * c.value / 100) : c.value })),
-  ]
-  const deductions: AppliedComponent[] = template.components
-    .filter((c) => c.type === 'Deduction')
-    .map((c) => ({ name: c.name, type: 'Deduction' as const, amount: c.basis === 'Percentage' ? Math.round(base * c.value / 100) : c.value }))
-  let netBase = earnings.reduce((s, c) => s + c.amount, 0) - deductions.reduce((s, c) => s + c.amount, 0)
-  // Absorb rupee-level rounding into Basic Pay so the net lands exactly.
-  if (exactNet !== undefined && netBase !== exactNet) {
-    earnings[0] = { ...earnings[0], amount: earnings[0].amount + (exactNet - netBase) }
-    netBase = exactNet
-  }
-  return { structureId: template.id, structureName: template.name, mode, base, netBase, earnings, deductions, effectiveFrom }
-}
-
-/** Places an employee on a scale for a target GROSS earnings total. */
-export function applyStructure(template: SalaryStructureTemplate, targetGross: number, effectiveFrom: string): SessionSalary {
-  // Simple scale — gross == net == the monthly salary.
-  if ((template.mode ?? 'detailed') === 'simple') return buildSession(template, targetGross, effectiveFrom)
-  const pctEarnings = template.components.filter((c) => c.type === 'Earning' && c.basis === 'Percentage')
-    .reduce((s, c) => s + c.value, 0) / 100
-  const fixedEarnings = template.components.filter((c) => c.type === 'Earning' && c.basis === 'Fixed')
-    .reduce((s, c) => s + c.value, 0)
-  const base = Math.round((targetGross - fixedEarnings) / (1 + pctEarnings))
-  return buildSession(template, base, effectiveFrom)
-}
-
-/** Places an employee on a scale for an exact target NET salary. */
-export function applyStructureToNet(template: SalaryStructureTemplate, targetNet: number, effectiveFrom: string): SessionSalary {
-  // Simple scale — the target net IS the monthly salary, exactly.
-  if ((template.mode ?? 'detailed') === 'simple') return buildSession(template, targetNet, effectiveFrom)
-  const pctEarnings = template.components.filter((c) => c.type === 'Earning' && c.basis === 'Percentage')
-    .reduce((s, c) => s + c.value, 0) / 100
-  const fixedEarnings = template.components.filter((c) => c.type === 'Earning' && c.basis === 'Fixed')
-    .reduce((s, c) => s + c.value, 0)
-  const pctDeductions = template.components.filter((c) => c.type === 'Deduction' && c.basis === 'Percentage')
-    .reduce((s, c) => s + c.value, 0) / 100
-  const fixedDeductions = template.components.filter((c) => c.type === 'Deduction' && c.basis === 'Fixed')
-    .reduce((s, c) => s + c.value, 0)
-  // net = base·(1 + pctE − pctD) + fixedE − fixedD
-  const denom = 1 + pctEarnings - pctDeductions
-  const base = Math.round((targetNet - fixedEarnings + fixedDeductions) / denom)
-  return buildSession(template, base, effectiveFrom, targetNet)
-}
-
-// ─── Time helpers ────────────────────────────────────────────────────
-
-export function currentPeriodKey(now = new Date()): string {
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-}
-
-export function periodLabel(periodKey: string): string {
-  const [y, m] = periodKey.split('-').map(Number)
-  return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
-}
-
-export function periodOptions(count = 6, now = new Date()): string[] {
-  const out: string[] = []
-  for (let i = 0; i < count; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    out.push(currentPeriodKey(d))
-  }
-  return out
-}
-
-/**
- * Next internal Cash payment reference for the school/tenant: `CASH-YYYY-NNNN`.
- * Derived from every reference already on file (reversed included), so a
- * number is never reused, numbering is sequential and consistent, and the
- * sequence stays independent per school because each tenant owns its store.
- */
-export function nextCashReference(existingReferences: Array<string | undefined>, year: number): string {
-  const prefix = `CASH-${year}-`
-  let max = 0
-  for (const ref of existingReferences) {
-    if (ref && ref.startsWith(prefix)) {
-      const n = Number(ref.slice(prefix.length))
-      if (Number.isFinite(n) && n > max) max = n
-    }
-  }
-  return `${prefix}${String(max + 1).padStart(4, '0')}`
-}
-
-const inr = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`
-
-// ─── Store ───────────────────────────────────────────────────────────
-
-export interface RecordPaymentInput {
-  employeeId: string
-  periodKey: string
-  amount: number
-  date: string
-  method: PaymentMethod
-  reference?: string
-  bankAccount?: string
-}
-
-export interface ChangeRequestInput {
-  employeeId: string
-  proposedNet: number
-  structureId?: string
-  effectiveFrom: string
-  note?: string
-}
-
-export interface AdjustmentInput {
-  employeeId: string
-  periodKey: string
-  label: string
-  amount: number
-}
-
-interface SalaryState {
-  employees: Employee[]
-  structures: SalaryStructureTemplate[]
-  salaries: Record<string, EmployeeSalaryState>
-  changeRequests: SalaryChangeRequest[]
-  adjustments: MonthlyAdjustment[]
-  payments: SalaryPayment[]
-  receipts: PaymentReceipt[]
-  audit: AuditEntry[]
-  editPermission: EditPermission
-  settings: PaymentSettings
-  receiptSeq: number
-  /** Completed sessions preserved as frozen, read-only payroll records. */
-  archives: SessionPayrollArchive[]
-
-  recordPayment: (input: RecordPaymentInput) => SalaryPayment
-  confirmReceipt: (paymentId: string, actor?: string) => void
-  reportNotReceived: (paymentId: string, reason: string, actor?: string) => void
-  reversePayment: (paymentId: string, reason: string) => void
-  markFollowedUp: (paymentId: string) => void
-
-  requestSalaryChange: (input: ChangeRequestInput) => void
-  respondToChangeRequest: (requestId: string, accept: boolean, reason?: string) => void
-  addAdjustment: (input: AdjustmentInput) => void
-
-  createStructure: (input: Omit<SalaryStructureTemplate, 'id' | 'status' | 'createdAt'>) => void
-  updateStructure: (id: string, patch: Partial<Omit<SalaryStructureTemplate, 'id' | 'createdAt'>>) => void
-  duplicateStructure: (id: string) => void
-  setStructureStatus: (id: string, status: StructureStatus) => void
-
-  enableEditing: () => void
-  normalizeEditPermission: () => void
-  updateSettings: (patch: Partial<PaymentSettings>) => void
-
-  /** Freeze a completed session's payroll into a read-only archive.
-   *  Guards: the current (in-progress) session can never be archived,
-   *  a session cannot be archived twice, and empty sessions are refused. */
-  archiveSession: (sessionId: string, actor?: string) => SessionPayrollArchive
-}
-
-// SaaS-STAGE-2A — one-time legacy copy into the demo school's namespace
-// (before store creation / hydration).
-migrateLegacyScopedStore(TENANT_SCOPED_BASES.salary, DEFAULT_TENANT_ID)
-
-/* ------------------------------------------------------------------ */
-/*  Persisted-state migration (Phase 7, Task 7-a)                      */
-/* ------------------------------------------------------------------ */
-
-/** The persisted payroll slice (see partialize below). */
-type SalaryPersistedState = Pick<
-  SalaryState,
-  | 'structures' | 'salaries' | 'changeRequests' | 'adjustments' | 'payments'
-  | 'receipts' | 'audit' | 'editPermission' | 'settings' | 'receiptSeq' | 'archives'
->
-
-const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v)
-
-/**
- * v0 (the un-versioned seeded era) → v1: purge the FABRICATED payroll —
- * seeded employees' salaries, the NEFT/UPI payment history, festival
- * bonuses, advance recoveries, receipts, change requests, the seed audit
- * trail and the frozen session archives built on top of them. Structure
- * templates and payment settings are school CONFIGURATION (not
- * identities) and survive. The employee list is never persisted — it
- * derives from the hydrated teachers-store, so real tenant staff appear
- * as soon as the roster syncs.
- */
-function migrateSalaryStore(persisted: unknown): SalaryPersistedState {
-  const devWarn = (...args: unknown[]) => {
-    if (process.env.NODE_ENV !== 'production') {
-      console.warn('[salary-store migrate]', ...args)
-    }
-  }
-
-  // Fabricated slices are purged regardless of shape — only the config
-  // slices (structures / settings) are even attempted.
-  if (!isPlainObject(persisted)) {
-    devWarn('persisted state is not an object — starting the honest (empty) payroll')
-    return emptyPayrollSnapshot()
-  }
-  devWarn(
-    'purging the seeded payroll (employees/salaries/payments/receipts/audit) — ' +
-      'the employee list now derives from the server teacher roster'
-  )
-
-  const snapshot = emptyPayrollSnapshot()
-
-  const rawStructures = persisted.structures
-  if (Array.isArray(rawStructures)) {
-    const structures = rawStructures.filter(
-      (s): s is SalaryStructureTemplate => isPlainObject(s) && typeof s.id === 'string' && typeof s.name === 'string'
-    )
-    if (structures.length > 0) snapshot.structures = structures
-  }
-  const rawSettings = persisted.settings
-  if (isPlainObject(rawSettings) && typeof rawSettings.defaultMethod === 'string' && isPlainObject(rawSettings.referenceRequired)) {
-    const referenceRequired = rawSettings.referenceRequired as Record<string, unknown>
-    if (METHODS.every((m) => typeof referenceRequired[m] === 'boolean')) {
-      snapshot.settings = rawSettings as unknown as PaymentSettings
-    }
-  }
-  // editPermission is always reset OFF (an expired/unversioned window must
-  // never survive the purge); payment history starts empty.
-  return snapshot
-}
-
-function emptyPayrollSnapshot(): SalaryPersistedState {
-  return {
-    structures: SEED_STRUCTURES,
-    salaries: {},
-    changeRequests: [],
-    adjustments: [],
-    payments: [],
-    receipts: [],
-    audit: [],
-    editPermission: { enabled: false, expiresAt: null },
-    settings: {
-      defaultMethod: 'Bank Transfer',
-      referenceRequired: { 'Bank Transfer': true, UPI: false, Cash: false, Cheque: true },
-    },
-    receiptSeq: 0,
-    archives: [],
-  }
-}
-
-export const useSalaryStore = create<SalaryState>()(
-  persist<SalaryState, [], [], SalaryPersistedState>(
-    (set, get) => {
-      const log = (action: AuditAction, title: string, detail: string, actor: string) =>
-        set((st) => ({ audit: [{ id: `AUD-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, action, title, detail, actor, timestamp: new Date().toISOString() }, ...st.audit] }))
-
-      /** Guard: every salary mutation runs through this. Throws when locked. */
-      const assertEditingAllowed = () => {
-        const { editPermission } = get()
-        const live = editPermission.enabled && editPermission.expiresAt !== null && Date.now() < editPermission.expiresAt
-        if (live) return
-        if (editPermission.enabled) {
-          // Window just expired — normalise and record it once.
-          set({ editPermission: { enabled: false, expiresAt: null } })
-          log('editing.expired', 'Editing window ended', 'Salary editing', 'System')
-        }
-        throw new Error('Salary editing is locked. Enable editing in Settings first.')
-      }
-
-      return {
-        // PHASE 7 — employees derive from the hydrated teachers-store (the
-        // bridge below keeps them in sync); payments/adjustments/receipts/
-        // audit start EMPTY and only ever hold real recorded actions.
-        employees: employeesFromTeachers(useTeachersStore.getState().teachers),
-        structures: SEED_STRUCTURES,
-        salaries: {},
-        changeRequests: [],
-        adjustments: [],
-        payments: [],
-        receipts: [],
-        audit: [],
-        receiptSeq: 0,
-        editPermission: { enabled: false, expiresAt: null },
-        archives: [],
-        settings: {
-          defaultMethod: 'Bank Transfer',
-          referenceRequired: { 'Bank Transfer': true, UPI: false, Cash: false, Cheque: true },
-        },
-
-        // ── Payments ──
-        recordPayment: (input) => {
-          const emp = get().employees.find((e) => e.id === input.employeeId)
-          if (!emp) throw new Error('Select an employee.')
-          if (!input.amount || input.amount <= 0) throw new Error('Enter a valid amount.')
-          if (!input.date) throw new Error('Select a payment date.')
-          const { settings } = get()
-          if (settings.referenceRequired[input.method] && !input.reference?.trim()) {
-            throw new Error(`Reference number is required for ${input.method}.`)
-          }
-          const payable = netPayableFor(get(), input.employeeId, input.periodKey)
-          // Cash has no external transaction number — the school's internal
-          // payment reference is generated here, once, and persists with the
-          // payment. UPI / Bank Transfer / Cheque keep the Principal-entered ref.
-          const reference = input.method === 'Cash'
-            ? nextCashReference(
-                get().payments.map((p) => p.reference),
-                Number(String(input.date).slice(0, 4)) || new Date().getFullYear(),
-              )
-            : input.reference?.trim() || undefined
-          const payment: SalaryPayment = {
-            id: `PAY-${Date.now().toString(36)}`,
-            employeeId: input.employeeId,
-            employeeName: emp.name,
-            periodKey: input.periodKey,
-            monthLabel: periodLabel(input.periodKey),
-            netPayable: payable,
-            amount: input.amount,
-            date: input.date,
-            method: input.method,
-            reference,
-            bankAccount: input.method === 'Bank Transfer' ? (input.bankAccount || emp.bankAccount) : undefined,
-            status: 'Pending Receipt',
-            recordedBy: principalActor(),
-            recordedAt: new Date().toISOString(),
-          }
-          set((st) => ({ payments: [payment, ...st.payments] }))
-          log('payment.recorded', 'Payment recorded', `${emp.name} · ${inr(input.amount)} · ${payment.monthLabel}`, principalActor())
-          return payment
-        },
-
-        confirmReceipt: (paymentId, actor) => {
-          const st = get()
-          const p = st.payments.find((x) => x.id === paymentId)
-          if (!p || p.status !== 'Pending Receipt') return
-          const now = new Date()
-          const receiptNo = `RCP-${String(now.getFullYear()).slice(2)}${String(now.getMonth() + 1).padStart(2, '0')}-${(st.receiptSeq + 1).toString().padStart(4, '0')}`
-          const confirmedAt = now.toISOString()
-          const receipt: PaymentReceipt = {
-            receiptNo, paymentId: p.id, employeeId: p.employeeId, employeeName: p.employeeName,
-            monthLabel: p.monthLabel, amount: p.amount, method: p.method, date: p.date,
-            confirmedAt, reference: p.reference,
-          }
-          set({
-            payments: st.payments.map((x) => x.id === paymentId
-              ? { ...x, status: 'Confirmed' as PaymentStatus, confirmedAt, confirmedBy: actor ?? p.employeeName, receiptNo }
-              : x),
-            receipts: [receipt, ...st.receipts],
-            receiptSeq: st.receiptSeq + 1,
-          })
-          log('payment.confirmed', 'Payment confirmed', `${p.employeeName} · ${inr(p.amount)}`, actor ?? p.employeeName)
-        },
-
-        reportNotReceived: (paymentId, reason, actor) => {
-          const st = get()
-          const p = st.payments.find((x) => x.id === paymentId)
-          if (!p || p.status !== 'Pending Receipt') return
-          if (!reason.trim()) throw new Error('Tell us what happened so the school can follow up.')
-          const rejectedAt = new Date().toISOString()
-          set({
-            payments: st.payments.map((x) => x.id === paymentId
-              ? { ...x, status: 'Not Received' as PaymentStatus, rejectedAt, rejectedBy: actor ?? p.employeeName, rejectionReason: reason.trim() }
-              : x),
-          })
-          log('payment.not_received', 'Payment not received', `${p.employeeName} · ${inr(p.amount)} — ${reason.trim()}`, actor ?? p.employeeName)
-        },
-
-        reversePayment: (paymentId, reason) => {
-          const st = get()
-          const p = st.payments.find((x) => x.id === paymentId)
-          if (!p || (p.status !== 'Confirmed' && p.status !== 'Pending Receipt')) return
-          if (!reason.trim()) throw new Error('Enter a reason for reversing this payment.')
-          set({
-            payments: st.payments.map((x) => x.id === paymentId
-              ? { ...x, status: 'Reversed' as PaymentStatus, reversedAt: new Date().toISOString(), reversalReason: reason.trim() }
-              : x),
-            receipts: st.receipts.filter((r) => r.paymentId !== paymentId),
-          })
-          log('payment.reversed', 'Payment reversed', `${p.employeeName} · ${inr(p.amount)} — ${reason.trim()}`, principalActor())
-        },
-
-        markFollowedUp: (paymentId) => {
-          const st = get()
-          const p = st.payments.find((x) => x.id === paymentId)
-          if (!p || (p.status !== 'Not Received' && p.status !== 'Pending Receipt')) return
-          set({ payments: st.payments.map((x) => x.id === paymentId ? { ...x, followedUpAt: new Date().toISOString() } : x) })
-          log('payment.followed_up', 'Follow-up recorded', `${p.employeeName} · ${inr(p.amount)}`, principalActor())
-        },
-
-        // ── Salary changes (employee approval) ──
-        requestSalaryChange: (input) => {
-          assertEditingAllowed()
-          const st = get()
-          const emp = st.employees.find((e) => e.id === input.employeeId)
-          const current = st.salaries[input.employeeId]
-          if (!emp || !current) throw new Error('Select an employee.')
-          if (!input.proposedNet || input.proposedNet <= 0) throw new Error('Enter a valid net salary.')
-          if (input.proposedNet === current.salary.netBase) throw new Error('The new amount is the same as the current salary.')
-          const structureName = input.structureId ? st.structures.find((s) => s.id === input.structureId)?.name : undefined
-          const req: SalaryChangeRequest = {
-            id: `CR-${Date.now().toString(36)}`,
-            employeeId: input.employeeId,
-            employeeName: emp.name,
-            currentNet: current.salary.netBase,
-            proposedNet: input.proposedNet,
-            structureId: input.structureId,
-            structureName,
-            effectiveFrom: input.effectiveFrom,
-            note: input.note?.trim() || undefined,
-            status: 'Pending',
-            requestedBy: principalActor(),
-            requestedAt: new Date().toISOString(),
-          }
-          set({ changeRequests: [req, ...st.changeRequests] })
-          log('salary.change_requested', 'Salary change sent', `${emp.name} · ${inr(current.salary.netBase)} → ${inr(input.proposedNet)}`, principalActor())
-        },
-
-        respondToChangeRequest: (requestId, accept, reason) => {
-          const st = get()
-          const req = st.changeRequests.find((r) => r.id === requestId)
-          const current = req ? st.salaries[req.employeeId] : undefined
-          if (!req || !current || req.status !== 'Pending') return
-          const respondedAt = new Date().toISOString()
-
-          if (accept) {
-            // The employee approved this exact net — the applied salary
-            // must land on it, whichever scale is used.
-            const targetStructure = st.structures.find((s) => s.id === req.structureId)
-              ?? st.structures.find((s) => s.id === current.salary.structureId)
-            const newSalary: SessionSalary = targetStructure
-              ? applyStructureToNet(targetStructure, req.proposedNet, req.effectiveFrom)
-              : (() => {
-                  // No scale available — scale every line proportionally.
-                  const factor = current.salary.netBase > 0 ? req.proposedNet / current.salary.netBase : 1
-                  const scaleLine = (c: AppliedComponent): AppliedComponent => ({ ...c, amount: Math.round(c.amount * factor) })
-                  const earnings = current.salary.earnings.map(scaleLine)
-                  const deductions = current.salary.deductions.map(scaleLine)
-                  const netBase = earnings.reduce((s, c) => s + c.amount, 0) - deductions.reduce((s, c) => s + c.amount, 0)
-                  return {
-                    ...current.salary,
-                    base: Math.round(current.salary.base * factor),
-                    netBase,
-                    earnings,
-                    deductions,
-                    effectiveFrom: req.effectiveFrom,
-                  }
-                })()
-            const historyEntry: SalaryHistoryEntry = {
-              id: `H-${Date.now().toString(36)}`,
-              date: req.effectiveFrom,
-              fromNet: current.salary.netBase,
-              toNet: req.proposedNet,
-              note: req.note,
-              by: req.employeeName,
-            }
-            set({
-              changeRequests: st.changeRequests.map((r) => r.id === requestId ? { ...r, status: 'Accepted' as ChangeRequestStatus, respondedAt, respondedBy: req.employeeName } : r),
-              salaries: {
-                ...st.salaries,
-                [req.employeeId]: { ...current, salary: newSalary, history: [historyEntry, ...current.history] },
-              },
-            })
-            log('salary.change_accepted', 'Salary change accepted', `${req.employeeName} · ${inr(req.currentNet)} → ${inr(req.proposedNet)}`, req.employeeName)
-          } else {
-            set({
-              changeRequests: st.changeRequests.map((r) => r.id === requestId
-                ? { ...r, status: 'Declined' as ChangeRequestStatus, respondedAt, respondedBy: req.employeeName, declineReason: reason?.trim() || undefined }
-                : r),
-            })
-            log('salary.change_declined', 'Salary change declined', `${req.employeeName} · ${inr(req.currentNet)} → ${inr(req.proposedNet)}`, req.employeeName)
-          }
-        },
-
-        addAdjustment: (input) => {
-          assertEditingAllowed()
-          const st = get()
-          const emp = st.employees.find((e) => e.id === input.employeeId)
-          if (!emp) throw new Error('Select an employee.')
-          if (!input.label.trim()) throw new Error('Enter what this adjustment is for.')
-          if (!input.amount || input.amount === 0) throw new Error('Enter a valid amount.')
-          const adj: MonthlyAdjustment = {
-            id: `ADJ-${Date.now().toString(36)}`,
-            employeeId: input.employeeId,
-            employeeName: emp.name,
-            periodKey: input.periodKey,
-            label: input.label.trim(),
-            amount: input.amount,
-            createdAt: new Date().toISOString(),
-            createdBy: principalActor(),
-          }
-          set({ adjustments: [adj, ...st.adjustments] })
-          const sign = input.amount > 0 ? '+' : '−'
-          log('adjustment.added', 'Adjustment added', `${emp.name} · ${input.label.trim()} ${sign}${inr(Math.abs(input.amount))} · ${periodLabel(input.periodKey)}`, principalActor())
-        },
-
-        // ── Structure templates ──
-        createStructure: (input) => {
-          const st = get()
-          const structure: SalaryStructureTemplate = {
-            ...input,
-            id: `STR-${Date.now().toString(36)}`,
-            status: 'Active',
-            createdAt: new Date().toISOString(),
-          }
-          set({ structures: [...st.structures, structure] })
-          log('structure.created', 'Structure created', `${structure.name} · ${structure.applicableTo}`, principalActor())
-        },
-
-        updateStructure: (id, patch) => {
-          const st = get()
-          const old = st.structures.find((s) => s.id === id)
-          set({ structures: st.structures.map((s) => s.id === id ? { ...s, ...patch } : s) })
-          if (old) log('structure.updated', 'Structure updated', old.name, principalActor())
-        },
-
-        duplicateStructure: (id) => {
-          const st = get()
-          const src = st.structures.find((s) => s.id === id)
-          if (!src) return
-          const copy: SalaryStructureTemplate = {
-            ...src,
-            id: `STR-${Date.now().toString(36)}`,
-            name: `${src.name} (Copy)`,
-            status: 'Active',
-            createdAt: new Date().toISOString(),
-          }
-          set({ structures: [...st.structures, copy] })
-          log('structure.created', 'Structure duplicated', `${src.name} → ${copy.name}`, principalActor())
-        },
-
-        setStructureStatus: (id, status) => {
-          const st = get()
-          const src = st.structures.find((s) => s.id === id)
-          set({ structures: st.structures.map((s) => s.id === id ? { ...s, status } : s) })
-          if (src) log(status === 'Archived' ? 'structure.archived' : 'structure.restored', status === 'Archived' ? 'Structure archived' : 'Structure restored', src.name, principalActor())
-        },
-
-        // ── Editing window ──
-        enableEditing: () => {
-          const now = Date.now()
-          set({
-            editPermission: {
-              enabled: true,
-              expiresAt: now + EDIT_WINDOW_MS,
-              enabledBy: principalActor(),
-              enabledAt: new Date().toISOString(),
-            },
-          })
-          const hours = Math.floor(EDIT_WINDOW_MS / 3600000)
-          log('editing.enabled', 'Editing enabled', `${hours}-hour window`, principalActor())
-        },
-
-        normalizeEditPermission: () => {
-          const { editPermission } = get()
-          if (editPermission.enabled && editPermission.expiresAt !== null && Date.now() >= editPermission.expiresAt) {
-            set({ editPermission: { enabled: false, expiresAt: null } })
-            log('editing.expired', 'Editing window ended', 'Salary editing', 'System')
-          }
-        },
-
-        updateSettings: (patch) => {
-          set((st) => ({ settings: { ...st.settings, ...patch } }))
-          log('settings.updated', 'Preferences updated', 'Salary & Payroll', principalActor())
-        },
-
-        // ── Session archive ──
-        archiveSession: (sessionId, actor) => {
-          const st = get()
-          if (sessionId === CURRENT_SESSION.id) {
-            throw new Error('This session is still in progress — it can be archived once it ends.')
-          }
-          if (st.archives.some((a) => a.sessionId === sessionId)) {
-            throw new Error('That session has already been archived.')
-          }
-          const snapshot = buildSessionPayrollSnapshot(st, sessionId)
-          if (snapshot.records.length === 0) {
-            throw new Error('No payroll records exist for that session.')
-          }
-          const archive: SessionPayrollArchive = {
-            ...snapshot,
-            archivedAt: new Date().toISOString(),
-            archivedBy: actor ?? principalActor(),
-          }
-          set({ archives: [archive, ...st.archives] })
-          log('session.archived', 'Session archived', `${archive.sessionLabel} · ${snapshot.summary.employees} employees · ${snapshot.summary.paymentsCount} payments`, actor ?? principalActor())
-          return archive
-        },
-      }
-    },
-    {
-      name: 'scholario-salary-v4',
-      // SaaS-STAGE-2A — tenant-scoped: each school has its own payroll
-      // dataset (structures, salaries, payments, receipts, audit).
-      // PHASE 7 (Task 7-a) — v1: persisted browsers held the fabricated
-      // seed payroll (employees with fake bank accounts, NEFT payment
-      // history, bonuses, seed audit). The migration purges every seeded
-      // slice; structure templates + settings (school configuration, not
-      // identities) survive. Employees are never persisted — they derive
-      // from the hydrated teachers-store.
-      version: 1,
-      migrate: migrateSalaryStore,
-      storage: createTenantScopedStorage(TENANT_SCOPED_BASES.salary),
-      partialize: (st) => ({
-        structures: st.structures,
-        salaries: st.salaries,
-        changeRequests: st.changeRequests,
-        adjustments: st.adjustments,
-        payments: st.payments,
-        receipts: st.receipts,
-        audit: st.audit,
-        editPermission: st.editPermission,
-        settings: st.settings,
-        receiptSeq: st.receiptSeq,
-        archives: st.archives,
-      }),
-      onRehydrateStorage: () => (state) => {
-        // Expiry survives refresh: an expired window rehydrates as OFF.
-        if (state) state.normalizeEditPermission()
-      },
-    },
-  ),
-)
-
-/* ------------------------------------------------------------------ */
-/*  Employees bridge (Phase 7) — the payroll staff list follows the    */
-/*  canonical faculty roster. Whenever the teachers-store's roster     */
-/*  changes (server sync, add-teacher wizard, termination), the        */
-/*  salary-store's employee list is re-derived from it. Empty roster   */
-/*  ⇒ empty employee list — never a fabricated staff universe.        */
-/* ------------------------------------------------------------------ */
-
-function applyTeachersToEmployees(teachers: TeacherRecord[]): void {
-  useSalaryStore.setState({ employees: employeesFromTeachers(teachers) })
-}
-
-if (typeof window !== 'undefined') {
-  // Present-state reconciliation (initial import / persisted hydration).
-  applyTeachersToEmployees(useTeachersStore.getState().teachers)
-  // Reactive follow — one universe, kept live.
-  useTeachersStore.subscribe((state, prev) => {
-    if (state.teachers !== prev.teachers) applyTeachersToEmployees(state.teachers)
-  })
-}
-
-// ─── Derived helpers ─────────────────────────────────────────────────
-
-interface PayableSource {
-  salaries: Record<string, EmployeeSalaryState>
-  adjustments: MonthlyAdjustment[]
-}
-
-export function netPayableFor(src: PayableSource, employeeId: string, periodKey: string): number {
-  const state = src.salaries[employeeId]
-  // The salary as it stood DURING `periodKey`: the latest change effective
-  // on or before that month. A future-dated raise (e.g. accepted today but
-  // effective from next month) must never rewrite past months' payable —
-  // those months were earned under the previous salary. Falls back to the
-  // current net only when no history exists at all.
-  const applicable = [...(state?.history ?? [])]
-    .filter((h) => h.date.slice(0, 7) <= periodKey)
-    .sort((a, b) => b.date.localeCompare(a.date))[0]
-  const base = applicable?.toNet ?? state?.salary.netBase ?? 0
-  const adj = src.adjustments
-    .filter((a) => a.employeeId === employeeId && a.periodKey === periodKey)
-    .reduce((s, a) => s + a.amount, 0)
-  return base + adj
-}
-
-export function confirmedPaidFor(payments: SalaryPayment[], employeeId: string, periodKey: string): number {
+/** Sum of RECORDED amounts for one teacher-month (what was actually paid). */
+export function recordedPaidFor(payments: SalaryPayment[], teacherId: string, month: string): number {
   return payments
-    .filter((p) => p.employeeId === employeeId && p.periodKey === periodKey && p.status === 'Confirmed')
+    .filter((p) => p.teacherId === teacherId && p.month === month && p.status === 'RECORDED')
     .reduce((s, p) => s + p.amount, 0)
 }
 
-/** Payslip state for an employee-month: Unpaid · Pending · Paid. */
-export function monthPaymentState(payments: SalaryPayment[], employeeId: string, periodKey: string): 'Unpaid' | 'Pending' | 'Paid' {
-  const forMonth = payments.filter((p) => p.employeeId === employeeId && p.periodKey === periodKey)
-  if (forMonth.some((p) => p.status === 'Confirmed')) return 'Paid'
-  if (forMonth.some((p) => p.status === 'Pending Receipt')) return 'Pending'
-  return 'Unpaid'
+/** Payslip state for a teacher-month: Unpaid · Recorded · Paid (alias). */
+export function monthPaymentState(
+  payments: SalaryPayment[],
+  teacherId: string,
+  month: string,
+): 'Unpaid' | 'Recorded' {
+  const forMonth = payments.filter((p) => p.teacherId === teacherId && p.month === month)
+  return forMonth.some((p) => p.status === 'RECORDED') ? 'Recorded' : 'Unpaid'
 }
 
-export function editPermissionLive(editPermission: EditPermission): { allowed: boolean; msLeft: number } {
-  const msLeft = editPermission.expiresAt ? editPermission.expiresAt - Date.now() : 0
-  return { allowed: editPermission.enabled && msLeft > 0, msLeft: Math.max(0, msLeft) }
+/** Payment events derived from canonical rows — the honest audit trail:
+ *  a row's creation is its "recorded" event; a VOIDED row's last update
+ *  is its "voided" event. Nothing else is invented. */
+export interface SalaryEvent {
+  id: string
+  kind: 'payment.recorded' | 'payment.voided'
+  teacherId: string
+  teacherName: string
+  month: string
+  amount: number
+  at: string
 }
 
-export function formatCountdown(ms: number): string {
-  if (ms <= 0) return '0m'
-  const totalMin = Math.floor(ms / 60000)
-  const h = Math.floor(totalMin / 60)
-  const m = totalMin % 60
-  if (h <= 0) return `${m}m`
-  return `${h}h ${m}m`
+export function salaryEventsOf(
+  payments: SalaryPayment[],
+  teacherNames: Record<string, string>,
+): SalaryEvent[] {
+  const events: SalaryEvent[] = []
+  for (const p of payments) {
+    const name = teacherNames[p.teacherId] ?? 'Unnamed teacher'
+    events.push({
+      id: `${p.id}:recorded`,
+      kind: 'payment.recorded',
+      teacherId: p.teacherId,
+      teacherName: name,
+      month: p.month,
+      amount: p.amount,
+      at: p.createdAt,
+    })
+    if (p.status === 'VOIDED') {
+      events.push({
+        id: `${p.id}:voided`,
+        kind: 'payment.voided',
+        teacherId: p.teacherId,
+        teacherName: name,
+        month: p.month,
+        amount: p.amount,
+        at: p.updatedAt,
+      })
+    }
+  }
+  return events.sort((a, b) => b.at.localeCompare(a.at))
 }
 
-// ─── Hook: aggregated read model ─────────────────────────────────────
+// ─── API transport (session-cookie auth; same-origin) ────────────────
+
+async function salaryApi<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    cache: 'no-store',
+    ...init,
+    headers: { ...(init?.headers ?? {}), 'content-type': 'application/json' },
+  })
+  const body = (await res.json().catch(() => null)) as
+    | { ok?: boolean; data?: T; error?: string; code?: string; existing?: PaymentDto | null }
+    | null
+  if (!res.ok || !body || body.ok !== true) {
+    throw new SalaryApiError(
+      body?.error ?? `Request failed (${res.status})`,
+      res.status,
+      body?.code,
+      body?.existing ?? null,
+    )
+  }
+  return body.data as T
+}
+
+// ─── Legacy localStorage cleanup ─────────────────────────────────────
+
+/** One-time removal of the retired localStorage payroll ledger (the
+ *  persist key 'scholario-salary-v4' and every tenant-scoped variant).
+ *  The server is the only source of truth now — stale browser rows must
+ *  never reappear. */
+function purgeLegacySalaryStorage(): void {
+  if (typeof window === 'undefined') return
+  try {
+    const stale: string[] = []
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)
+      if (key && (key === 'scholario-salary-v4' || key.startsWith('scholario-salary-v4::'))) {
+        stale.push(key)
+      }
+    }
+    for (const key of stale) window.localStorage.removeItem(key)
+  } catch {
+    // Storage disabled (Safari private mode) — nothing to purge.
+  }
+}
+
+// ─── Store ───────────────────────────────────────────────────────────
+
+interface SalaryState {
+  /** Session role driving the view shape (null until first sync). */
+  role: 'PRINCIPAL' | 'MANAGEMENT' | 'TEACHER' | null
+  /** Teacher-view only: the signed-in teacher's own identity. */
+  me: SalaryTeacher | null
+  /** School roster (principal/management view; empty for teachers). */
+  teachers: SalaryTeacher[]
+  structures: SalaryStructure[]
+  payments: SalaryPayment[]
+  /** Teacher names by teacherId (from the canonical rows themselves). */
+  teacherNames: Record<string, string>
+  syncStatus: 'idle' | 'syncing' | 'synced' | 'error'
+  error: string | null
+  lastSyncedAt: string | null
+
+  /** Hydrate once per session (module-level guard; force to re-run). */
+  hydrate: (opts?: { force?: boolean }) => Promise<boolean>
+  setStructure: (input: SetStructureInput) => Promise<SalaryStructure>
+  recordPayment: (input: RecordPaymentInput) => Promise<SalaryPayment>
+  voidPayment: (paymentId: string) => Promise<SalaryPayment>
+}
+
+function applyBootstrap(boot: SalaryBootstrap) {
+  const payments = (boot.payments ?? []).map((p) => stripPayment(p))
+  const teacherNames: Record<string, string> = {}
+  for (const t of boot.teachers ?? []) teacherNames[t.id] = t.name
+  // Names come from the RAW dtos (they carry teacher.user.name); the
+  // stripped cache rows keep only ids.
+  for (const p of boot.payments ?? []) teacherNames[p.teacherId] = teacherNames[p.teacherId] ?? pDtoName(p)
+  return {
+    role: boot.role,
+    me: boot.me ?? null,
+    teachers: boot.teachers ?? [],
+    structures: boot.role === 'TEACHER'
+      ? boot.structure ? [stripStructure(boot.structure)] : []
+      : (boot.structures ?? []).map((s) => stripStructure(s)),
+    payments,
+    teacherNames,
+    syncStatus: 'synced' as const,
+    error: null,
+    lastSyncedAt: new Date().toISOString(),
+  }
+}
+
+function pDtoName(p: PaymentDto): string {
+  return p.teacher?.user?.name ?? 'Unnamed teacher'
+}
+
+function stripPayment(p: PaymentDto): SalaryPayment {
+  return {
+    id: p.id,
+    teacherId: p.teacherId,
+    month: p.month,
+    amount: p.amount,
+    paidOn: p.paidOn,
+    method: (p.method as SalaryMethod | null) ?? null,
+    reference: p.reference,
+    note: p.note,
+    status: p.status === 'VOIDED' ? 'VOIDED' : 'RECORDED',
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  }
+}
+
+function stripStructure(s: StructureDto): SalaryStructure {
+  return {
+    id: s.id,
+    teacherId: s.teacherId,
+    monthlyAmount: s.monthlyAmount,
+    effectiveFrom: s.effectiveFrom,
+    note: s.note,
+    updatedAt: s.updatedAt,
+  }
+}
+
+let hydratePromise: Promise<boolean> | null = null
+
+// NOTE (8B-7-d lint gate): the `get` param is intentionally unused in
+// this store's actions — underscore-prefixed to satisfy the unused-args
+// rule without changing any behavior.
+export const useSalaryStore = create<SalaryState>()((set, _get) => ({
+  role: null,
+  me: null,
+  teachers: [],
+  structures: [],
+  payments: [],
+  teacherNames: {},
+  syncStatus: 'idle',
+  error: null,
+  lastSyncedAt: null,
+
+  hydrate: (opts) => {
+    if (typeof window !== 'undefined') purgeLegacySalaryStorage()
+    if (hydratePromise && !opts?.force) return hydratePromise
+    hydratePromise = (async () => {
+      set({ syncStatus: 'syncing' })
+      try {
+        const boot = await salaryApi<SalaryBootstrap>('/api/salary')
+        set(applyBootstrap(boot))
+        return true
+      } catch (e) {
+        // Keep whatever the cache has — never fabricate. Honest error flag.
+        set({ syncStatus: 'error', error: e instanceof Error ? e.message : 'Salary sync failed' })
+        return false
+      }
+    })()
+    return hydratePromise
+  },
+
+  setStructure: async (input) => {
+    const dto = await salaryApi<StructureDto>('/api/salary/structure', {
+      method: 'PUT',
+      body: JSON.stringify({
+        teacherId: input.teacherId,
+        monthlyAmount: input.monthlyAmount,
+        effectiveFrom: input.effectiveFrom || undefined,
+        note: input.note || undefined,
+      }),
+    })
+    const row = stripStructure(dto)
+    set((st) => ({
+      structures: [row, ...st.structures.filter((s) => s.teacherId !== row.teacherId)],
+      teacherNames: { ...st.teacherNames, [row.teacherId]: dto.teacher?.user?.name ?? st.teacherNames[row.teacherId] ?? 'Unnamed teacher' },
+    }))
+    return row
+  },
+
+  recordPayment: async (input) => {
+    const dto = await salaryApi<PaymentDto>('/api/salary/payments', {
+      method: 'POST',
+      body: JSON.stringify({
+        teacherId: input.teacherId,
+        month: input.month,
+        amount: input.amount,
+        paidOn: input.paidOn || undefined,
+        method: input.method || undefined,
+        reference: input.reference || undefined,
+        note: input.note || undefined,
+      }),
+    })
+    const row = stripPayment(dto)
+    set((st) => ({
+      payments: [row, ...st.payments.filter((p) => p.id !== row.id)],
+      teacherNames: { ...st.teacherNames, [row.teacherId]: pDtoName(dto) },
+    }))
+    return row
+  },
+
+  voidPayment: async (paymentId) => {
+    const dto = await salaryApi<PaymentDto>(`/api/salary/payments/${encodeURIComponent(paymentId)}/void`, {
+      method: 'POST',
+    })
+    const row = stripPayment(dto)
+    set((st) => ({
+      payments: st.payments.map((p) => (p.id === row.id ? row : p)),
+    }))
+    return row
+  },
+}))
+
+/** Reset the once-per-session hydration guard (explicit retry / tests). */
+export function resetSalarySyncGuard(): void {
+  hydratePromise = null
+}
+
+// ─── Hook: aggregated read model (principal/management view) ─────────
 
 export function useSalaryData() {
-  const employees = useSalaryStore((s) => s.employees)
+  const role = useSalaryStore((s) => s.role)
+  const teachers = useSalaryStore((s) => s.teachers)
   const structures = useSalaryStore((s) => s.structures)
-  const salaries = useSalaryStore((s) => s.salaries)
-  const changeRequests = useSalaryStore((s) => s.changeRequests)
-  const adjustments = useSalaryStore((s) => s.adjustments)
   const payments = useSalaryStore((s) => s.payments)
-  const receipts = useSalaryStore((s) => s.receipts)
-  const audit = useSalaryStore((s) => s.audit)
+  const syncStatus = useSalaryStore((s) => s.syncStatus)
 
   return useMemo(() => {
     const periodKey = currentPeriodKey()
-    const label = periodLabel(periodKey)
-    const active = employees.filter((e) => e.status === 'Active' || e.status === 'On Leave')
+    const monthLabel = periodLabel(periodKey)
 
-    const rows = active.map((e) => {
-      const payable = netPayableFor({ salaries, adjustments }, e.id, periodKey)
-      const confirmed = confirmedPaidFor(payments, e.id, periodKey)
-      const state = monthPaymentState(payments, e.id, periodKey)
-      return { employee: e, payable, confirmed, balance: Math.max(0, payable - confirmed), state }
+    // Per-teacher row: configured monthly salary + what is RECORDED this
+    // month. No payable arithmetic beyond the sum of recorded amounts.
+    const rows = teachers.map((t) => {
+      const structure = structures.find((s) => s.teacherId === t.id) ?? null
+      const monthly = structure?.monthlyAmount ?? 0
+      const recorded = payments.filter(
+        (p) => p.teacherId === t.id && p.month === periodKey && p.status === 'RECORDED',
+      )
+      const recordedTotal = recorded.reduce((s, p) => s + p.amount, 0)
+      const state: 'Unpaid' | 'Recorded' = recorded.length > 0 ? 'Recorded' : 'Unpaid'
+      return {
+        teacher: t,
+        structure,
+        monthly,
+        recordedTotal,
+        recordedCount: recorded.length,
+        state,
+      }
     })
 
-    const payable = rows.reduce((s, r) => s + r.payable, 0)
-    const confirmed = rows.reduce((s, r) => s + r.confirmed, 0)
-    const monthPayments = payments.filter((p) => p.periodKey === periodKey)
-    const pending = monthPayments.filter((p) => p.status === 'Pending Receipt')
-    const notReceived = monthPayments.filter((p) => p.status === 'Not Received' && !p.followedUpAt)
-    const pendingAmount = pending.reduce((s, p) => s + p.amount, 0)
+    const monthPayments = payments.filter((p) => p.month === periodKey)
+    const recorded = monthPayments.filter((p) => p.status === 'RECORDED')
+    const voided = monthPayments.filter((p) => p.status === 'VOIDED')
 
-    const methodSplit = METHODS.map((m) => ({
+    const methodSplit = METHOD_KEYS.map((m) => ({
       method: m,
-      count: monthPayments.filter((p) => p.method === m && p.status !== 'Reversed').length,
-      amount: monthPayments.filter((p) => p.method === m && p.status === 'Confirmed').reduce((s, p) => s + p.amount, 0),
+      count: recorded.filter((p) => p.method === m).length,
+      amount: recorded.filter((p) => p.method === m).reduce((s, p) => s + p.amount, 0),
     })).filter((m) => m.count > 0)
 
-    const deptMap = new Map<string, { staff: number; payable: number; confirmed: number }>()
-    rows.forEach((r) => {
-      const cur = deptMap.get(r.employee.department) ?? { staff: 0, payable: 0, confirmed: 0 }
-      deptMap.set(r.employee.department, { staff: cur.staff + 1, payable: cur.payable + r.payable, confirmed: cur.confirmed + r.confirmed })
-    })
+    const deptMap = new Map<string, { staff: number; monthly: number; recorded: number }>()
+    for (const r of rows) {
+      const dept = r.teacher.department || 'Unassigned'
+      const cur = deptMap.get(dept) ?? { staff: 0, monthly: 0, recorded: 0 }
+      deptMap.set(dept, {
+        staff: cur.staff + 1,
+        monthly: cur.monthly + r.monthly,
+        recorded: cur.recorded + r.recordedTotal,
+      })
+    }
 
-    const structureUsage: Record<string, number> = {}
-    Object.values(salaries).forEach((s) => {
-      structureUsage[s.salary.structureId] = (structureUsage[s.salary.structureId] ?? 0) + 1
-    })
-
-    const pendingChangeRequests = changeRequests.filter((r) => r.status === 'Pending')
-
+    const withSalary = rows.filter((r) => r.monthly > 0)
     return {
-      employees, structures, salaries, changeRequests, adjustments, payments, receipts, audit,
-      rows, periodKey, monthLabel: label,
+      role,
+      syncStatus,
+      teachers,
+      structures,
+      payments,
+      rows,
+      periodKey,
+      monthLabel,
       currentMonth: {
-        payable, confirmed,
-        pending: { count: pending.length, amount: pendingAmount },
-        notReceived: { count: notReceived.length, amount: notReceived.reduce((s, p) => s + p.amount, 0) },
-        paid: monthPayments.filter((p) => p.status === 'Confirmed').length,
+        /** Payroll commitment: sum of configured monthly salaries. */
+        payable: withSalary.reduce((s, r) => s + r.monthly, 0),
+        /** Sum of RECORDED amounts this month. */
+        recorded: recorded.reduce((s, p) => s + p.amount, 0),
+        recordedCount: recorded.length,
+        voidedCount: voided.length,
+        voidedTotal: voided.reduce((s, p) => s + p.amount, 0),
+        /** Teachers with a salary configured but nothing recorded yet. */
+        unrecorded: withSalary.filter((r) => r.state === 'Unpaid'),
       },
-      pendingChangeRequests,
       methodSplit,
-      departmentTotals: Array.from(deptMap.entries()).map(([dept, v]) => ({ dept, ...v })).sort((a, b) => b.payable - a.payable),
-      structureUsage,
+      departmentTotals: Array.from(deptMap.entries())
+        .map(([dept, v]) => ({ dept, ...v }))
+        .sort((a, b) => b.monthly - a.monthly),
       analytics: {
-        monthlyPayroll: payable,
-        netPayable: payable,
-        pendingAdjustments: pendingChangeRequests.length,
-        employeeCount: active.length,
+        monthlyPayroll: withSalary.reduce((s, r) => s + r.monthly, 0),
+        configuredCount: withSalary.length,
+        staffCount: teachers.length,
+        paymentsCount: payments.length,
       },
     }
-  }, [employees, structures, salaries, changeRequests, adjustments, payments, receipts, audit])
+  }, [role, teachers, structures, payments, syncStatus])
 }
 
-// ─── Hook: sessions that actually exist (for the Payroll Archive) ────
+// ─── Hook: payroll sessions that actually exist (canonical months) ───
 
 export interface PayrollSessionInfo {
   sessionId: string
   label: string
   isCurrent: boolean
-  /** Frozen archive exists for this session. */
-  archived: boolean
   paymentsCount: number
+  /** Sum of RECORDED amounts in the session. */
+  recordedTotal: number
+  /** Distinct teachers with at least one payment row in the session. */
   employeesCount: number
 }
 
-/** Derives the sessions REAL payroll data references — never invents one.
- *  The current session is always listed first (it is where live payroll
- *  lives); completed/archived sessions follow, newest first. */
+/** Sessions derived from REAL payment months — the current session is
+ *  always listed first; a session with no rows never appears. */
 export function usePayrollSessions(): PayrollSessionInfo[] {
-  const employees = useSalaryStore((s) => s.employees)
   const payments = useSalaryStore((s) => s.payments)
-  const adjustments = useSalaryStore((s) => s.adjustments)
-  const salaries = useSalaryStore((s) => s.salaries)
-  const archives = useSalaryStore((s) => s.archives)
 
   return useMemo(() => {
     const ids = new Set<string>([CURRENT_SESSION.id])
-    for (const p of payments) ids.add(sessionOfPeriod(p.periodKey))
-    for (const a of adjustments) ids.add(sessionOfPeriod(a.periodKey))
-    for (const a of archives) ids.add(a.sessionId)
-
+    for (const p of payments) ids.add(sessionOfPeriod(p.month))
     return Array.from(ids)
       .sort((x, y) => {
         if (x === CURRENT_SESSION.id) return -1
@@ -1326,32 +576,18 @@ export function usePayrollSessions(): PayrollSessionInfo[] {
         return y.localeCompare(x)
       })
       .map((sessionId) => {
-        const archive = archives.find((a) => a.sessionId === sessionId)
-        const isCurrent = sessionId === CURRENT_SESSION.id
-        if (archive) {
-          return {
-            sessionId,
-            label: archive.sessionLabel,
-            isCurrent,
-            archived: true,
-            paymentsCount: archive.summary.paymentsCount,
-            employeesCount: archive.summary.employees,
-          }
-        }
-        const live = isCurrent
-          ? buildSessionPayrollSnapshot({ employees, salaries, adjustments, payments }, sessionId, currentPeriodKey())
-          : null
-        const sessionPayments = payments.filter((p) => sessionOfPeriod(p.periodKey) === sessionId && p.status !== 'Reversed')
+        const inSession = payments.filter((p) => sessionOfPeriod(p.month) === sessionId)
+        const recorded = inSession.filter((p) => p.status === 'RECORDED')
         return {
           sessionId,
           label: sessionLabelOf(sessionId),
-          isCurrent,
-          archived: false,
-          paymentsCount: sessionPayments.length,
-          employeesCount: live?.summary.employees ?? 0,
+          isCurrent: sessionId === CURRENT_SESSION.id,
+          paymentsCount: inSession.length,
+          recordedTotal: recorded.reduce((s, p) => s + p.amount, 0),
+          employeesCount: new Set(inSession.map((p) => p.teacherId)).size,
         }
       })
-  }, [payments, adjustments, salaries, archives, employees])
+  }, [payments])
 }
 
 export { formatINR, formatDate } from '@/lib/format'

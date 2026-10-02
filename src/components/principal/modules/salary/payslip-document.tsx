@@ -3,46 +3,35 @@
 /**
  * PayslipDocument — a minimal school salary slip.
  *
+ * PHASE 8B: the slip shows EXACTLY the fixed-monthly-salary model —
+ * the configured Monthly Salary and the payment record that settled the
+ * month. No gross/deduction/net blocks exist (the school's payroll model
+ * has no components); nothing is independently calculated.
+ *
  * Visual direction: "Payment detail card + small school-document header".
  * The same quiet label-left / value-right rhythm as PaymentDetailDialog,
- * compact spacing, hairline dividers, restrained badges — NOT a corporate
- * payroll dashboard. Only real salary/payment data appears here.
- *
- * Every number comes from the salary store's single calculation path:
- * gross − deductions must land exactly on payable. Nothing is an
- * independent calculation.
+ * compact spacing, hairline dividers, restrained badges.
  *
  * Print: window.print() prints ONLY this document (print CSS isolates
  * .payslip-print), with an A5 PORTRAIT default page size so the slip fits
- * one page without oversized A4 output. The user can still pick another
- * paper size manually. No mention of paper size on the document itself.
+ * one page. No mention of paper size on the document itself.
  */
 
 import { Check } from 'lucide-react'
 
 import { useSchoolProfile } from '@/lib/school-profile'
 import { amountInWordsINR } from '@/lib/format'
-import type {
-  Employee, MonthlyAdjustment, SalaryPayment, SessionSalary,
-} from '@/lib/store/salary-store'
+import type { SalaryPayment } from '@/lib/store/salary-store'
 import { periodLabel } from '@/lib/store/salary-store'
 import { fmtDayYear } from './salary-shared'
 
 // ─── Slip identity ───────────────────────────────────────────────────
 
 /** Stable, human slip no. — e.g. EMP-014 · 2026-08 → SLIP-2026-08-0014 */
-function slipNumberFor(employee: Pick<Employee, 'employeeId'>, periodKey: string): string {
-  const digits = employee.employeeId.match(/(\d+)\s*$/)?.[1]
-  const tail = digits ? digits.padStart(4, '0') : employee.employeeId
+function slipNumberFor(employeeId: string, periodKey: string): string {
+  const digits = employeeId.match(/(\d+)\s*$/)?.[1]
+  const tail = digits ? digits.padStart(4, '0') : employeeId || '0000'
   return `SLIP-${periodKey}-${tail}`
-}
-
-/** The month's primary payment line for the details block. */
-function primaryPayment(payments: SalaryPayment[]): SalaryPayment | null {
-  return payments.find((p) => p.status === 'Confirmed')
-    ?? payments.find((p) => p.status === 'Pending Receipt')
-    ?? payments.find((p) => p.status === 'Not Received')
-    ?? null
 }
 
 // ─── Print ───────────────────────────────────────────────────────────
@@ -52,9 +41,8 @@ function primaryPayment(payments: SalaryPayment[]): SalaryPayment | null {
  *
  * The slip is cloned into a dedicated #print-root element at document.body
  * level, every other top-level element (app shell, dialogs, portals, toasts)
- * is display:none while the body carries .salary-printing. This avoids the
- * classic clipping bug where the slip lives inside a scrolling dialog and
- * the old visibility-hack printed half a page. Restored on afterprint.
+ * is display:none while the body carries .salary-printing. Restored on
+ * afterprint.
  */
 export function printPayslip(): void {
   const node = document.querySelector('.payslip-print')
@@ -84,39 +72,29 @@ export function printPayslip(): void {
 // ─── Document ────────────────────────────────────────────────────────
 
 export interface PayslipDocumentProps {
-  employee: Employee
-  session: SessionSalary
+  /** Teacher identity (canonical Teacher row). */
+  teacher: {
+    name: string
+    employeeId: string
+    department: string
+  }
+  /** The configured fixed monthly salary (null = not configured). */
+  structure: { monthlyAmount: number; effectiveFrom: string | null } | null
+  /** 'YYYY-MM' */
   periodKey: string
-  /** Month adjustments for this employee (already inside `payable`). */
-  adjustments: MonthlyAdjustment[]
-  /** This employee's payments for the month (reversed excluded). */
-  payments: SalaryPayment[]
-  /** Net payable for the month (session net + adjustments). */
-  payable: number
+  /** The canonical RECORDED payment for the month (null = not paid yet). */
+  payment: SalaryPayment | null
 }
 
 export function PayslipDocument({
-  employee, session, periodKey, adjustments, payments, payable,
+  teacher, structure, periodKey, payment,
 }: PayslipDocumentProps) {
   // Letterhead identity — the sanctioned school-profile cascade (server
   // identity → settings → neutral), never a hardcoded demo school.
   const school = useSchoolProfile()
-  // Structure components + month adjustments = the full slip line items.
-  const earningLines = [
-    ...session.earnings,
-    ...adjustments.filter((a) => a.amount > 0).map((a) => ({ name: a.label, type: 'Earning' as const, amount: a.amount })),
-  ]
-  const deductionLines = [
-    ...session.deductions,
-    ...adjustments.filter((a) => a.amount < 0).map((a) => ({ name: a.label, type: 'Deduction' as const, amount: Math.abs(a.amount) })),
-  ]
-  const gross = earningLines.reduce((s, c) => s + c.amount, 0)
-  const totalDeductions = deductionLines.reduce((s, c) => s + c.amount, 0)
-
-  const primary = primaryPayment(payments)
-  const confirmed = payments.some((p) => p.status === 'Confirmed')
+  const recorded = payment?.status === 'RECORDED'
   const monthName = periodLabel(periodKey)
-  const slipNo = slipNumberFor(employee, periodKey)
+  const slipNo = slipNumberFor(teacher.employeeId, periodKey)
 
   return (
     <div
@@ -148,70 +126,44 @@ export function PayslipDocument({
       {/* ── Employee ── */}
       <div className="px-5 py-3.5">
         <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Employee</p>
-        <p className="text-[14px] font-bold leading-tight mt-1">{employee.name}</p>
-        <p className="text-[11px] text-slate-600 mt-0.5">{employee.designation} · {employee.department}</p>
+        <p className="text-[14px] font-bold leading-tight mt-1">{teacher.name}</p>
+        {teacher.department && <p className="text-[11px] text-slate-600 mt-0.5">{teacher.department}</p>}
         <p className="text-[11px] text-slate-600">
-          Employee ID: <span className="font-mono">{employee.employeeId}</span>
+          Employee ID: <span className="font-mono">{teacher.employeeId || '—'}</span>
         </p>
       </div>
 
       <div className="border-t border-slate-200" />
 
-      {/* ── Salary details — configuration-driven ── */}
+      {/* ── Salary details — the fixed monthly salary only ── */}
       <div className="px-5 py-3.5">
         <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Salary Details</p>
+        <table className="w-full">
+          <tbody>
+            <tr className="border-b border-dashed border-slate-100">
+              <td className="py-1 text-[11px] text-slate-700">Monthly Salary</td>
+              <td className="py-1 text-right text-[11px] tabular-nums text-slate-800">
+                {structure ? `₹${Math.round(structure.monthlyAmount).toLocaleString('en-IN')}` : 'Not configured'}
+              </td>
+            </tr>
+            {structure?.effectiveFrom && (
+              <tr className="border-b border-dashed border-slate-100 last:border-b-0">
+                <td className="py-1 text-[11px] text-slate-600">Effective From</td>
+                <td className="py-1 text-right text-[11px] tabular-nums text-slate-600">{fmtDayYear(structure.effectiveFrom)}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
 
-        {(session.mode ?? 'detailed') === 'simple' ? (
-          <>
-            {/* SIMPLE — the Principal's configured Monthly Salary and any
-                actual adjustments. No gross/deduction lines are invented. */}
-            <table className="w-full">
-              <tbody>
-                <AmountRow name="Monthly Salary" amount={session.netBase} />
-                {adjustments.filter((a) => a.amount > 0).map((a) => (
-                  <AmountRow key={`sa-${a.id}`} name={a.label} amount={a.amount} />
-                ))}
-                {adjustments.filter((a) => a.amount < 0).map((a) => (
-                  <AmountRow key={`sd-${a.id}`} name={a.label} amount={a.amount} />
-                ))}
-              </tbody>
-            </table>
-
-            <div className="mt-2.5 pt-2.5 border-t-[1.5px] border-slate-700 flex items-end justify-between gap-3">
-              <p className="text-[10px] font-bold tracking-[0.18em] uppercase text-slate-700 pb-0.5">Amount Payable</p>
-              <p className="text-[19px] font-bold tabular-nums leading-none">{`₹${Math.round(payable).toLocaleString('en-IN')}`}</p>
-            </div>
-            <p className="text-[9px] italic text-slate-400 mt-1.5">{amountInWordsINR(payable)}</p>
-          </>
-        ) : (
-          <>
-            <table className="w-full">
-              <tbody>
-                {earningLines.map((c, i) => (
-                  <AmountRow key={`e-${c.name}-${i}`} name={c.name} amount={c.amount} />
-                ))}
-                {deductionLines.map((c, i) => (
-                  <AmountRow key={`d-${c.name}-${i}`} name={c.name} amount={-c.amount} muted />
-                ))}
-                {deductionLines.length === 0 && (
-                  <tr><td colSpan={2} className="py-1 text-[10px] italic text-slate-400">No deductions</td></tr>
-                )}
-              </tbody>
-            </table>
-
-            {/* Subtotals */}
-            <div className="mt-2 pt-2 border-t border-dashed border-slate-300 space-y-1">
-              <SubtotalRow label="Gross Earnings" value={`₹${gross.toLocaleString('en-IN')}`} />
-              <SubtotalRow label="Total Deductions" value={`₹${totalDeductions.toLocaleString('en-IN')}`} />
-            </div>
-
-            {/* Net pay */}
-            <div className="mt-2.5 pt-2.5 border-t-[1.5px] border-slate-700 flex items-end justify-between gap-3">
-              <p className="text-[10px] font-bold tracking-[0.18em] uppercase text-slate-700 pb-0.5">Net Pay</p>
-              <p className="text-[19px] font-bold tabular-nums leading-none">{`₹${Math.round(payable).toLocaleString('en-IN')}`}</p>
-            </div>
-            <p className="text-[9px] italic text-slate-400 mt-1.5">{amountInWordsINR(payable)}</p>
-          </>
+        {/* Amount paid band — the canonical payment record for the month */}
+        <div className="mt-2.5 pt-2.5 border-t-[1.5px] border-slate-700 flex items-end justify-between gap-3">
+          <p className="text-[10px] font-bold tracking-[0.18em] uppercase text-slate-700 pb-0.5">Amount Paid</p>
+          <p className="text-[19px] font-bold tabular-nums leading-none">
+            {payment ? `₹${Math.round(payment.amount).toLocaleString('en-IN')}` : '—'}
+          </p>
+        </div>
+        {payment && (
+          <p className="text-[9px] italic text-slate-400 mt-1.5">{amountInWordsINR(payment.amount)}</p>
         )}
       </div>
 
@@ -224,22 +176,27 @@ export function PayslipDocument({
           <DetailRow
             label="Payment Status"
             value={
-              confirmed ? (
+              recorded ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                  <Check className="h-2.5 w-2.5" strokeWidth={3} /> Paid
+                  <Check className="h-2.5 w-2.5" strokeWidth={3} /> Recorded
+                </span>
+              ) : payment ? (
+                <span className="inline-flex items-center rounded-full bg-slate-500/10 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                  Voided
                 </span>
               ) : (
                 <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                  Pending Receipt
+                  Not recorded yet
                 </span>
               )
             }
           />
-          <DetailRow label="Payment Date" value={primary ? fmtDayYear(primary.date) : '—'} />
-          <DetailRow label="Payment Method" value={primary?.method ?? '—'} />
-          {primary?.reference && (
-            <DetailRow label="Payment Reference" value={<span className="font-mono text-[11px]">{primary.reference}</span>} />
+          <DetailRow label="Paid On" value={payment ? fmtDayYear(payment.paidOn) : '—'} />
+          <DetailRow label="Payment Method" value={payment?.method ?? '—'} />
+          {payment?.reference && (
+            <DetailRow label="Payment Reference" value={<span className="font-mono text-[11px]">{payment.reference}</span>} />
           )}
+          {payment?.note && <DetailRow label="Note" value={payment.note} />}
           <DetailRow label="Salary Slip No." value={<span className="font-mono text-[11px] font-semibold">{slipNo}</span>} />
         </div>
       </div>
@@ -291,25 +248,5 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
       <span className="text-slate-400 shrink-0 pt-px">{label}</span>
       <span className="font-medium text-slate-700 text-right">{value}</span>
     </div>
-  )
-}
-
-function SubtotalRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-3 text-[10px]">
-      <span className="uppercase tracking-wider font-semibold text-slate-500">{label}</span>
-      <span className="font-bold tabular-nums text-slate-700">{value}</span>
-    </div>
-  )
-}
-
-function AmountRow({ name, amount, muted = false }: { name: string; amount: number; muted?: boolean }) {
-  return (
-    <tr className="border-b border-dashed border-slate-100 last:border-b-0">
-      <td className={`py-1 text-[11px] ${muted ? 'text-slate-600' : 'text-slate-700'}`}>{name}</td>
-      <td className={`py-1 text-right text-[11px] tabular-nums ${muted ? 'text-slate-500' : 'text-slate-800'}`}>
-        {`${amount < 0 ? '-₹' : '₹'}${Math.abs(Math.round(amount)).toLocaleString('en-IN')}`}
-      </td>
-    </tr>
   )
 }

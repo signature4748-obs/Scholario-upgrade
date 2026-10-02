@@ -61,6 +61,16 @@ const SUPABASE_ANON_KEY = envOf('SUPABASE_ANON_KEY')
 const SUPABASE_SERVICE_ROLE_KEY = envOf('SUPABASE_SERVICE_ROLE_KEY')
 const SUPABASE_URL = envOf('SUPABASE_URL').replace(/\/+$/, '')
 
+// PHASE 8B — CI runs against an ephemeral local PostgreSQL (no Supabase
+// platform). This RLS / integration-shape probe only applies to the
+// Supabase integration environment — skip cleanly elsewhere (a skip is
+// honest; a failure would be a false negative).
+const isSupabaseIntegration =
+  DATABASE_URL.includes('pooler.supabase.com') &&
+  SUPABASE_ANON_KEY.length > 20 &&
+  SUPABASE_SERVICE_ROLE_KEY.length > 20 &&
+  SUPABASE_URL.length > 0
+
 const PROBE_PASSWORD = randomBytes(12).toString('hex') // never printed
 
 // ── shared state ────────────────────────────────────────────────────────────
@@ -117,7 +127,7 @@ afterAll(async () => {
 
 // ── PostgREST (Supabase REST) surface ───────────────────────────────────────
 
-describe('Phase 8A · PostgREST anon surface is closed (RLS deny-by-default)', () => {
+describe.skipIf(!isSupabaseIntegration)('Phase 8A · PostgREST anon surface is closed (RLS deny-by-default)', () => {
   for (const table of ['Student', 'User', 'Notification']) {
     test(`anon key GET /rest/v1/${table} → NO data`, async () => {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=id&limit=10`, {

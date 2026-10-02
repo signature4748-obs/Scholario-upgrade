@@ -31,17 +31,15 @@ export function FoldersNav({ onNavigate, variant = 'rail' }: Props) {
   const activeLabel = useMessagingStore((s) => s.activeLabel)
   const setActiveLabel = useMessagingStore((s) => s.setActiveLabel)
   const conversations = useMessagingStore((s) => s.conversations)
-  const messages = useMessagingStore((s) => s.messages)
   const groups = useMessagingStore((s) => s.groups)
   const drafts = useMessagingStore((s) => s.drafts)
   const [labelsOpen, setLabelsOpen] = useState(false)
 
   const inboxCount = conversations.filter((c) => !c.archived && c.unread > 0).length
   const starredCount = conversations.filter((c) => c.starred && !c.archived).length
-  const sentCount = conversations.filter((c) => {
-    const msgs = messages[c.id] ?? []
-    return msgs.length > 0 && msgs[msgs.length - 1].sender === 'me' && !c.archived
-  }).length
+  // 8B-7-d — server truth: a thread belongs to Sent when its newest
+  // message is the viewer's (no reliance on loaded local history).
+  const sentCount = conversations.filter((c) => c.lastFromMe && !c.archived).length
   const groupCount = groups.length
   const draftCount = drafts.length
   const archiveCount = conversations.filter((c) => c.archived).length

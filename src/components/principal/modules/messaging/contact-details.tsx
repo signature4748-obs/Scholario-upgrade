@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/sheet'
 import {
   Mail, Phone, GraduationCap, MapPin, Users, Star, Archive, Settings2,
-  Briefcase, BookOpen, RotateCcw, ChevronRight,
+  Briefcase, BookOpen, RotateCcw, ChevronRight, MessageCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -61,9 +61,17 @@ export function ContactDetailsSheet({
   )
 
   // The school's REAL teacher roster (Phase 7 — hydrated from /api/teachers).
+  // 8B-7-d — server threads key the counterpart USER id, so the link
+  // matches the Teacher row id OR the teacher's user id.
   const teacherRecords = useTeachersStore((s) => s.teachers)
   const teacher = useMemo(
-    () => (conversation?.type === 'staff' && conversation.teacherId ? teacherRecords.find((t) => t.id === conversation!.teacherId) : undefined),
+    () => (conversation?.type === 'staff' && (conversation.teacherId || conversation.id)
+      ? teacherRecords.find(
+          (t) =>
+            (conversation.teacherId && t.id === conversation.teacherId) ||
+            (t.serverUserId && t.serverUserId === conversation.id),
+        )
+      : undefined),
     [conversation, teacherRecords],
   )
   const student = useMemo(
@@ -141,6 +149,18 @@ export function ContactDetailsSheet({
               ) : (
                 <DetailRow icon={<GraduationCap className="h-3.5 w-3.5" />} label="Ward" value={convo.studentName ?? '—'} />
               )}
+            </DetailSection>
+          )}
+
+          {/* Student details (server direct thread with a student) */}
+          {convo.type === 'student' && (
+            <DetailSection>
+              <DetailRow icon={<GraduationCap className="h-3.5 w-3.5" />} label="Role" value={convo.role || 'Student'} />
+              <DetailRow
+                icon={<MessageCircle className="h-3.5 w-3.5" />}
+                label="Thread"
+                value="Direct messages with this student"
+              />
             </DetailSection>
           )}
 

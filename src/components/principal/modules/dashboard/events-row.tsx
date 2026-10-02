@@ -7,11 +7,13 @@
  *   - Upcoming Events reads the canonical SchoolEvent table via
  *     `GET /api/events?upcoming=1` (was: 5 hardcoded Dec-2025 mock
  *     events). Loading → skeletons; none → honest empty state.
- *   - Pending Reviews counts stay store-backed (admission/fee/salary
- *     queues are in-session workspace data — fee cash approvals and
- *     salary change requests start honest-empty; admission counts
- *     follow the admission store's honest-empty contract, see
- *     docs/DATA_SOURCE_MAP.md for the classification).
+ *   - Pending Reviews counts stay store-backed (admission/fee queues
+ *     are in-session workspace data — fee cash approvals start honest-
+ *     empty; admission counts follow the admission store's honest-empty
+ *     contract, see docs/DATA_SOURCE_MAP.md for the classification).
+ *     PHASE 8B: the salary queue is retired with the localStorage
+ *     approval workflow — salary is canonical server data with no
+ *     pending-review state, so no salary row is shown here.
  *
  * Both cards use the shared `Panel` (flat `rounded-xl border border-border
  * bg-card`), not the legacy `GlassCard`.
@@ -20,13 +22,12 @@
 import { motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import {
-  ArrowRight, FileText, IndianRupee, Wallet, CalendarDays,
+  ArrowRight, FileText, IndianRupee, CalendarDays,
 } from 'lucide-react'
 import { Panel } from '../shared/panel'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAdmissionStore } from '@/lib/store/admission-store'
 import { useFeeStore } from '@/lib/store/fee-store'
-import { useSalaryStore } from '@/lib/store/salary-store'
 
 export interface EventsRowProps {
   onNavigate?: (module: string) => void
@@ -138,9 +139,6 @@ function PendingReviewsCard({ onNavigate }: { onNavigate?: (m: string) => void }
       r.status === 'Pending Principal Acceptance' || r.status === 'Collected by Teacher'
     ).length
   )
-  const pendingSalaryAdjustments = useSalaryStore((s) =>
-    s.changeRequests.filter((r) => r.status === 'Pending').length
-  )
 
   const reviews: ReviewRow[] = [
     {
@@ -156,13 +154,6 @@ function PendingReviewsCard({ onNavigate }: { onNavigate?: (m: string) => void }
       icon: <IndianRupee className="h-3.5 w-3.5" />,
       navKey: 'fees',
       tone: 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10',
-    },
-    {
-      label: 'Salary Approvals',
-      count: pendingSalaryAdjustments,
-      icon: <Wallet className="h-3.5 w-3.5" />,
-      navKey: 'salary',
-      tone: 'text-amber-600 dark:text-amber-400 bg-amber-500/10',
     },
   ]
 

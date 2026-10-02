@@ -3,6 +3,7 @@ import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
 import { slotsToServerRows, type PublishableSlot } from '@/lib/timetable/server-mapping'
+import { publishToSchool } from '@/lib/realtime/publish'
 
 export const runtime = 'nodejs'
 
@@ -245,7 +246,7 @@ export async function POST(req: NextRequest) {
       }
 
       // 5 — audit trail (platform activity feed reads these).
-      await db.activityLog.create({
+      const published = await db.activityLog.create({
         data: {
           schoolId,
           userId: user.id,
@@ -253,6 +254,18 @@ export async function POST(req: NextRequest) {
           detail: `${writtenCount} slots across ${classByKey.size} classes (replaced ${removedCount} rows)`,
         },
       })
+
+      // PHASE 8B — school-wide realtime 'timetable' frame (fire-and-forget):
+      // the "master schedule changed" moment the legacy event-stream emitted
+      // from this exact ActivityLog row. Student/teacher timetable views bump
+      // their version counter and live-refresh on receipt.
+      void publishToSchool(schoolId, 'all', 'timetable', {
+        id: published.id,
+        at: published.createdAt.toISOString(),
+        schoolId,
+        detail: `${writtenCount} slots across ${classByKey.size} classes (replaced ${removedCount} rows)`,
+        actor: user.name ?? null,
+      }).catch(() => {})
 
       return {
         rowsWritten: writtenCount,

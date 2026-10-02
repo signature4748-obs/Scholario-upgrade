@@ -13,7 +13,7 @@ import {
 } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { AppError, newRequestId } from '@/lib/security/errors'
-import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { RATE_LIMITS, enforceRateLimitStrict } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, passwordInputSchema, newPasswordSchema } from '@/lib/security/validation'
 import { auditEvent } from '@/lib/security/audit'
 
@@ -50,7 +50,8 @@ export async function POST(req: NextRequest) {
     if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
 
     // Per-account throttle — wrong current-password attempts are limited.
-    enforceRateLimit(`rl:pwchange:${user.id}`, RATE_LIMITS.passwordChange)
+    // PHASE 8B (§21) — strict shared-budget gate (credential-adjacent mutation).
+    await enforceRateLimitStrict(`rl:pwchange:${user.id}`, RATE_LIMITS.passwordChange)
 
     const body = await parseJsonBody(req, changePasswordBodySchema)
 

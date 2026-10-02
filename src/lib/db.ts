@@ -170,7 +170,15 @@ const globalForPrisma = globalThis as unknown as {
 
 export const db = globalForPrisma.prisma ?? createDb()
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
+// PHASE 8B — serverless-aware reuse. The global assignment was previously
+// dev-only (HMR safety), leaving each PRODUCTION module instance with its
+// own client. On Vercel, every route bundle is a separate module instance
+// inside the same lambda invocation context — unconditional globalThis
+// sharing makes ONE PrismaClient (and its pool budget, connection_limit=2
+// on the deployment) serve all route bundles per warm instance. Safe for
+// HMR for the same reason it always was: createDb() is only invoked when
+// the global slot is empty.
+globalForPrisma.prisma = db
 
 /**
  * Interactive transaction wrapper with failure diagnostics (Phase 4 —

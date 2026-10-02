@@ -130,6 +130,9 @@ export const RATE_LIMITS = {
   platformMutation: { name: 'platform-mutation', limit: 60, windowMs: 60_000 },
   /** Platform announcements public read (school login page, per-IP). */
   platformAnnouncementPublic: { name: 'platform-announcement-public', limit: 30, windowMs: 60_000 },
+  // PHASE 8B — canonical payroll mutations (structure writes, payment
+  // records, voids — per-user; the principal's whole salary workflow).
+  salary: { name: 'salary', limit: 30, windowMs: 60 * 60_000 },
 } satisfies Record<string, RateLimitProfile>
 
 export interface RateLimitResult {
@@ -423,4 +426,156 @@ export function loginIpKey(ip: string): string {
 
 export function loginAccountKey(normalizedEmail: string): string {
   return `rl:login:acct:${normalizedEmail}`
+}
+
+// ─── PHASE 8B (§21) — strict shared-budget gate for credential endpoints ────
+//
+// Serverless reality: many short-lived instances each hold a LOCAL bucket,
+// so the fire-and-forget sync admits the documented ≤1-per-(key,instance)
+// overshoot — a budget that scales with instance count on exactly the
+// endpoints where overshoot matters (login, account lockout, MFA step-up,
+// password change). For those profiles the strict gate makes the SAME
+// atomic upsert the DECISION, not a background reconcile:
+//
+//   1. atomic increment+RETURNING (row lock serializes concurrent checks —
+//      exactly `limit` of a concurrent burst pass, the rest deny);
+//   2. the returned (count, windowStart) is adopted locally (reconcile);
+//   3. allowed iff count ≤ limit (the count already includes this attempt);
+//   4. on DB error or a 250ms timeout → BOUNDED FALLBACK to the local-only
+//      decision (fail-open to shared protection, never to zero protection —
+//      availability is preserved; a DB outage cannot lock out every login,
+//      and the local Map still enforces per-instance budgets).
+//
+// Everything else (all other profiles) keeps the fire-and-forget path
+// unchanged. The hermetic contract is preserved: NODE_ENV=test, an
+// injected clock, or RATE_LIMIT_DB_SYNC=off degrade strict → local-only.
+
+/** Profiles whose shared budget is enforced SYNCHRONOUSLY (credential surface). */
+const STRICT_SHARED_PROFILES = new Set([
+  'login',
+  'login-account',
+  'platform-login',
+  'platform-login-account',
+  'platform-step-up',
+  'password-change',
+])
+
+/** Authoritative row state returned by the atomic increment. */
+export interface StrictSharedRow {
+  count: number
+  windowStart: Date
+}
+
+/** Injectable atomic increment (tests substitute a serialized counter). */
+export type SharedIncrement = (key: string, profile: RateLimitProfile) => Promise<StrictSharedRow>
+
+const STRICT_TIMEOUT_MS = 250
+
+const defaultSharedIncrement: SharedIncrement = async (key, profile) => {
+  const windowStart = new Date()
+  const windowSecs = profile.windowMs / 1000
+  const rows = (await db.$queryRaw`
+    INSERT INTO "RateLimitBucket"("key","count","windowStart","updatedAt")
+    VALUES (${key}, 1, ${windowStart}, now())
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE WHEN "RateLimitBucket"."windowStart" <= now() - make_interval(secs => ${windowSecs})
+                     THEN 1 ELSE "RateLimitBucket"."count" + 1 END,
+      "windowStart" = CASE WHEN "RateLimitBucket"."windowStart" <= now() - make_interval(secs => ${windowSecs})
+                     THEN ${windowStart} ELSE "RateLimitBucket"."windowStart" END,
+      "updatedAt" = now()
+    RETURNING "count", "windowStart"
+  `) as StrictSharedRow[]
+  if (!rows[0]) throw new Error('strict rate-limit increment returned no row')
+  return rows[0]
+}
+
+/** Deny-path shared-window abuse restart (extracted for both paths). */
+function fireAbuseExtension(key: string, profile: RateLimitProfile): Promise<void> {
+  return db
+    .$executeRaw`
+      UPDATE "RateLimitBucket"
+      SET "windowStart" = now(), "updatedAt" = now()
+      WHERE "key" = ${key} AND "count" >= ${profile.limit * 2}
+    `
+    .then(() => undefined)
+    .catch(() => undefined)
+}
+
+/**
+ * Strict variant of checkRateLimit: the shared row IS the decision for
+ * credential profiles. Non-throwing (same contract as checkRateLimit).
+ * `force` is a TEST-ONLY escape that reaches the shared path even under
+ * the hermetic NODE_ENV=test gate (with an injected sharedIncrement).
+ */
+export async function checkRateLimitStrict(
+  key: string,
+  profile: RateLimitProfile,
+  opts: {
+    now?: number
+    sharedIncrement?: SharedIncrement
+    force?: boolean
+  } = {},
+): Promise<RateLimitResult> {
+  // Hermetic / clock-injected / non-strict profile → the established
+  // local-only decision, byte-for-byte (never overridable — `force` only
+  // escapes the NODE_ENV=test DB-sync gate for injected-counter tests).
+  if (opts.now !== undefined || !STRICT_SHARED_PROFILES.has(profile.name)) {
+    return checkRateLimit(key, profile, opts.now)
+  }
+  if (!dbSyncEnabled() && !opts.force) {
+    return checkRateLimit(key, profile, opts.now)
+  }
+
+  const inc = opts.sharedIncrement ?? defaultSharedIncrement
+  try {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('strict shared-budget timeout')), STRICT_TIMEOUT_MS)
+    })
+    let row: StrictSharedRow
+    try {
+      row = await Promise.race([inc(key, profile), timeout])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+
+    // Adopt the authoritative state locally (same window semantics as the
+    // background reconcile — including this attempt in the local count).
+    reconcile(key, profile, row)
+    const b = buckets.get(key)
+    const extensions = b?.extensions ?? 0
+
+    if (row.count > profile.limit) {
+      if (b && row.count === profile.limit + 1) {
+        b.extensions = Math.min(4, b.extensions + 1)
+      }
+      const windowLen = profile.windowMs * (1 + (b?.extensions ?? extensions))
+      const resetAt = row.windowStart.getTime() + windowLen
+      const retryAfterSec = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000))
+      void fireAbuseExtension(key, profile)
+      return { allowed: false, remaining: 0, retryAfterSec }
+    }
+    return { allowed: true, remaining: profile.limit - row.count, retryAfterSec: 0 }
+  } catch {
+    // Bounded fallback: shared gate unavailable → local budget decides.
+    warnBackendUnavailable(new Error('strict shared-budget read failed or timed out'))
+    return checkRateLimit(key, profile)
+  }
+}
+
+/** Throwing strict variant (same contract as enforceRateLimit). */
+export async function enforceRateLimitStrict(
+  key: string,
+  profile: RateLimitProfile,
+  opts: { now?: number; sharedIncrement?: SharedIncrement; force?: boolean } = {},
+): Promise<RateLimitResult> {
+  const result = await checkRateLimitStrict(key, profile, opts)
+  if (!result.allowed) {
+    throw new AppError('RATE_LIMITED', {
+      publicMessage: `Too many requests. Please try again in ${result.retryAfterSec}s.`,
+      headers: { 'Retry-After': String(result.retryAfterSec) },
+      internalDetail: `rate-limited [strict:${profile.name}] key=${key}`,
+    })
+  }
+  return result
 }

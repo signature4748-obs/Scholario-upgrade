@@ -1,51 +1,59 @@
+'use client'
+
 /**
- * Messaging store — Zustand store for the Messages & Inbox module.
+ * Messaging store — the principal's Messages & Inbox, server-canonical.
  *
- * One connected messaging system:
- *   Conversations → Messages → Send/Reply → Star/Archive/Draft
- *   Groups → Group Members → Group Conversation → Send to Group
+ * Task 8B-7-d: conversations now live in the SHARED Message table (the
+ * same engine the teacher Communication Hub and the student messaging
+ * store read), served by /api/messaging/*:
  *
- * Recipient data comes from canonical Teachers + Students (for parents).
- * No fake "online" status — we use role/department labels instead.
- * No fake "read receipts" or "typing" indicators.
+ *   · GET  /api/messaging/threads        — the thread list (+ exact unread,
+ *                                          viewer thread state)
+ *   · GET  /api/messaging/threads/[id]   — full thread (marks it read)
+ *   · POST /api/messaging/threads/[id]   — send a message
  *
- * Folders: Inbox · Starred · Sent · Groups · Drafts · Archive
- * Labels: Staff · Parents · Groups · Urgent (all functional filters)
+ * RETIRED with this task (fabrications, all of them):
+ *   · the seeded demo conversations / messages / drafts / groups
+ *   · the fake auto-reply timers ("Thank you, Ma'am…")
+ *   · the simulated "delivered" tick that nothing ever delivered
+ *   · the mock-teachers recipient universe and localStorage persistence
+ * A tenant with no Message rows gets the honest "No conversations yet"
+ * state — every thread rendered here is a row someone actually sent.
  *
- * QA-FIX-B — TENANT-SCOPED PERSISTENCE: conversations, messages, drafts +
- * groups survive reload (per-school namespace via createTenantScopedStorage).
- * activeConversationId / folder / label / searchQuery are ephemeral UI state
- * and are NOT persisted. The simulated delivery/auto-reply timers live
- * inside the sendMessage action (runtime-only) — nothing non-serializable
- * ever enters state, so no sanitization is needed in partialize.
+ * Recipients come from /api/contacts (the real same-school directory).
+ * Groups remain a LOCAL organizational affordance (member rosters from
+ * the real teacher/student stores); sending to a group fans out REAL
+ * direct messages to every member with a messaging account — nothing is
+ * simulated.
  *
- * State mutations:
- *   - sendMessage (creates/replies to conversation; group replies use a random member name)
- *   - markRead (clears unread on open)
- *   - starConversation / unstarConversation
- *   - archiveConversation / unarchiveConversation
- *   - saveDraft / deleteDraft / sendDraft
- *   - markUrgent
- *   - composeNew (recipient picker)
- *   - createGroup / addMember / removeMember (group management)
+ * Refresh triggers (messaging-sync.ts): window focus, the
+ * 'scholario:realtime-message' window event, and a 60s poll while a
+ * thread is open on a visible tab.
+ *
+ * Session-scoped view flags: star / archive / urgent / mark-unread are
+ * per-session toggles on top of server truth (the server's
+ * DirectThreadState pin/archive flags hydrate them initially — the
+ * teacher hub owns the write path). Drafts stay session-local by
+ * design: a draft is a composing affordance, never a message.
  */
 
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
-import { teachers } from '@/lib/mock/teachers'
+import { useTeachersStore } from '@/lib/store/teachers-store'
 import { useStudentsStore } from '@/lib/store/students-store'
-import { makeDemoSeedApplier, readIsDemoTenant } from '@/lib/store/demo-tenant'
-import { migrateLegacyScopedStore, createTenantScopedStorage } from '@/lib/tenant/tenant-storage'
-import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
-
-migrateLegacyScopedStore('scholario-messaging-v1', DEFAULT_TENANT_ID)
+import { attachMessagingAutoRefresh, purgeLegacyMessagingStorage } from '@/lib/store/messaging-sync'
+import type {
+  DirectMessageCreated,
+  DirectThreadDetail,
+  DirectThreadSummary,
+  DirectThreadsPayload,
+} from '@/lib/messaging/types'
 
 // ─── Types ───────────────────────────────────────────────────────────
 
-export type ConversationType = 'staff' | 'parent' | 'group'
+export type ConversationType = 'staff' | 'parent' | 'student' | 'group'
 export type Folder = 'inbox' | 'starred' | 'sent' | 'groups' | 'drafts' | 'archive'
 export type Label = 'Staff' | 'Parents' | 'Groups' | 'Urgent'
-export type MessageStatus = 'sent' | 'delivered'
+export type MessageStatus = 'sent'
 
 export type GroupType =
   | 'Class Group'
@@ -71,17 +79,21 @@ export interface Message {
   senderName?: string // for group messages
   text: string
   timestamp: string // ISO string
+  /** 'sent' once the server persisted it — no simulated delivery. */
   status?: MessageStatus
 }
 
 export interface Conversation {
+  /** For server threads: the counterpart USER id. For groups: local. */
   id: string
   name: string
   avatar: string
-  role: string // e.g. "Senior Teacher · Maths" or "Parent · Aarav Sharma" or "Group · 18 members"
+  role: string
   type: ConversationType
   lastMessage: string
   lastTimestamp: string // ISO string
+  /** True when the newest message was sent by the viewer (server truth). */
+  lastFromMe: boolean
   unread: number
   starred: boolean
   archived: boolean
@@ -92,7 +104,7 @@ export interface Conversation {
   // For group conversations
   memberCount?: number
   groupId?: string // links to a Group entry when created via Create Group
-  // For staff — linked teacher
+  // For staff — linked teacher (Teacher row id, best-effort at sync)
   teacherId?: string
 }
 
@@ -105,15 +117,12 @@ export interface Draft {
 }
 
 /**
- * Group — a managed chat group with structured membership.
+ * Group — a managed chat group with structured membership (LOCAL — a
+ * composing affordance; sending fans out real direct messages).
  *
  * `memberRefs` is an array of stable references:
- *   - `t:T-014` → teacher by id
- *   - `p:STU-12` → parent of a student by student id (we resolve the father's name)
- *
- * A Group ALWAYS has a linked Conversation (same name) so the existing
- * message-thread UI works without changes — opening the group's conversation
- * shows the chat thread; the Group panel surfaces member management.
+ *   - `t:<teacher row id>` → teacher from the real roster store
+ *   - `p:<student id>` → parent of a student (resolved from the record)
  */
 export interface Group {
   id: string
@@ -124,7 +133,17 @@ export interface Group {
   createdAt: string
 }
 
-// ─── Member ref helpers ─────────────────────────────────────────────
+// ─── Directory (compose recipients — /api/contacts) ──────────────────
+
+export interface DirectoryUser {
+  id: string
+  name: string | null
+  email: string | null
+  role: string
+  phone: string | null
+}
+
+// ─── Member ref helpers (rosters are the REAL stores) ───────────────
 
 export type MemberType = 'teacher' | 'parent'
 
@@ -136,18 +155,41 @@ export interface MemberDisplay {
   role: string
 }
 
+const STAFF_ROLE_LABELS: Record<string, string> = {
+  PRINCIPAL: 'Principal',
+  MANAGEMENT: 'Management',
+  COORDINATOR: 'Coordinator',
+  ACCOUNTANT: 'Accounts',
+  DRIVER: 'Transport',
+}
+
+function roleLabel(role: string): string {
+  if (!role) return 'Staff'
+  if (STAFF_ROLE_LABELS[role]) return STAFF_ROLE_LABELS[role]
+  if (role === 'TEACHER') return 'Teacher'
+  if (role === 'PARENT') return 'Parent'
+  if (role === 'STUDENT') return 'Student'
+  return role.charAt(0).toUpperCase() + role.slice(1).toLowerCase()
+}
+
+function conversationTypeOfRole(role: string): ConversationType {
+  if (role === 'STUDENT') return 'student'
+  if (role === 'PARENT') return 'parent'
+  return 'staff'
+}
+
 /** Resolve a single member ref into a display object. Returns null if not found. */
 export function resolveMemberRef(ref: string): MemberDisplay | null {
   if (ref.startsWith('t:')) {
     const id = ref.slice(2)
-    const t = teachers.find((x) => x.id === id)
-    if (!t || t.archived) return null
+    const t = useTeachersStore.getState().teachers.find((x) => x.id === id)
+    if (!t || t.status !== 'Active') return null
     return {
       ref,
       type: 'teacher',
       name: t.name,
       avatar: t.avatar,
-      role: `${t.designation} · ${t.department}`,
+      role: [t.designation || 'Teacher', t.department].filter(Boolean).join(' · '),
     }
   }
   if (ref.startsWith('p:')) {
@@ -171,6 +213,22 @@ export function resolveMemberRefs(refs: string[]): MemberDisplay[] {
   return refs.map(resolveMemberRef).filter((x): x is MemberDisplay => x !== null)
 }
 
+/**
+ * Member refs → real USER ids (the fan-out targets for a group send).
+ * Only members with a messaging account resolve — guardians whose
+ * parent account is not provisioned are counted as skipped, never
+ * fabricated.
+ */
+function memberRefUserIds(refs: string[]): string[] {
+  const ids: string[] = []
+  for (const ref of refs) {
+    if (!ref.startsWith('t:')) continue
+    const t = useTeachersStore.getState().teachers.find((x) => x.id === ref.slice(2))
+    if (t?.serverUserId) ids.push(t.serverUserId)
+  }
+  return ids
+}
+
 /** All parents (as refs) of active students in a given class+section. */
 export function getParentsOfClassSection(className: string, section: string): string[] {
   return useStudentsStore
@@ -179,19 +237,28 @@ export function getParentsOfClassSection(className: string, section: string): st
     .map((s) => `p:${s.id}`)
 }
 
-/** All teachers (as refs) whose classes array includes a given class name (e.g. "Class 10-A"). */
+/** All teachers (as refs) whose classes array includes a given class name. */
 export function getTeachersOfClass(className: string): string[] {
-  return teachers.filter((t) => !t.archived && t.classes.includes(className)).map((t) => `t:${t.id}`)
+  return useTeachersStore
+    .getState()
+    .teachers.filter((t) => t.status === 'Active' && t.classes.includes(className))
+    .map((t) => `t:${t.id}`)
 }
 
 /** All teachers (as refs) in a given department. */
 export function getTeachersOfDepartment(department: string): string[] {
-  return teachers.filter((t) => !t.archived && t.department === department).map((t) => `t:${t.id}`)
+  return useTeachersStore
+    .getState()
+    .teachers.filter((t) => t.status === 'Active' && t.department === department)
+    .map((t) => `t:${t.id}`)
 }
 
 /** All active teachers (as refs) — used by Staff Group default. */
 export function getAllStaffRefs(): string[] {
-  return teachers.filter((t) => !t.archived).map((t) => `t:${t.id}`)
+  return useTeachersStore
+    .getState()
+    .teachers.filter((t) => t.status === 'Active')
+    .map((t) => `t:${t.id}`)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -255,153 +322,102 @@ function avatarFromName(name: string): string {
   return name.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase() || 'G'
 }
 
-// ─── Seed Conversations (connected to canonical data) ───────────────
+// ─── Server mapping ──────────────────────────────────────────────────
 
-const SEED_CONVERSATIONS: Conversation[] = [
-  // Staff conversations — linked to real teachers
-  { id: 'C01', name: 'Rohan Mehta', avatar: 'RM', role: 'Senior Teacher · Maths', type: 'staff', lastMessage: 'Submitted the Unit Test 3 marks, please review.', lastTimestamp: new Date(Date.now() - 2 * 60000).toISOString(), unread: 2, starred: true, archived: false, urgent: false, teacherId: 'T-014' },
-  { id: 'C03', name: 'Pooja Bhatt', avatar: 'PB', role: 'HoD Science', type: 'staff', lastMessage: 'Lab equipment needs restocking — 4 microscopes down.', lastTimestamp: new Date(Date.now() - 60 * 60000).toISOString(), unread: 1, starred: false, archived: false, urgent: true, teacherId: 'T-038' },
-  { id: 'C05', name: 'Rajesh Khanna', avatar: 'RK', role: 'HoD Mathematics', type: 'staff', lastMessage: 'Pre-board timetable draft attached for approval.', lastTimestamp: new Date(Date.now() - 5 * 60 * 60000).toISOString(), unread: 0, starred: false, archived: false, urgent: false, teacherId: 'T-035' },
-  { id: 'C06', name: 'Suresh Pillai', avatar: 'SP', role: 'Teacher · Social Sci', type: 'staff', lastMessage: 'On medical leave till Friday, sub arranged.', lastTimestamp: new Date(Date.now() - 26 * 60 * 60000).toISOString(), unread: 0, starred: false, archived: false, urgent: false, teacherId: 'T-029' },
-  { id: 'C08', name: 'Admin Office', avatar: 'AO', role: 'Front Office', type: 'staff', lastMessage: '3 new admission enquiries logged today.', lastTimestamp: new Date(Date.now() - 2 * 24 * 60 * 60000).toISOString(), unread: 0, starred: false, archived: false, urgent: false },
-
-  // Parent conversations — linked to students
-  { id: 'C04', name: 'Vikram Sharma', avatar: 'VS', role: 'Parent · Aarav Sharma', type: 'parent', lastMessage: 'When is the next parent-teacher meeting?', lastTimestamp: new Date(Date.now() - 3 * 60 * 60000).toISOString(), unread: 0, starred: false, archived: false, urgent: false, studentName: 'Aarav Sharma', studentClass: 'Class 2-A' },
-  { id: 'C07', name: 'Sriram Iyer', avatar: 'SI', role: 'Parent · Myra Iyer', type: 'parent', lastMessage: 'Myra will be late today due to a doctor appointment.', lastTimestamp: new Date(Date.now() - 26 * 60 * 60000).toISOString(), unread: 0, starred: false, archived: false, urgent: false, studentName: 'Myra Iyer', studentClass: 'Class 2-A' },
-
-  // Group conversations — linked to class structure (groupId linked below).
-  // memberCount / role are kept in sync with the Group.memberRefs length at
-  // seed time (see buildSeedGroups) so add/remove mutations stay consistent.
-  { id: 'C02', name: 'Class 2-A Parents', avatar: '2A', role: 'Group · 6 members', type: 'group', lastMessage: 'Mrs. Sharma: Thank you for the PTM update!', lastTimestamp: new Date(Date.now() - 18 * 60000).toISOString(), unread: 5, starred: true, archived: false, urgent: false, memberCount: 6, groupId: 'G01' },
-  { id: 'C09', name: 'Science Department', avatar: 'SD', role: 'Group · 6 members', type: 'group', lastMessage: 'Kavita: Lab safety protocols updated for Term 2.', lastTimestamp: new Date(Date.now() - 4 * 60 * 60000).toISOString(), unread: 0, starred: false, archived: false, urgent: false, memberCount: 6, groupId: 'G02' },
-  { id: 'C10', name: 'Class 10 Teachers', avatar: '10T', role: 'Group · 8 members', type: 'group', lastMessage: 'Rajesh: Pre-board exam preparation meeting tomorrow.', lastTimestamp: new Date(Date.now() - 8 * 60 * 60000).toISOString(), unread: 3, starred: false, archived: false, urgent: true, memberCount: 8, groupId: 'G03' },
-
-  // Archived
-  { id: 'C11', name: 'Deepa Menon', avatar: 'DM', role: 'Senior Teacher · English', type: 'staff', lastMessage: 'PTM preparation notes shared.', lastTimestamp: new Date(Date.now() - 5 * 24 * 60 * 60000).toISOString(), unread: 0, starred: false, archived: true, urgent: false, teacherId: 'T-020' },
-]
-
-const SEED_MESSAGES: Record<string, Message[]> = {
-  C01: [
-    { id: 'M01', conversationId: 'C01', sender: 'them', text: "Good morning, Ma'am. I've completed the Unit Test 3 marking for Class 2-A Mathematics.", timestamp: new Date(Date.now() - 90 * 60000).toISOString() },
-    { id: 'M02', conversationId: 'C01', sender: 'them', text: 'Overall class average is 78%. Top scorer is Myra Iyer with 48/50.', timestamp: new Date(Date.now() - 88 * 60000).toISOString() },
-    { id: 'M03', conversationId: 'C01', sender: 'me', text: 'Excellent work, Rohan! Please publish the results and send me the analysis report.', timestamp: new Date(Date.now() - 80 * 60000).toISOString(), status: 'delivered' },
-    { id: 'M04', conversationId: 'C01', sender: 'them', text: 'Will do. I noticed 3 students scored below 60% — should I schedule remedial sessions?', timestamp: new Date(Date.now() - 78 * 60000).toISOString() },
-    { id: 'M05', conversationId: 'C01', sender: 'me', text: "Yes, please coordinate with their parents. Let's discuss in the staff meeting at 3 PM.", timestamp: new Date(Date.now() - 75 * 60000).toISOString(), status: 'delivered' },
-    { id: 'M06', conversationId: 'C01', sender: 'them', text: 'Submitted the Unit Test 3 marks, please review.', timestamp: new Date(Date.now() - 2 * 60000).toISOString() },
-  ],
-  C02: [
-    { id: 'M01', conversationId: 'C02', sender: 'me', text: 'Dear Parents, the Primary PTM is scheduled for Saturday, 7th December from 9 AM to 12 PM. Please be on time.', timestamp: new Date(Date.now() - 30 * 60000).toISOString(), status: 'delivered' },
-    { id: 'M02', conversationId: 'C02', sender: 'them', senderName: 'Mrs. Sharma', text: 'Thank you for the PTM update! Will be there.', timestamp: new Date(Date.now() - 18 * 60000).toISOString() },
-    { id: 'M03', conversationId: 'C02', sender: 'them', senderName: 'Mr. Patel', text: 'Can we get a specific time slot to avoid waiting?', timestamp: new Date(Date.now() - 15 * 60000).toISOString() },
-    { id: 'M04', conversationId: 'C02', sender: 'me', text: "Mr. Patel — slots are first-come-first-serve but we'll try to keep it under 10 min per family.", timestamp: new Date(Date.now() - 12 * 60000).toISOString(), status: 'delivered' },
-  ],
-  C03: [
-    { id: 'M01', conversationId: 'C03', sender: 'them', text: 'Lab equipment needs restocking — 4 microscopes down.', timestamp: new Date(Date.now() - 60 * 60000).toISOString() },
-    { id: 'M02', conversationId: 'C03', sender: 'them', text: 'Can we approve the procurement request by Friday?', timestamp: new Date(Date.now() - 58 * 60000).toISOString() },
-  ],
-  C04: [
-    { id: 'M01', conversationId: 'C04', sender: 'them', text: "Good morning Ma'am, this is Vikram, Aarav's father.", timestamp: new Date(Date.now() - 4 * 60 * 60000).toISOString() },
-    { id: 'M02', conversationId: 'C04', sender: 'them', text: 'When is the next parent-teacher meeting?', timestamp: new Date(Date.now() - 3 * 60 * 60000).toISOString() },
-    { id: 'M03', conversationId: 'C04', sender: 'me', text: "Hello Mr. Sharma! The primary PTM is on 7th December, 9 AM–12 PM. Looking forward to discussing Aarav's excellent progress.", timestamp: new Date(Date.now() - 2.5 * 60 * 60000).toISOString(), status: 'delivered' },
-  ],
-  C05: [
-    { id: 'M01', conversationId: 'C05', sender: 'them', text: 'Pre-board timetable draft attached for approval.', timestamp: new Date(Date.now() - 5 * 60 * 60000).toISOString() },
-  ],
-  C10: [
-    { id: 'M01', conversationId: 'C10', sender: 'them', senderName: 'Rajesh Khanna', text: 'Pre-board exam preparation meeting tomorrow at 2 PM in the staff room.', timestamp: new Date(Date.now() - 8 * 60 * 60000).toISOString() },
-    { id: 'M02', conversationId: 'C10', sender: 'them', senderName: 'Pooja Bhatt', text: 'I will share the science practical schedule after the meeting.', timestamp: new Date(Date.now() - 7 * 60 * 60000).toISOString() },
-    { id: 'M03', conversationId: 'C10', sender: 'them', senderName: 'Deepa Menon', text: 'Should we also discuss the answer sheet evaluation rubric?', timestamp: new Date(Date.now() - 6.5 * 60 * 60000).toISOString() },
-  ],
+/** Guarded envelope-unwrap (Phase-1 { ok, data } contract). */
+async function apiData<T>(res: Response): Promise<T> {
+  const json = (await res.json().catch(() => null)) as { ok?: boolean; data?: T; error?: string } | null
+  if (!res.ok || !json || json.ok !== true) {
+    throw new Error(json?.error ?? `Request failed (${res.status})`)
+  }
+  return json.data as T
 }
 
-const SEED_DRAFTS: Draft[] = [
-  { id: 'D01', conversationId: 'C03', text: 'Yes, I will approve the procurement request today. Please send the vendor details.', timestamp: new Date(Date.now() - 30 * 60000).toISOString() },
-  { id: 'D02', conversationId: 'C10', text: 'Yes, please include the rubric discussion in the agenda.', timestamp: new Date(Date.now() - 45 * 60000).toISOString() },
-  { id: 'D03', recipientName: 'Accounts Office', text: 'Please share the Q3 expense summary for the board meeting.', timestamp: new Date(Date.now() - 2 * 60 * 60000).toISOString() },
-]
-
-// ─── Seed Groups (linked to existing seed conversations) ────────────
-
-function buildSeedGroups(): Group[] {
-  // Class 2-A Parents — pull parents from ALL Class 2 sections so the
-  // membership roster is rich enough (the seed has only 2 students per
-  // section, so limiting to section A would give just 2 parents).
-  const class2Sections = ['A', 'B', 'C']
-  const class2Parents = Array.from(
-    new Set(class2Sections.flatMap((sec) => getParentsOfClassSection('Class 2', sec))),
-  ).slice(0, 6)
-  // Science Department — all Science-dept teachers + a couple of HoDs that work with Science
-  const scienceTeachers = getTeachersOfDepartment('Science')
-  // Class 10 Teachers — teachers of Class 10 + senior-school HoDs that coordinate
-  const class10a = getTeachersOfClass('Class 10-A')
-  const class10b = getTeachersOfClass('Class 10-B')
-  const class9 = getTeachersOfClass('Class 9-A')
-  const class11Sci = getTeachersOfClass('Class 11-Sci-A')
-  const class12Sci = getTeachersOfClass('Class 12-Sci-A')
-  const class10Teachers = Array.from(new Set([...class10a, ...class10b, ...class9, ...class11Sci, ...class12Sci]))
-  // Backfill with senior HoDs / teachers to reach 8
-  const backfill = ['T-020', 'T-029', 'T-032', 'T-026', 'T-014', 'T-023']
-    .map((id) => `t:${id}`)
-    .filter((r) => !class10Teachers.includes(r))
-  const class10Final = [...class10Teachers, ...backfill].slice(0, 8)
-  // Science Department backfill to reach 6
-  const sciBackfill = ['T-041', 'T-014']
-    .map((id) => `t:${id}`)
-    .filter((r) => !scienceTeachers.includes(r))
-  const sciFinal = [...scienceTeachers, ...sciBackfill].slice(0, 6)
-
-  return [
-    {
-      id: 'G01',
-      name: 'Class 2-A Parents',
-      type: 'Class Group',
-      memberRefs: class2Parents,
-      conversationId: 'C02',
-      createdAt: new Date(Date.now() - 30 * 24 * 60 * 60000).toISOString(),
-    },
-    {
-      id: 'G02',
-      name: 'Science Department',
-      type: 'Department Group',
-      memberRefs: sciFinal,
-      conversationId: 'C09',
-      createdAt: new Date(Date.now() - 90 * 24 * 60 * 60000).toISOString(),
-    },
-    {
-      id: 'G03',
-      name: 'Class 10 Teachers',
-      type: 'Teachers Group',
-      memberRefs: class10Final,
-      conversationId: 'C10',
-      createdAt: new Date(Date.now() - 60 * 24 * 60 * 60000).toISOString(),
-    },
-  ]
+function threadToConversation(t: DirectThreadSummary): Conversation {
+  const type = conversationTypeOfRole(t.counterpart.role)
+  const counterpartId = t.counterpartId
+  // Best-effort Teacher-row link so the contact sheet can resolve staff
+  // details once the faculty roster has synced (roster is hydrated by
+  // the principal panel mount; both orders are handled).
+  const teacherId =
+    type === 'staff'
+      ? useTeachersStore.getState().teachers.find((x) => x.serverUserId === counterpartId)?.id
+      : undefined
+  return {
+    id: counterpartId,
+    name: t.counterpart.name,
+    avatar: avatarFromName(t.counterpart.name),
+    role: roleLabel(t.counterpart.role),
+    type,
+    lastMessage: t.lastMessage?.body ?? '',
+    lastTimestamp: t.lastMessage?.createdAt ?? new Date(0).toISOString(),
+    lastFromMe: t.lastMessage?.fromMe ?? false,
+    unread: t.unreadCount,
+    starred: t.threadState.pinned,
+    archived: t.threadState.archived,
+    urgent: false, // no server source — never fabricated
+    teacherId,
+  }
 }
 
-const SEED_GROUPS: Group[] = buildSeedGroups()
+function serverMessageToConversationMessage(
+  m: { id: string; senderId: string; body: string; createdAt: string },
+  conversationId: string,
+): Message {
+  return {
+    id: m.id,
+    conversationId,
+    // A direct thread has exactly two participants: the message is
+    // theirs iff its sender IS the counterpart.
+    sender: m.senderId === conversationId ? 'them' : 'me',
+    text: m.body,
+    timestamp: m.createdAt,
+  }
+}
+
+/** POST one direct message — returns the created server row. */
+async function postDirectMessage(counterpartId: string, text: string): Promise<DirectMessageCreated['message']> {
+  const res = await fetch(`/api/messaging/threads/${counterpartId}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ body: text }),
+  })
+  const data = await apiData<DirectMessageCreated>(res)
+  return data.message
+}
 
 // ─── Zustand Store ───────────────────────────────────────────────────
+
+export interface SendResult {
+  ok: boolean
+  error?: string
+  /** Group fan-out: real rows persisted / unresolvable members skipped. */
+  delivered?: number
+  skipped?: number
+}
 
 interface MessagingState {
   conversations: Conversation[]
   messages: Record<string, Message[]>
   drafts: Draft[]
   groups: Group[]
+  /** Same-school user directory (compose recipients, /api/contacts). */
+  directory: DirectoryUser[]
   activeConversationId: string | null
   activeFolder: Folder
   activeLabel: Label | null
   searchQuery: string
-  /** FINAL-GATE (EG-9F/R4) — set once the demo seed has been applied. */
-  demoSeeded?: boolean
-  /** FINAL-GATE (EG-9F/R4) — one-shot demo-tier seeder (module root). */
-  ensureDemoSeed: () => void
+  /** Server hydration status (Phase-7 sync pattern). */
+  syncStatus: 'idle' | 'syncing' | 'synced' | 'error'
+  error: string | null
 
   // actions
   setActiveFolder: (folder: Folder) => void
   setActiveLabel: (label: Label | null) => void
   setSearchQuery: (query: string) => void
   openConversation: (id: string) => void
-  sendMessage: (conversationId: string, text: string) => void
+  sendMessage: (conversationId: string, text: string) => Promise<SendResult>
   starConversation: (id: string) => void
   archiveConversation: (id: string) => void
   unarchiveConversation: (id: string) => void
@@ -410,8 +426,10 @@ interface MessagingState {
   saveDraft: (conversationId: string, text: string) => void
   saveNewDraft: (recipientName: string, text: string) => void
   deleteDraft: (id: string) => void
-  sendDraft: (id: string) => void
-  composeNew: (recipientName: string, text: string) => void
+  sendDraft: (id: string) => Promise<SendResult>
+  composeNew: (recipientName: string, text: string) => Promise<SendResult>
+  /** Re-fetch the thread list (server truth) + reload the open thread. */
+  refresh: () => Promise<boolean>
 
   // group actions
   createGroup: (input: { name: string; type: GroupType; memberRefs: string[] }) => string
@@ -427,138 +445,155 @@ interface MessagingState {
   getGroupByConversationId: (conversationId: string) => Group | undefined
 }
 
-export const useMessagingStore = create<MessagingState>()(
-  persist(
-    (set, get) => ({
-  // FINAL-GATE (EG-9F/R4) — the seed corpus above is the sanctioned DEMO
-  // TIER content (School.isDemo): the store now boots EMPTY and the
-  // Messages module root applies it once per session via `ensureDemoSeed`.
-  // A real production tenant keeps this honest empty state; persisted
-  // tenant-scoped state always wins over re-seeding.
+let inflightRefresh: Promise<boolean> | null = null
+
+export const useMessagingStore = create<MessagingState>()((set, get) => ({
   conversations: [],
   messages: {},
   drafts: [],
   groups: [],
+  directory: [],
   activeConversationId: null,
   activeFolder: 'inbox',
   activeLabel: null,
   searchQuery: '',
-  ensureDemoSeed: () => ensureMessagingDemoSeed(),
+  syncStatus: 'idle',
+  error: null,
 
   setActiveFolder: (folder) => set({ activeFolder: folder, activeLabel: null }),
   setActiveLabel: (label) => set({ activeLabel: label }),
   setSearchQuery: (query) => set({ searchQuery: query }),
 
   openConversation: (id) => {
-    const state = get()
-    const convo = state.conversations.find((c) => c.id === id)
-    if (!convo) return
-    set({
+    set((s) => ({
       activeConversationId: id,
-      conversations: state.conversations.map((c) => c.id === id ? { ...c, unread: 0 } : c),
-    })
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, unread: 0 } : c)),
+    }))
+    const convo = get().conversations.find((c) => c.id === id)
+    // Server threads fetch their history (the GET also marks the thread
+    // read server-side); group conversations hold local history only.
+    if (convo && convo.type !== 'group') {
+      void loadThreadMessages(id)
+    }
   },
 
-  sendMessage: (conversationId, text) => {
-    const state = get()
-    if (!text.trim()) return
-    const newMsg: Message = {
-      id: `M${Date.now()}`,
+  sendMessage: async (conversationId, text) => {
+    const trimmed = text.trim()
+    if (!trimmed) return { ok: false, error: 'Write a message first.' }
+    const convo = get().conversations.find((c) => c.id === conversationId)
+    if (!convo) return { ok: false, error: 'Conversation not found.' }
+
+    // Optimistic bubble — replaced by the server row (or rolled back).
+    const optimistic: Message = {
+      id: `optimistic-${Date.now()}`,
       conversationId,
       sender: 'me',
-      text: text.trim(),
+      text: trimmed,
       timestamp: new Date().toISOString(),
-      status: 'sent',
     }
-    const existingMessages = state.messages[conversationId] ?? []
-    set({
-      messages: {
-        ...state.messages,
-        [conversationId]: [...existingMessages, newMsg],
-      },
-      conversations: state.conversations.map((c) =>
+    set((s) => ({
+      messages: { ...s.messages, [conversationId]: [...(s.messages[conversationId] ?? []), optimistic] },
+      conversations: s.conversations.map((c) =>
         c.id === conversationId
-          ? { ...c, lastMessage: text.trim(), lastTimestamp: new Date().toISOString(), unread: 0 }
+          ? { ...c, lastMessage: trimmed, lastTimestamp: optimistic.timestamp, lastFromMe: true }
           : c,
       ),
-    })
+    }))
 
-    // Simulate delivered status after 800ms
-    setTimeout(() => {
-      const currentState = get()
-      set({
+    // Roll the optimistic write back to the conversation's previous tail.
+    const rollBack = () =>
+      set((s) => ({
         messages: {
-          ...currentState.messages,
-          [conversationId]: (currentState.messages[conversationId] ?? []).map((m) =>
-            m.id === newMsg.id ? { ...m, status: 'delivered' as MessageStatus } : m,
+          ...s.messages,
+          [conversationId]: (s.messages[conversationId] ?? []).filter((m) => m.id !== optimistic.id),
+        },
+        conversations: s.conversations.map((c) => (c.id === conversationId ? { ...convo } : c)),
+      }))
+
+    if (convo.type === 'group') {
+      // Fan-out: one REAL direct message per member with a messaging
+      // account. Members without accounts (unprovisioned guardians)
+      // are skipped — never simulated.
+      const group = get().groups.find((g) => g.conversationId === conversationId)
+      const targets = group ? memberRefUserIds(group.memberRefs) : []
+      const skipped = (group?.memberRefs.length ?? 0) - targets.length
+      if (targets.length === 0) {
+        rollBack()
+        return {
+          ok: false,
+          error: 'No members of this group have messaging accounts yet.',
+          delivered: 0,
+          skipped,
+        }
+      }
+      const results = await Promise.allSettled(targets.map((uid) => postDirectMessage(uid, trimmed)))
+      const delivered = results.filter((r) => r.status === 'fulfilled').length
+      if (delivered === 0) {
+        rollBack()
+        return {
+          ok: false,
+          error: 'Message could not be delivered — please try again.',
+          delivered: 0,
+          skipped,
+        }
+      }
+      set((s) => ({
+        messages: {
+          ...s.messages,
+          [conversationId]: (s.messages[conversationId] ?? []).map((m) =>
+            m.id === optimistic.id ? { ...m, status: 'sent' as const } : m,
           ),
         },
-      })
-    }, 800)
+      }))
+      return { ok: true, delivered, skipped }
+    }
 
-    // Simulate auto-reply for staff/parent/group conversations after 3.5s.
-    // DEMO-TIER ONLY (PIH-4c): the inbound auto-reply is a fabrication — a
-    // real tenant must never see a message nobody actually sent. Gated on
-    // the server-derived demo signal exactly like the seed corpus above.
-    if (!readIsDemoTenant()) return
-    const convo = state.conversations.find((c) => c.id === conversationId)
-    if (convo && (convo.type === 'staff' || convo.type === 'parent' || convo.type === 'group')) {
-      const replies = [
-        'Thank you, Ma\'am. I will follow up on this.',
-        'Noted. Will get back to you shortly.',
-        'Understood. I will take care of it.',
-        'Thanks for the update. Let me check and confirm.',
-        'Got it. Will coordinate accordingly.',
-      ]
-      setTimeout(() => {
-        const replyState = get()
-        // For groups, pick a real member name; for staff/parent, senderName is undefined (uses convo.name)
-        let senderName: string | undefined
-        if (convo.type === 'group') {
-          const group = replyState.groups.find((g) => g.id === convo.groupId)
-          if (group && group.memberRefs.length > 0) {
-            const members = resolveMemberRefs(group.memberRefs)
-            if (members.length > 0) {
-              const pick = members[Math.floor(Math.random() * members.length)]
-              senderName = pick.name
-            }
-          }
-          if (!senderName) senderName = convo.name.split(' ')[0]
-        }
-        const reply: Message = {
-          id: `M${Date.now() + 1}`,
-          conversationId,
-          sender: 'them',
-          senderName,
-          text: replies[Math.floor(Math.random() * replies.length)],
-          timestamp: new Date().toISOString(),
-        }
-        set({
-          messages: {
-            ...replyState.messages,
-            [conversationId]: [...(replyState.messages[conversationId] ?? []), reply],
-          },
-          conversations: replyState.conversations.map((c) =>
-            c.id === conversationId
-              ? { ...c, lastMessage: reply.text, lastTimestamp: reply.timestamp }
-              : c,
+    // Direct thread — the server row IS the truth.
+    try {
+      const created = await postDirectMessage(conversationId, trimmed)
+      set((s) => ({
+        messages: {
+          ...s.messages,
+          [conversationId]: (s.messages[conversationId] ?? []).map((m) =>
+            m.id === optimistic.id
+              ? {
+                  id: created.id,
+                  conversationId,
+                  sender: 'me' as const,
+                  text: created.body,
+                  timestamp: created.createdAt,
+                  status: 'sent' as const,
+                }
+              : m,
           ),
-        })
-      }, 3500)
+        },
+        conversations: s.conversations.map((c) =>
+          c.id === conversationId
+            ? { ...c, lastMessage: created.body, lastTimestamp: created.createdAt, lastFromMe: true }
+            : c,
+        ),
+      }))
+      return { ok: true, delivered: 1, skipped: 0 }
+    } catch (e) {
+      rollBack()
+      return {
+        ok: false,
+        error: e instanceof Error && e.message ? e.message : 'Message could not be delivered.',
+      }
     }
   },
 
   starConversation: (id) => {
     const state = get()
     set({
-      conversations: state.conversations.map((c) => c.id === id ? { ...c, starred: !c.starred } : c),
+      conversations: state.conversations.map((c) => (c.id === id ? { ...c, starred: !c.starred } : c)),
     })
   },
 
   archiveConversation: (id) => {
     const state = get()
     set({
-      conversations: state.conversations.map((c) => c.id === id ? { ...c, archived: true, starred: false } : c),
+      conversations: state.conversations.map((c) => (c.id === id ? { ...c, archived: true, starred: false } : c)),
       activeConversationId: state.activeConversationId === id ? null : state.activeConversationId,
     })
   },
@@ -566,36 +601,40 @@ export const useMessagingStore = create<MessagingState>()(
   unarchiveConversation: (id) => {
     const state = get()
     set({
-      conversations: state.conversations.map((c) => c.id === id ? { ...c, archived: false } : c),
+      conversations: state.conversations.map((c) => (c.id === id ? { ...c, archived: false } : c)),
     })
   },
 
   markUrgent: (id) => {
     const state = get()
     set({
-      conversations: state.conversations.map((c) => c.id === id ? { ...c, urgent: !c.urgent } : c),
+      conversations: state.conversations.map((c) => (c.id === id ? { ...c, urgent: !c.urgent } : c)),
     })
   },
 
   markUnread: (id) => {
+    // Session-scoped view flag on real rows (there is no server write
+    // path from this surface yet — the thread re-reads as read).
     const state = get()
     set({
-      conversations: state.conversations.map((c) => c.id === id && c.unread === 0 ? { ...c, unread: 1 } : c),
+      conversations: state.conversations.map((c) => (c.id === id && c.unread === 0 ? { ...c, unread: 1 } : c)),
     })
   },
 
   saveDraft: (conversationId, text) => {
     const state = get()
     if (!text.trim()) return
-    // Remove existing draft for this conversation
     const filteredDrafts = state.drafts.filter((d) => d.conversationId !== conversationId)
     set({
-      drafts: [...filteredDrafts, {
-        id: `D${Date.now()}`,
-        conversationId,
-        text: text.trim(),
-        timestamp: new Date().toISOString(),
-      }],
+      drafts: [
+        ...filteredDrafts,
+        {
+          id: `D${Date.now()}`,
+          conversationId,
+          text: text.trim(),
+          timestamp: new Date().toISOString(),
+        },
+      ],
     })
   },
 
@@ -603,12 +642,15 @@ export const useMessagingStore = create<MessagingState>()(
     const state = get()
     if (!text.trim()) return
     set({
-      drafts: [...state.drafts, {
-        id: `D${Date.now()}`,
-        recipientName,
-        text: text.trim(),
-        timestamp: new Date().toISOString(),
-      }],
+      drafts: [
+        ...state.drafts,
+        {
+          id: `D${Date.now()}`,
+          recipientName,
+          text: text.trim(),
+          timestamp: new Date().toISOString(),
+        },
+      ],
     })
   },
 
@@ -617,68 +659,112 @@ export const useMessagingStore = create<MessagingState>()(
     set({ drafts: state.drafts.filter((d) => d.id !== id) })
   },
 
-  sendDraft: (id) => {
-    const state = get()
-    const draft = state.drafts.find((d) => d.id === id)
-    if (!draft) return
-    if (draft.conversationId) {
-      get().sendMessage(draft.conversationId, draft.text)
-    } else if (draft.recipientName) {
-      get().composeNew(draft.recipientName, draft.text)
-    }
-    set({ drafts: state.drafts.filter((d) => d.id !== id) })
+  sendDraft: async (id) => {
+    const draft = get().drafts.find((d) => d.id === id)
+    if (!draft) return { ok: false, error: 'Draft not found.' }
+    const result = draft.conversationId
+      ? await get().sendMessage(draft.conversationId, draft.text)
+      : draft.recipientName
+        ? await get().composeNew(draft.recipientName, draft.text)
+        : { ok: false, error: 'Draft has no recipient.' }
+    // The draft is consumed only when the message really went out.
+    if (result.ok) set({ drafts: get().drafts.filter((d) => d.id !== id) })
+    return result
   },
 
-  composeNew: (recipientName, text) => {
-    const state = get()
-    if (!text.trim()) return
+  composeNew: async (recipientName, text) => {
+    const trimmed = text.trim()
+    if (!trimmed) return { ok: false, error: 'Write a message first.' }
+    const name = recipientName.trim()
+    if (!name) return { ok: false, error: 'Select a recipient first.' }
 
-    // Check if conversation with this recipient already exists
-    const existing = state.conversations.find((c) => c.name === recipientName && !c.archived)
+    // Group send — fan out through the group's conversation.
+    const group = get().groups.find((g) => g.name.toLowerCase() === name.toLowerCase())
+    if (group) {
+      const result = await get().sendMessage(group.conversationId, trimmed)
+      if (result.ok) set({ activeFolder: 'groups', activeConversationId: group.conversationId })
+      return result
+    }
+
+    // Directory contact — a real account in this school.
+    const contact = get().directory.find((c) => (c.name ?? '').toLowerCase() === name.toLowerCase())
+    if (!contact) {
+      return {
+        ok: false,
+        error: `No account found for “${name}” — pick a recipient from the directory.`,
+      }
+    }
+
+    const existing = get().conversations.find((c) => c.id === contact.id)
     if (existing) {
-      get().sendMessage(existing.id, text)
-      set({ activeFolder: 'inbox', activeConversationId: existing.id })
-      return
+      const result = await get().sendMessage(existing.id, trimmed)
+      if (result.ok) {
+        set({
+          activeFolder: existing.archived ? 'archive' : 'inbox',
+          activeConversationId: existing.id,
+        })
+      }
+      return result
     }
 
-    // Create new conversation
-    const id = `C${Date.now()}`
-    const isGroup = recipientName.includes('Parents') || recipientName.includes('Department') || recipientName.includes('Teachers') || recipientName.includes('Group')
-    const isStaff = !isGroup && teachers.some((t) => t.name === recipientName)
-    const teacher = teachers.find((t) => t.name === recipientName)
-    const type: ConversationType = isGroup ? 'group' : isStaff ? 'staff' : 'parent'
-
-    const newConvo: Conversation = {
-      id,
-      name: recipientName,
-      avatar: avatarFromName(recipientName),
-      role: teacher ? `${teacher.designation} · ${teacher.department}` : isGroup ? 'Group' : 'Parent',
-      type,
-      lastMessage: text.trim(),
-      lastTimestamp: new Date().toISOString(),
-      unread: 0,
-      starred: false,
-      archived: false,
-      urgent: false,
-      teacherId: teacher?.id,
-      memberCount: isGroup ? 1 : undefined,
+    // Brand-new thread — the server row creates it.
+    try {
+      const created = await postDirectMessage(contact.id, trimmed)
+      mergeDirectMessage(created, contact)
+      set({ activeFolder: 'inbox', activeConversationId: contact.id })
+      return { ok: true, delivered: 1, skipped: 0 }
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error && e.message ? e.message : 'Message could not be delivered.',
+      }
     }
+  },
 
-    const newMsg: Message = {
-      id: `M${Date.now()}`,
-      conversationId: id,
-      sender: 'me',
-      text: text.trim(),
-      timestamp: new Date().toISOString(),
-      status: 'sent',
-    }
-
-    set({
-      conversations: [newConvo, ...state.conversations],
-      messages: { ...state.messages, [id]: [newMsg] },
-      activeFolder: 'inbox',
-      activeConversationId: id,
-    })
+  refresh: async () => {
+    if (inflightRefresh) return inflightRefresh
+    inflightRefresh = (async () => {
+      try {
+        const res = await fetch('/api/messaging/threads', { cache: 'no-store', credentials: 'same-origin' })
+        const data = await apiData<DirectThreadsPayload>(res)
+        const prev = new Map(get().conversations.map((c) => [c.id, c]))
+        const prevMessages = get().messages
+        const conversations = data.threads.map((t) => {
+          const fresh = threadToConversation(t)
+          const old = prev.get(fresh.id)
+          if (!old) return fresh
+          // Session view flags (star / archive / urgent toggles) survive a
+          // refresh — they have no write path yet, so local is freshest.
+          // Keep loaded histories while nothing newer arrived.
+          return {
+            ...fresh,
+            starred: old.starred,
+            archived: old.archived,
+            urgent: old.urgent,
+          }
+        })
+        set({
+          conversations,
+          error: null,
+          messages: prevMessages,
+        })
+        // The OPEN thread converges on server truth immediately (this
+        // also re-marks it read and reloads its full history).
+        const openId = get().activeConversationId
+        const openConvo = openId ? conversations.find((c) => c.id === openId) : undefined
+        if (openConvo && openConvo.type !== 'group') {
+          await loadThreadMessages(openId as string)
+        }
+        return true
+      } catch {
+        // Failed fetch keeps the current content — never fabricates.
+        set({ error: 'Could not load your messages — showing what you already have.' })
+        return false
+      } finally {
+        inflightRefresh = null
+      }
+    })()
+    return inflightRefresh
   },
 
   // ─── Group actions ─────────────────────────────────────────────────
@@ -691,15 +777,15 @@ export const useMessagingStore = create<MessagingState>()(
     const uniqueMembers = Array.from(new Set(memberRefs))
     const memberCount = uniqueMembers.length
 
-    // Build the linked conversation
     const newConvo: Conversation = {
       id: conversationId,
       name: trimmed,
       avatar: avatarFromName(trimmed),
       role: `Group · ${memberCount} member${memberCount === 1 ? '' : 's'}`,
       type: 'group',
-      lastMessage: 'Group created · say hi to your members!',
+      lastMessage: `Group created · ${memberCount} member${memberCount === 1 ? '' : 's'}`,
       lastTimestamp: new Date().toISOString(),
+      lastFromMe: true,
       unread: 0,
       starred: false,
       archived: false,
@@ -714,7 +800,7 @@ export const useMessagingStore = create<MessagingState>()(
       sender: 'me',
       text: `Group "${trimmed}" created with ${memberCount} member${memberCount === 1 ? '' : 's'}.`,
       timestamp: new Date().toISOString(),
-      status: 'delivered',
+      status: 'sent',
     }
 
     const newGroup: Group = {
@@ -746,7 +832,7 @@ export const useMessagingStore = create<MessagingState>()(
     }
     const nextRefs = [...group.memberRefs, memberRef]
     set({
-      groups: state.groups.map((g) => g.id === groupId ? { ...g, memberRefs: nextRefs } : g),
+      groups: state.groups.map((g) => (g.id === groupId ? { ...g, memberRefs: nextRefs } : g)),
       conversations: state.conversations.map((c) =>
         c.id === group.conversationId
           ? { ...c, memberCount: nextRefs.length, role: `Group · ${nextRefs.length} member${nextRefs.length === 1 ? '' : 's'}` }
@@ -762,7 +848,7 @@ export const useMessagingStore = create<MessagingState>()(
     if (!group) return
     const nextRefs = group.memberRefs.filter((r) => r !== memberRef)
     set({
-      groups: state.groups.map((g) => g.id === groupId ? { ...g, memberRefs: nextRefs } : g),
+      groups: state.groups.map((g) => (g.id === groupId ? { ...g, memberRefs: nextRefs } : g)),
       conversations: state.conversations.map((c) =>
         c.id === group.conversationId
           ? { ...c, memberCount: nextRefs.length, role: `Group · ${nextRefs.length} member${nextRefs.length === 1 ? '' : 's'}` }
@@ -778,7 +864,7 @@ export const useMessagingStore = create<MessagingState>()(
     const group = state.groups.find((g) => g.id === groupId)
     if (!group) return
     set({
-      groups: state.groups.map((g) => g.id === groupId ? { ...g, name: trimmed } : g),
+      groups: state.groups.map((g) => (g.id === groupId ? { ...g, name: trimmed } : g)),
       conversations: state.conversations.map((c) =>
         c.id === group.conversationId ? { ...c, name: trimmed, avatar: avatarFromName(trimmed) } : c,
       ),
@@ -789,12 +875,14 @@ export const useMessagingStore = create<MessagingState>()(
     const state = get()
     const group = state.groups.find((g) => g.id === groupId)
     if (!group) return
+    const nextMessages = { ...state.messages }
+    delete nextMessages[group.conversationId]
     set({
       groups: state.groups.filter((g) => g.id !== groupId),
       conversations: state.conversations.filter((c) => c.id !== group.conversationId),
       activeConversationId: state.activeConversationId === group.conversationId ? null : state.activeConversationId,
-      // Remove any drafts tied to the conversation
       drafts: state.drafts.filter((d) => d.conversationId !== group.conversationId),
+      messages: nextMessages,
     })
   },
 
@@ -811,17 +899,13 @@ export const useMessagingStore = create<MessagingState>()(
         result = result.filter((c) => c.starred && !c.archived)
         break
       case 'sent':
-        // Conversations where the last message was sent by me
-        result = result.filter((c) => {
-          const msgs = state.messages[c.id] ?? []
-          return msgs.length > 0 && msgs[msgs.length - 1].sender === 'me' && !c.archived
-        })
+        // Server truth: the thread's newest message is mine.
+        result = result.filter((c) => c.lastFromMe && !c.archived)
         break
       case 'groups':
         result = result.filter((c) => c.type === 'group' && !c.archived)
         break
       case 'drafts':
-        // Conversations that have an associated draft
         const draftConvIds = new Set(state.drafts.filter((d) => d.conversationId).map((d) => d.conversationId!))
         result = result.filter((c) => draftConvIds.has(c.id) && !c.archived)
         break
@@ -840,13 +924,12 @@ export const useMessagingStore = create<MessagingState>()(
       }
     }
 
-    // Search filter
+    // Search filter (names, previews, and the loaded message content)
     if (state.searchQuery.trim()) {
       const q = state.searchQuery.toLowerCase()
       result = result.filter((c) => {
         if (c.name.toLowerCase().includes(q)) return true
         if (c.lastMessage.toLowerCase().includes(q)) return true
-        // Search in message content
         const msgs = state.messages[c.id] ?? []
         return msgs.some((m) => m.text.toLowerCase().includes(q))
       })
@@ -868,38 +951,157 @@ export const useMessagingStore = create<MessagingState>()(
 
   getGroupByConversationId: (conversationId) =>
     get().groups.find((g) => g.conversationId === conversationId),
-    }),
-    {
-      name: 'scholario-messaging-v1',
-      storage: createTenantScopedStorage('scholario-messaging-v1'),
-      version: 2,
-      // DATA slices only — plain JSON (arrays, records, strings). UI state
-      // (active folder/label/conversation, search) and actions excluded.
-      partialize: (s) => ({
-        conversations: s.conversations,
-        messages: s.messages,
-        drafts: s.drafts,
-        groups: s.groups,
-      }),
-    },
-  ),
-)
+}))
 
-// ─── FINAL-GATE (EG-9F/R4) demo-tier seeder ──────────────────────────
-// Built lazily on first call (the store exists by then). Applies the
-// sanctioned demo corpus at most once, never over non-pristine state —
-// see makeDemoSeedApplier guard rules.
-let _ensureMessagingDemoSeed: (() => void) | null = null
-function ensureMessagingDemoSeed(): void {
-  _ensureMessagingDemoSeed ??= makeDemoSeedApplier(useMessagingStore, {
-    conversations: SEED_CONVERSATIONS,
-    messages: SEED_MESSAGES,
-    drafts: SEED_DRAFTS,
-    groups: SEED_GROUPS,
-    // Pre-open the flagship thread (C01) exactly as the seed era did.
-    activeConversationId: 'C01',
+// ─── Server loading (module-local, uses the store) ───────────────────
+
+/** Fetch one thread's full history; the GET marks it read server-side. */
+async function loadThreadMessages(conversationId: string): Promise<void> {
+  try {
+    const res = await fetch(`/api/messaging/threads/${conversationId}`, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+    })
+    const data = await apiData<DirectThreadDetail>(res)
+    const messages = data.messages.map((m) => serverMessageToConversationMessage(m, conversationId))
+    useMessagingStore.setState((s) => ({
+      messages: { ...s.messages, [conversationId]: messages },
+      conversations: upsertThreadConversation(s.conversations, data, messages),
+    }))
+  } catch {
+    // Keep whatever is loaded — the list refresh surfaces errors.
+  }
+}
+
+function upsertThreadConversation(
+  conversations: Conversation[],
+  data: DirectThreadDetail,
+  messages: Message[],
+): Conversation[] {
+  const last = messages[messages.length - 1]
+  const existing = conversations.find((c) => c.id === data.counterpart.id)
+  const type = conversationTypeOfRole(data.counterpart.role)
+  const teacherId =
+    type === 'staff'
+      ? useTeachersStore.getState().teachers.find((x) => x.serverUserId === data.counterpart.id)?.id
+      : undefined
+  const fresh: Conversation = existing
+    ? {
+        ...existing,
+        name: data.counterpart.name,
+        role: roleLabel(data.counterpart.role),
+        teacherId: existing.teacherId ?? teacherId,
+        unread: 0, // GET marked the thread read server-side
+        ...(last
+          ? { lastMessage: last.text, lastTimestamp: last.timestamp, lastFromMe: last.sender === 'me' }
+          : {}),
+      }
+    : {
+        id: data.counterpart.id,
+        name: data.counterpart.name,
+        avatar: avatarFromName(data.counterpart.name),
+        role: roleLabel(data.counterpart.role),
+        type,
+        lastMessage: last?.text ?? '',
+        lastTimestamp: last?.timestamp ?? new Date(0).toISOString(),
+        lastFromMe: last ? last.sender === 'me' : false,
+        unread: 0,
+        starred: data.threadState.pinned,
+        archived: data.threadState.archived,
+        urgent: false,
+        teacherId,
+      }
+  return existing
+    ? conversations.map((c) => (c.id === data.counterpart.id ? fresh : c))
+    : [fresh, ...conversations]
+}
+
+/** Merge a freshly created server row into the store (new or existing). */
+function mergeDirectMessage(
+  created: DirectMessageCreated['message'],
+  contact: { id: string; name: string | null; role: string },
+): void {
+  const message: Message = {
+    id: created.id,
+    conversationId: contact.id,
+    sender: 'me',
+    text: created.body,
+    timestamp: created.createdAt,
+    status: 'sent',
+  }
+  const type = conversationTypeOfRole(contact.role)
+  useMessagingStore.setState((s) => {
+    const existing = s.conversations.find((c) => c.id === contact.id)
+    if (existing) {
+      return {
+        conversations: s.conversations.map((c) =>
+          c.id === contact.id
+            ? { ...c, lastMessage: created.body, lastTimestamp: created.createdAt, lastFromMe: true }
+            : c,
+        ),
+        messages: { ...s.messages, [contact.id]: [...(s.messages[contact.id] ?? []), message] },
+      }
+    }
+    const conversation: Conversation = {
+      id: contact.id,
+      name: contact.name ?? 'User',
+      avatar: avatarFromName(contact.name ?? 'U'),
+      role: roleLabel(contact.role),
+      type,
+      lastMessage: created.body,
+      lastTimestamp: created.createdAt,
+      lastFromMe: true,
+      unread: 0,
+      starred: false,
+      archived: false,
+      urgent: false,
+    }
+    return {
+      conversations: [conversation, ...s.conversations],
+      messages: { ...s.messages, [contact.id]: [message] },
+    }
   })
-  _ensureMessagingDemoSeed()
+}
+
+// ─── Session sync (teachers-store pattern: once per session) ─────────
+
+async function loadDirectory(): Promise<void> {
+  const res = await fetch('/api/contacts', { cache: 'no-store', credentials: 'same-origin' })
+  const json = (await res.json().catch(() => null)) as
+    | { ok?: boolean; data?: { users?: DirectoryUser[] } }
+    | null
+  if (!res.ok || !json || json.ok !== true) throw new Error('directory unavailable')
+  useMessagingStore.setState({ directory: json.data?.users ?? [] })
+}
+
+let syncPromise: Promise<boolean> | null = null
+
+/**
+ * One-per-session server hydration: the thread list (server truth) plus
+ * the same-school directory that powers the compose picker. Failures
+ * flag `syncStatus: 'error'` — the store keeps whatever it has and the
+ * UI can offer an honest retry. The auto-refresh listeners keep the
+ * THREADS converging afterwards (no directory re-fetch).
+ */
+export function syncMessagingFromServer(): Promise<boolean> {
+  if (syncPromise) return syncPromise
+  syncPromise = (async () => {
+    useMessagingStore.setState({ syncStatus: 'syncing' })
+    try {
+      const [threadsOk] = await Promise.all([useMessagingStore.getState().refresh(), loadDirectory()])
+      useMessagingStore.setState({ syncStatus: threadsOk ? 'synced' : 'error' })
+      return threadsOk
+    } catch {
+      useMessagingStore.setState({ syncStatus: 'error' })
+      return false
+    }
+  })()
+  return syncPromise
+}
+
+/** Reset the once-per-session guard (explicit retry / tests). */
+export function resetMessagingSyncGuard(): void {
+  syncPromise = null
 }
 
 // ─── Recipient options (for Compose) ────────────────────────────────
@@ -909,53 +1111,41 @@ export interface RecipientOption {
   role: string
   type: ConversationType
   avatar: string
+  /** 8B-7-d — the recipient's USER id (null for local groups). */
+  userId: string | null
 }
 
 export function getRecipientOptions(): RecipientOption[] {
-  const students = useStudentsStore.getState().students
-  const activeStudents = students.filter((s) => s.status === 'Active')
+  const { directory, groups } = useMessagingStore.getState()
 
-  const staff: RecipientOption[] = teachers
-    .filter((t) => !t.archived)
-    .map((t) => ({
-      name: t.name,
-      role: `${t.designation} · ${t.department}`,
-      type: 'staff' as ConversationType,
-      avatar: t.avatar,
-    }))
-
-  // Parents — deduped by guardian name (one entry per parent; siblings
-  // are collapsed into a single row so recipient keys stay unique).
+  const staff: RecipientOption[] = []
   const parents: RecipientOption[] = []
-  const seenParent = new Set<string>()
-  for (const s of activeStudents) {
-    if (seenParent.has(s.fatherName)) continue
-    seenParent.add(s.fatherName)
-    const wards = activeStudents.filter((x) => x.fatherName === s.fatherName).map((x) => x.name)
-    const wardLabel =
-      wards.length === 1
-        ? wards[0]
-        : wards.length === 2
-          ? wards.join(' & ')
-          : `${wards[0]} +${wards.length - 1} more`
-    parents.push({
-      name: s.fatherName,
-      role: `Parent · ${wardLabel}`,
-      type: 'parent' as ConversationType,
-      avatar: s.fatherName.split(' ').map((n) => n[0]).slice(0, 2).join(''),
-    })
-    if (parents.length >= 12) break
+  const students: RecipientOption[] = []
+  for (const u of directory) {
+    const name = u.name?.trim() || u.email?.split('@')[0] || 'User'
+    const type = conversationTypeOfRole(u.role)
+    const option: RecipientOption = {
+      name,
+      role: roleLabel(u.role),
+      type,
+      avatar: avatarFromName(name),
+      userId: u.id,
+    }
+    if (type === 'parent') parents.push(option)
+    else if (type === 'student') students.push(option)
+    else staff.push(option)
   }
 
   // Groups — pulled from the live store so newly-created groups appear automatically
-  const groups: RecipientOption[] = useMessagingStore.getState().groups.map((g) => ({
+  const groupOptions: RecipientOption[] = groups.map((g) => ({
     name: g.name,
     role: `Group · ${g.memberRefs.length} member${g.memberRefs.length === 1 ? '' : 's'}`,
     type: 'group' as ConversationType,
     avatar: avatarFromName(g.name),
+    userId: null,
   }))
 
-  return [...staff, ...parents, ...groups]
+  return [...staff, ...parents, ...students, ...groupOptions]
 }
 
 // ─── Group options (for the Groups panel + compose picker) ──────────
@@ -981,3 +1171,17 @@ export function getGroupOptions(): GroupOption[] {
 // ─── Format helpers ──────────────────────────────────────────────────
 
 export { formatTimeAgo, formatMessageTime, formatListTime, formatDayLabel }
+
+// ─── Session wiring ──────────────────────────────────────────────────
+
+attachMessagingAutoRefresh({
+  refresh: async () => {
+    await useMessagingStore.getState().refresh()
+  },
+  hasOpenThread: () => useMessagingStore.getState().activeConversationId !== null,
+})
+
+// The retired localStorage persist key (base + tenant-scoped variants)
+// is purged once — the fabricated demo corpus and every ghost thread
+// from the pre-DB era must never reappear.
+purgeLegacyMessagingStorage('scholario-messaging-v1')

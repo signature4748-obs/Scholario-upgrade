@@ -1,29 +1,26 @@
 'use client'
 
 /**
- * Payroll Archive — the Principal's historical payroll records.
+ * Payroll Archive — the Principal's payroll history by academic session.
  *
- * PAYROLLARCHIVECARD lives on Settings (bottom section): shows the session
- * that is in progress, every completed session that has been preserved,
- * and opens the archive browser.
+ * PHASE 8B: read-only, derived LIVE from the canonical server ledger —
+ * sessions are the academic-session buckets of the REAL payment months
+ * (never invented); the current session is always listed first. There is
+ * no client-side frozen snapshot any more: every figure is a sum of
+ * RECORDED amounts in the server rows (totals update as payroll
+ * continues; VOIDED rows stay visible as the audit trail).
  *
- * PAYROLLARCHIVEDIALOG is a read-only, session-based viewer:
- *   Level 1 — sessions that actually exist (current + archived; the list
- *             is derived from real data, never invented).
- *   Level 2 — one session: summary, employee-wise payroll, full payment
- *             history, and a Download Report action (PDF).
- *
- * Archived sessions render from their FROZEN snapshot — later salary
- * changes cannot rewrite them. The in-progress session renders live from
- * the same store every other tab reads, clearly labelled as ongoing.
- * Nothing here is editable — records only.
+ * PAYROLLARCHIVECARD lives on Settings (bottom section).
+ * PAYROLLARCHIVEDIALOG: Level 1 — sessions that actually exist; Level 2 —
+ * one session: summary, teacher-wise payroll, full payment history, and
+ * a Download Report action (PDF).
  */
 
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Archive, ArrowRight, Banknote, CheckCircle2, ChevronLeft, ChevronRight,
-  Clock, Download, FileText, Lock, Users, Wallet, X,
+  Clock, Download, FileText, Users, Wallet, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -32,11 +29,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  useSalaryStore, usePayrollSessions, buildSessionPayrollSnapshot,
-  currentPeriodKey, sessionLabelOf, CURRENT_SESSION,
-} from '@/lib/store/salary-store'
-import type {
-  ArchivedEmployeeRecord, PayrollSessionInfo, SalaryPayment,
+  useSalaryStore, usePayrollSessions, currentPeriodKey, sessionOfPeriod,
+  sessionLabelOf, CURRENT_SESSION,
 } from '@/lib/store/salary-store'
 import { moneyMy, fmtDayYear, PaymentStatusBadge } from './salary-shared'
 import { downloadPayrollReport } from './payroll-report-pdf'
@@ -46,7 +40,6 @@ import { cn } from '@/lib/utils'
 
 export function PayrollArchiveCard() {
   const sessions = usePayrollSessions()
-  const archives = useSalaryStore((s) => s.archives)
   const [open, setOpen] = useState(false)
 
   const current = sessions.find((s) => s.isCurrent)
@@ -57,11 +50,12 @@ export function PayrollArchiveCard() {
       <div className="rounded-xl border bg-card p-4 space-y-3">
         <div className="flex items-center gap-2">
           <Archive className="h-4 w-4 text-muted-foreground" />
-          <p className="text-[10px] uppercase font-semibold tracking-wider text-muted-foreground">Payroll Archive</p>
+          <p className="text-[10px] uppercase font-semibold tracking-wider text-muted-foreground">Payroll Records</p>
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Salary &amp; payment records from past academic sessions — preserved exactly as they happened, ready for audits and school records.
+          Salary &amp; payment records by academic session — read from the school&apos;s server ledger,
+          preserved exactly as recorded.
         </p>
 
         {/* Current session — always real, always separated */}
@@ -73,7 +67,7 @@ export function PayrollArchiveCard() {
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">Current Session</span>
               </p>
               <p className="text-[10px] text-muted-foreground mt-0.5">
-                {current.employeesCount} on payroll · {current.paymentsCount} payment{current.paymentsCount === 1 ? '' : 's'} so far
+                {current.employeesCount} on payroll · {current.paymentsCount} payment{current.paymentsCount === 1 ? '' : 's'} · {moneyMy(current.recordedTotal)} recorded
               </p>
             </div>
             <button
@@ -101,10 +95,10 @@ export function PayrollArchiveCard() {
                   <p className="text-xs font-semibold flex items-center gap-1.5">
                     {s.label}
                     <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-300">
-                      <Lock className="h-2 w-2" />Archived
+                      <Archive className="h-2 w-2" />Closed
                     </span>
                   </p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">{s.employeesCount} employees · {s.paymentsCount} payments</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{s.employeesCount} teachers · {s.paymentsCount} payments · {moneyMy(s.recordedTotal)} recorded</p>
                 </div>
                 <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               </button>
@@ -114,20 +108,17 @@ export function PayrollArchiveCard() {
           <div className="rounded-lg border border-dashed border-border px-3 py-3 text-center">
             <p className="text-[11px] font-medium text-muted-foreground">No completed sessions yet</p>
             <p className="text-[10px] text-muted-foreground/70 mt-0.5">
-              {archives.length === 0
-                ? `When ${sessionLabelOf(CURRENT_SESSION.id)} ends, its payroll is preserved here — every record stays exactly as it was.`
-                : 'Archived sessions will appear here.'}
+              When {sessionLabelOf(CURRENT_SESSION.id)} ends, its payroll stays readable here — every record exactly as it was recorded.
             </p>
           </div>
         )}
 
         <Button
-          variant="outline"
-          size="sm"
+          variant="outline" size="sm"
           className="w-full h-8 text-xs gap-1.5"
           onClick={() => setOpen(true)}
         >
-          <Archive className="h-3.5 w-3.5" /> View Archive <ArrowRight className="h-3 w-3" />
+          <Archive className="h-3.5 w-3.5" /> View Records <ArrowRight className="h-3 w-3" />
         </Button>
       </div>
 
@@ -143,11 +134,9 @@ export function PayrollArchiveDialog({ open, onOpenChange }: {
   onOpenChange: (o: boolean) => void
 }) {
   const sessions = usePayrollSessions()
-  const archives = useSalaryStore((s) => s.archives)
   // null = session list · otherwise the selected sessionId
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const selected = selectedId ? sessions.find((s) => s.sessionId === selectedId) ?? null : null
   const completed = sessions.filter((s) => !s.isCurrent)
 
   const closeSession = () => setSelectedId(null)
@@ -160,10 +149,10 @@ export function PayrollArchiveDialog({ open, onOpenChange }: {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-3xl p-0 gap-0 overflow-hidden">
         <div className="max-h-[82vh] overflow-y-auto overscroll-contain">
-          {selected ? (
+          {selectedId ? (
             <SessionArchiveView
-              key={selected.sessionId}
-              session={selected}
+              key={selectedId}
+              session={sessions.find((s) => s.sessionId === selectedId) ?? null}
               onBack={closeSession}
               onClose={() => handleOpenChange(false)}
             />
@@ -174,10 +163,10 @@ export function PayrollArchiveDialog({ open, onOpenChange }: {
                   <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                     <Archive className="h-4 w-4" />
                   </span>
-                  Payroll Archive
+                  Payroll Records
                 </DialogTitle>
                 <DialogDescription>
-                  Salary &amp; payment records, session by session — historical records are read-only.
+                  Salary &amp; payment records, session by session — read-only, straight from the school ledger.
                 </DialogDescription>
               </DialogHeader>
 
@@ -197,11 +186,9 @@ export function PayrollArchiveDialog({ open, onOpenChange }: {
                   ) : (
                     <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center">
                       <Archive className="h-5 w-5 mx-auto text-muted-foreground/50" />
-                      <p className="text-xs font-medium text-muted-foreground mt-2">Nothing archived yet</p>
+                      <p className="text-xs font-medium text-muted-foreground mt-2">No completed sessions yet</p>
                       <p className="text-[11px] text-muted-foreground/70 mt-0.5 max-w-sm mx-auto">
-                        {archives.length === 0
-                          ? 'When an academic session ends, its complete payroll — every salary, payment and receipt — is preserved here automatically.'
-                          : 'Archived sessions will appear here.'}
+                        Sessions appear here as soon as the ledger holds payments outside the current one.
                       </p>
                     </div>
                   )}
@@ -215,7 +202,7 @@ export function PayrollArchiveDialog({ open, onOpenChange }: {
   )
 }
 
-function SessionRow({ session, onOpen }: { session: PayrollSessionInfo; onOpen: () => void }) {
+function SessionRow({ session, onOpen }: { session: ReturnType<typeof usePayrollSessions>[number]; onOpen: () => void }) {
   return (
     <button
       type="button"
@@ -230,12 +217,12 @@ function SessionRow({ session, onOpen }: { session: PayrollSessionInfo; onOpen: 
             <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 shrink-0">Current Session</span>
           ) : (
             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-300 shrink-0">
-              <Lock className="h-2 w-2" />Archived
+              <Archive className="h-2 w-2" />Closed
             </span>
           )}
         </p>
         <p className="text-[11px] text-muted-foreground mt-0.5">
-          {session.employeesCount} employee{session.employeesCount === 1 ? '' : 's'} · {session.paymentsCount} payment{session.paymentsCount === 1 ? '' : 's'}
+          {session.employeesCount} teacher{session.employeesCount === 1 ? '' : 's'} · {session.paymentsCount} payment{session.paymentsCount === 1 ? '' : 's'} · {moneyMy(session.recordedTotal)} recorded
           {session.isCurrent ? ' · in progress' : ''}
         </p>
       </div>
@@ -248,64 +235,72 @@ function SessionRow({ session, onOpen }: { session: PayrollSessionInfo; onOpen: 
 
 // ─── One session, read-only ──────────────────────────────────────────
 
-type DataSource =
-  | { kind: 'archived'; records: ArchivedEmployeeRecord[]; payments: SalaryPayment[]; archivedAt: string; archivedBy: string }
-  | { kind: 'live'; records: ArchivedEmployeeRecord[]; payments: SalaryPayment[] }
-
 function SessionArchiveView({ session, onBack, onClose: _onClose }: {
-  session: PayrollSessionInfo
+  session: ReturnType<typeof usePayrollSessions>[number] | null
   onBack: () => void
   onClose: () => void
 }) {
-  const archives = useSalaryStore((s) => s.archives)
-  const employees = useSalaryStore((s) => s.employees)
-  const salaries = useSalaryStore((s) => s.salaries)
-  const adjustments = useSalaryStore((s) => s.adjustments)
+  const teachers = useSalaryStore((s) => s.teachers)
+  const teacherNames = useSalaryStore((s) => s.teacherNames)
+  const structures = useSalaryStore((s) => s.structures)
   const payments = useSalaryStore((s) => s.payments)
 
-  const [focusEmployeeId, setFocusEmployeeId] = useState<string | null>(null)
+  const [focusTeacherId, setFocusTeacherId] = useState<string | null>(null)
 
-  const data: DataSource = useMemo(() => {
-    const archive = archives.find((a) => a.sessionId === session.sessionId)
-    if (archive) {
-      return {
-        kind: 'archived',
-        records: archive.records,
-        payments: archive.payments,
-        archivedAt: archive.archivedAt,
-        archivedBy: archive.archivedBy,
-      }
-    }
-    // In-progress session — live from the same store every tab reads.
-    const snap = buildSessionPayrollSnapshot(
-      { employees, salaries, adjustments, payments },
-      session.sessionId,
-      currentPeriodKey(),
-    )
-    return { kind: 'live', records: snap.records, payments: snap.payments }
-  }, [archives, session.sessionId, employees, salaries, adjustments, payments])
+  const data = useMemo(() => {
+    if (!session) return { payments: [] as typeof payments, teachers: [] as typeof teachers }
+    const inSession = payments.filter((p) => sessionOfPeriod(p.month) === session.sessionId)
+    return { payments: inSession, teachers }
+  }, [payments, session, teachers])
 
-  const focused = data.records.find((r) => r.employeeId === focusEmployeeId) ?? null
-  const visiblePayments = focused
-    ? data.payments.filter((p) => p.employeeId === focused.employeeId)
+  const visiblePayments = focusTeacherId
+    ? data.payments.filter((p) => p.teacherId === focusTeacherId)
     : data.payments
 
-  const summary = useMemo(() => ({
-    employees: data.records.length,
-    totalPayroll: data.records.reduce((s, r) => s + r.totalPayable, 0),
-    totalPaid: data.payments.filter((p) => p.status === 'Confirmed').reduce((s, p) => s + p.amount, 0),
-    totalOutstanding: data.records.reduce((s, r) => s + r.outstanding, 0),
-    paymentsCount: data.payments.filter((p) => p.status !== 'Reversed').length,
-  }), [data])
+  const summary = useMemo(() => {
+    const recorded = data.payments.filter((p) => p.status === 'RECORDED')
+    // Monthly payroll commitment: the sum of configured salaries of the
+    // teachers actually paid in this session (a session-scoped snapshot
+    // of the commitment, never invented arithmetic).
+    const paidTeacherIds = new Set(data.payments.map((p) => p.teacherId))
+    const monthly = structures
+      .filter((s) => paidTeacherIds.has(s.teacherId))
+      .reduce((sum, s) => sum + s.monthlyAmount, 0)
+    return {
+      employees: paidTeacherIds.size,
+      monthlyPayroll: monthly,
+      recordedTotal: recorded.reduce((s, p) => s + p.amount, 0),
+      paymentsCount: data.payments.length,
+    }
+  }, [data.payments, structures])
+
+  // Per-teacher rows: monthly salary (if configured) + recorded total.
+  const records = useMemo(() => {
+    const byTeacher = new Map<string, { recorded: number; count: number }>()
+    for (const p of data.payments) {
+      if (p.status !== 'RECORDED') continue
+      const cur = byTeacher.get(p.teacherId) ?? { recorded: 0, count: 0 }
+      byTeacher.set(p.teacherId, { recorded: cur.recorded + p.amount, count: cur.count + 1 })
+    }
+    const rows = Array.from(byTeacher.entries()).map(([teacherId, v]) => ({
+      teacherId,
+      name: teacherNames[teacherId] ?? '—',
+      monthly: structures.find((s) => s.teacherId === teacherId)?.monthlyAmount ?? 0,
+      recorded: v.recorded,
+      count: v.count,
+    }))
+    return rows.sort((a, b) => b.recorded - a.recorded || a.name.localeCompare(b.name))
+  }, [data.payments, structures, teacherNames])
+
+  if (!session) return null
 
   const handleDownload = () => {
     downloadPayrollReport({
       sessionId: session.sessionId,
       sessionLabel: session.label,
-      kind: data.kind,
-      archivedAt: data.kind === 'archived' ? data.archivedAt : undefined,
-      archivedBy: data.kind === 'archived' ? data.archivedBy : undefined,
-      records: data.records,
+      isCurrent: session.isCurrent,
+      teachers: data.teachers,
+      structures,
       payments: data.payments,
       summary,
     })
@@ -333,18 +328,18 @@ function SessionArchiveView({ session, onBack, onClose: _onClose }: {
           <div className="min-w-0">
             <h2 className="text-base font-bold flex items-center gap-2">
               {session.label}
-              {data.kind === 'archived' ? (
-                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-300">
-                  <Lock className="h-2 w-2" />Archived
-                </span>
-              ) : (
+              {session.isCurrent ? (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">Current Session</span>
+              ) : (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-300">
+                  <Archive className="h-2 w-2" />Closed
+                </span>
               )}
             </h2>
             <p className="text-[11px] text-muted-foreground">
-              {data.kind === 'archived'
-                ? `Historical record — archived ${fmtDayYear(data.archivedAt)} by ${data.archivedBy}. Read-only.`
-                : 'Session in progress — figures update as payroll continues. Read-only here.'}
+              {session.isCurrent
+                ? 'Session in progress — figures update as payroll continues. Read-only here.'
+                : 'Historical record from the school ledger. Read-only.'}
             </p>
           </div>
         </div>
@@ -352,58 +347,49 @@ function SessionArchiveView({ session, onBack, onClose: _onClose }: {
 
       <div className="p-5 space-y-4">
         {/* Summary */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          <ArchiveTile label="Employees" value={String(summary.employees)} icon={<Users className="h-3 w-3" />} />
-          <ArchiveTile label="Total Payroll" value={moneyMy(summary.totalPayroll)} icon={<Wallet className="h-3 w-3" />} />
-          <ArchiveTile label="Total Paid" value={moneyMy(summary.totalPaid)} tone="emerald" icon={<CheckCircle2 className="h-3 w-3" />} />
-          <ArchiveTile label="Outstanding" value={moneyMy(summary.totalOutstanding)} tone={summary.totalOutstanding > 0 ? 'rose' : 'emerald'} icon={<Banknote className="h-3 w-3" />} />
-          <ArchiveTile label="Payments" value={String(summary.paymentsCount)} icon={<FileText className="h-3 w-3" />} />
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <ArchiveTile label="Teachers Paid" value={String(summary.employees)} icon={<Users className="h-3 w-3" />} />
+          <ArchiveTile label="Monthly Payroll" value={moneyMy(summary.monthlyPayroll)} icon={<Wallet className="h-3 w-3" />} />
+          <ArchiveTile label="Recorded Paid" value={moneyMy(summary.recordedTotal)} tone="emerald" icon={<CheckCircle2 className="h-3 w-3" />} />
+          <ArchiveTile label="Payment Rows" value={String(summary.paymentsCount)} icon={<FileText className="h-3 w-3" />} />
         </div>
 
-        {/* Employee-wise payroll */}
+        {/* Teacher-wise payroll */}
         <div>
           <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground mb-2">
-            Employee-wise payroll — click an employee to see their payments
+            Teacher-wise payroll — click a teacher to see their payments
           </p>
-          {data.records.length === 0 ? (
+          {records.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center">
               <Users className="h-5 w-5 mx-auto text-muted-foreground/50" />
               <p className="text-xs font-medium text-muted-foreground mt-2">No payroll records for this session</p>
             </div>
           ) : (
             <div className="rounded-lg border border-border bg-card overflow-hidden overflow-x-auto">
-              <div className="min-w-[640px]">
+              <div className="min-w-[560px]">
                 <div className="flex items-center gap-3 px-3 py-2 border-b border-border/60 bg-muted/30 text-[9px] uppercase tracking-wider font-semibold text-muted-foreground">
-                  <span className="flex-1">Employee</span>
-                  <span className="w-20 text-right">Salary / mo</span>
-                  <span className="w-20 text-right">Payable</span>
-                  <span className="w-20 text-right">Paid</span>
-                  <span className="w-20 text-right">Outstanding</span>
+                  <span className="flex-1">Teacher</span>
+                  <span className="w-24 text-right">Salary / mo</span>
+                  <span className="w-24 text-right">Recorded</span>
+                  <span className="w-16 text-right">Rows</span>
                 </div>
                 <div className="divide-y divide-border max-h-72 overflow-y-auto">
-                  {data.records.map((r) => (
+                  {records.map((r) => (
                     <button
-                      key={r.employeeId}
+                      key={r.teacherId}
                       type="button"
-                      onClick={() => setFocusEmployeeId(focusEmployeeId === r.employeeId ? null : r.employeeId)}
+                      onClick={() => setFocusTeacherId(focusTeacherId === r.teacherId ? null : r.teacherId)}
                       className={cn(
                         'w-full flex items-center gap-3 px-3 py-2 hover:bg-muted/25 transition-colors text-left',
-                        focusEmployeeId === r.employeeId && 'bg-emerald-500/[0.06]',
+                        focusTeacherId === r.teacherId && 'bg-emerald-500/[0.06]',
                       )}
                     >
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-medium truncate">{r.name}</p>
-                        <p className="text-[9px] text-muted-foreground truncate">{r.employeeCode} · {r.designation} · {r.department}</p>
                       </div>
-                      <span className="w-20 text-right text-[11px] tabular-nums">{r.monthlySalary ? moneyMy(r.monthlySalary) : '—'}</span>
-                      <span className="w-20 text-right text-[11px] font-semibold tabular-nums">{moneyMy(r.totalPayable)}</span>
-                      <span className="w-20 text-right text-[11px] font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{moneyMy(r.totalPaid)}</span>
-                      <span className={cn(
-                        'w-20 text-right text-[11px] font-bold tabular-nums',
-                        r.outstanding > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-muted-foreground',
-                      )}>
-                        {r.outstanding > 0 ? moneyMy(r.outstanding) : 'Clear'}
-                      </span>
+                      <span className="w-24 text-right text-[11px] tabular-nums">{r.monthly > 0 ? moneyMy(r.monthly) : '—'}</span>
+                      <span className="w-24 text-right text-[11px] font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{moneyMy(r.recorded)}</span>
+                      <span className="w-16 text-right text-[11px] tabular-nums text-muted-foreground">{r.count}</span>
                     </button>
                   ))}
                 </div>
@@ -416,12 +402,12 @@ function SessionArchiveView({ session, onBack, onClose: _onClose }: {
         <div>
           <div className="flex items-center justify-between gap-2 mb-2">
             <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">
-              Payment history{focused ? ` — ${focused.name}` : ''}
+              Payment history{focusTeacherId ? ` — ${teacherNames[focusTeacherId] ?? '—'}` : ''}
             </p>
-            {focused && (
+            {focusTeacherId && (
               <button
                 type="button"
-                onClick={() => setFocusEmployeeId(null)}
+                onClick={() => setFocusTeacherId(null)}
                 className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[10px] font-medium hover:bg-muted/60 transition-colors"
               >
                 <X className="h-2.5 w-2.5" /> Show all
@@ -432,39 +418,35 @@ function SessionArchiveView({ session, onBack, onClose: _onClose }: {
             <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center">
               <FileText className="h-5 w-5 mx-auto text-muted-foreground/50" />
               <p className="text-xs font-medium text-muted-foreground mt-2">
-                {focused ? `No payments recorded for ${focused.name} in ${session.label}` : 'No payments recorded in this session'}
+                {focusTeacherId ? `No payments recorded for this teacher in ${session.label}` : 'No payments recorded in this session'}
               </p>
             </div>
           ) : (
             <div className="rounded-lg border border-border bg-card overflow-hidden overflow-x-auto">
-              <div className="min-w-[760px]">
+              <div className="min-w-[700px]">
                 <div className="flex items-center gap-3 px-3 py-2 border-b border-border/60 bg-muted/30 text-[9px] uppercase tracking-wider font-semibold text-muted-foreground">
                   <span className="w-20 shrink-0">Date</span>
-                  <span className="flex-1 min-w-0">Employee</span>
+                  <span className="flex-1 min-w-0">Teacher</span>
                   <span className="w-20 shrink-0">Period</span>
-                  <span className="w-16 text-right shrink-0">Payable</span>
-                  <span className="w-16 text-right shrink-0">Paid</span>
-                  <span className="w-20 shrink-0">Method</span>
+                  <span className="w-16 text-right shrink-0">Amount</span>
+                  <span className="w-24 shrink-0">Method</span>
                   <span className="w-24 shrink-0">Reference</span>
                   <span className="w-24 shrink-0 text-right">Status</span>
                 </div>
                 <div className="divide-y divide-border max-h-72 overflow-y-auto">
                   {visiblePayments.map((p) => (
                     <div key={p.id} className="flex items-center gap-3 px-3 py-2 hover:bg-muted/25 transition-colors">
-                      <span className="w-20 shrink-0 text-[11px] tabular-nums">{fmtDayYear(p.date)}</span>
+                      <span className="w-20 shrink-0 text-[11px] tabular-nums">{fmtDayYear(p.paidOn)}</span>
                       <span className="flex-1 min-w-0 text-[11px] font-medium truncate">
-                        {p.employeeName}
-                        {(p.rejectionReason || p.reversalReason) && (
-                          <span className="block text-[9px] text-muted-foreground truncate">
-                            {p.rejectionReason ? `“${p.rejectionReason}”` : p.reversalReason}
-                          </span>
+                        {teacherNames[p.teacherId] ?? '—'}
+                        {p.note && (
+                          <span className="block text-[9px] text-muted-foreground truncate">{p.note}</span>
                         )}
                       </span>
-                      <span className="w-20 shrink-0 text-[11px] text-muted-foreground truncate">{p.monthLabel}</span>
-                      <span className="w-16 text-right shrink-0 text-[11px] tabular-nums">{p.netPayable ? moneyMy(p.netPayable) : '—'}</span>
+                      <span className="w-20 shrink-0 text-[11px] text-muted-foreground truncate">{p.month}</span>
                       <span className="w-16 text-right shrink-0 text-[11px] font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{moneyMy(p.amount)}</span>
-                      <span className="w-20 shrink-0 text-[11px] truncate">{p.method}</span>
-                      <span className="w-24 shrink-0 text-[10px] font-mono text-muted-foreground truncate" title={p.reference}>
+                      <span className="w-24 shrink-0 text-[11px] truncate">{p.method ?? '—'}</span>
+                      <span className="w-24 shrink-0 text-[10px] font-mono text-muted-foreground truncate" title={p.reference ?? undefined}>
                         {p.reference ?? '—'}
                       </span>
                       <span className="w-24 shrink-0 flex justify-end"><PaymentStatusBadge status={p.status} /></span>
@@ -476,16 +458,15 @@ function SessionArchiveView({ session, onBack, onClose: _onClose }: {
           )}
         </div>
 
-        {data.kind === 'archived' && (
-          <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
-            <Lock className="h-3 w-3 shrink-0" />
-            This is a historical record — preserved {fmtDayYear(data.archivedAt)}. Current salary changes never rewrite it.
-          </p>
-        )}
-        {data.kind === 'live' && (
+        {session.isCurrent ? (
           <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
             <Clock className="h-3 w-3 shrink-0" />
-            {session.label} is still in progress — record and confirm payments from the Payments tab.
+            {session.label} is still in progress — record payments from the Payments tab; totals here update live.
+          </p>
+        ) : (
+          <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
+            <Banknote className="h-3 w-3 shrink-0" />
+            Historical record — every row exactly as recorded in the school ledger (as of {fmtDayYear(currentPeriodKey() + '-01')}).
           </p>
         )}
       </div>

@@ -211,16 +211,14 @@ export function TeacherPanel() {
       />
 
       <SalaryConfirmationsBanner
-        employeeId={currentTeacher?.id || ''}
         onReview={() => setActive('payroll')}
       />
 
-      {active === 'payroll' &&
-        (currentTeacher ? (
-          <MySalaryModule employeeId={currentTeacher.id} />
-        ) : (
-          <QuietNoRecord label="Your payroll record is not available yet — the office will publish your salary details." />
-        ))}
+      {/* PHASE 8B — My Salary reads the teacher's OWN canonical server rows
+          (GET /api/salary resolves the session's Teacher record), so the
+          module renders even before the staffing roster syncs and shows its
+          honest empty states. */}
+      {active === 'payroll' && <MySalaryModule />}
 
       {/* Relieved staff views (profile / fee-management) */}
       {(active === 'profile' || active === 'fee-management') &&

@@ -50,3 +50,41 @@ transactions (SAVEPOINT pinning).
   live-HTTP suite + dev server concurrently (kernel OOM-killer observed;
   mitigated: dev heap 1.4 GiB, event-stream shed during canonical runs).
 - All measurements above are single-instance (Next dev + Prisma pool 6).
+
+---
+
+# PHASE 8B — Teacher Dashboard N+1 Fix (2026-10-02)
+
+## What changed
+
+`GET /api/teacher/dashboard` hot path, batched without changing
+authorization or the response shape (verified top-level keys identical:
+teacher/today/nextDay/assignments/classTeacherOf/attendance/curriculum/
+hub/notices):
+
+| Block | Before (Phase 8A) | After (8B) |
+|---|---|---|
+| Attendance snapshot (class-teacher classes) | 1 query **per class** in `Promise.all` map | 1 batched `findMany({ classId: { in: [...] }, date })` |
+| Lesson plans (per assignment) | `getLessonPlan()` per (class,subject) — ~5 queries × N assignments | `getLessonPlansBatch()` — 5 queries total (school + topics + completions + timetables + holidays) with OR'd (classId,subjectId) pairs, grouped in memory |
+| Notice audience filter | `.filter(n => audienceAllows(...))` on an **async** function (never awaited — latent bug) | synchronous `audienceAllowsStaff(n.audience, user.role)`; teacher-visible semantics preserved (staff pass-through) |
+| Sequential query count | ~70 | ~24 |
+
+## Measured (sandbox → Supavisor ap-south-1 session pooler)
+
+| Metric | Before | After |
+|---|---|---|
+| Warm GET /api/teacher/dashboard | ~7.7 s (QA-observed 9–13 s cold) | **3.38–3.62 s** (3.83 s cold incl. dev compile) |
+
+Remaining wall time is dominated by the sandbox→Mumbai pooler RTT:
+every single query in this route logs `db_slow_query durationMs≈270`
+with single-digit-ms server-side plans (see Phase 8A EXPLAIN ANALYZE).
+On the Vercel deployment (function region `bom1` — same region as the
+Supabase database) the RTT collapses from ~250 ms to ~1–5 ms, which
+projects the same request to **well under 1 s** without further changes.
+
+## Not done / notes
+
+- Principal `/api/dashboard` was already flat (12 parallel aggregates, no
+  await-in-loop) — untouched.
+- No caching introduced: the fix is real batching; the DB stays the only
+  source of truth.

@@ -149,6 +149,13 @@ model School {
   // reason-required, read-only oversight sessions created by platform
   // admins through the control plane. See SupportSession.
   supportSessions SupportSession[]
+
+  // PHASE 8B — verified custom-domain mapping (multi-tenant resolution)
+  tenantDomains TenantDomain[]
+
+  // PHASE 8B — canonical payroll persistence (fixed monthly salary)
+  salaryStructures SalaryStructure[]
+  salaryPayments   SalaryPayment[]
 }
 
 /// Per-user conversation state for DIRECT (Message-row) threads. The
@@ -240,6 +247,10 @@ model Teacher {
   qualification String?
   subjects      String?
   createdAt     DateTime @default(now())
+
+  // PHASE 8B — canonical payroll (fixed monthly salary + payments)
+  salaryStructure  SalaryStructure?
+  salaryPayments   SalaryPayment[]
 }
 
 model Student {
@@ -2533,4 +2544,120 @@ model PlatformAnnouncement {
   expiresAt DateTime?
 
   @@index([createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 8B — Multi-tenant custom-domain mapping, canonical payroll
+// persistence, and outbound email audit. All additive; no existing table
+// is altered destructively.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Verified custom-domain → tenant mapping. A hostname resolves to a school
+/// ONLY through a VERIFIED row here (the legacy School.domain exact-match
+/// path remains supported for compatibility). Hostnames are normalized
+/// before storage AND lookup: lowercase, no protocol, no port, no leading
+/// "www.", no trailing dot. The UNIQUE constraint on hostname is global —
+/// a cross-tenant collision is impossible at the storage layer.
+model TenantDomain {
+  id       String  @id @default(cuid())
+  schoolId String
+  school   School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// Normalized hostname, e.g. "school-a.com". Never a full URL.
+  hostname String  @unique
+  /// Marks the school's primary domain (informational; resolution treats
+  /// every VERIFIED row equally).
+  isPrimary      Boolean   @default(false)
+  /// PENDING | VERIFIED. Only VERIFIED rows participate in resolution.
+  status         String    @default("PENDING")
+  /// Random token the school proves ownership with via the DNS TXT record
+  /// "_scholario-verify.<hostname>".
+  verificationToken String
+  lastCheckedAt   DateTime?
+  /// Human-readable outcome of the last verification attempt (no secrets).
+  lastCheckResult String?
+  createdAt       DateTime  @default(now())
+  verifiedAt      DateTime?
+
+  @@index([schoolId])
+  @@index([status])
+}
+
+/// Canonical per-teacher FIXED MONTHLY SALARY, configured by the principal.
+/// Business rule (Phase 8B): one monthly amount — no HRA, no PF, no tax,
+/// no deductions, no gross/basic/net arithmetic. One row per teacher per
+/// school. Written only through /api/salary (school-scoped, audited).
+model SalaryStructure {
+  id        String  @id @default(cuid())
+  schoolId  String
+  school    School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacherId String  @unique
+  teacher   Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  /// Fixed monthly salary, exact NUMERIC(12,2) (Phase 8A money rule).
+  monthlyAmount Decimal  @db.Decimal(12, 2)
+  /// Optional effective-from date (informational provenance).
+  effectiveFrom DateTime?
+  note          String?
+  /// User.id of the principal/management user who last wrote this row.
+  updatedById   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([schoolId])
+}
+
+/// Canonical salary payment record. The principal records the payment; the
+/// teacher reads the SAME canonical row (single source of truth in
+/// PostgreSQL — never localStorage). One RECORDED row per
+/// (school, teacher, month): duplicate recording is rejected by the
+/// storage-layer unique key; VOIDED rows survive as the audit trail and a
+/// voided month may be re-recorded. Every mutation is audit-logged.
+model SalaryPayment {
+  id        String  @id @default(cuid())
+  schoolId  String
+  school    School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacherId String
+  teacher   Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  /// Salary month — stored as the FIRST DAY of that month (UTC date).
+  month     DateTime @db.Date
+  /// Amount actually paid for the month, NUMERIC(12,2).
+  amount    Decimal  @db.Decimal(12, 2)
+  paidOn    DateTime @default(now())
+  method    String?
+  reference String?
+  note      String?
+  /// RECORDED | VOIDED.
+  status    String   @default("RECORDED")
+  /// User.id of the recorder (principal/management).
+  recordedById String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([schoolId, teacherId, month, status])
+  @@index([schoolId, month])
+  @@index([teacherId, month])
+}
+
+/// Outbound email audit/outbox. One row per logical email; `dedupeKey`
+/// makes triggers idempotent (a key that already SUCCEEDED is never
+/// re-sent). School FK deliberately omitted so audit rows survive school
+/// deletion (mirrors the PlatformAuditLog pattern).
+model EmailDelivery {
+  id        String   @id @default(cuid())
+  schoolId  String?
+  template  String
+  recipient String
+  /// PENDING | SENT | FAILED.
+  status    String   @default("PENDING")
+  attempts  Int      @default(0)
+  lastError String?
+  providerMessageId String?
+  /// Idempotency key — logical identity of the email (e.g. trigger row id).
+  /// Multiple NULLs allowed (un-deduped emails).
+  dedupeKey String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dedupeKey])
+  @@index([schoolId, createdAt])
+  @@index([status, createdAt])
 }

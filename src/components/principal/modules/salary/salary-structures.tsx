@@ -1,16 +1,21 @@
 'use client'
 
 /**
- * SalaryStructuresSection — salary scales as self-explanatory cards:
- * base, net, component math, live usage, and lifecycle actions.
- * The editor uses a responsive component grid: five clear columns on
- * tablet/desktop, stacked rows on small screens — controls never
- * overlap, and Save/Cancel stay visible while the list scrolls.
+ * SalaryStructuresSection — per-teacher MONTHLY salary cards.
+ *
+ * PHASE 8B: the salary structure is ONE fixed monthly amount per teacher
+ * (server truth: SalaryStructure row, unique per teacher). The editor
+ * dialog carries exactly: Monthly Salary (₹) + optional effective-from +
+ * optional note. No components, allowances or deductions exist.
+ *
+ * The list follows the server roster: every teacher appears (configured
+ * or honestly "Not set"); the editor writes via PUT /api/salary/structure
+ * and the canonical row folds back into the cache.
  */
 
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Archive, ArchiveRestore, Copy, Layers, Pencil, Plus, Trash2, Users } from 'lucide-react'
+import { CalendarDays, IndianRupee, Pencil, Users, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { cn } from '@/lib/utils'
@@ -19,215 +24,166 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { useSalaryStore, type SalaryStructureTemplate, type StructureComponent, type EmployeeType } from '@/lib/store/salary-store'
-import { moneyMy, SalaryEmptyState } from './salary-shared'
-
-const TYPES: Array<EmployeeType | 'All'> = ['Teaching', 'Administration', 'Support', 'Transport', 'Finance', 'All']
-
-// ─── Component math (shared with the preview) ────────────────────────
-
-function structureMath(base: number, components: StructureComponent[]) {
-  const earnings = components.filter((c) => c.type === 'Earning')
-    .reduce((s, c) => s + (c.basis === 'Percentage' ? Math.round(base * c.value / 100) : c.value), base)
-  const deductions = components.filter((c) => c.type === 'Deduction')
-    .reduce((s, c) => s + (c.basis === 'Percentage' ? Math.round(base * c.value / 100) : c.value), 0)
-  return { earnings, deductions, net: earnings - deductions }
-}
-
-/** Compact ₹ amounts for the component summary (₹1.2K style). */
-const shortInr = (n: number) =>
-  n >= 1000 ? `₹${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}K` : `₹${n}`
-
-/** Short component names for card summaries. */
-const shortName = (name: string) => name
-  .replace(' Allowance', '')
-  .replace('Provident Fund', 'PF')
-  .replace('Professional Tax', 'PT')
+import {
+  useSalaryStore, SalaryApiError, type SalaryTeacher, type SalaryStructure,
+} from '@/lib/store/salary-store'
+import { useSalaryUI } from './salary-ui-context'
+import { moneyMy, fmtDayYear, SalaryEmptyState, SyncErrorStrip } from './salary-shared'
 
 // ─── Section ─────────────────────────────────────────────────────────
 
 export function SalaryStructuresSection() {
+  const teachers = useSalaryStore((s) => s.teachers)
   const structures = useSalaryStore((s) => s.structures)
-  const salaries = useSalaryStore((s) => s.salaries)
-  const duplicateStructure = useSalaryStore((s) => s.duplicateStructure)
-  const setStructureStatus = useSalaryStore((s) => s.setStructureStatus)
+  const hydrate = useSalaryStore((s) => s.hydrate)
+  const syncStatus = useSalaryStore((s) => s.syncStatus)
+  const { openEmployee } = useSalaryUI()
 
-  const [showArchived, setShowArchived] = useState(false)
-  const [editing, setEditing] = useState<SalaryStructureTemplate | 'new' | null>(null)
+  const [editing, setEditing] = useState<{ teacher: SalaryTeacher; structure: SalaryStructure | null } | null>(null)
+  const [search, setSearch] = useState('')
 
-  const usage = useMemo(() => {
-    const map: Record<string, number> = {}
-    Object.values(salaries).forEach((s) => {
-      map[s.salary.structureId] = (map[s.salary.structureId] ?? 0) + 1
-    })
+  const structureByTeacher = useMemo(() => {
+    const map = new Map<string, SalaryStructure>()
+    for (const s of structures) map.set(s.teacherId, s)
     return map
-  }, [salaries])
+  }, [structures])
 
-  // Total staff salary assignments across all structures — the summary
-  // badge's real figure (how many employees' salaries reference a
-  // structure). Never invented.
-  const staffAssigned = useMemo(() => Object.values(usage).reduce((s, n) => s + n, 0), [usage])
+  const configuredCount = structures.length
 
-  const visible = structures.filter((s) => showArchived || s.status === 'Active')
-  const archived = structures.filter((s) => s.status === 'Archived')
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return teachers
+      .map((t) => ({ teacher: t, structure: structureByTeacher.get(t.id) ?? null }))
+      .filter((r) => !q || `${r.teacher.name} ${r.teacher.employeeId} ${r.teacher.department}`.toLowerCase().includes(q))
+      .sort((a, b) => {
+        // Un-configured salaries first — they need the principal's attention.
+        const aSet = a.structure ? 1 : 0
+        const bSet = b.structure ? 1 : 0
+        return aSet - bSet || a.teacher.name.localeCompare(b.teacher.name)
+      })
+  }, [teachers, structureByTeacher, search])
+
+  const monthlyCommitment = structures.reduce((s, st) => s + st.monthlyAmount, 0)
 
   return (
     <div className="space-y-4">
-      {/* UX-REFINE — the "Salary Structure" tab already establishes context,
-          so no page heading or explanatory line: summary badges left
-          (structures / staff assigned), Archived filter + create right.
-          Mirrors Fee Structures for a twin product feel. */}
+      {syncStatus === 'error' && <SyncErrorStrip onRetry={() => void hydrate({ force: true })} />}
+
+      {/* Summary badges + search — the tab already establishes context */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap">
           <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-muted/40">
-            <Layers className="h-2.5 w-2.5" /> {structures.length} structure{structures.length === 1 ? '' : 's'}
+            <Users className="h-2.5 w-2.5" /> {teachers.length} teacher{teachers.length === 1 ? '' : 's'}
           </Badge>
           <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-muted/40">
-            <Users className="h-2.5 w-2.5" /> {staffAssigned} staff assigned
+            <Wallet className="h-2.5 w-2.5" /> {configuredCount} salary set
+          </Badge>
+          <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-muted/40">
+            <IndianRupee className="h-2.5 w-2.5" /> {moneyMy(monthlyCommitment)} / month
           </Badge>
         </div>
-        <div className="flex items-center gap-2">
-          {archived.length > 0 && (
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setShowArchived((v) => !v)}>
-              {showArchived ? 'Hide Archived' : `Archived (${archived.length})`}
-            </Button>
-          )}
-          <Button size="sm" className="h-8 text-xs gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setEditing('new')}>
-            <Plus className="h-3.5 w-3.5" /> New Structure
-          </Button>
-        </div>
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search teacher…"
+          className="h-8 w-[180px] text-xs"
+          aria-label="Search teachers"
+        />
       </div>
 
-      {visible.length === 0 ? (
-        <SalaryEmptyState icon={<Layers className="h-5 w-5" />} title="No structures" action={
-          <Button size="sm" className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setEditing('new')}>
-            <Plus className="h-3.5 w-3.5" /> New Structure
-          </Button>
-        } />
+      {teachers.length === 0 ? (
+        <div className="rounded-xl border bg-card">
+          <SalaryEmptyState
+            icon={<Users className="h-5 w-5" />}
+            title="No teachers on the roster"
+            description="The payroll list follows the school's teacher roster — register teachers in the Teachers module and they will appear here."
+          />
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {visible.map((s, i) => {
-            const math = structureMath(s.baseAmount, s.components)
-            const used = usage[s.id] ?? 0
-            const isArchived = s.status === 'Archived'
-            const earnings = s.components.filter((c) => c.type === 'Earning')
-            const deductions = s.components.filter((c) => c.type === 'Deduction')
-            const isSimple = (s.mode ?? 'detailed') === 'simple'
-            return (
-              <motion.div
-                key={s.id}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.25, delay: i * 0.03 }}
-                className={cn(
-                  'rounded-xl border bg-card p-4 flex flex-col gap-3',
-                  isArchived && 'opacity-75',
-                )}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold truncate">
-                      {s.name}
-                      <span className={cn(
-                        'ml-1.5 inline-block rounded px-1 py-px align-middle text-[8px] font-bold uppercase tracking-wider',
-                        isSimple
-                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                          : 'bg-violet-500/10 text-violet-700 dark:text-violet-400',
-                      )}>
-                        {isSimple ? 'Simple' : 'Detailed'}
-                      </span>
-                    </p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                      {s.applicableTo}{s.description ? ` · ${s.description}` : ''}
-                    </p>
-                  </div>
-                  {isArchived ? (
-                    <Badge variant="outline" className="text-[9px] gap-1 shrink-0"><Archive className="h-2.5 w-2.5" /> Archive only</Badge>
-                  ) : used > 0 ? (
-                    <Badge variant="outline" className="text-[9px] shrink-0">Used by {used} staff</Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-[9px] shrink-0 text-muted-foreground">Unused</Badge>
-                  )}
+          {rows.map(({ teacher, structure }, i) => (
+            <motion.button
+              key={teacher.id}
+              type="button"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, delay: Math.min(i * 0.02, 0.24) }}
+              onClick={() => setEditing({ teacher, structure })}
+              aria-label={`Set monthly salary for ${teacher.name}`}
+              className={cn(
+                'rounded-xl border bg-card p-4 text-left hover:border-emerald-500/40 hover:shadow-md transition-all',
+                !structure && 'border-dashed',
+              )}
+            >
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold truncate">{teacher.name}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                    {[teacher.employeeId, teacher.department].filter(Boolean).join(' · ') || '—'}
+                  </p>
                 </div>
+                <span className={cn(
+                  'inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold shrink-0 mt-0.5',
+                  structure
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-muted text-muted-foreground',
+                )}>
+                  {structure ? 'Set' : 'Not set'}
+                </span>
+              </div>
 
-                {isSimple ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-lg bg-emerald-500/[0.07] px-2.5 py-1.5">
-                      <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Monthly Salary</p>
-                      <p className="text-sm font-bold tabular-nums mt-0.5 text-emerald-600 dark:text-emerald-400">{moneyMy(s.baseAmount)}</p>
-                    </div>
-                    <div className="rounded-lg bg-muted/40 px-2.5 py-1.5">
-                      <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Model</p>
-                      <p className="text-sm font-bold mt-0.5">Simple</p>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="rounded-lg bg-muted/40 px-2.5 py-1.5">
-                        <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Base</p>
-                        <p className="text-sm font-bold tabular-nums mt-0.5">{moneyMy(s.baseAmount)}</p>
-                      </div>
-                      <div className="rounded-lg bg-emerald-500/[0.07] px-2.5 py-1.5">
-                        <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Net / month</p>
-                        <p className="text-sm font-bold tabular-nums mt-0.5 text-emerald-600 dark:text-emerald-400">{moneyMy(math.net)}</p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1 text-[10px] leading-relaxed min-h-[2rem]">
-                      <p className="text-muted-foreground">
-                        <span className="text-emerald-600 dark:text-emerald-400 font-semibold">+ </span>
-                        Basic {shortInr(s.baseAmount)}
-                        {earnings.slice(0, 2).map((c) => ` · ${shortName(c.name)} ${shortInr(c.basis === 'Percentage' ? Math.round(s.baseAmount * c.value / 100) : c.value)}`).join('')}
-                        {earnings.length > 2 ? ` · +${earnings.length - 2} more` : ''}
-                      </p>
-                      <p className="text-muted-foreground">
-                        <span className="text-rose-600 dark:text-rose-400 font-semibold">− </span>
-                        {deductions.slice(0, 2).map((c) => `${shortName(c.name)} ${shortInr(c.basis === 'Percentage' ? Math.round(s.baseAmount * c.value / 100) : c.value)}`).join(' · ') || '—'}
-                        {deductions.length > 2 ? ` · +${deductions.length - 2} more` : ''}
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                <div className="flex items-center gap-1.5 pt-1 border-t mt-auto">
-                  <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1" onClick={() => setEditing(s)}>
-                    <Pencil className="h-3 w-3" /> View / Edit
-                  </Button>
-                  <Button
-                    variant="ghost" size="sm" className="h-7 text-[11px] gap-1"
-                    onClick={() => { duplicateStructure(s.id); toast.success('Structure duplicated', { description: `${s.name} (Copy)` }) }}
-                  >
-                    <Copy className="h-3 w-3" /> Duplicate
-                  </Button>
-                  <div className="flex-1" />
-                  {isArchived ? (
-                    <Button
-                      variant="ghost" size="sm" className="h-7 text-[11px] gap-1 text-emerald-600 hover:text-emerald-700"
-                      onClick={() => { setStructureStatus(s.id, 'Active'); toast.success('Structure restored', { description: s.name }) }}
-                    >
-                      <ArchiveRestore className="h-3 w-3" /> Restore
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="ghost" size="sm" className="h-7 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
-                      onClick={() => { setStructureStatus(s.id, 'Archived'); toast.success('Structure archived', { description: `${s.name} — existing salaries unchanged` }) }}
-                    >
-                      <Archive className="h-3 w-3" /> Archive
-                    </Button>
-                  )}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-emerald-500/[0.07] px-2.5 py-1.5">
+                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Monthly Salary</p>
+                  <p className="text-sm font-bold tabular-nums mt-0.5 text-emerald-700 dark:text-emerald-400">
+                    {structure ? moneyMy(structure.monthlyAmount) : '—'}
+                  </p>
                 </div>
-              </motion.div>
-            )
-          })}
+                <div className="rounded-lg bg-muted/40 px-2.5 py-1.5">
+                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Effective From</p>
+                  <p className="text-sm font-bold mt-0.5">
+                    {structure?.effectiveFrom ? fmtDayYear(structure.effectiveFrom) : '—'}
+                  </p>
+                </div>
+              </div>
+
+              {structure?.note && (
+                <p className="text-[10px] text-muted-foreground mt-2.5 truncate">{structure.note}</p>
+              )}
+
+              <div className="flex items-center gap-1.5 pt-2.5 mt-3 border-t">
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                  <Pencil className="h-3 w-3" /> {structure ? 'View / Edit' : 'Set Salary'}
+                </span>
+                <div className="flex-1" />
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open payroll for ${teacher.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    openEmployee(teacher.id)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.stopPropagation()
+                      openEmployee(teacher.id)
+                    }
+                  }}
+                  className="text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Payroll →
+                </span>
+              </div>
+            </motion.button>
+          ))}
         </div>
       )}
 
-      {/* Editor */}
-      <StructureEditorDialog
-        structure={editing === 'new' ? null : editing}
-        open={editing !== null}
+      {/* Editor — one Monthly Salary amount (+ optional effective-from + note) */}
+      <MonthlySalaryEditorDialog
+        target={editing}
+        open={!!editing}
         onOpenChange={(o) => !o && setEditing(null)}
       />
     </div>
@@ -236,264 +192,133 @@ export function SalaryStructuresSection() {
 
 // ─── Editor dialog ───────────────────────────────────────────────────
 
-interface EditorState {
-  name: string
-  applicableTo: EmployeeType | 'All'
-  /** 'simple' — one fixed monthly salary (the default workflow);
-   *  'detailed' — explicit component structure (Basic/HRA/PF/…). */
-  mode: 'simple' | 'detailed'
-  baseAmount: string
-  components: StructureComponent[]
-}
+function MonthlySalaryEditorDialog({
+  target, open, onOpenChange,
+}: {
+  target: { teacher: SalaryTeacher; structure: SalaryStructure | null } | null
+  open: boolean
+  onOpenChange: (o: boolean) => void
+}) {
+  const setStructure = useSalaryStore((s) => s.setStructure)
 
-function toEditorState(s: SalaryStructureTemplate | null): EditorState {
-  if (!s) return { name: '', applicableTo: 'Teaching', mode: 'simple', baseAmount: '', components: [] }
-  return {
-    name: s.name,
-    applicableTo: s.applicableTo,
-    mode: s.mode ?? 'detailed',
-    baseAmount: String(s.baseAmount),
-    components: s.components.map((c) => ({ ...c })),
-  }
-}
-
-function StructureEditorDialog({
-  structure, open, onOpenChange,
-}: { structure: SalaryStructureTemplate | null; open: boolean; onOpenChange: (o: boolean) => void }) {
-  const createStructure = useSalaryStore((s) => s.createStructure)
-  const updateStructure = useSalaryStore((s) => s.updateStructure)
-
-  const [state, setState] = useState<EditorState>(toEditorState(structure))
+  const [amount, setAmount] = useState('')
+  const [effectiveFrom, setEffectiveFrom] = useState('')
+  const [note, setNote] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   const [key, setKey] = useState('')
 
   // Re-seed the form whenever the target changes.
-  const targetKey = structure?.id ?? 'new'
+  const targetKey = target?.teacher.id ?? 'none'
   if (key !== targetKey) {
     setKey(targetKey)
-    setState(toEditorState(structure))
+    setAmount(target?.structure ? String(target.structure.monthlyAmount) : '')
+    setEffectiveFrom(target?.structure?.effectiveFrom ? target.structure.effectiveFrom.slice(0, 10) : '')
+    setNote(target?.structure?.note ?? '')
+    setSubmitting(false)
   }
 
-  const base = Number(state.baseAmount) || 0
-  const math = structureMath(base, state.components)
+  const amountNum = Number(amount) || 0
+  const invalidAmount = amountNum <= 0 || amountNum > 5_000_000
 
-  const addComponent = () => {
-    setState((st) => ({
-      ...st,
-      components: [...st.components, { id: `c-${Date.now().toString(36)}`, name: '', type: 'Earning', basis: 'Percentage', value: 0 }],
-    }))
-  }
-
-  const updateComponent = (id: string, patch: Partial<StructureComponent>) => {
-    setState((st) => ({ ...st, components: st.components.map((c) => c.id === id ? { ...c, ...patch } : c) }))
-  }
-
-  const handleSave = () => {
-    if (!state.name.trim()) { toast.error('Enter a name for this structure.'); return }
-    if (base <= 0) { toast.error(state.mode === 'simple' ? 'Enter the monthly salary.' : 'Enter a valid base amount.'); return }
-    const components = state.mode === 'simple'
-      ? [] // simple = ONE fixed monthly salary — components are never stored
-      : state.components.filter((c) => c.name.trim() && c.value > 0)
+  const handleSave = async () => {
+    if (!target || submitting || invalidAmount) return
+    setSubmitting(true)
     try {
-      if (structure) {
-        updateStructure(structure.id, {
-          name: state.name.trim(),
-          applicableTo: state.applicableTo,
-          mode: state.mode,
-          baseAmount: base,
-          components,
-        })
-        toast.success('Structure updated', { description: state.name.trim() })
-      } else {
-        createStructure({
-          name: state.name.trim(),
-          description: state.mode === 'simple' ? 'Monthly salary' : 'Component structure',
-          applicableTo: state.applicableTo,
-          mode: state.mode,
-          baseAmount: base,
-          components,
-        })
-        toast.success('Structure created', { description: state.name.trim() })
-      }
+      const row = await setStructure({
+        teacherId: target.teacher.id,
+        monthlyAmount: amountNum,
+        effectiveFrom: effectiveFrom || undefined,
+        note: note.trim() || undefined,
+      })
+      toast.success(target.structure ? 'Monthly salary updated' : 'Monthly salary set', {
+        description: `${target.teacher.name} · ${moneyMy(row.monthlyAmount)} / month`,
+      })
       onOpenChange(false)
     } catch (err) {
-      toast.error('Could not save', { description: err instanceof Error ? err.message : undefined })
+      const message = err instanceof SalaryApiError || err instanceof Error
+        ? err.message
+        : 'Could not save the monthly salary.'
+      toast.error('Could not save', { description: message })
+    } finally {
+      setSubmitting(false)
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90dvh] p-0 gap-0 flex flex-col overflow-hidden">
-        <DialogHeader className="px-5 pt-5 pb-4 border-b shrink-0">
-          <DialogTitle>{structure ? 'Edit Structure' : 'New Structure'}</DialogTitle>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+              <IndianRupee className="h-4 w-4" />
+            </span>
+            {target?.structure ? 'Edit Monthly Salary' : 'Set Monthly Salary'}
+          </DialogTitle>
           <DialogDescription>
-            {structure ? structure.name : 'Name, base and components'}
+            {target ? `${target.teacher.name}${target.teacher.employeeId ? ` · ${target.teacher.employeeId}` : ''}` : ''}
           </DialogDescription>
         </DialogHeader>
 
-        {/* Scrollable body — Save/Cancel stay in view however long the list */}
-        <div className="flex-1 min-h-0 overflow-y-auto salary-scroll px-5 py-4">
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs" htmlFor="st-name">Name</Label>
-                <Input id="st-name" className="h-9 text-xs" placeholder="e.g. Primary Teaching" value={state.name} onChange={(e) => setState((st) => ({ ...st, name: e.target.value }))} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Applies To</Label>
-                <Select value={state.applicableTo} onValueChange={(v) => setState((st) => ({ ...st, applicableTo: v as EmployeeType | 'All' }))}>
-                  <SelectTrigger className="h-9 w-full text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent className="z-[70]">
-                    {TYPES.map((t) => <SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {/* Salary model — Simple is the school's default workflow */}
-            <div className="space-y-1.5">
-              <Label className="text-xs">Salary Model</Label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setState((st) => ({ ...st, mode: 'simple' }))}
-                  className={cn(
-                    'rounded-lg border p-2.5 text-left transition-colors',
-                    state.mode === 'simple'
-                      ? 'border-emerald-500/50 bg-emerald-500/[0.06]'
-                      : 'border-border hover:border-emerald-500/30',
-                  )}
-                >
-                  <p className="text-xs font-semibold">Simple · Monthly Salary</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
-                    One fixed amount per month. The default school workflow — nothing is auto-computed.
-                  </p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setState((st) => ({ ...st, mode: 'detailed' }))}
-                  className={cn(
-                    'rounded-lg border p-2.5 text-left transition-colors',
-                    state.mode === 'detailed'
-                      ? 'border-emerald-500/50 bg-emerald-500/[0.06]'
-                      : 'border-border hover:border-emerald-500/30',
-                  )}
-                >
-                  <p className="text-xs font-semibold">Detailed · Components</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
-                    Explicit Basic / HRA / PF / Tax lines — shown only when you configure them.
-                  </p>
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs" htmlFor="st-base">
-                {state.mode === 'simple' ? 'Monthly Salary (₹)' : 'Base Amount (₹/month)'}
-              </Label>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs" htmlFor="ms-amount">Monthly Salary (₹)</Label>
+            <div className="relative">
+              <IndianRupee className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <Input
-                id="st-base" inputMode="numeric" className="h-9 text-xs tabular-nums sm:max-w-[220px]"
-                placeholder={state.mode === 'simple' ? '25000' : '10000'}
-                value={state.baseAmount}
-                onChange={(e) => setState((st) => ({ ...st, baseAmount: e.target.value.replace(/[^0-9]/g, '') }))}
+                id="ms-amount"
+                inputMode="numeric"
+                className="pl-7 h-9 tabular-nums"
+                placeholder="25000"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
               />
             </div>
-
-            {/* Live preview — detailed mode only (simple = the salary itself) */}
-            {state.mode === 'detailed' && (
-              <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-lg bg-muted/40 px-2.5 py-1.5">
-                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Earnings</p>
-                  <p className="text-sm font-bold tabular-nums mt-0.5">{moneyMy(math.earnings)}</p>
-                </div>
-                <div className="rounded-lg bg-muted/40 px-2.5 py-1.5">
-                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Deductions</p>
-                  <p className="text-sm font-bold tabular-nums mt-0.5 text-rose-600 dark:text-rose-400">{moneyMy(math.deductions)}</p>
-                </div>
-                <div className="rounded-lg bg-emerald-500/[0.07] px-2.5 py-1.5">
-                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Net</p>
-                  <p className="text-sm font-bold tabular-nums mt-0.5 text-emerald-600 dark:text-emerald-400">{moneyMy(math.net)}</p>
-                </div>
-              </div>
+            {amount && invalidAmount && (
+              <p className="text-[10px] text-rose-600 dark:text-rose-400">
+                Enter an amount between ₹1 and ₹50,00,000.
+              </p>
             )}
+            <p className="text-[10px] text-muted-foreground">
+              One fixed amount per month — the school&apos;s payroll model has no components or deductions.
+            </p>
+          </div>
 
-            {/* Components — detailed mode only */}
-            {state.mode === 'detailed' && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Components</Label>
-                <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1" onClick={addComponent}>
-                  <Plus className="h-3 w-3" /> Add
-                </Button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs" htmlFor="ms-effective">Effective From</Label>
+              <div className="relative">
+                <CalendarDays className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  id="ms-effective"
+                  type="date"
+                  className="pl-7 h-9 text-xs tabular-nums"
+                  value={effectiveFrom}
+                  onChange={(e) => setEffectiveFrom(e.target.value)}
+                />
               </div>
-              {state.components.length === 0 && (
-                <p className="text-[11px] text-muted-foreground py-2 text-center rounded-lg border border-dashed">
-                  Basic is included automatically — add allowances and deductions here.
-                </p>
-              )}
-
-              {/* Column labels — tablet/desktop rows */}
-              {state.components.length > 0 && (
-                <div className="hidden sm:grid grid-cols-[1fr_108px_108px_92px_32px] gap-2 px-0.5">
-                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Component</p>
-                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Type</p>
-                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Calculation</p>
-                  <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Value</p>
-                  <span />
-                </div>
-              )}
-
-              {state.components.map((c) => (
-                <div
-                  key={c.id}
-                  className="grid grid-cols-2 sm:grid-cols-[1fr_108px_108px_92px_32px] gap-2 items-center rounded-lg sm:rounded-none border sm:border-0 bg-muted/20 sm:bg-transparent p-2 sm:p-0"
-                >
-                  <Input
-                    className="col-span-2 sm:col-span-1 h-8 text-xs"
-                    placeholder="e.g. HRA"
-                    value={c.name} onChange={(e) => updateComponent(c.id, { name: e.target.value })}
-                  />
-                  <Select value={c.type} onValueChange={(v) => updateComponent(c.id, { type: v as 'Earning' | 'Deduction' })}>
-                    <SelectTrigger className="h-8 w-full text-[11px]"><SelectValue /></SelectTrigger>
-                    <SelectContent className="z-[70]">
-                      <SelectItem value="Earning" className="text-xs">Earning +</SelectItem>
-                      <SelectItem value="Deduction" className="text-xs">Deduction −</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={c.basis} onValueChange={(v) => updateComponent(c.id, { basis: v as 'Fixed' | 'Percentage' })}>
-                    <SelectTrigger className="h-8 w-full text-[11px]"><SelectValue /></SelectTrigger>
-                    <SelectContent className="z-[70]">
-                      <SelectItem value="Percentage" className="text-xs">% of Basic</SelectItem>
-                      <SelectItem value="Fixed" className="text-xs">Fixed ₹</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <div className="relative">
-                    <Input
-                      className="h-8 text-xs tabular-nums pr-6" inputMode="numeric"
-                      value={c.value || ''} placeholder="0"
-                      onChange={(e) => updateComponent(c.id, { value: Number(e.target.value.replace(/[^0-9]/g, '')) || 0 })}
-                    />
-                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground pointer-events-none">
-                      {c.basis === 'Percentage' ? '%' : '₹'}
-                    </span>
-                  </div>
-                  <button
-                    type="button" aria-label="Remove component"
-                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-rose-600 hover:bg-rose-500/10 transition-colors justify-self-end"
-                    onClick={() => setState((st) => ({ ...st, components: st.components.filter((x) => x.id !== c.id) }))}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
             </div>
-            )}
+            <div className="space-y-1.5">
+              <Label className="text-xs" htmlFor="ms-note">Note</Label>
+              <Input
+                id="ms-note"
+                className="h-9 text-xs"
+                placeholder="e.g. Annual increment"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </div>
           </div>
         </div>
 
-        <DialogFooter className="px-5 py-4 border-t bg-card shrink-0 gap-2">
+        <DialogFooter className="gap-2">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleSave}>
-            {structure ? 'Save Changes' : 'Create Structure'}
+          <Button
+            size="sm"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            onClick={() => void handleSave()}
+            disabled={!target || !amountNum || invalidAmount || submitting}
+          >
+            {submitting ? 'Saving…' : target?.structure ? 'Save Changes' : 'Set Salary'}
           </Button>
         </DialogFooter>
       </DialogContent>

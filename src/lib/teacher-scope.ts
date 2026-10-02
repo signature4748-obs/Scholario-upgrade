@@ -52,18 +52,22 @@ export async function getTeacherSubjectAssignments(
 ): Promise<SubjectAssignment[]> {
   const out = new Map<string, SubjectAssignment>()
 
-  // 1 — canonical CSA appointments (teacherUserId FK)
-  const csaRows = await db.classSubjectAssignment.findMany({
-    where: { schoolId, isActive: true, teacherUserId: user.id },
-    select: { classId: true, subjectId: true },
-  })
+  // 1 — canonical CSA appointments (teacherUserId FK).
+  // 2 — timetable fallback: relational id first, legacy name-match second.
+  // 8B-7-f — the two scope reads are independent of each other: ONE
+  // parallel round (was two sequential pooler round-trips). The `out` map
+  // is still keyed CSA-first, so the resolution result is identical.
+  const [csaRows, ttRows] = await Promise.all([
+    db.classSubjectAssignment.findMany({
+      where: { schoolId, isActive: true, teacherUserId: user.id },
+      select: { classId: true, subjectId: true },
+    }),
+    db.timetable.findMany({
+      where: { schoolId, subjectId: { not: null } },
+      select: { classId: true, subjectId: true, teacherUserId: true, teacherName: true },
+    }),
+  ])
   for (const r of csaRows) out.set(`${r.classId}|${r.subjectId}`, { ...r, source: 'CSA' })
-
-  // 2 — timetable fallback: relational id first, legacy name-match second
-  const ttRows = await db.timetable.findMany({
-    where: { schoolId, subjectId: { not: null } },
-    select: { classId: true, subjectId: true, teacherUserId: true, teacherName: true },
-  })
   const byId = new Set<string>()
   const byName = new Set<string>()
   for (const r of ttRows) {

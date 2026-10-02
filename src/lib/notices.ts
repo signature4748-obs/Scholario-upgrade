@@ -114,6 +114,40 @@ function baseAudienceAllows(audience: string, role: string): boolean {
 }
 
 /**
+ * Synchronous audience verdict for STAFF viewers (teacher / principal /
+ * super admin) — Phase 8B-7-f fix.
+ *
+ * WHY: the teacher dashboard previously called the async `audienceAllows`
+ * inside `.filter((n) => audienceAllows(n.audience, user))` WITHOUT
+ * awaiting — every call returned a truthy Promise, so the filter was a
+ * no-op that passed EVERY row. Staff roles never reach the DB-backed
+ * branches of `audienceAllows` (student/parent class matching), so their
+ * verdict is expressible synchronously — this helper is that branch
+ * without the await.
+ *
+ * CONTRACT (deliberate deviation, documented): staff rows pass through
+ * UNCONDITIONALLY — audience does not change the staff verdict. A strict
+ * base-tag filter (TEACHER → ALL/TEACHERS/STAFF + class-family tags)
+ * would now EXCLUDE rows the broken no-op filter shipped as visible
+ * (e.g. STUDENTS/PARENTS-tagged announcements inside a staff feed
+ * window), changing teacher-visible notice semantics. To keep the
+ * dashboard's visible rows identical to what teachers see today, the
+ * historical staff pass-through is preserved; staff oversight of
+ * class-targeted notices (the `audienceAllows` staff rule) is unchanged.
+ * Applying real base-tag scoping for staff is a product decision, not a
+ * perf fix. NON-staff roles return false here by design — students and
+ * parents MUST use the async `audienceAllows` (their class matching hits
+ * the DB); a misuse of this helper can never silently widen their access.
+ */
+export function audienceAllowsStaff(audience: string | null | undefined, role: string): boolean {
+  // The staff verdict is audience-independent (documented pass-through);
+  // the parameter is kept for signature parity with `audienceAllows` so
+  // call sites read identically.
+  void audience
+  return role === 'PRINCIPAL' || role === 'TEACHER' || role === 'SUPER_ADMIN'
+}
+
+/**
  * Prisma `where` fragment for Notification reads: only rows that are
  * published (publishAt null or in the past) and not expired (expiresAt
  * null or in the future). Every feed/list reader spreads this into its

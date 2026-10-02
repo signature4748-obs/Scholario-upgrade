@@ -23,8 +23,18 @@ const sora = Sora({
   weight: ["400", "500", "600", "700", "800"],
 });
 
+// PHASE 8B — deployment-aware metadataBase (SEO/OG URLs must match the
+// serving origin: Vercel production domain → preview deployment URL →
+// explicit APP_URL override → localhost dev). Vercel system envs are
+// present at build time; the fallback chain keeps local dev identical.
+const metadataOrigin =
+  process.env.APP_URL ||
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null) ||
+  (process.env.VERCE_URL ? `https://${process.env.VERCE_URL}` : null) ||
+  "http://localhost:3000";
+
 export const metadata: Metadata = {
-  metadataBase: new URL("http://localhost:3000"),
+  metadataBase: new URL(metadataOrigin),
   title: {
     default: "SCHOLARIO-OS — Enterprise School ERP",
     template: "%s · SCHOLARIO-OS",

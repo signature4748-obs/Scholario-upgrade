@@ -3,6 +3,7 @@ import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { applyPaymentToLedger, mintReceiptNo, resolveFeeIdForTxn } from '@/lib/fee-workflow'
+import { publishToSchool, publishToUser } from '@/lib/realtime/publish'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { num, type MoneyInput } from '@/lib/money'
 
@@ -210,7 +211,7 @@ export async function POST(req: NextRequest) {
       //     and the loser returns the winner's authoritative state
       //     (idempotent response, no error, no second credit).
       const gatewayPaymentId = `confirm:${orderId}`
-      const updated = await trackedTransaction('payment-confirm-capture', async (tx) => {
+      const capture = await trackedTransaction('payment-confirm-capture', async (tx) => {
         // PIH-4b — fee targeting BEFORE the state write: the resolved fee
         // id is PERSISTED on the canonical row (same discipline as the
         // student verify path), so a settled order always carries its
@@ -257,8 +258,15 @@ export async function POST(req: NextRequest) {
             tx,
           )
         }
-        return tx.feeTransaction.findUnique({ where: { id: txn.id } })
+        // `won` tells the realtime wiring below whether THIS call performed
+        // the PENDING → SUCCESS transition (idempotent replays and race
+        // losers must not re-broadcast the payment event).
+        return {
+          row: await tx.feeTransaction.findUnique({ where: { id: txn.id } }),
+          won: settled.count > 0,
+        }
       })
+      const updated = capture.row
       if (!updated) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Order not found for this school.' })
       // Audit parity with the webhook's auto-reconciliation — Phase 3:
       // existence-checked (transactionId + settlementId) before the create
@@ -283,6 +291,49 @@ export async function POST(req: NextRequest) {
           .catch(() => {
             /* best-effort audit row */
           })
+      }
+
+      // ── PHASE 8B — realtime 'fee-payment' hints (fire-and-forget, never
+      // block the settlement response). Same audiences the legacy
+      // event-stream poller served for Payment status SUCCESS rows: the
+      // STAFF feed + the paying student's own user room (financial PII
+      // never reaches other students). Payload discipline: ids, short
+      // labels and the amount only. `won` guards idempotent replays and
+      // race losers from double-broadcasting.
+      if (capture.won) {
+        const studentId = txn.studentId
+        const amountNum = num(updated.amount)
+        const method = updated.method
+        const feeTitle = updated.feeHeadName ?? 'Fee'
+        const atIso = (updated.reconciledAt ?? new Date()).toISOString()
+        const eventHint = {
+          id: gatewayPaymentId, // stable per order — client dedupe key
+          at: atIso,
+          schoolId,
+          student: 'Student',
+          feeTitle,
+          amount: amountNum,
+          method,
+        }
+        void (async () => {
+          const payer = studentId
+            ? await db.student
+                .findUnique({
+                  where: { id: studentId },
+                  select: { userId: true, user: { select: { name: true } } },
+                })
+                .catch(() => null)
+            : null
+          const hint = payer?.user?.name
+            ? { ...eventHint, student: payer.user.name }
+            : eventHint
+          await publishToSchool(schoolId, 'staff', 'fee-payment', hint)
+          if (payer?.userId) {
+            await publishToUser(schoolId, payer.userId, 'fee-payment', hint)
+          }
+        })().catch(() => {
+          /* fire-safe by contract — never fails the settlement */
+        })
       }
 
       return settlementOf(updated)

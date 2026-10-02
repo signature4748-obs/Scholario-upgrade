@@ -4,6 +4,7 @@ import { withUser, schoolScoped } from '@/lib/api'
 import { requireTeacher, auditTeacherAction, parseDate, classLabelOf } from '@/lib/teacher-hub'
 import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 import { AppError } from '@/lib/security/errors'
+import { publishToSchool } from '@/lib/realtime/publish'
 
 export const runtime = 'nodejs'
 
@@ -147,6 +148,20 @@ export async function POST(req: NextRequest) {
           ...(expiresAt ? { expiresAt } : {}),
         },
       })
+
+      // PHASE 8B — realtime announcement frame (school-wide channel,
+      // fire-and-forget). Rows default to PUBLISHED; a scheduled publishAt
+      // gates VISIBILITY in every feed, so only due-now rows broadcast
+      // (mirrors the legacy event-stream's create-time emission).
+      if (!publishAt || publishAt.getTime() <= Date.now()) {
+        void publishToSchool(schoolId, 'all', 'announcement', {
+          id: notification.id,
+          at: notification.createdAt.toISOString(),
+          schoolId,
+          title,
+          detail: message.slice(0, 120),
+        }).catch(() => {})
+      }
 
       await auditTeacherAction(
         user,

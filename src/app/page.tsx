@@ -85,8 +85,15 @@ export default function Home() {
         // hydrates the settings store's `server` slice; documents, the
         // settings tabs and the app-shell footer follow the DB from then on.
         void import('@/lib/store/school-settings-store/server-sync').then((m) => m.syncSchoolSettingsFromServer())
+        // PHASE 8B — canonical payroll (fixed monthly salary + payments)
+        // hydrates the salary cache once per session (GET /api/salary).
+        void import('@/lib/store/salary-store').then((m) => m.useSalaryStore.getState().hydrate())
       } else if (role === 'student') {
         void import('@/lib/store/students-store').then((m) => m.syncStudentsFromServer())
+      } else if (role === 'teacher') {
+        // PHASE 8B — the teacher's OWN salary rows (structure + payments)
+        // hydrate from the canonical server ledger once per session.
+        void import('@/lib/store/salary-store').then((m) => m.useSalaryStore.getState().hydrate())
       }
     }
   }, [isAuthenticated, user?.role])

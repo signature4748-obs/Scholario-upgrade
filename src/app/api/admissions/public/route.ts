@@ -7,6 +7,7 @@ import {
   clientIpFromHeaders,
 } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, emailSchema, phoneSchema, safeText } from '@/lib/security/validation'
+import { sendEmail } from '@/lib/email'
 import { z } from 'zod'
 import { auditRateLimit } from '@/lib/security/audit'
 
@@ -67,7 +68,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Record the admission inquiry in ActivityLog and create a Notification for School Admins
-    await db.activityLog.create({
+    // (8B-7-e: the row id is captured — it is the email dedupeKey + the
+    // family's reference id, making the confirmation send idempotent.)
+    const inquiryActivity = await db.activityLog.create({
       data: {
         schoolId: school.id,
         action: 'ADMISSION_INQUIRY',
@@ -85,6 +88,41 @@ export async function POST(req: NextRequest) {
         priority: 'HIGH',
       },
     })
+
+    // 8B-7-e — admission-enquiry confirmation email to the family
+    // (the ONLY email trigger wired in this phase). Best-effort by
+    // contract: sendEmail NEVER throws, and this belt-and-braces
+    // try/catch keeps the public form's 2xx response unconditional.
+    // The response shape is unchanged — email results stay out of it.
+    // maxAttempts: 2 bounds the resend worst case (5s timeout + 250ms
+    // backoff + 5s timeout ≈ 10.3s) for this latency-sensitive public
+    // call site; with RESEND_API_KEY unset the dev transport resolves
+    // immediately. dedupeKey = 'admission-enquiry:<ActivityLog id>' →
+    // a repeated submission of the same logged inquiry can never
+    // double-send (status='skipped' on the second pass).
+    if (email) {
+      try {
+        await sendEmail(
+          {
+            to: email,
+            template: 'admission-enquiry-received',
+            props: {
+              studentName,
+              grade: grade || '',
+              contactEmail: email,
+              referenceId: inquiryActivity.id,
+            },
+            schoolId: school.id,
+            dedupeKey: `admission-enquiry:${inquiryActivity.id}`,
+            requestId,
+          },
+          { maxAttempts: 2 },
+        )
+      } catch {
+        // Contractually unreachable — kept so no email-infrastructure
+        // failure can ever surface on the public form.
+      }
+    }
 
     console.log(
       JSON.stringify({

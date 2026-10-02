@@ -11,6 +11,17 @@ import { useLiveAlerts } from '@/lib/store/live-alerts-store'
 import { useLiveFeedStore } from '@/lib/store/live-feed-store'
 import { readSessionToken } from '@/lib/auth-session-token'
 import { signOut } from '@/lib/signout'
+// PHASE 8B — realtime transport bridge (Supabase Realtime broadcast, with
+// the socket.io event-stream as the dev-only fallback). The bridge maps
+// broadcast payloads onto the SAME `school-event` frame type the Phase-8A
+// socket handlers consumed, so every downstream consumer is unchanged.
+import {
+  getRealtimeConfig,
+  startRealtimeBridge,
+  stopRealtimeBridge,
+  type RealtimeBridgeHandle,
+  type StreamEvent,
+} from '@/lib/realtime/client'
 // SaaS-STAGE-2A — the shell footer reflects the signed-in school's REAL
 // identity: server session school name (current-user store) → school
 // settings server/local identity → neutral 'Our School'.
@@ -48,19 +59,8 @@ const STREAM_METHOD_LABELS: Record<string, string> = {
   UPI: 'UPI', CARD: 'Card', NETBANKING: 'Net Banking', CASH: 'Cash', CHEQUE: 'Cheque', WALLET: 'Wallet',
 }
 
-// Shape of a `school-event` frame emitted by mini-services/event-stream
-interface StreamEvent {
-  kind: 'payment' | 'announcement' | 'message' | 'timetable'
-  schoolId: string
-  title: string
-  detail: string
-  amount?: number
-  method?: string
-  /** message events: User.id of the addressee — used to mark the
-   *  recipient's own inbox; others in the school see it as a broadcast. */
-  recipientId?: string | null
-  at: string
-}
+// StreamEvent (the `school-event` frame shape) now comes from
+// @/lib/realtime/client — the single source shared by BOTH transports.
 
 export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, children, quickAction }: ShellProps) {
   const [collapsed, setCollapsed] = useState(false)
@@ -79,7 +79,8 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
   // from @/lib/mock/operations) is retired: 'loading' → 'live' (even an
   // honestly-empty feed, e.g. super admin) or 'error'.
   const [notifSource, setNotifSource] = useState<'live' | 'loading' | 'error'>('loading')
-  // Real-time event stream status (socket.io mini-service :3003 via gateway)
+  // Real-time event stream status (PHASE 8B: Supabase Realtime bridge, or
+  // the dev-only socket.io event-stream fallback :3003 via the gateway)
   const [streamLive, setStreamLive] = useState(false)
   // ── PHASE 7.5-D — suspended / dead-session guard ─────────────────────
   // An ALREADY-SIGNED-IN user whose school is suspended mid-session (the
@@ -183,117 +184,165 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
     return () => { window.clearTimeout(t) }
   }, [sessionGuard])
 
-  // ─── Real-time event stream (socket.io mini-service :3003 via gateway) ───
+  // ─── Real-time event stream — PHASE 8B mode-aware transport ───
   // Resolves the viewer's school scope + DB user id from the server session
   // (SS-1: the current-user store — shared with Settings/avatar surfaces),
-  // then subscribes. Super admins (schoolId = null) receive the platform-
-  // wide stream; school-scoped roles only see events for their own school.
-  // Direct messages are only surfaced to their addressee (recipientId filter).
+  // then asks /api/realtime/config ONCE (identity-keyed, 60s TTL) which
+  // transport to use:
+  //   · 'supabase' (default, Vercel/serverless) — the Supabase Realtime
+  //     broadcast bridge (src/lib/realtime/client.ts): stateless REST
+  //     publishes server-side, capability channels issued per identity.
+  //   · 'event-stream' (DEV-ONLY fallback) — the Phase-8A socket.io
+  //     mini-service :3003 via the gateway, code path unchanged.
+  //   · 'disabled' — no live stream (every polling surface still works).
+  // Frame DISPATCH is byte-identical across transports: one shared
+  // handleStreamEvent closure below (scope filter → bell item → live-feed
+  // ring → toast) — the handlers just receive frames from the bridge
+  // instead of socket.io. School-scoped roles only see events for their
+  // own school (channel scoping AND the frame filter); direct messages
+  // are only surfaced to their addressee (recipientId filter).
   const streamScopeRef = useRef<string | null | undefined>(undefined) // undefined = resolving
   const streamUserIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     // Wait for the server identity BEFORE connecting: the school scope
     // filter depends on it (connecting early would briefly accept events
-    // from every school). me === null while resolving → no socket yet.
+    // from every school). me === null while resolving → no stream yet.
     if (!user || !me) return
     let _cancelled = false
     let socket: ReturnType<typeof io> | null = null
+    let bridge: RealtimeBridgeHandle | null = null
 
     streamUserIdRef.current = me.id
     streamScopeRef.current = me.schoolId ?? null
-    socket = io('/?XTransformPort=3003', {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 8,
-      reconnectionDelay: 1500,
-      timeout: 10000,
-      // Phase 1 — the stream service AUTHENTICATES the handshake: present
-      // the dev-preview bearer token (the first-party cookie flows
-      // automatically on same-origin requests). No valid session → the
-      // server refuses the connection.
-      auth: { token: readSessionToken() ?? undefined },
-    })
-    socket.on('connect', () => { setStreamLive(true); useLiveFeedStore.getState().setConnected(true) })
-    socket.on('disconnect', () => { setStreamLive(false); useLiveFeedStore.getState().setConnected(false) })
-    socket.on('connect_error', () => { setStreamLive(false); useLiveFeedStore.getState().setConnected(false) })
-    socket.on('school-event', (evt: StreamEvent) => {
-          // Scope filter — super admins see the whole platform
-          const scope = streamScopeRef.current
-          if (scope && evt.schoolId && evt.schoolId !== scope) return
 
-          const isPayment = evt.kind === 'payment'
-          const isMessage = evt.kind === 'message'
-          const isTimetable = evt.kind === 'timetable'
-          // Direct messages are addressed to one user — only the addressee's
-          // bell/toast shows them (others in the school skip the frame).
-          if (isMessage && evt.recipientId && evt.recipientId !== streamUserIdRef.current) return
+    // The ONE frame consumer — the exact Phase-8A socket dispatch
+    // (scope filter → notification item → live-feed ring → toast),
+    // now shared by both transports.
+    const handleStreamEvent = (evt: StreamEvent) => {
+      // Scope filter — super admins see the whole platform
+      const scope = streamScopeRef.current
+      if (scope && evt.schoolId && evt.schoolId !== scope) return
 
-          const item: NotificationItem = {
-            id: `stream-${evt.kind}-${evt.at}-${Math.random().toString(36).slice(2, 7)}`,
-            type: isPayment ? 'PAYMENT' : isMessage ? 'MESSAGE' : isTimetable ? 'TIMETABLE' : 'ANNOUNCEMENT',
-            title: isPayment ? 'Fee payment received' : isTimetable ? 'Timetable updated' : evt.title,
-            description: isPayment && evt.amount
-              ? `${evt.detail} · ${formatINR(evt.amount)} via ${STREAM_METHOD_LABELS[(evt.method || '').toUpperCase()] ?? evt.method ?? '—'}`
-              : evt.detail,
-            time: 'just now',
-            timestamp: evt.at,
-            unread: true,
-          }
-          setNotifList((prev) => [item, ...prev].slice(0, 30))
+      const isPayment = evt.kind === 'payment'
+      const isMessage = evt.kind === 'message'
+      const isTimetable = evt.kind === 'timetable'
+      // Direct messages are addressed to one user — only the addressee's
+      // bell/toast shows them (others in the school skip the frame).
+      if (isMessage && evt.recipientId && evt.recipientId !== streamUserIdRef.current) return
 
-          // Mirror the same frame into the live-feed ring so dashboard
-          // surfaces (principal Live Activity ticker) can render it without
-          // opening a second socket connection.
-          useLiveFeedStore.getState().push({
-            kind: evt.kind,
-            title: item.title ?? evt.title,
-            detail: item.description ?? evt.detail,
-            amount: evt.amount,
-            method: evt.method,
-            at: evt.at,
-          })
+      const item: NotificationItem = {
+        id: `stream-${evt.kind}-${evt.at}-${Math.random().toString(36).slice(2, 7)}`,
+        type: isPayment ? 'PAYMENT' : isMessage ? 'MESSAGE' : isTimetable ? 'TIMETABLE' : 'ANNOUNCEMENT',
+        title: isPayment ? 'Fee payment received' : isTimetable ? 'Timetable updated' : evt.title,
+        description: isPayment && evt.amount
+          ? `${evt.detail} · ${formatINR(evt.amount)} via ${STREAM_METHOD_LABELS[(evt.method || '').toUpperCase()] ?? evt.method ?? '—'}`
+          : evt.detail,
+        time: 'just now',
+        timestamp: evt.at,
+        unread: true,
+      }
+      setNotifList((prev) => [item, ...prev].slice(0, 30))
 
-          // Premium live toast — accent stripe + icon chip + LIVE pill
-          toast.custom(
-            (t) => (
-              <div
-                className={cn(
-                  'relative overflow-hidden w-[min(21rem,calc(100vw-2rem))] flex items-start gap-3 rounded-xl border bg-card/95 backdrop-blur p-3 pl-4 shadow-premium-lg transition-opacity',
-                  isPayment ? 'border-emerald-500/30' : isMessage ? 'border-sky-500/30' : isTimetable ? 'border-amber-500/40' : 'border-violet-500/30',
-                  t ? 'opacity-100' : 'opacity-0'
-                )}
-              >
-                <span className={cn('absolute left-0 top-0 bottom-0 w-1', isPayment ? 'bg-emerald-500' : isMessage ? 'bg-sky-500' : isTimetable ? 'bg-amber-500' : 'bg-violet-500')} />
-                <span className={cn(
-                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
-                  isPayment
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                    : isMessage
-                      ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
-                      : isTimetable
-                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                        : 'bg-violet-500/15 text-violet-600 dark:text-violet-400'
-                )}>
-                  {isPayment ? <span className="font-bold text-xs">₹</span> : isMessage ? <Mail className="h-4 w-4" /> : isTimetable ? <CalendarCheck className="h-4 w-4" /> : <Megaphone className="h-4 w-4" />}
+      // Mirror the same frame into the live-feed ring so dashboard
+      // surfaces (principal Live Activity ticker) can render it without
+      // opening a second connection. `timetable` frames bump
+      // timetableVersion inside the store (live-refresh signal).
+      useLiveFeedStore.getState().push({
+        kind: evt.kind,
+        title: item.title ?? evt.title,
+        detail: item.description ?? evt.detail,
+        amount: evt.amount,
+        method: evt.method,
+        at: evt.at,
+      })
+
+      // Premium live toast — accent stripe + icon chip + LIVE pill
+      toast.custom(
+        (t) => (
+          <div
+            className={cn(
+              'relative overflow-hidden w-[min(21rem,calc(100vw-2rem))] flex items-start gap-3 rounded-xl border bg-card/95 backdrop-blur p-3 pl-4 shadow-premium-lg transition-opacity',
+              isPayment ? 'border-emerald-500/30' : isMessage ? 'border-sky-500/30' : isTimetable ? 'border-amber-500/40' : 'border-violet-500/30',
+              t ? 'opacity-100' : 'opacity-0'
+            )}
+          >
+            <span className={cn('absolute left-0 top-0 bottom-0 w-1', isPayment ? 'bg-emerald-500' : isMessage ? 'bg-sky-500' : isTimetable ? 'bg-amber-500' : 'bg-violet-500')} />
+            <span className={cn(
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+              isPayment
+                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                : isMessage
+                  ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                  : isTimetable
+                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                    : 'bg-violet-500/15 text-violet-600 dark:text-violet-400'
+            )}>
+              {isPayment ? <span className="font-bold text-xs">₹</span> : isMessage ? <Mail className="h-4 w-4" /> : isTimetable ? <CalendarCheck className="h-4 w-4" /> : <Megaphone className="h-4 w-4" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-bold text-foreground truncate">{item.title}</p>
+                <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400 shrink-0">
+                  <Radio className="h-2 w-2 animate-pulse" aria-hidden="true" /> Live
                 </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-bold text-foreground truncate">{item.title}</p>
-                    <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400 shrink-0">
-                      <Radio className="h-2 w-2 animate-pulse" aria-hidden="true" /> Live
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{item.description}</p>
-                </div>
               </div>
-            ),
-            { duration: 5000 }
-          )
+              <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{item.description}</p>
+            </div>
+          </div>
+        ),
+        { duration: 5000 }
+      )
+    }
+
+    // Transport decision comes from the same config fetch the bridge uses
+    // (never throws — failures answer 'disabled'; realtime is optional).
+    void getRealtimeConfig(user.id)
+      .then((cfg) => {
+        if (_cancelled) return
+        const channels = cfg.channels
+        if (cfg.mode === 'supabase' && cfg.url && cfg.anonKey && channels && channels.length > 0) {
+          bridge = startRealtimeBridge({
+            url: cfg.url,
+            anonKey: cfg.anonKey,
+            channels,
+            onFrame: handleStreamEvent,
+            onStatus: (live) => {
+              setStreamLive(live)
+              useLiveFeedStore.getState().setConnected(live)
+            },
+          })
+          return
+        }
+        if (cfg.mode !== 'event-stream') return // disabled / failed config → no live stream
+        // DEV-ONLY fallback — the legacy socket.io path, verbatim.
+        socket = io('/?XTransformPort=3003', {
+          transports: ['websocket', 'polling'],
+          reconnection: true,
+          reconnectionAttempts: 8,
+          reconnectionDelay: 1500,
+          timeout: 10000,
+          // Phase 1 — the stream service AUTHENTICATES the handshake: present
+          // the dev-preview bearer token (the first-party cookie flows
+          // automatically on same-origin requests). No valid session → the
+          // server refuses the connection.
+          auth: { token: readSessionToken() ?? undefined },
         })
+        socket.on('connect', () => { setStreamLive(true); useLiveFeedStore.getState().setConnected(true) })
+        socket.on('disconnect', () => { setStreamLive(false); useLiveFeedStore.getState().setConnected(false) })
+        socket.on('connect_error', () => { setStreamLive(false); useLiveFeedStore.getState().setConnected(false) })
+        socket.on('school-event', handleStreamEvent)
+      })
+      .catch(() => {
+        /* config fetch failure → no stream (polling covers every surface) */
+      })
 
     return () => {
       _cancelled = true
+      // Logout / tenant-switch cleanup — same teardown discipline the
+      // socket path always had: whichever transport started, stop it.
+      if (bridge) stopRealtimeBridge(bridge)
+      bridge = null
       socket?.close()
       socket = null
     }

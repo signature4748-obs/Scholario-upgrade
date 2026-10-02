@@ -70,6 +70,16 @@ export const AUDIT_ACTIONS = [
   'ANNOUNCEMENT_DELETED',
   'WEBSITE_CONTENT_UPDATED',
   'GALLERY_UPDATED',
+  // PHASE 8B — canonical payroll mutations (salary persistence): every
+  // structure write, payment recording and void is a school financial
+  // event and joins the canonical vocabulary.
+  'SALARY_STRUCTURE_SET',
+  'SALARY_PAYMENT_RECORDED',
+  'SALARY_PAYMENT_VOIDED',
+  // PHASE 8B — multi-tenant custom-domain onboarding (school plane).
+  'DOMAIN_REQUESTED',
+  'DOMAIN_VERIFIED',
+  'DOMAIN_CHECK_FAILED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

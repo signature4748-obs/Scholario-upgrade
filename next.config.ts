@@ -26,7 +26,12 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // Local/sandbox production boot uses the standalone server (bun
+  // .next/standalone/server.js — package.json `start`). On Vercel the
+  // platform builds and packages the output itself: `output: standalone`
+  // is unnecessary there and must not interfere (VERCEL is a system env
+  // present in Vercel builds only).
+  output: process.env.VERCEL ? undefined : "standalone",
   // Phase 4 (item 12): production builds MUST fail on TypeScript errors.
   // The Phase-0 baseline kept `ignoreBuildErrors: true` while the codebase
   // was being hardened; `bunx tsc --noEmit` has been a hard gate since

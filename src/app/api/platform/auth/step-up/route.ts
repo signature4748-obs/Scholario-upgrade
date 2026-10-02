@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { api } from '@/lib/api'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { parseJsonBody, strictBody, passwordInputSchema } from '@/lib/security/validation'
-import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { RATE_LIMITS, enforceRateLimitStrict } from '@/lib/security/rate-limit'
 import { platformAuditEvent } from '@/lib/platform/audit'
 import { getPlatformSession, markStepUp, STEP_UP_WINDOW_MS } from '@/lib/platform/auth'
 import { verifyTotp } from '@/lib/platform/totp'
@@ -29,7 +29,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Brake-force on code guessing (per admin + per session).
-    enforceRateLimit(`rl:pf-stepup:${auth.admin.id}`, RATE_LIMITS.platformStepUp)
+    // PHASE 8B (§21) — strict shared-budget gate (MFA step-up guessing brake).
+    await enforceRateLimitStrict(`rl:pf-stepup:${auth.admin.id}`, RATE_LIMITS.platformStepUp)
 
     const body = await parseJsonBody(req, stepUpSchema)
     const code = /^\d{6}$/.test(body.code) ? body.code : body.code.replace(/\D/g, '')

@@ -51,7 +51,10 @@ function messageStamp(iso: string): string {
 }
 
 /** Teachers the student may message — class teacher + subject teachers of
- *  their OWN class section (spec §30 — never a school-wide directory). */
+ *  their OWN class section (spec §30 — never a school-wide directory).
+ *  8B-7-d: ids are the teacher's USER id — the server thread key
+ *  (/api/messaging/threads/[userId]) — so threads started here are the
+ *  exact Message rows the teacher's Communication Hub reads. */
 function classContacts(
   student: StudentRecord | undefined,
   classes: ClassRecord[],
@@ -71,7 +74,7 @@ function classContacts(
     const t = useTeacherRosterStore.getState().teachers.find((x) => x.id === id || x.userId === id)
     if (!t) return
     seen.add(id)
-    roster.push({ id: t.id, name: t.name, subject, role })
+    roster.push({ id: t.userId, name: t.name, subject, role })
   }
   push(section?.classTeacherId ?? cls.classTeacherId, 'Class Teacher', 'Class Teacher')
   for (const [subId, tid] of Object.entries(cls.subjectTeachers)) {
@@ -84,7 +87,15 @@ function classContacts(
 export function StudentMessagesModule() {
   const conversations = useStudentMessagingStore((s) => s.conversations)
   const seenAt = useStudentMessagingStore((s) => s.seenAt)
-  const markConversationSeen = useStudentMessagingStore((s) => s.markConversationSeen)
+  const error = useStudentMessagingStore((s) => s.error)
+  const openThread = useStudentMessagingStore((s) => s.openThread)
+
+  // Server-canonical threads (8B-7-d): hydrate once on mount — the
+  // store's own listeners (focus / realtime hint / open-thread poll)
+  // keep it converging afterwards.
+  useEffect(() => {
+    void useStudentMessagingStore.getState().refresh()
+  }, [])
 
   // Canonical identity — the session user's own roster record (server
   // sync stamps the userId/email link fields; the legacy demo record
@@ -116,11 +127,13 @@ export function StudentMessagesModule() {
 
   const active = conversations.find((c) => c.id === openId) ?? null
 
-  // Opening a thread flips the honest derived-read "seen" flag (re-fires
-  // when a new message lands while the thread is open).
+  // Opening a thread loads its FULL history from the server — the GET
+  // also marks the thread read server-side (both sides' badges agree).
+  // Re-fires only when the student opens a different thread; while the
+  // thread stays open the store's 60s poll reloads it.
   useEffect(() => {
-    if (openId) markConversationSeen(openId)
-  }, [openId, markConversationSeen, active?.messages.length])
+    if (openId) void openThread(openId)
+  }, [openId, openThread])
 
   return (
     <div className="space-y-3">
@@ -167,9 +180,11 @@ export function StudentMessagesModule() {
             {filtered.length === 0 ? (
               <EmptyMini
                 text={
-                  conversations.length === 0
-                    ? 'No conversations yet — message your class teacher to get started.'
-                    : 'No conversations match your search.'
+                  error
+                    ? error
+                    : conversations.length === 0
+                      ? 'No conversations yet — message your class teacher to get started.'
+                      : 'No conversations match your search.'
                 }
               />
             ) : (
@@ -269,6 +284,7 @@ export function StudentMessagesModule() {
 function ThreadView({ conversation, onBack }: { conversation: StudentConversation; onBack: () => void }) {
   const sendMessage = useStudentMessagingStore((s) => s.sendMessage)
   const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll to the newest message — deferred one rAF frame so the new
@@ -281,10 +297,13 @@ function ThreadView({ conversation, onBack }: { conversation: StudentConversatio
     return () => cancelAnimationFrame(id)
   }, [conversation.id, conversation.messages.length])
 
-  const send = () => {
+  const send = async () => {
     const body = draft.trim()
     if (!body) return
-    const result = sendMessage(conversation.id, body)
+    setSending(true)
+    // Server POST — optimistic bubble in the store, server row replaces it.
+    const result = await sendMessage(conversation.id, body)
+    setSending(false)
     if (result.ok) setDraft('')
     else toast.error('Could not send message', { description: result.error })
   }
@@ -359,7 +378,7 @@ function ThreadView({ conversation, onBack }: { conversation: StudentConversatio
           aria-label={`Message ${conversation.teacherName}`}
           className="flex-1 rounded-xl border border-border bg-background px-3.5 py-2.5 text-[13px] placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-ring/40"
         />
-        <Button size="sm" onClick={send} disabled={!draft.trim()} aria-label="Send message">
+        <Button size="sm" onClick={send} disabled={!draft.trim() || sending} aria-label="Send message">
           <Send className="h-4 w-4" />
           <span className="hidden sm:inline">Send</span>
         </Button>
@@ -381,27 +400,31 @@ function NewMessageDialog({
 }) {
   const startConversation = useStudentMessagingStore((s) => s.startConversation)
   const [recipientId, setRecipientId] = useState(contacts[0]?.id ?? '')
-  const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
 
   useDismissOnEscape(onClose)
 
-  const submit = () => {
+  // 8B-7-d — server POST: no client-side subject (the thread's stored
+  // subject is the server's 'Direct message' constant); the body IS the
+  // message. Errors surface from the server envelope, verbatim.
+  const submit = async () => {
     const recipient = contacts.find((c) => c.id === recipientId)
     if (!recipient) {
       setError('Choose a recipient first.')
       return
     }
-    const result = startConversation({
+    setSending(true)
+    const result = await startConversation({
       teacherId: recipient.id,
       teacherName: recipient.name,
       teacherSubject: recipient.subject,
-      subject: subject.trim(),
       body,
     })
+    setSending(false)
     if (result.ok) {
-      toast.success('Message sent', { description: `${recipient.name} · ${subject.trim()}` })
+      toast.success('Message sent', { description: recipient.name })
       onStarted(result.conversation.id)
     } else {
       setError(result.error)
@@ -473,18 +496,6 @@ function NewMessageDialog({
           )}
 
           <div>
-            <label htmlFor="nm-subject" className="text-xs font-medium text-muted-foreground">
-              Subject
-            </label>
-            <input
-              id="nm-subject"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="e.g. Doubt in today's homework"
-              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring/40"
-            />
-          </div>
-          <div>
             <label htmlFor="nm-body" className="text-xs font-medium text-muted-foreground">
               Message
             </label>
@@ -503,7 +514,7 @@ function NewMessageDialog({
         </div>
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border/60 bg-muted/20">
           <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={submit} disabled={!subject.trim() || !body.trim() || !recipientId}>
+          <Button size="sm" onClick={submit} disabled={!body.trim() || !recipientId || sending}>
             <Send className="h-4 w-4" /> Send
           </Button>
         </div>

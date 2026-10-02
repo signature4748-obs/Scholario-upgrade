@@ -60,11 +60,17 @@ export function DraftsList({ onEditNewDraft, onOpenThread }: Props) {
     }
   }
 
-  const handleSend = (draft: Draft) => {
-    sendDraft(draft.id)
+  const handleSend = async (draft: Draft) => {
+    // 8B-7-d — the draft goes out through the server; it is consumed
+    // only when a row was actually persisted (failures keep the draft).
+    const result = await sendDraft(draft.id)
     const target = draft.conversationId
       ? conversations.find((c) => c.id === draft.conversationId)?.name
       : draft.recipientName
+    if (!result.ok) {
+      toast.error('Draft not sent', { description: result.error ?? 'Please try again.' })
+      return
+    }
     toast.success('Draft sent', { description: `To ${target ?? 'recipient'}` })
     onOpenThread()
   }

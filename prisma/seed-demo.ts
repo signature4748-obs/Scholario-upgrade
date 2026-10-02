@@ -18,7 +18,10 @@
  *   9. prisma/seed-roster-150          ~150-student roster (fees/payments/
  *                                      ledger parity, attendance, PA1 marks)
  *  10. prisma/seed-website-cms         branding + CMS + gallery
- *  11. prisma/seed-exam-ops            exam schedule/seats/attendance (last)
+ *  11. prisma/seed-exam-ops            exam schedule/seats/attendance
+ *  12. prisma/seed-salary               canonical payroll (structures +
+ *                                      last-2-completed-months payments —
+ *                                      skip-if-exists, isDemo tenant only)
  *
  * DETERMINISM: re-running this script RESETS the demo tenant to canonical
  * state. The base seed hard-wipes every non-clean-school row (the clean
@@ -52,6 +55,10 @@ const PIPELINE: { script: string; label: string }[] = [
   { script: 'prisma/seed-roster-150.ts', label: 'roster 150 — students, fees, payments, ledger parity' },
   { script: 'prisma/seed-website-cms.ts', label: 'website cms — branding, settings, gallery' },
   { script: 'prisma/seed-exam-ops.ts', label: 'exam ops — schedule, seats, invigilation attendance' },
+  // PHASE 8B (Task 8B-7-c) — canonical payroll for the demo tenant. AFTER
+  // the roster exists (structures reference Teacher rows); skip-if-exists
+  // per unique key so a partial run or a principal edit is respected.
+  { script: 'prisma/seed-salary.ts', label: 'salary — structures + last-2-completed-months payments (skip-if-exists)' },
 ]
 
 function runStep(script: string, label: string): Promise<void> {

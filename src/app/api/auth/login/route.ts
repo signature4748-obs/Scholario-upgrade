@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import {
   RATE_LIMITS,
-  checkRateLimit,
+  checkRateLimitStrict,
   resetRateLimit,
   clientIpFromHeaders,
   loginIpKey,
@@ -31,7 +31,10 @@ export async function POST(req: NextRequest) {
     const ip = clientIpFromHeaders(req.headers)
 
     // ── Brute-force protection: IP bucket + account bucket ──────────────
-    const ipVerdict = checkRateLimit(loginIpKey(ip), RATE_LIMITS.login)
+    // PHASE 8B (§21): credential buckets use the STRICT shared-budget gate
+    // (the atomic DB row is the decision — exact global enforcement under
+    // concurrency; bounded fallback to the local budget on DB failure).
+    const ipVerdict = await checkRateLimitStrict(loginIpKey(ip), RATE_LIMITS.login)
     if (!ipVerdict.allowed) {
       auditRateLimit('login-ip', ip, requestId)
       throw new AppError('RATE_LIMITED', {
@@ -42,7 +45,7 @@ export async function POST(req: NextRequest) {
     }
 
     const accountKey = loginAccountKey(body.email)
-    const accountVerdict = checkRateLimit(accountKey, RATE_LIMITS.loginAccount)
+    const accountVerdict = await checkRateLimitStrict(accountKey, RATE_LIMITS.loginAccount)
     if (!accountVerdict.allowed) {
       auditRateLimit('login-account', body.email, requestId)
       // Audit-persist account lockouts (lower frequency than blocks).

@@ -117,19 +117,34 @@ export async function getTeachingAssignments(user: AuthUser): Promise<TeachingAs
   if (assignments.length === 0) return []
 
   // Permission gate: only ACTIVE ClassSubjectAssignments count.
-  const csas = await db.classSubjectAssignment.findMany({
-    where: { schoolId, isActive: true },
-    select: { classId: true, subjectId: true },
-  })
-  const activeKeys = new Set(csas.map((c) => `${c.classId}|${c.subjectId}`))
-
   // periodsPerWeek — the teacher's OWN timetable cells per pair (id-linked
   // first; legacy name-matched cells only where the row has no id).
+  // 8B-7-f — these four reads are independent of each other (the class /
+  // subject ids derive from `assignments` above), so they run in ONE
+  // parallel round (was three sequential rounds). Same rows, same result.
   const teacherName = (user.name || '').trim().toLowerCase()
-  const ttRows = await db.timetable.findMany({
-    where: { schoolId, subjectId: { not: null } },
-    select: { classId: true, subjectId: true, teacherUserId: true, teacherName: true },
-  })
+  const classIds = [...new Set(assignments.map((a) => a.classId))]
+  const subjectIds = [...new Set(assignments.map((a) => a.subjectId))]
+  const [csas, ttRows, classRows, subjectRows] = await Promise.all([
+    db.classSubjectAssignment.findMany({
+      where: { schoolId, isActive: true },
+      select: { classId: true, subjectId: true },
+    }),
+    db.timetable.findMany({
+      where: { schoolId, subjectId: { not: null } },
+      select: { classId: true, subjectId: true, teacherUserId: true, teacherName: true },
+    }),
+    db.class.findMany({
+      where: { schoolId, id: { in: classIds } },
+      select: { id: true, name: true, section: true },
+    }),
+    db.subject.findMany({
+      where: { schoolId, id: { in: subjectIds } },
+      select: { id: true, name: true },
+    }),
+  ])
+  const activeKeys = new Set(csas.map((c) => `${c.classId}|${c.subjectId}`))
+
   const cellCount = new Map<string, number>()
   for (const r of ttRows) {
     if (!r.subjectId) continue
@@ -140,19 +155,6 @@ export async function getTeachingAssignments(user: AuthUser): Promise<TeachingAs
     const key = `${r.classId}|${r.subjectId}`
     cellCount.set(key, (cellCount.get(key) ?? 0) + 1)
   }
-
-  const classIds = [...new Set(assignments.map((a) => a.classId))]
-  const subjectIds = [...new Set(assignments.map((a) => a.subjectId))]
-  const [classRows, subjectRows] = await Promise.all([
-    db.class.findMany({
-      where: { schoolId, id: { in: classIds } },
-      select: { id: true, name: true, section: true },
-    }),
-    db.subject.findMany({
-      where: { schoolId, id: { in: subjectIds } },
-      select: { id: true, name: true },
-    }),
-  ])
   const classById = new Map(classRows.map((c) => [c.id, c]))
   const subjectById = new Map(subjectRows.map((s) => [s.id, s]))
 
@@ -194,11 +196,16 @@ interface ClassPace {
   teachingWeekdays: number[]
 }
 
-async function getClassPace(schoolId: string, classId: string, subjectId: string | null): Promise<ClassPace> {
-  const rows = await db.timetable.findMany({
-    where: { schoolId, classId },
-    select: { day: true, subjectId: true, startTime: true, endTime: true },
-  })
+/** The shape `classPaceOf` needs — what the per-class timetable query
+ *  (and the 8B-7-f batched variant) selects. */
+type PaceRow = { day: string; subjectId: string | null; startTime: string | null; endTime: string | null }
+
+/** PURE pace derivation over ONE class's timetable rows (all subjects of
+ *  the class — the historical getClassPace row set). Shared by the async
+ *  per-class fetch and the 8B-7-f batched fetch so the two can never
+ *  drift. `rows` MUST be every timetable row of that class for the
+ *  school, exactly as `getClassPace` selects them. */
+function classPaceOf(rows: PaceRow[], subjectId: string | null): ClassPace {
   const days = new Set(rows.map((r) => r.day))
   const subjectCells = subjectId ? rows.filter((r) => r.subjectId === subjectId).length : 0
 
@@ -223,6 +230,14 @@ async function getClassPace(schoolId: string, classId: string, subjectId: string
   }
 }
 
+async function getClassPace(schoolId: string, classId: string, subjectId: string | null): Promise<ClassPace> {
+  const rows = await db.timetable.findMany({
+    where: { schoolId, classId },
+    select: { day: true, subjectId: true, startTime: true, endTime: true },
+  })
+  return classPaceOf(rows, subjectId)
+}
+
 export async function getHolidays(schoolId: string): Promise<HolidayRange[]> {
   const events = await db.schoolEvent.findMany({
     where: { schoolId, type: 'HOLIDAY' },
@@ -241,6 +256,26 @@ export async function getHolidays(schoolId: string): Promise<HolidayRange[]> {
 /** Boards whose schools attach the NCERT-based library curriculum. */
 const LIBRARY_BOARDS = new Set(['CBSE', 'UP_BOARD', 'NCERT', ''])
 
+/** PURE board→curriculum resolution (no DB). `schoolExists` and `board`
+ *  are the caller's already-fetched school row — identical logic to the
+ *  async `resolveCurriculumFor` fetch path, extracted so the 8B-7-f batch
+ *  (one school fetch for the whole request) resolves every pair with the
+ *  same semantics. */
+function resolveCurriculumForBoard(
+  schoolExists: boolean,
+  board: string | null,
+  classLabel: string,
+  subjectName: string,
+): SubjectCurriculum | null {
+  if (schoolExists && !LIBRARY_BOARDS.has((board || '').trim().toUpperCase())) {
+    // ICSE / STATE / CUSTOM boards carry no library curriculum — the planner
+    // falls back to its honest "build your own plan" state for them.
+    return null
+  }
+  const found = findCurriculumForClassSubject(classLabel, subjectName)
+  return found?.curriculum ?? null
+}
+
 async function resolveCurriculumFor(
   schoolId: string,
   classLabel: string,
@@ -250,13 +285,7 @@ async function resolveCurriculumFor(
     where: { id: schoolId },
     select: { board: true },
   })
-  if (school && !LIBRARY_BOARDS.has((school.board || '').trim().toUpperCase())) {
-    // ICSE / STATE / CUSTOM boards carry no library curriculum — the planner
-    // falls back to its honest "build your own plan" state for them.
-    return null
-  }
-  const found = findCurriculumForClassSubject(classLabel, subjectName)
-  return found?.curriculum ?? null
+  return resolveCurriculumForBoard(school != null, school?.board ?? null, classLabel, subjectName)
 }
 
 /** Instantiate library chapters as the class+subject's curriculum.
@@ -755,4 +784,244 @@ export async function getLessonPlan(
     syllabus,
     autoProvisioned,
   }
+}
+
+// ─── Batched plan reads (8B-7-f — teacher-dashboard N+1 fix) ────────────
+
+/**
+ * getLessonPlan for MANY assignments in ONE round of queries — the 8B-7-f
+ * fix for the teacher dashboard N+1 (one getLessonPlan call ≈ 13 queries
+ * per assignment, dominated by a full getTeachingAssignments re-resolution
+ * every time). Resolves the exact same underlying rows, batched:
+ *
+ *   · School row (academicYear + board)      — ONE fetch, shared (was 2
+ *     per pair: the plan fetch + the syllabus board lookup)
+ *   · CurriculumTopic rows                   — ONE findMany over OR'd
+ *     (classId, subjectId) pairs, grouped in memory (was 1 per pair)
+ *   · LessonTopicCompletion rows             — ONE findMany over the same
+ *     OR pairs (was 1 per pair)
+ *   · Timetable pace rows                    — ONE findMany for every
+ *     involved class (the per-pair pace query filters on
+ *     { schoolId, classId } only, so one fetch per DISTINCT class covers
+ *     every pair; grouped in memory) (was 1 per pair)
+ *   · SchoolEvent holidays                   — ONE fetch (was 1 per pair)
+ *
+ * Authorization contract: identical to getLessonPlan — callers pass the
+ * pairs resolved by `getTeachingAssignments(user)` (the same list
+ * getLessonPlan re-resolves internally and matches each (classId,
+ * subjectId) against). Payload semantics are identical too, including the
+ * rare spec-§11 auto-attach for pairs with no topics yet (first open) —
+ * the per-chapter instantiation writes are kept, and the fed pairs
+ * re-fetch in one query.
+ *
+ * Returns a Map keyed `${classId}|${subjectId}` → LessonPlanPayload. A
+ * pair whose payload computation throws is skipped (the same containment
+ * the dashboard's per-assignment try/catch had); a pair not present in
+ * the map simply has no plan.
+ */
+export async function getLessonPlansBatch(
+  user: AuthUser,
+  assignments: TeachingAssignment[],
+): Promise<Map<string, LessonPlanPayload>> {
+  const out = new Map<string, LessonPlanPayload>()
+  // Same key/dedup discipline as getTeachingAssignments's byKey map.
+  const byKey = new Map<string, TeachingAssignment>()
+  for (const a of assignments) byKey.set(`${a.classId}|${a.subjectId}`, a)
+  const pairs = [...byKey.values()]
+  if (pairs.length === 0) return out
+  const schoolId = schoolScoped(user)
+
+  const pairFilter = {
+    schoolId,
+    OR: pairs.map((a) => ({ classId: a.classId, subjectId: a.subjectId })),
+  }
+  const classIds = [...new Set(pairs.map((a) => a.classId))]
+
+  const [school, topicRows, completionRows, paceRows, holidays] = await Promise.all([
+    db.school.findUnique({ where: { id: schoolId }, select: { academicYear: true, board: true } }),
+    db.curriculumTopic.findMany({ where: pairFilter, orderBy: { orderIndex: 'asc' } }),
+    db.lessonTopicCompletion.findMany({
+      where: pairFilter,
+      select: { classId: true, subjectId: true, curriculumTopicId: true, completedOn: true, note: true },
+    }),
+    db.timetable.findMany({
+      where: { schoolId, classId: { in: classIds } },
+      select: { classId: true, day: true, subjectId: true, startTime: true, endTime: true },
+    }),
+    getHolidays(schoolId),
+  ])
+
+  // Group the batched rows per (classId, subjectId) / per class. The global
+  // orderIndex ordering preserves each pair's per-pair order (the same
+  // `orderBy: { orderIndex: 'asc' }` the per-pair query used).
+  const topicsByPair = new Map<string, typeof topicRows>()
+  for (const t of topicRows) {
+    const k = `${t.classId}|${t.subjectId}`
+    const list = topicsByPair.get(k) ?? []
+    list.push(t)
+    topicsByPair.set(k, list)
+  }
+  const completionsByPair = new Map<string, typeof completionRows>()
+  for (const c of completionRows) {
+    const k = `${c.classId}|${c.subjectId}`
+    const list = completionsByPair.get(k) ?? []
+    list.push(c)
+    completionsByPair.set(k, list)
+  }
+  const paceRowsByClass = new Map<string, PaceRow[]>()
+  for (const r of paceRows) {
+    const list = paceRowsByClass.get(r.classId) ?? []
+    list.push(r)
+    paceRowsByClass.set(r.classId, list)
+  }
+
+  // AUTO-ATTACH (spec §11) — same semantics as getLessonPlan: a pair with
+  // no topics yet instantiates the COMPLETE official 2026-27 plan on its
+  // first read. Rare path (first open per pair); failures stay quiet.
+  const schoolExists = school != null
+  const fedKeys = new Set<string>()
+  for (const a of pairs) {
+    if ((topicsByPair.get(`${a.classId}|${a.subjectId}`) ?? []).length > 0) continue
+    const curriculum = resolveCurriculumForBoard(schoolExists, school?.board ?? null, a.classLabel, a.subjectName)
+    if (!curriculum) continue
+    try {
+      const fed = await instantiateCurriculum(schoolId, a.classId, a.subjectId, curriculum, [], flattenCurriculum(curriculum))
+      if (fed > 0) fedKeys.add(`${a.classId}|${a.subjectId}`)
+    } catch {
+      // Auto-attach is best-effort; never block the plan read.
+    }
+  }
+  if (fedKeys.size > 0) {
+    // One re-fetch for every auto-attached pair (the per-pair re-read of
+    // getLessonPlan, batched).
+    const refed = await db.curriculumTopic.findMany({
+      where: {
+        schoolId,
+        OR: [...fedKeys].map((k) => {
+          const [classId, subjectId] = k.split('|')
+          return { classId, subjectId }
+        }),
+      },
+      orderBy: { orderIndex: 'asc' },
+    })
+    for (const t of refed) {
+      const k = `${t.classId}|${t.subjectId}`
+      const list = topicsByPair.get(k) ?? []
+      list.push(t)
+      topicsByPair.set(k, list)
+    }
+  }
+
+  const today = new Date()
+  const sessionStart = sessionStartFor(school?.academicYear, today)
+  const todayKeyStr = dayKey(today)
+
+  for (const a of pairs) {
+    const key = `${a.classId}|${a.subjectId}`
+    try {
+      const pairTopicRows = topicsByPair.get(key) ?? []
+      const completions = new Map(
+        (completionsByPair.get(key) ?? []).map((c) => [c.curriculumTopicId, { completedOn: dayKey(c.completedOn), note: c.note }]),
+      )
+      const pace = classPaceOf(paceRowsByClass.get(a.classId) ?? [], a.subjectId)
+
+      const topics = computeSchedule({
+        topics: pairTopicRows.map((t) => ({
+          id: t.id,
+          unitNo: t.unitNo,
+          unitName: t.unitName,
+          topicNo: t.topicNo,
+          topicName: t.topicName,
+          description: t.description,
+          periodsNeeded: t.periodsNeeded,
+          orderIndex: t.orderIndex,
+        })),
+        completions,
+        sessionStart,
+        today,
+        pace,
+        holidays,
+      })
+      // Display numbering follows the SCHEDULE order (mirrors getLessonPlan:
+      // custom inserts keep the on-screen sequence tidy even though stored
+      // topicNo stays insert-stable).
+      topics.forEach((t, i) => {
+        t.topicNo = i + 1
+      })
+
+      const completed = topics.filter((t) => t.status === 'completed').length
+      const total = topics.length
+      const unitMap = new Map<string, UnitProgress>()
+      for (const t of topics) {
+        const uKey = `${t.unitNo}|${t.unitName}`
+        let u = unitMap.get(uKey)
+        if (!u) {
+          u = { unitNo: t.unitNo, unitName: t.unitName, total: 0, completed: 0 }
+          unitMap.set(uKey, u)
+        }
+        u.total += 1
+        if (t.status === 'completed') u.completed += 1
+      }
+
+      const todayTopic =
+        topics.find((t) => t.status === 'today') ?? topics.find((t) => t.status === 'in-progress')
+        // A topic completed TODAY still owns the hero (see getLessonPlan).
+        ?? topics.find((t) => t.status === 'completed' && t.completedOn === todayKeyStr)
+        ?? null
+      let reason: string | null = null
+      if (!todayTopic) {
+        const holiday = isHolidayKey(todayKeyStr, holidays)
+        if (holiday) {
+          reason = `School holiday — ${holiday.title}`
+        } else if (pace.teachingWeekdays.length > 0 && !pace.teachingWeekdays.includes(today.getUTCDay())) {
+          reason = 'No classes scheduled today'
+        } else if (topics.length > 0 && topics[topics.length - 1].status === 'completed') {
+          reason = 'Curriculum completed for this session'
+        } else {
+          reason = 'No lesson scheduled for today'
+        }
+      }
+
+      const periodsPerDay = pace.periodsPerWeek > 0
+        ? pace.periodsPerWeek / Math.max(1, pace.teachingDaysPerWeek)
+        : 1
+
+      // Board-curriculum coverage (LP-2) — the school board is already in
+      // hand, so the per-pair board lookup is resolved synchronously (same
+      // resolveCurriculumFor semantics via the shared pure core).
+      let syllabus: SyllabusInfo | null = null
+      {
+        const curriculum = resolveCurriculumForBoard(schoolExists, school?.board ?? null, a.classLabel, a.subjectName)
+        if (curriculum) {
+          syllabus = buildSyllabusInfo(curriculum, pairTopicRows.map((t) => normalizeTopicName(t.topicName)))
+        }
+      }
+
+      out.set(key, {
+        classId: a.classId,
+        classLabel: a.classLabel,
+        subjectId: a.subjectId,
+        subjectName: a.subjectName,
+        sourceBoard: pairTopicRows[0]?.sourceBoard ?? school?.board ?? 'CBSE',
+        sessionStart: dayKey(sessionStart),
+        pace: {
+          periodsPerWeek: pace.periodsPerWeek,
+          periodsPerDay: Math.round(periodsPerDay * 10) / 10,
+          periodMinutes: pace.periodMinutes,
+          teachingDaysPerWeek: pace.teachingDaysPerWeek,
+        },
+        progress: { completed, total, pct: total > 0 ? Math.round((completed / total) * 100) : 0 },
+        units: [...unitMap.values()].sort((a, b) => a.unitNo - b.unitNo),
+        topics,
+        today: { date: todayKeyStr, topic: todayTopic, reason },
+        nextUp: topics.filter((t) => t.status === 'upcoming' || t.status === 'today').slice(0, 5),
+        syllabus,
+        autoProvisioned: fedKeys.has(key),
+      })
+    } catch {
+      // Per-pair containment — a failing pair drops only itself (the same
+      // contract the dashboard's per-assignment try/catch had).
+    }
+  }
+  return out
 }
