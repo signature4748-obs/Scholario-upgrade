@@ -1413,7 +1413,7 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
 
   return (
     <>
-      <div className="grid lg:grid-cols-5 gap-6 items-start">
+      <div className="grid lg:grid-cols-5 gap-6 items-start [&>*]:min-w-0">
         {/* Featured notice — the newest broadcast gets the big canvas
             (with its optional image as a full-width banner). */}
         <FadeIn className={hasRest ? 'lg:col-span-3' : 'lg:col-span-5'}>
