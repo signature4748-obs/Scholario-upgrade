@@ -39,6 +39,7 @@ import { randomBytes } from 'crypto'
 import { getTeacherSubjectAssignments } from '@/lib/teacher-scope'
 import { hashSessionToken } from '@/lib/auth'
 import { DEMO_STUDENT_EMAIL } from '../helpers/credentials'
+import { PROBE_SUBJECT_CODE } from '../../prisma/seed-identity'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -52,14 +53,14 @@ let teacher1 = { id: '', name: '', email: 'teacher1@hawkingshigh.edu' }
 let principal = { id: '', email: 'principal@hawkingshigh.edu' }
 let student1 = { id: '', email: DEMO_STUDENT_EMAIL, classTeacherId: '' }
 let subjectOnly = { id: '', email: `pih5.subjectonly.${MARKER}@hawkings.test` }
-let g9a = { id: '' } // NOT teacher1's class; Math taught by a colleague
-let g8a = { id: '' } // teacher1's class-teacher class; Math NOT her subject
-let g10a = { id: '' } // Science here IS teacher1's subject (positive control)
+let g9a = { id: '' } // NOT teacher1's class; MAT taught by a colleague (teacher9)
+let g8a = { id: '' } // teacher11's class-teacher class; MAT is NOT teacher11's subject
+let g1a = { id: '' } // teacher1's class-teacher class — MAT here IS teacher1's subject (positive control)
 let mathId = ''
-let scienceId = ''
 let pa1ExamId = ''
 let g8aStudentId = ''
 let teacherToken = ''
+let teacher11Token = ''
 let principalToken = ''
 let subjectOnlyToken = ''
 
@@ -93,21 +94,26 @@ beforeAll(async () => {
     if (!c) throw new Error(`fixture class missing: ${name}`)
     return c
   }
-  // Final-acceptance corpus labels: '9-A' / '8-A' / '10-A' (Hawkings).
-  const [c9, c8, c10] = await Promise.all([classBy('9-A'), classBy('8-A'), classBy('10-A')])
+  // Final-acceptance corpus (Hawkings): teacher1 (Smt. Kavita Singh) is the
+  // 1-A class teacher and owns ALL of 1-A's CSAs (ENG/HIN/MAT/EVS/DRW); 8-A's
+  // class teacher is teacher11 (owns only 8-A ENG); 9-A MAT belongs to
+  // teacher9. So: 9-A × MAT = a colleague's sheet (403 for teacher1);
+  // 8-A × MAT = class-teacher class × not-their-subject (403 for teacher11);
+  // 1-A × MAT = teacher1's own assignment (200 positive control).
+  const [c9, c8, c1a] = await Promise.all([classBy('9-A'), classBy('8-A'), classBy('1-A')])
   g9a = { id: c9.id }
   g8a = { id: c8.id }
-  g10a = { id: c10.id }
+  g1a = { id: c1a.id }
 
-  const subjectBy = async (name: string) => {
-    // Phase 8A: the corpus carries THREE rows named 'Mathematics' (canonical
-    // MAT — referenced by the PA1 sheets — plus MATH and the SR-MATH probe);
-    // resolve deterministically by code so the sheet lookups below are stable.
-    const s = await db.subject.findFirst({ where: { schoolId, name }, orderBy: { code: 'asc' } })
-    if (!s) throw new Error(`fixture subject missing: ${name}`)
+  const subjectByCode = async (code: string) => {
+    // Final-acceptance corpus: TWO subjects are named 'Mathematics' (the
+    // canonical MAT and the tenant-isolation probe HH-PROBE-MATH) — resolve
+    // by CODE so the sheet lookups are deterministic.
+    const s = await db.subject.findFirst({ where: { schoolId, code } })
+    if (!s) throw new Error(`fixture subject missing: ${code}`)
     return s.id
   }
-  ;[mathId, scienceId] = await Promise.all([subjectBy('Mathematics'), subjectBy('Science')])
+  ;[mathId] = await Promise.all([subjectByCode('MAT')])
 
   // Phase 8A re-target: the legacy subject-only fixture (tenant.teacher.a)
   // became a class teacher via the roster-150 rotation (Grade 4-A/7-B), so
@@ -128,12 +134,12 @@ beforeAll(async () => {
     data: { schoolId, userId: throwawayTeacher.id, employeeId: `PIH5-SO-${MARKER}`, department: 'Test', subjects: 'Test' },
   })
   // A REAL subject assignment (CSA) on a probe-free (class, subject) pair —
-  // Grade 9-A × SR-MATH (the probe subject, unassigned there) — so the
+  // Grade 9-A × the seeded probe subject (PROBE_SUBJECT_CODE, unassigned there) — so the
   // teacher has subject scope but appointed class teacher of NOTHING.
   // Self-healing fixture (Phase 8A): if a prior crashed run left a CSA on
   // this pair, RE-BIND it to the throwaway teacher (and restore it to
   // teacher-less in cleanup) instead of colliding on (classId, subjectId).
-  const probeSubjectId = (await db.subject.findFirstOrThrow({ where: { schoolId, code: 'SR-MATH' } })).id
+  const probeSubjectId = (await db.subject.findFirstOrThrow({ where: { schoolId, code: PROBE_SUBJECT_CODE } })).id
   const existingProbeCsa = await db.classSubjectAssignment.findFirst({
     where: { schoolId, classId: g9a.id, subjectId: probeSubjectId },
   })
@@ -173,6 +179,14 @@ beforeAll(async () => {
   if (!g8student) throw new Error('no ACTIVE student in 8-A')
   g8aStudentId = g8student.id
 
+  // 8-A's class teacher (teacher11) — the "class-teacher status alone grants
+  // nothing" fixture: she owns ONLY 8-A ENG; 8-A MAT is teacher9's CSA.
+  const c8Row = await db.class.findUnique({ where: { id: g8a.id }, select: { classTeacherId: true } })
+  if (!c8Row?.classTeacherId) throw new Error('8-A has no class teacher — seed state unexpected')
+  const teacher11 = await db.user.findUnique({ where: { id: c8Row.classTeacherId } })
+  if (!teacher11) throw new Error('8-A class teacher user missing')
+  teacher11Token = randomBytes(32).toString('hex')
+
   // Direct-minted sessions (phase75 pattern) — bypasses ONLY the login
   // limiter; every authorization gate below is exercised for real.
   teacherToken = randomBytes(32).toString('hex')
@@ -183,6 +197,7 @@ beforeAll(async () => {
       // PHASE 8A — rows store sha256(token); the RAW tokens ride the
       // cookie jar below (createSession wire contract).
       { userId: t1.id, tokenHash: hashSessionToken(teacherToken), expiresAt: new Date(Date.now() + 3600_000) },
+      { userId: teacher11.id, tokenHash: hashSessionToken(teacher11Token), expiresAt: new Date(Date.now() + 3600_000) },
       { userId: p1.id, tokenHash: hashSessionToken(principalToken), expiresAt: new Date(Date.now() + 3600_000) },
       { userId: subjectOnly.id, tokenHash: hashSessionToken(subjectOnlyToken), expiresAt: new Date(Date.now() + 3600_000) },
     ],
@@ -191,7 +206,7 @@ beforeAll(async () => {
     db.session.deleteMany({
       where: {
         tokenHash: {
-          in: [teacherToken, principalToken, subjectOnlyToken].map(hashSessionToken),
+          in: [teacherToken, teacher11Token, principalToken, subjectOnlyToken].map(hashSessionToken),
         },
       },
     }),
@@ -244,29 +259,38 @@ describe('PIH-5 · marks-entry scope (subject assignment, not class-teacher stat
     expect(body.code).toBe('FORBIDDEN')
   }, T)
 
-  test('grid: teacher1 → her CLASS-TEACHER class (Grade 8-A) but a subject she does NOT teach → 403 — class-teacher status alone grants nothing', async () => {
-    // Grade 8-A's classTeacherId IS teacher1 (DB truth)…
+  test('grid: the CLASS-TEACHER of a class on a subject they do NOT teach → 403 — class-teacher status alone grants nothing', async () => {
+    // 8-A's classTeacherId is teacher11 (DB truth)…
     const cls = await db.class.findUnique({ where: { id: g8a.id }, select: { classTeacherId: true } })
-    expect(cls?.classTeacherId).toBe(teacher1.id)
+    const teacher11User = await db.user.findUnique({ where: { id: cls?.classTeacherId ?? '' } })
+    expect(teacher11User?.email).toBeDefined()
+    expect(teacher11User?.email).not.toBe(teacher1.email) // teacher11, not teacher1
+    // …teacher11 owns only 8-A ENG — the 8-A MAT CSA is a colleague's…
+    const csa8mat = await db.classSubjectAssignment.findFirst({
+      where: { classId: g8a.id, subjectId: mathId },
+      include: { teacherUser: { select: { email: true } } },
+    })
+    expect(csa8mat?.teacherUser?.email).toBeDefined()
+    expect(csa8mat?.teacherUser?.email).not.toBe(teacher11User?.email)
     // …the Mathematics sheet exists…
     const config = await db.examSubjectConfig.findFirst({
       where: { examId: pa1ExamId, classId: g8a.id, subjectId: mathId },
     })
     expect(config).not.toBeNull()
 
-    const res = await as(teacherToken, `/api/teacher/marks-entry/grid?examId=${pa1ExamId}&classId=${g8a.id}&subjectId=${mathId}`)
+    const res = await as(teacher11Token, `/api/teacher/marks-entry/grid?examId=${pa1ExamId}&classId=${g8a.id}&subjectId=${mathId}`)
     expect(res.status).toBe(403)
     const body = (await res.json()) as { ok: boolean }
     expect(body.ok).toBe(false)
   }, T)
 
-  test('grid: positive control — teacher1\'s OWN assigned subject (Grade 10-A Science) → 200 (guard is scope-driven, not a blanket 403)', async () => {
+  test('grid: positive control — teacher1\'s OWN assigned subject (1-A Mathematics, her class) → 200 (guard is scope-driven, not a blanket 403)', async () => {
     const config = await db.examSubjectConfig.findFirst({
-      where: { examId: pa1ExamId, classId: g10a.id, subjectId: scienceId },
+      where: { examId: pa1ExamId, classId: g1a.id, subjectId: mathId },
     })
     expect(config).not.toBeNull()
 
-    const res = await as(teacherToken, `/api/teacher/marks-entry/grid?examId=${pa1ExamId}&classId=${g10a.id}&subjectId=${scienceId}`)
+    const res = await as(teacherToken, `/api/teacher/marks-entry/grid?examId=${pa1ExamId}&classId=${g1a.id}&subjectId=${mathId}`)
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data?: { students?: unknown[] } }
     expect(body.ok).toBe(true)
@@ -293,8 +317,8 @@ describe('PIH-5 · marks-entry scope (subject assignment, not class-teacher stat
     expect(marksAfter).toBe(marksBefore)
   }, T)
 
-  test('save: teacher1 → her class-teacher class, unassigned subject → 403 (CSA guard, teacherCanEnterMarks)', async () => {
-    const res = await as(teacherToken, '/api/teacher/marks-entry/save', {
+  test('save: the class teacher on a subject they do NOT teach → 403 (CSA guard, teacherCanEnterMarks)', async () => {
+    const res = await as(teacher11Token, '/api/teacher/marks-entry/save', {
       method: 'POST',
       body: JSON.stringify({
         examId: pa1ExamId,
@@ -374,17 +398,31 @@ describe('PIH-5 · teacher fee-collection scope (class-teacher appointment)', ()
 
 describe('PIH-5 · profile rename vs timetable scope hijack', () => {
   test('rename to a colleague\'s timetable teacherName (null teacherUserId rows) → 409', async () => {
-    // Pick a colleague with timetable rows NOT id-linked to teacher1 (all
-    // demo timetable rows carry teacherUserId NULL today, so any teacher
-    // OTHER than teacher1 is a hijack target).
+    // Legacy-data guard: a (teacherName, teacherUserId=null) timetable row is
+    // the pre-8B storage shape. The Hawkings corpus id-links every row, so
+    // the legacy shape is STAGED here (self-contained fixture, swept in
+    // cleanup) — the guard must still refuse a rename onto that name.
+    let colleague = 'Shri Legacy Colleague'
+    const staged = await db.timetable.create({
+      data: {
+        schoolId,
+        classId: g9a.id,
+        day: 'MONDAY',
+        period: 8,
+        teacherName: colleague,
+        teacherUserId: null,
+        room: 'Legacy Stage',
+      },
+    })
+    cleanup.push(() => db.timetable.delete({ where: { id: staged.id } }).catch(() => {}))
     const rows = await db.timetable.findMany({
       where: { schoolId, teacherName: { not: null }, teacherUserId: null },
       select: { teacherName: true },
       take: 200,
     })
-    const colleague = rows.map((r) => r.teacherName!).find(
+    colleague = rows.map((r) => r.teacherName!).find(
       (name) => name.toLowerCase() !== teacher1.name.toLowerCase(),
-    )
+    ) ?? colleague
     expect(colleague).toBeTruthy()
 
     const res = await as(teacherToken, '/api/profile', {
@@ -452,7 +490,7 @@ describe('PIH-5 · room archive lifecycle (assignment guard + active picker)', (
 
     // Stage the assignment (DB — no assignment API exists) on a class this
     // suite never otherwise touches; restore in cleanup.
-    const holder = await db.class.findFirst({ where: { schoolId, name: 'Grade 12 - B' }, select: { id: true, roomId: true } })
+    const holder = await db.class.findFirst({ where: { schoolId, name: '12-A' }, select: { id: true, roomId: true } })
     expect(holder).not.toBeNull()
     const originalRoomId = holder!.roomId
     await db.class.update({ where: { id: holder!.id }, data: { roomId } })

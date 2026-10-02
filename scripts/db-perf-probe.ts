@@ -13,7 +13,7 @@
  *       re-run filtered to the throwaway school. A second 5,000-student
  *       phase runs UNLESS the 1,000-scale insert exceeded ~2 minutes.
  *   (c) The known N+1 endpoint: GET /api/teacher/dashboard as
- *       teacher1@sunriseacademy.edu (real login with a random
+ *       teacher1@hawkingshigh.edu (real login with a random
  *       x-forwarded-for IP) — wall time recorded (QA measured 9–13 s).
  *   (d) FULL cleanup of the throwaway school (cascade) + residue sweep
  *       (every table with a schoolId column + baseline counts + money
@@ -28,12 +28,13 @@
  */
 import { createHash } from 'node:crypto'
 import { assertNotProductionDatabase, connectOpsClient, prismaDatasourceUrl, utcSlug } from './db-conn'
-import { SEED_DEMO_PASSWORD } from '../prisma/seed-credentials'
+import { SEED_SHOWCASE_TEACHER_PASSWORD } from '../prisma/seed-credentials'
 
 const BASE = process.env.PROBE_BASE ?? 'http://localhost:3000'
-const TEACHER_EMAIL = 'teacher1@sunriseacademy.edu'
-// Env-driven demo credential (prisma/seed-credentials.ts convention).
-const TEACHER_PW = SEED_DEMO_PASSWORD
+const TEACHER_EMAIL = 'teacher1@hawkingshigh.edu'
+// Env-driven demo credential — the FEATURED TEACHER carries its own password
+// family (final-acceptance family split), not the default family.
+const TEACHER_PW = SEED_SHOWCASE_TEACHER_PASSWORD
 
 // ── timing helpers ───────────────────────────────────────────────────────
 
@@ -67,10 +68,10 @@ async function main(): Promise<void> {
 
   // ══ Phase 0: fixtures ═══════════════════════════════════════════════
   const { rows: schoolRows } = await query(
-    `SELECT id, name FROM "School" WHERE slug = 'sunrise-academy' LIMIT 1`,
+    `SELECT id, name FROM "School" WHERE slug = 'hawkings-prithvipur' LIMIT 1`,
   )
   const schoolId = String(schoolRows[0]?.id ?? '')
-  if (!schoolId) throw new Error('sunrise-academy school not found')
+  if (!schoolId) throw new Error('hawkings-prithvipur school not found')
   const { rows: classRows } = await query(
     `SELECT a."classId" AS id, count(*)::int AS n
        FROM "Attendance" a JOIN "Class" c ON c."id" = a."classId"
