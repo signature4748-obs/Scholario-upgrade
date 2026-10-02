@@ -28,6 +28,20 @@
  * Run (sandbox DATABASE_URL prefix):
  *   export DATABASE_URL="$(sed -n 's/^DATABASE_URL=//p' .env | head -1)" \
  *     && bun test tests/security/realtime-bridge.test.ts
+ *
+ * PHASE 8C FIX — environment adaptation (the parked CI was red by design):
+ * this suite was authored against a Supabase-env sandbox (.env carried
+ * SUPABASE_URL/anon/service key + REALTIME_CHANNEL_SECRET). CI (and any
+ * REALTIME_MODE=disabled environment) has NONE of those, so the unit
+ * derivation tests threw (channels.ts fails loud without the secret) and
+ * the live-HTTP tests asserted a mode the server cannot be in. Now:
+ *   · the capability-derivation + publisher tests run EVERYWHERE — the
+ *     file provisions synthetic in-process env values (secret/URL/key)
+ *     when the real ones are absent, and RESTORES the original env in
+ *     afterAll (fetch is stubbed — zero network);
+ *   · the live-HTTP /api/realtime/config tests skip unless the SERVER can
+ *     be in supabase mode (same decision as src/lib/realtime/mode.ts);
+ *   · the unauthenticated 401 boundary test runs in every mode.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
@@ -39,6 +53,48 @@ import { publishToSchool, publishToUser } from '@/lib/realtime/publish'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const TEST_TIMEOUT = 45_000
+
+// ─── PHASE 8C · environment adaptation ────────────────────────────────────────
+
+// Mirrors src/lib/realtime/mode.ts's decision for the SERVER process (the
+// dev server shares .env with the test process: bun auto-loads .env).
+const REALTIME_MODE_ENV = (process.env.REALTIME_MODE ?? '').trim().toLowerCase()
+const serverSupabaseMode =
+  REALTIME_MODE_ENV === 'supabase' ||
+  (REALTIME_MODE_ENV !== 'disabled' &&
+    REALTIME_MODE_ENV !== 'event-stream' &&
+    Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY))
+
+// Synthetic values used ONLY when the real ones are absent (CI / local PG
+// runs). Never a secret — deterministic, in-process, fetch-stubbed.
+const UNIT_SECRET = 'unit-test-realtime-channel-secret-8c'
+const UNIT_SUPABASE_URL = 'https://unit-test.supabase.co'
+const UNIT_SERVICE_KEY = 'unit-test-service-role-key'
+
+const ENV_KEYS = ['REALTIME_CHANNEL_SECRET', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'REALTIME_MODE'] as const
+const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {}
+
+function ensureUnitEnv(): void {
+  for (const k of ENV_KEYS) savedEnv[k] = process.env[k]
+  if (!process.env.REALTIME_CHANNEL_SECRET || process.env.REALTIME_CHANNEL_SECRET.length < 16) {
+    process.env.REALTIME_CHANNEL_SECRET = UNIT_SECRET
+  }
+  if (!process.env.SUPABASE_URL) process.env.SUPABASE_URL = UNIT_SUPABASE_URL
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) process.env.SUPABASE_SERVICE_ROLE_KEY = UNIT_SERVICE_KEY
+  // The publisher unit tests exercise the SUPABASE publish path in-process
+  // (fetch is stubbed — zero network). An explicit REALTIME_MODE=disabled
+  // (CI) would make publishToUser/publishToSchool no-op, so the in-process
+  // override is required. The SERVER process is unaffected (its own env).
+  process.env.REALTIME_MODE = 'supabase'
+}
+
+function restoreEnv(): void {
+  for (const k of ENV_KEYS) {
+    const v = savedEnv[k]
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
+}
 
 // ─── fixtures ──────────────────────────────────────────────────────────────
 
@@ -52,6 +108,11 @@ let tokenTeacher = ''
 const cleanup: Array<() => Promise<unknown>> = []
 
 beforeAll(async () => {
+  // Unit + publisher layers need the synthetic env in EVERY environment;
+  // the fixture sessions are only needed by the live-HTTP layer.
+  ensureUnitEnv()
+  if (!serverSupabaseMode) return
+
   const school = await db.school.findUnique({ where: { slug: 'sunrise-academy' }, select: { id: true } })
   if (!school) throw new Error('fixture school missing (run bun run seed:demo / seed:clean)')
   const [sa, ta] = await Promise.all([
@@ -89,6 +150,7 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const fn of cleanup.reverse()) await fn().catch(() => {})
   await db.$disconnect()
+  restoreEnv()
 })
 
 // ─── helpers ───────────────────────────────────────────────────────────────
@@ -155,7 +217,9 @@ describe('channelsForUser — capability channel derivation', () => {
 
 // ─── 2. /api/realtime/config (live HTTP) ───────────────────────────────────
 
-describe('/api/realtime/config — authenticated transport bootstrap', () => {
+// The 401 boundary is mode-INDEPENDENT: no session, no channels, no keys —
+// proven in every environment.
+describe('/api/realtime/config — unauthenticated boundary (any mode)', () => {
   test(
     'unauthenticated → 401 envelope, no channels, no keys',
     async () => {
@@ -171,7 +235,11 @@ describe('/api/realtime/config — authenticated transport bootstrap', () => {
     },
     TEST_TIMEOUT,
   )
+})
 
+// The authenticated bootstrap tests pin the SERVER's supabase mode — they
+// can only run where the server can actually be in that mode.
+describe.skipIf(!serverSupabaseMode)('/api/realtime/config — authenticated transport bootstrap (supabase mode)', () => {
   test(
     'student session → supabase mode, exactly 2 channels, no staff channel, no-store',
     async () => {

@@ -251,6 +251,11 @@ model Teacher {
   // PHASE 8B — canonical payroll (fixed monthly salary + payments)
   salaryStructure  SalaryStructure?
   salaryPayments   SalaryPayment[]
+
+  // PHASE 8C — teacher rosters/oversight/payroll filter by schoolId on
+  // every staff query (homework service, oversight counts, /api/teachers,
+  // salary views). The table previously had NO schoolId index at all.
+  @@index([schoolId])
 }
 
 model Student {
@@ -815,6 +820,11 @@ model Attendance {
   // Student.id is globally unique (one student row = one school).
   @@index([schoolId, classId, date])
   @@index([schoolId, date])
+  // PHASE 8C — the class-attendance service queries (classId, date-range)
+  // WITHOUT schoolId (src/lib/class-attendance.ts — class identity is
+  // already the authorization scope there), which the schoolId-leading
+  // composites above cannot serve. Also covers the Class-side FK cascade.
+  @@index([classId, date])
 }
 
 // ─── Class Teacher Hub v2.17 — canonical attendance workflow ────────────

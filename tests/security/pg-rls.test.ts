@@ -65,6 +65,15 @@ const SUPABASE_URL = envOf('SUPABASE_URL').replace(/\/+$/, '')
 // platform). This RLS / integration-shape probe only applies to the
 // Supabase integration environment — skip cleanly elsewhere (a skip is
 // honest; a failure would be a false negative).
+//
+// PHASE 8C FIX — the skip was previously PARTIAL: the file-level beforeAll
+// asserted the Supabase shape unconditionally, so any non-Supabase run
+// failed the whole file instead of skipping it (the parked CI would have
+// been red on its very first run). The guard now wraps the hooks AND every
+// describe block. The anon-surface probes also cover the four Phase-8B
+// tables by name (EmailDelivery / SalaryPayment / SalaryStructure /
+// TenantDomain — migration 20261002000100_8c_rls_close_8b_gap closed
+// their RLS gap; these assertions keep it closed).
 const isSupabaseIntegration =
   DATABASE_URL.includes('pooler.supabase.com') &&
   SUPABASE_ANON_KEY.length > 20 &&
@@ -95,9 +104,7 @@ async function hardDropRole(): Promise<void> {
 }
 
 beforeAll(async () => {
-  expect(DATABASE_URL).toContain('pooler.supabase.com') // integration DB shape
-  expect(SUPABASE_ANON_KEY.length).toBeGreaterThan(20)
-  expect(SUPABASE_SERVICE_ROLE_KEY.length).toBeGreaterThan(20)
+  if (!isSupabaseIntegration) return // honest skip: nothing to probe here
 
   admin = new Client({
     connectionString: DATABASE_URL,
@@ -120,6 +127,7 @@ beforeAll(async () => {
 }, T)
 
 afterAll(async () => {
+  if (!isSupabaseIntegration) return
   if (probeMode === 'set-role') await admin?.query(`RESET ROLE`).catch(() => {})
   await hardDropRole()
   if (admin) await admin.end().catch(() => {})
@@ -128,7 +136,7 @@ afterAll(async () => {
 // ── PostgREST (Supabase REST) surface ───────────────────────────────────────
 
 describe.skipIf(!isSupabaseIntegration)('Phase 8A · PostgREST anon surface is closed (RLS deny-by-default)', () => {
-  for (const table of ['Student', 'User', 'Notification']) {
+  for (const table of ['Student', 'User', 'Notification', 'EmailDelivery', 'SalaryPayment', 'SalaryStructure', 'TenantDomain']) {
     test(`anon key GET /rest/v1/${table} → NO data`, async () => {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=id&limit=10`, {
         headers: {
@@ -162,7 +170,7 @@ describe.skipIf(!isSupabaseIntegration)('Phase 8A · PostgREST anon surface is c
   }, T)
 })
 
-describe('Phase 8A · service_role key reads rows (bypassrls, server-side-only)', () => {
+describe.skipIf(!isSupabaseIntegration)('Phase 8A · service_role key reads rows (bypassrls, server-side-only)', () => {
   test('service_role GET /rest/v1/Student → rows readable', async () => {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/Student?select=id&limit=5`, {
       headers: {
@@ -193,8 +201,9 @@ describe('Phase 8A · service_role key reads rows (bypassrls, server-side-only)'
 
 // ── direct PG probe role ────────────────────────────────────────────────────
 
-describe('Phase 8A · probe role (LOGIN, NOBYPASSRLS) sees nothing + cannot write', () => {
+describe.skipIf(!isSupabaseIntegration)('Phase 8A · probe role (LOGIN, NOBYPASSRLS) sees nothing + cannot write', () => {
   test('role exists with the mission shape (LOGIN, NOSUPERUSER, NOBYPASSRLS)', async () => {
+    if (!admin) throw new Error('admin client not connected (Supabase integration only)')
     const r = await adminQuery(`SELECT rolname, rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = '${PROBE_ROLE}'`)
     expect(r.rows.length).toBe(1)
     expect(r.rows[0].rolcanlogin).toBe(true)
@@ -279,8 +288,9 @@ describe('Phase 8A · probe role (LOGIN, NOBYPASSRLS) sees nothing + cannot writ
 
 // ── RLS census ──────────────────────────────────────────────────────────────
 
-describe('Phase 8A · every public-schema table has RLS enabled (census)', () => {
-  test('relrowsecurity set on ALL app tables (>= 96, zero exceptions)', async () => {
+describe.skipIf(!isSupabaseIntegration)('Phase 8A · every public-schema table has RLS enabled (census)', () => {
+  test('relrowsecurity set on ALL app tables (>= 100, zero exceptions)', async () => {
+    if (!admin) throw new Error('admin client not connected (Supabase integration only)')
     const r = await adminQuery(`
       SELECT count(*)::int AS total,
              count(*) FILTER (WHERE c.relrowsecurity)::int AS rls_on
@@ -289,7 +299,7 @@ describe('Phase 8A · every public-schema table has RLS enabled (census)', () =>
       WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relispartition = false`)
     const total = Number(r.rows[0].total)
     const rlsOn = Number(r.rows[0].rls_on)
-    expect(total).toBeGreaterThanOrEqual(96)
+    expect(total).toBeGreaterThanOrEqual(100)
     expect(rlsOn).toBe(total) // every table, no exceptions
 
     const off = await adminQuery(`
@@ -303,8 +313,9 @@ describe('Phase 8A · every public-schema table has RLS enabled (census)', () =>
 
 // ── cleanup proof ───────────────────────────────────────────────────────────
 
-describe('Phase 8A · probe role is fully removed after the suite', () => {
+describe.skipIf(!isSupabaseIntegration)('Phase 8A · probe role is fully removed after the suite', () => {
   test('hardDropRole → no scholario_rls_probe remains in pg_roles', async () => {
+    if (!admin) throw new Error('admin client not connected (Supabase integration only)')
     // The suite's own teardown, asserted IN-TEST: every grant/membership
     // is revoked, the role is dropped, and pg_roles no longer knows it
     // (re-running the suite re-proves idempotence via beforeAll pre-clean).
