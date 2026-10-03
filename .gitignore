@@ -91,3 +91,6 @@ db/*.db-journal
 
 # embedded PostgreSQL cluster (mini-services/postgres-db) — local dev only
 db/pg/
+
+# local audit workspace (verification scripts — never committed)
+.audit-work/
