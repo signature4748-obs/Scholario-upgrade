@@ -19,7 +19,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { Cloud, ShieldCheck, KeyRound, Lock, AlertTriangle, ArrowLeft, Smartphone } from 'lucide-react'
+import { Cloud, ShieldCheck, KeyRound, Lock, AlertTriangle, Smartphone } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp'
@@ -184,7 +184,7 @@ export default function PlatformLoginPage() {
       <header className="relative z-10 border-b border-slate-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-sm">
+            <div className="h-10 w-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-sm">
               <Cloud className="h-5 w-5" aria-hidden="true" />
             </div>
             <div>
@@ -196,14 +196,13 @@ export default function PlatformLoginPage() {
               </p>
             </div>
           </div>
-          <a
-            href="/"
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white transition-all focus-ring"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-            <span className="hidden sm:inline">Back to school website</span>
-            <span className="sm:hidden sr-only">Back to school website</span>
-          </a>
+          {/* ARCHITECTURE RESET — the platform control plane has NO generic
+              navigation path to a school website. School websites are reached
+              ONLY through explicit tenant actions inside the console
+              (Schools → school → "Preview Website"). Nothing here links to /. */}
+          <span className="hidden sm:inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-500 border border-transparent select-none">
+            Platform access is restricted
+          </span>
         </div>
       </header>
 

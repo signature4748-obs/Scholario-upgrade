@@ -16,6 +16,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import {
   ArrowLeft,
+  ExternalLink,
   RefreshCw,
   AlertTriangle,
   LifeBuoy,
@@ -214,7 +215,7 @@ function AccessDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
             <LifeBuoy className="h-4 w-4 text-amber-600" aria-hidden="true" />
-            Access {schoolName} — read-only support session
+            Open Support Session — {schoolName} (read-only)
           </DialogTitle>
           <DialogDescription className="text-slate-500">
             Opens a time-boxed, audited oversight session. No school identity is assumed and no school data
@@ -858,15 +859,32 @@ export function SchoolDetailModule() {
             {school.slug} · {school.code}
           </p>
         </div>
-        {canSupport && (
-          <Button
-            onClick={() => setAccessOpen(true)}
-            className="h-11 shrink-0 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold focus-ring"
+        {/* ARCHITECTURE RESET — explicit, boundary-respecting actions:
+            · "Preview Website" opens the PUBLIC school website in a new tab
+              (an explicit look, never an inherited tenant context).
+            · "Open Support Session" (renamed from "Access School") is the
+              explicit, audited, step-up-gated, read-only entry into the
+              school's application context. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href={`/?slug=${encodeURIComponent(school.slug)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
           >
-            <LifeBuoy className="h-4 w-4" aria-hidden="true" />
-            Access School
-          </Button>
-        )}
+            <ExternalLink className="h-4 w-4" aria-hidden="true" />
+            Preview Website
+          </a>
+          {canSupport && (
+            <Button
+              onClick={() => setAccessOpen(true)}
+              className="h-11 shrink-0 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold focus-ring"
+            >
+              <LifeBuoy className="h-4 w-4" aria-hidden="true" />
+              Open Support Session
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Stat cards */}

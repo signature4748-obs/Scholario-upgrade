@@ -56,12 +56,27 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: '/platform', label: 'Overview', icon: LayoutDashboard },
   { href: '/platform/schools', label: 'Schools', icon: Building2, permission: 'schools.read' },
-  { href: '/platform/support', label: 'Support Tools', icon: LifeBuoy, permission: 'support.access' },
-  { href: '/platform/audit', label: 'Audit Trail', icon: ScrollText, permission: 'audit.read' },
+  { href: '/platform/support', label: 'Support', icon: LifeBuoy, permission: 'support.access' },
+  { href: '/platform/audit', label: 'Audit Log', icon: ScrollText, permission: 'audit.read' },
   { href: '/platform/announcements', label: 'Announcements', icon: Megaphone, permission: 'announcements.manage' },
   { href: '/platform/settings', label: 'Settings', icon: Settings2, permission: 'settings.manage' },
-  { href: '/platform/admins', label: 'Admins', icon: Users, permission: 'admins.manage' },
+  { href: '/platform/admins', label: 'Users', icon: Users, permission: 'admins.manage' },
   { href: '/platform/sessions', label: 'My Sessions', icon: MonitorSmartphone },
+]
+
+/** ARCHITECTURE RESET — grouped control-plane IA (premium console nav):
+ *  honest modules that ACTUALLY exist — no invented Plans/Billing or
+ *  Security modules (plan management lives inside Schools → school detail;
+ *  session security lives under My Sessions). Renames for honest labels:
+ *  Admins → Users (platform users), Support Tools → Support, Audit Trail →
+ *  Audit Log. */
+const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
+  { label: 'Platform', items: [NAV[0]] },
+  { label: 'Tenants', items: [NAV[1]] },
+  { label: 'Operations', items: [NAV[2], NAV[4]] },
+  { label: 'Governance', items: [NAV[3]] },
+  { label: 'Administration', items: [NAV[5], NAV[6]] },
+  { label: 'Account', items: [NAV[7]] },
 ]
 
 function initials(name: string): string {
@@ -194,35 +209,47 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
   if (loading || !me) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 animate-pulse shadow-sm" />
+        <div className="h-12 w-12 rounded-2xl bg-slate-200 animate-pulse" />
       </div>
     )
   }
 
   const nav = NAV.filter((item) => !item.permission || can(item.permission))
+  const navGroups = NAV_GROUPS.map((g) => ({
+    label: g.label,
+    items: g.items.filter((item) => nav.includes(item)),
+  })).filter((g) => g.items.length > 0)
 
   const SidebarContent = (
-    <nav aria-label="Platform navigation" className="flex-1 space-y-1 px-3 py-4 overflow-y-auto custom-scrollbar">
-      <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Control Plane</p>
-      {nav.map((item) => {
-        const active = pathname === item.href || (item.href !== '/platform' && pathname.startsWith(item.href))
-        const Icon = item.icon
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            aria-current={active ? 'page' : undefined}
-            className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors focus-ring ${
-              active
-                ? 'bg-teal-50 text-teal-700 border border-teal-200'
-                : 'text-slate-600 border border-transparent hover:text-slate-900 hover:bg-slate-50'
-            }`}
-          >
-            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-            {item.label}
-          </Link>
-        )
-      })}
+    <nav aria-label="Platform navigation" className="flex-1 space-y-4 px-3 py-4 overflow-y-auto custom-scrollbar">
+      {navGroups.map((group) => (
+        <div key={group.label}>
+          <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+            {group.label}
+          </p>
+          <div className="space-y-0.5">
+            {group.items.map((item) => {
+              const active = pathname === item.href || (item.href !== '/platform' && pathname.startsWith(item.href))
+              const Icon = item.icon
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={active ? 'page' : undefined}
+                  className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-ring ${
+                    active
+                      ? 'bg-teal-50 text-teal-700 border border-teal-200'
+                      : 'text-slate-600 border border-transparent hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  {item.label}
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+      ))}
     </nav>
   )
 
@@ -231,7 +258,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 flex-col border-r border-slate-200 bg-white z-40">
         <div className="flex items-center gap-3 h-20 px-5 border-b border-slate-200">
-          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-sm">
+          <div className="h-10 w-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-sm">
             <Cloud className="h-5 w-5" aria-hidden="true" />
           </div>
           <div className="min-w-0">
@@ -264,7 +291,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
           <div className="absolute inset-y-0 left-0 w-72 max-w-[85vw] bg-white border-r border-slate-200 flex flex-col shadow-xl">
             <div className="flex items-center justify-between h-20 px-5 border-b border-slate-200">
               <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
+                <div className="h-8 w-8 rounded-lg bg-teal-600 flex items-center justify-center text-white">
                   <Cloud className="h-4 w-4" aria-hidden="true" />
                 </div>
                 <span className="font-display font-extrabold text-sm text-slate-900">SCHOLARIO Control Plane</span>
