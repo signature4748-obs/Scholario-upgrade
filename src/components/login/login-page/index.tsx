@@ -11,28 +11,29 @@ import { isValidHexColor } from '@/lib/branding-contrast'
 import { LoadingPhase } from './loading-phase'
 
 /* ------------------------------------------------------------------ */
-/*  LoginPage — split-pane design adapted from the "Spacer" reference  */
-/*  • Left pane: animated emerald→teal gradient with school logo,     */
-/*    name, tagline, cloud SVG divider on the right edge              */
-/*  • Right pane: clean white form panel with underline inputs,        */
-/*    Sign In + Forgot Password only (NO sign-up, NO terms checkbox,  */
-/*    NO demo-access shortcuts — Phase 8A credential-exposure         */
-/*    cleanup removed the one-tap demo chips + their hardcoded        */
-/*    credential values from this surface entirely)                   */
+/*  LoginPage — quiet split-pane school login                          */
+/*  • Left pane (md+): solid light brand wash — school logo, name,     */
+/*    tagline (only when configured), and the factual school-workspace */
+/*    line. No animated color washes, no floating orbs, no dividers.   */
+/*  • Right pane: white form card — Sign In + Forgot Password only     */
+/*    (NO sign-up, NO terms checkbox, NO demo-access shortcuts —       */
+/*    Phase 8A credential-exposure cleanup removed the one-tap demo    */
+/*    chips + their hardcoded credential values from this surface      */
+/*    entirely).                                                       */
 /* ------------------------------------------------------------------ */
 
 
-/* ── PHASE 7 — REAL school branding ────────────────────────────────────
- * The login surface's school identity (name/logo alt/tagline) comes from
+/* ── REAL school branding ────────────────────────────────────────────
+ * The login surface's school identity (name/logo/tagline) comes from
  * the REAL registered school profile (GET /api/schools/public — same
  * canonical source as the public website), with a NEUTRAL degradation
- * when the profile is unavailable. The retired `lib/mock/school`
- * snapshot (Greenwood branding + fabricated "CBSE · Estd. 2020") is no
- * longer consulted here. */
+ * when the profile is unavailable OR when the request is a bare
+ * deployment-domain visit (demo fallback, no explicit slug) — the
+ * generic portal door is NOT the demo school's door. */
 interface LoginBranding {
   name: string
   shortName: string
-  tagline: string
+  tagline: string | null
   affiliation: string | null
   academicYear: string | null
   logoUrl: string | null
@@ -40,19 +41,20 @@ interface LoginBranding {
 }
 
 const NEUTRAL_BRANDING: LoginBranding = {
-  name: 'Scholario School',
-  shortName: 'SCHOLARIO',
-  tagline: 'Your school workspace, secured by Scholario',
+  name: 'Scholario',
+  shortName: 'Scholario',
+  tagline: null,
   affiliation: null,
   academicYear: null,
   logoUrl: null,
   primaryColor: null,
 }
 
-/* PHASE 7.5 — the branding fetch carries the school's own identity
- * fields (shortName / tagline / affiliation / logoUrl / themeColor).
- * NO slug is sent: the server resolves the tenant (Host domain →
- * ?slug → single-school → demo) exactly as for the public website. */
+/* The branding fetch carries the school's own identity fields
+ * (shortName / tagline / affiliation / logoUrl / themeColor) plus the
+ * server's tenant-resolution marker `resolvedVia`. A ?slug= is
+ * forwarded when present; otherwise the Host header resolves the
+ * tenant exactly as for the public website. */
 interface PublicSchoolBrandingBody {
   success?: boolean
   data?: {
@@ -63,21 +65,22 @@ interface PublicSchoolBrandingBody {
     academicYear?: string
     logoUrl?: string | null
     themeColor?: string
+    resolvedVia?: string
   }
 }
 
-/** CSS custom properties for the brand-token classes (globals.css):
- *  `--school-primary` drives the sign-in button, chip selected state and
- *  input underline accents; `--ring` tints the keyboard focus ring.
- *  Both are set ONLY when the school configured a valid color, so the
- *  un-branded fallback stays the Scholario emerald identity. */
+/** CSS custom properties for this surface: `--school-primary` drives the
+ *  sign-in button and input focus accents; `--ring` tints the keyboard
+ *  focus ring. Both resolve to the school's color when configured and
+ *  to the Scholario neutral (#0f766e) otherwise. */
 function loginBrandStyle(primaryColor: string | null): CSSProperties {
-  if (typeof primaryColor !== 'string' || !isValidHexColor(primaryColor)) {
-    return {}
-  }
+  const primary =
+    typeof primaryColor === 'string' && isValidHexColor(primaryColor)
+      ? primaryColor.trim()
+      : '#0f766e'
   return {
-    '--school-primary': primaryColor,
-    '--ring': primaryColor,
+    '--school-primary': primary,
+    '--ring': primary,
   } as React.CSSProperties
 }
 
@@ -98,6 +101,12 @@ function useLoginSchoolBranding(): LoginBranding {
       .then((body: PublicSchoolBrandingBody | null) => {
         const d = body?.success ? body.data : undefined
         if (!alive || !d?.name) return
+        // ARCHITECTURE RESET — same surface rule as the public website:
+        // a demo fallback with NO explicit slug is a deployment-domain
+        // visit, so the generic portal door stays NEUTRAL (platform)
+        // instead of branding itself as the demo school.
+        const resolvedVia = typeof d.resolvedVia === 'string' ? d.resolvedVia : 'domain'
+        if (!slug && resolvedVia === 'demo') return
         const name = d.name
         setBranding({
           name,
@@ -105,10 +114,12 @@ function useLoginSchoolBranding(): LoginBranding {
           shortName:
             (typeof d.shortName === 'string' && d.shortName.trim()) ||
             name.split(' ').slice(0, 2).join(' '),
+          // Tagline ONLY when the school actually configured one — the
+          // pane never invents one.
           tagline:
             typeof d.tagline === 'string' && d.tagline.trim()
               ? d.tagline.trim()
-              : NEUTRAL_BRANDING.tagline,
+              : null,
           affiliation:
             typeof d.affiliation === 'string' && d.affiliation.trim()
               ? d.affiliation.trim()
@@ -251,7 +262,7 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
             {/* LEFT PANE: brand + welcome — DESKTOP ONLY. On mobile it
                 consumed ~36% of the viewport and pushed the Sign In button
                 below the fold, which read as "login does nothing". The
-                RightPane carries its own compact mobile logo. */}
+                RightPane carries its own compact mobile brand row. */}
             <LeftPane school={school} onBackToWebsite={onBackToWebsite} />
 
             {/* RIGHT PANE: form */}
@@ -300,7 +311,7 @@ const PLATFORM_ANNOUNCEMENT_STYLES: Record<
   PlatformAnnouncement['level'],
   { border: string; icon: ComponentType<{ className?: string }>; iconClass: string }
 > = {
-  INFO: { border: 'border-l-emerald-600', icon: Info, iconClass: 'text-emerald-600' },
+  INFO: { border: 'border-l-teal-600', icon: Info, iconClass: 'text-teal-600' },
   WARNING: { border: 'border-l-amber-500', icon: AlertTriangle, iconClass: 'text-amber-600' },
   CRITICAL: { border: 'border-l-red-500', icon: AlertTriangle, iconClass: 'text-red-600' },
 }
@@ -346,13 +357,13 @@ function PlatformAnnouncementBanner() {
         return (
           <div
             key={a.id}
-            className={`rounded-lg border border-border/70 border-l-4 bg-card px-3.5 py-3 ${style.border}`}
+            className={`rounded-lg border border-slate-200 border-l-4 bg-white px-3.5 py-3 ${style.border}`}
           >
             <div className="flex items-start gap-2.5">
               <LevelIcon className={`mt-0.5 h-4 w-4 shrink-0 ${style.iconClass}`} aria-hidden />
               <div className="min-w-0">
-                <p className="text-sm font-semibold leading-snug text-foreground">{a.title}</p>
-                <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{a.body}</p>
+                <p className="text-sm font-semibold leading-snug text-slate-900">{a.title}</p>
+                <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">{a.body}</p>
               </div>
             </div>
           </div>
@@ -363,7 +374,7 @@ function PlatformAnnouncementBanner() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Left pane — animated gradient + logo + cloud divider               */
+/*  Left pane — quiet solid brand wash (logo, name, tagline)           */
 /* ------------------------------------------------------------------ */
 
 function LeftPane({
@@ -375,57 +386,37 @@ function LeftPane({
 }) {
   return (
     <section
-      className="left-pane relative hidden md:flex md:w-[45%] p-8 md:p-12 flex-col items-center justify-center text-center text-white overflow-hidden"
+      className="relative hidden md:flex md:w-[45%] flex-col p-10 lg:p-14"
       style={{
-        // PHASE 7.5 — the brand pane gradient derives from the school's
-        // primary color (server contrast-validated). Un-branded fallback
-        // = the classic emerald→teal Scholario login look.
-        background:
-          'linear-gradient(180deg, color-mix(in srgb, var(--school-primary, #0d9488) 55%, #041f1c) 0%, var(--school-primary, #0d9488) 50%, color-mix(in srgb, var(--school-primary, #0d9488) 72%, #041f1c) 100%)',
-        backgroundSize: '200% 200%',
-        animation: 'bgShift 15s ease infinite',
+        // Solid quiet brand treatment — the school's primary color at a
+        // low tint over white (never an animated color wash).
+        backgroundColor: 'color-mix(in srgb, var(--school-primary, #0f766e) 7%, white)',
       }}
     >
-      {/* Floating ambient orbs */}
-      <div
-        aria-hidden
-        className="absolute top-10 left-10 w-40 h-40 rounded-full bg-emerald-300/20 blur-3xl"
-        style={{ animation: 'float 6s ease-in-out infinite' }}
-      />
-      <div
-        aria-hidden
-        className="absolute bottom-20 left-1/3 w-32 h-32 rounded-full bg-teal-200/20 blur-3xl"
-        style={{ animation: 'float 8s ease-in-out infinite reverse' }}
-      />
-
-      {/* Welcome header */}
-      <motion.h2
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 text-xl lg:text-2xl font-medium mb-8 text-emerald-50"
+      {/* Top — back to the website */}
+      <button
+        type="button"
+        onClick={onBackToWebsite}
+        className="rounded-md px-1.5 -mx-1.5 py-0.5 text-xs font-medium uppercase tracking-wider text-slate-500 hover:text-slate-900 transition-colors focus-ring self-start"
       >
-        Welcome to
-      </motion.h2>
+        ← Back to Website
+      </button>
 
-      {/* Logo + school name */}
+      {/* Center — logo, school name, tagline, factual line */}
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 flex flex-col items-center mb-8"
+        transition={{ duration: 0.6, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+        className="my-auto py-10 flex flex-col items-start"
       >
-        <div
-          className="bg-white rounded-3xl p-5 mb-5 w-28 h-28 flex items-center justify-center shadow-2xl shadow-emerald-900/30"
-          style={{ animation: 'float 6s ease-in-out infinite' }}
-        >
+        <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           {school.logoUrl ? (
             <Image
               src={school.logoUrl}
               alt={`${school.name} logo`}
               width={72}
               height={72}
-              className="w-16 h-16 object-contain"
+              className="h-12 w-12 object-contain"
               priority
             />
           ) : (
@@ -434,89 +425,42 @@ function LeftPane({
               alt="Scholario logo"
               width={72}
               height={72}
-              className="w-16 h-16"
+              className="h-12 w-12"
               priority
             />
           )}
         </div>
-        <h1 className="font-display text-3xl lg:text-4xl font-bold tracking-tight text-white">
+        <h1 className="font-display text-3xl lg:text-4xl font-bold tracking-tight text-slate-900">
           {school.shortName}
         </h1>
-        <p className="text-[11px] font-semibold text-emerald-100 tracking-[0.25em] uppercase mt-2">
-          Powered by Scholario
-        </p>
         {school.affiliation ? (
-          <p className="text-xs text-emerald-100/85 mt-2 tracking-wide">
-            {school.affiliation}
+          <p className="mt-2 text-sm text-slate-600">{school.affiliation}</p>
+        ) : null}
+        <span
+          aria-hidden="true"
+          className="mt-6 block h-1 w-12 rounded-full"
+          style={{ backgroundColor: 'var(--school-primary, #0f766e)' }}
+        />
+        {school.tagline ? (
+          <p className="mt-6 text-base text-slate-700 max-w-sm leading-relaxed">
+            {school.tagline}
           </p>
         ) : null}
+        <p className="mt-3 text-sm text-slate-500 max-w-sm leading-relaxed">
+          Your school workspace, secured by Scholario.
+        </p>
       </motion.div>
 
-      {/* Description */}
-      <motion.p
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 text-sm lg:text-base text-emerald-50/90 max-w-[320px] leading-relaxed mb-auto"
-      >
-        {school.tagline}. Sign in to access your dashboard, resources, and school community.
-      </motion.p>
-
-      {/* Footer links */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, delay: 0.4, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 mt-12 mb-8 text-xs text-emerald-100/70 tracking-wider flex gap-4 uppercase font-medium"
-      >
-        <button
-          type="button"
-          onClick={onBackToWebsite}
-          className="rounded-md px-1.5 -mx-1.5 py-0.5 hover:text-white transition-colors focus-ring"
-        >
-          ← Back to Website
-        </button>
-        <span className="w-px bg-emerald-300/40" />
+      {/* Bottom — session year */}
+      <div className="text-xs text-slate-400 tracking-wider uppercase font-medium">
         {school.academicYear ? <span>Session {school.academicYear}</span> : null}
-      </motion.div>
-
-      {/* Cloud SVG divider (right edge) */}
-      <svg
-        aria-hidden
-        className="absolute top-0 right-0 bottom-0 w-[120px] h-full pointer-events-none hidden md:block"
-        preserveAspectRatio="none"
-        viewBox="0 0 100 500"
-      >
-        <path
-          d="M100,0 C80,30 90,80 70,120 C50,160 80,220 60,260 C40,300 70,360 50,420 C30,480 80,500 100,500 Z"
-          fill="rgba(255,255,255,0.1)"
-        />
-        <path
-          d="M100,0 C90,40 100,90 80,130 C60,170 95,210 75,270 C55,330 90,370 65,430 C40,490 90,500 100,500 Z"
-          fill="rgba(255,255,255,0.35)"
-        />
-        <path
-          d="M100,0 C100,50 110,100 95,150 C80,200 105,250 85,300 C65,350 100,400 80,450 C60,500 100,500 100,500 Z"
-          fill="#ffffff"
-        />
-      </svg>
-
-      <style jsx global>{`
-        @keyframes bgShift {
-          0%, 100% { background-position: 0% 50%; }
-          50% { background-position: 100% 50%; }
-        }
-        @keyframes float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-10px); }
-        }
-      `}</style>
+      </div>
     </section>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/*  Right pane — login form                                             */
+/*  Right pane — login form                                            */
 /* ------------------------------------------------------------------ */
 
 interface RightPaneProps {
@@ -544,18 +488,18 @@ function RightPane({
 }: RightPaneProps) {
   const [passwordVisible, setPasswordVisible] = useState(false)
   return (
-    <section className="relative z-20 flex w-full flex-1 flex-col justify-center overflow-y-auto bg-white p-6 sm:p-8 md:w-[55%] md:p-12 lg:p-16">
+    <section className="relative z-20 flex w-full flex-1 flex-col justify-center overflow-y-auto bg-slate-50 p-4 sm:p-6 md:w-[55%] md:p-10 lg:p-14">
       <div className="w-full max-w-md mx-auto">
-        {/* Mobile-only logo (school logo when configured) */}
-        <div className="md:hidden flex flex-col items-center mb-8">
-          <div className="bg-white rounded-2xl p-3 mb-3 w-16 h-16 flex items-center justify-center shadow-lg shadow-emerald-500/20 border border-emerald-500/20">
+        {/* Mobile-only brand row (school logo when configured) */}
+        <div className="md:hidden flex items-center justify-center gap-3 mb-6">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
             {school.logoUrl ? (
               <Image
                 src={school.logoUrl}
                 alt={`${school.name} logo`}
                 width={40}
                 height={40}
-                className="h-10 w-10 rounded-lg object-contain"
+                className="h-9 w-9 rounded-lg object-contain"
               />
             ) : (
               <Image
@@ -563,75 +507,65 @@ function RightPane({
                 alt="Scholario logo"
                 width={40}
                 height={40}
-                className="w-10 h-10"
+                className="w-9 h-9"
               />
             )}
           </div>
-          <h1 className="font-display text-xl font-bold text-foreground">{school.shortName}</h1>
-          <p className="text-[11px] font-semibold text-emerald-600 tracking-[0.25em] uppercase mt-1">
-            Powered by Scholario
-          </p>
-          {school.affiliation ? (
-            <p className="text-xs text-muted-foreground mt-1.5">{school.affiliation}</p>
-          ) : null}
+          <div className="min-w-0">
+            <h1 className="font-display text-lg font-bold text-slate-900 truncate">{school.shortName}</h1>
+            {school.affiliation ? (
+              <p className="text-[11px] text-slate-500 truncate">{school.affiliation}</p>
+            ) : null}
+          </div>
         </div>
 
-        {/* Heading */}
-        <motion.h2
-          initial={{ opacity: 0, y: 20 }}
+        {/* Form card */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="font-display text-3xl lg:text-4xl font-semibold mb-2 text-foreground"
+          transition={{ duration: 0.6, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+          className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 shadow-sm"
         >
-          Student & Staff Login
-        </motion.h2>
-        <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.25, ease: [0.16, 1, 0.3, 1] }}
-          className="text-sm text-muted-foreground mb-8"
-        >
-          Sign in to access your dashboard.
-        </motion.p>
+          <h2 className="font-display text-2xl lg:text-3xl font-semibold mb-1.5 text-slate-900">
+            Student &amp; Staff Login
+          </h2>
+          <p className="text-sm text-slate-500 mb-7">
+            Sign in to access your dashboard.
+          </p>
 
-        {/* PHASE 6 — platform announcements (additive, read-only; see
-            PlatformAnnouncementBanner above). Renders nothing when the
-            platform has no active notices. */}
-        <PlatformAnnouncementBanner />
+          {/* PHASE 6 — platform announcements (additive, read-only; see
+              PlatformAnnouncementBanner above). Renders nothing when the
+              platform has no active notices. */}
+          <PlatformAnnouncementBanner />
 
-        {/* Error message — rendered ABOVE the fields so it is always
-            visible without scrolling, on every viewport. */}
-        {error && (
-          <div
-            role="alert"
-            aria-live="polite"
-            className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm font-medium text-destructive"
-          >
-            {error}
-          </div>
-        )}
-
-        {/* Form */}
-        <form
-          className="space-y-6"
-          onSubmit={(e) => {
-            e.preventDefault()
-            onLogin()
-          }}
-        >
-          {/* Institutional Email or ID */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.35, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <label
-              htmlFor="identifier"
-              className="block text-sm font-semibold text-foreground mb-2 transition-colors focus-within:text-emerald-600"
+          {/* Error message — rendered ABOVE the fields so it is always
+              visible without scrolling, on every viewport. */}
+          {error && (
+            <div
+              role="alert"
+              aria-live="polite"
+              className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700"
             >
-              Institutional Email or ID
-            </label>
-            <div className="custom-input-wrapper relative flex items-center">
+              {error}
+            </div>
+          )}
+
+          {/* Form */}
+          <form
+            className="space-y-5"
+            onSubmit={(e) => {
+              e.preventDefault()
+              onLogin()
+            }}
+          >
+            {/* Institutional Email or ID */}
+            <div>
+              <label
+                htmlFor="identifier"
+                className="block text-sm font-semibold text-slate-700 mb-2 transition-colors focus-within:text-slate-900"
+              >
+                Institutional Email or ID
+              </label>
               <input
                 id="identifier"
                 name="identifier"
@@ -642,84 +576,63 @@ function RightPane({
                 value={email}
                 onChange={(e) => onEmailChange(e.target.value)}
                 placeholder="Enter your email or ID"
-                className="custom-input block w-full text-foreground placeholder:text-gray-400 py-2.5 focus:ring-0 peer"
+                className="block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-[var(--school-primary)] focus:ring-1 focus:ring-[var(--school-primary)]"
               />
-              <span className="absolute right-0 input-check-icon peer-focus:scale-110 school-brand-text">
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </span>
             </div>
-          </motion.div>
 
-          {/* Password */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.4, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <label
-              htmlFor="password"
-              className="block text-sm font-semibold text-foreground mb-2 transition-colors focus-within:text-emerald-600"
-            >
-              Password
-            </label>
-            <div className="custom-input-wrapper relative flex items-center">
-              <input
-                id="password"
-                name="password"
-                type={passwordVisible ? 'text' : 'password'}
-                required
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => onPasswordChange(e.target.value)}
-                placeholder="Enter your password"
-                className="custom-input custom-input-action-end block w-full text-foreground placeholder:text-gray-400 py-2.5 focus:ring-0"
-              />
+            {/* Password */}
+            <div>
+              <label
+                htmlFor="password"
+                className="block text-sm font-semibold text-slate-700 mb-2 transition-colors focus-within:text-slate-900"
+              >
+                Password
+              </label>
+              <div className="relative flex items-center">
+                <input
+                  id="password"
+                  name="password"
+                  type={passwordVisible ? 'text' : 'password'}
+                  required
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => onPasswordChange(e.target.value)}
+                  placeholder="Enter your password"
+                  className="block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 pr-11 text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-[var(--school-primary)] focus:ring-1 focus:ring-[var(--school-primary)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setPasswordVisible((v) => !v)}
+                  aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+                  aria-pressed={passwordVisible}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-slate-400 hover:text-slate-700 transition-colors focus-ring"
+                >
+                  {passwordVisible ? (
+                    <EyeOff className="h-5 w-5" aria-hidden />
+                  ) : (
+                    <Eye className="h-5 w-5" aria-hidden />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Forgot password */}
+            <div className="flex items-center justify-end">
               <button
                 type="button"
-                onClick={() => setPasswordVisible((v) => !v)}
-                aria-label={passwordVisible ? 'Hide password' : 'Show password'}
-                aria-pressed={passwordVisible}
-                className="absolute right-0 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 hover:text-foreground transition-colors focus-ring"
+                onClick={onForgotPassword}
+                className="rounded-md px-1 -mx-1 py-0.5 text-sm font-medium school-brand-text hover:underline transition-colors focus-ring"
               >
-                {passwordVisible ? (
-                  <EyeOff className="h-5 w-5" aria-hidden />
-                ) : (
-                  <Eye className="h-5 w-5" aria-hidden />
-                )}
+                Forgot password?
               </button>
             </div>
-          </motion.div>
 
-          {/* Forgot password */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.45, ease: [0.16, 1, 0.3, 1] }}
-            className="flex items-center justify-end"
-          >
+            {/* Submit — solid school primary */}
             <button
-              type="button"
-              onClick={onForgotPassword}
-              className="rounded-md px-1 -mx-1 py-0.5 text-sm font-medium school-brand-text hover:underline transition-colors focus-ring"
-            >
-              Forgot password?
-            </button>
-          </motion.div>
-
-          {/* Submit */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.5, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <motion.button
               type="submit"
               disabled={submitting}
-              whileHover={{ scale: 1.01, y: -1 }}
-              whileTap={{ scale: 0.98 }}
-              className="group w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 school-brand-cta text-base font-semibold rounded-full transition-all disabled:opacity-60 disabled:cursor-not-allowed focus-ring"
+              style={{ backgroundColor: 'var(--school-primary, #0f766e)' }}
+              className="group w-full inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-base font-semibold text-white transition-all hover:brightness-110 active:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed focus-ring"
             >
               {submitting ? 'Signing in…' : 'Sign In'}
               {!submitting && (
@@ -733,77 +646,16 @@ function RightPane({
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75" />
                 </svg>
               )}
-            </motion.button>
-          </motion.div>
-        </form>
+            </button>
+          </form>
+        </motion.div>
       </div>
-
-      <style jsx>{`
-        .custom-input-wrapper {
-          position: relative;
-        }
-        .custom-input-wrapper::after {
-          content: '';
-          position: absolute;
-          bottom: 0;
-          left: 0;
-          width: 0%;
-          height: 2px;
-          /* PHASE 7.5 — school primary (inert fallback = the classic
-             emerald→teal underline) */
-          background: linear-gradient(
-            90deg,
-            var(--school-primary, #10b981),
-            color-mix(in srgb, var(--school-primary, #10b981) 72%, #000)
-          );
-          transition: width 0.3s ease;
-        }
-        .custom-input-wrapper:focus-within::after {
-          width: 100%;
-        }
-        .custom-input {
-          border: none;
-          border-bottom: 1px solid var(--border, #d1d5db);
-          border-radius: 0;
-          padding-left: 0;
-          padding-right: 0;
-          background-color: transparent;
-          font-size: 1rem;
-          padding-top: 0.625rem;
-          padding-bottom: 0.625rem;
-          transition: border-color 0.3s ease;
-        }
-        .custom-input:focus {
-          outline: none;
-          box-shadow: none;
-          border-bottom-color: transparent;
-        }
-        /* Keyboard-only focus indicator matching the app-wide .focus-ring
-           pattern: mouse/touch focus keeps just the animated underline;
-           keyboard focus additionally draws the high-contrast ring
-           (--ring is the school primary when branded). */
-        .custom-input:focus-visible {
-          box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
-        }
-        /* Right padding so text never runs under a trailing inline action
-           (the password show/hide toggle). */
-        .custom-input-action-end {
-          padding-right: 2.5rem;
-        }
-        .input-check-icon {
-          transition: transform 0.3s ease, opacity 0.3s ease;
-          opacity: 0.4;
-        }
-        .peer:focus ~ .input-check-icon {
-          opacity: 1;
-        }
-      `}</style>
     </section>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/*  Forgot password modal                                               */
+/*  Forgot password modal                                              */
 /* ------------------------------------------------------------------ */
 
 function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
@@ -825,7 +677,7 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
       onClick={onClose}
     >
       <motion.div
@@ -837,24 +689,25 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
         role="dialog"
         aria-modal="true"
         aria-label="Reset your password"
-        className="w-full max-w-md bg-white rounded-3xl p-8 shadow-2xl"
+        className="w-full max-w-md bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xl"
       >
         {sent ? (
           <div className="text-center space-y-3">
-            <div className="mx-auto w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center">
-              <svg className="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <div className="mx-auto w-12 h-12 rounded-full school-brand-soft flex items-center justify-center">
+              <svg className="w-6 h-6 school-brand-text" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h3 className="font-display text-xl font-bold text-foreground">Contact your administrator</h3>
-            <p className="text-sm text-muted-foreground">
+            <h3 className="font-display text-xl font-bold text-slate-900">Contact your administrator</h3>
+            <p className="text-sm text-slate-600">
               {/* PIH-4c — no reset-email backend exists; the modal tells the
                   user the truth instead of promising a link that never comes. */}
-              Password resets are handled by your school administrator — please contact them to reset the password for <span className="font-semibold text-foreground">{email}</span>.
+              Password resets are handled by your school administrator — please contact them to reset the password for <span className="font-semibold text-slate-900">{email}</span>.
             </p>
             <button
               onClick={onClose}
-              className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:shadow-lg hover:shadow-emerald-500/30 transition-all focus-ring"
+              style={{ backgroundColor: 'var(--school-primary, #0f766e)' }}
+              className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold text-white transition-all hover:brightness-110 focus-ring"
             >
               Got it
             </button>
@@ -862,8 +715,8 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
         ) : (
           <div className="space-y-5">
             <div>
-              <h3 className="font-display text-xl font-bold text-foreground">Forgot your password?</h3>
-              <p className="text-sm text-muted-foreground mt-1">
+              <h3 className="font-display text-xl font-bold text-slate-900">Forgot your password?</h3>
+              <p className="text-sm text-slate-600 mt-1">
                 {/* PIH-4c — honest copy: no reset link can be emailed yet
                     (no email backend). The email identifies the account when
                     the user contacts their school administrator. */}
@@ -885,19 +738,20 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@school.edu"
                 aria-label="Registered email address"
-                className="w-full px-4 py-3 rounded-xl border border-border bg-card/60 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 outline-none transition-all"
+                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-[var(--school-primary)] focus:ring-1 focus:ring-[var(--school-primary)]"
               />
               <div className="flex gap-3">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex-1 px-5 py-2.5 rounded-full text-sm font-semibold text-foreground border border-border hover:bg-accent transition-colors focus-ring"
+                  className="flex-1 px-5 py-2.5 rounded-lg text-sm font-semibold text-slate-700 border border-slate-300 hover:bg-slate-50 transition-colors focus-ring"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-5 py-2.5 rounded-full text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:shadow-lg hover:shadow-emerald-500/30 transition-all focus-ring"
+                  style={{ backgroundColor: 'var(--school-primary, #0f766e)' }}
+                  className="flex-1 px-5 py-2.5 rounded-lg text-sm font-semibold text-white transition-all hover:brightness-110 focus-ring"
                 >
                   Continue
                 </button>

@@ -51,132 +51,113 @@ async function main() {
 
   // ── 1. Identity columns (only fill what is not already configured) ──
   // Final-acceptance rebrand: Sunrise → Hawkings High School Prithvipur.
+  // ARCHITECTURE RESET — NO INVENTED TAGLINES: a school that has not
+  // provided a tagline shows none (the name IS the identity). No slogan,
+  // no motto, no marketing line is ever seeded as default content.
   const identity = {
     shortName: school.shortName ?? 'Hawkings High',
-    tagline: school.tagline ?? 'Knowledge · Character · Service',
+    tagline: school.tagline ?? null,
     affiliation: school.affiliation ?? 'CBSE (Patna Region)',
     website: school.website ?? 'https://hawkingshigh.edu',
     principalName: school.principalName ?? 'Dr. (Smt.) Sunita Verma',
     established: school.established ?? '2004',
   }
 
-  // ── 2. Website CMS document (current public-site copy, verbatim) ────
+  // ── 2. Website CMS document — HONEST DEMO CONTENT (ARCHITECTURE RESET).
+  // Only factual, school-provided statements. No slogan hero, no marketing
+  // pillars, no invented claims. Sections the school did not provide are
+  // simply absent (the renderer omits empty sections — nothing is invented
+  // to fill space). The hero title is the school name.
   const websiteContent: Record<string, unknown> = {
     hero: {
-      badgePrefix: 'Admissions open for',
-      title: 'Rooted in Prithvipur,',
-      titleAccent: 'Rising with Knowledge',
+      badgePrefix: '',
+      title: 'Hawkings High School Prithvipur',
+      titleAccent: '',
       description:
-        'Hawkings High School Prithvipur has served the families of Ghazipur since 2004 — an English-medium, CBSE-pattern education from Nursery to Class 12, grounded in discipline, character and hard work.',
-      ctaPrimary: { label: 'Apply for Admission' },
-      ctaSecondary: { label: 'Visit the School' },
+        'English-medium, CBSE-pattern education from Nursery to Class 12, serving Prithvipur, Ghazipur since 2004.',
+      ctaPrimary: { label: 'Enquire about Admission' },
+      ctaSecondary: { label: 'Login Portal' },
     },
-    pillars: [
-      {
-        icon: 'target',
-        title: 'Strong Academics',
-        description: 'A CBSE-pattern curriculum with small classes, regular assessments and consistent board results.',
-      },
-      {
-        icon: 'heart',
-        title: 'Caring Faculty',
-        description: 'Sixteen dedicated teachers who know every child by name — and every parent by face.',
-      },
-      {
-        icon: 'shield',
-        title: 'Value-Based Education',
-        description: 'Discipline, honesty and respect woven into the school day — from morning assembly to the last bell.',
-      },
-      {
-        icon: 'building',
-        title: 'Affordable Quality',
-        description: 'Reasonable fees with sibling concessions — a good education within every family\'s reach.',
-      },
-    ],
     journey: {
-      title: 'Nursery to Class 12 — one school, one family',
-      subtitle: 'A program for each stage of growth, on one campus.',
+      title: 'Programme',
+      subtitle: 'Nursery to Class 12, on one campus.',
       stages: [
         {
           title: 'Pre-Primary',
           grades: 'Nursery – IKG',
           years: 'Ages 3–6',
-          description:
-            'Play-based foundations — rhymes, colours, numbers and confidence in a warm, caring first classroom.',
+          description: 'Play-based foundations — rhymes, colours, numbers.',
           icon: 'sprout',
         },
         {
           title: 'Primary',
           grades: 'Classes 1–5',
           years: 'Ages 6–11',
-          description:
-            'Reading, writing and numeracy built carefully by class teachers who stay with their class through the year.',
+          description: 'Reading, writing and numeracy with class teachers.',
           icon: 'compass',
         },
         {
           title: 'Middle',
           grades: 'Classes 6–8',
           years: 'Ages 11–14',
-          description:
-            'Subject specialists take over — Mathematics, Science, Sanskrit and Computer Education alongside the core.',
+          description: 'Mathematics, Science, Sanskrit and Computer Education.',
           icon: 'compass',
         },
         {
           title: 'Secondary & Senior',
           grades: 'Classes 9–12',
           years: 'Ages 14–18',
-          description:
-            'Board-focused rigour with a Science stream (PCM/PCB), regular tests, remedial support and career guidance.',
+          description: 'Science stream (PCM/PCB) with regular tests and remedial support.',
           icon: 'rocket',
         },
       ],
     },
     facilities: {
       title: 'Campus & Facilities',
-      subtitle: 'Everything a child of Prithvipur needs — nothing unnecessary.',
+      subtitle: '',
       items: [
         {
           icon: 'library',
           title: 'The Library',
-          description: 'Over 3,000 Hindi and English titles — from Premchand to NCERT reference.',
+          description: 'Hindi and English titles for all grades.',
         },
         {
           icon: 'flask',
           title: 'Science Laboratory',
-          description: 'A working lab for Physics, Chemistry and Biology practicals up to Class 12.',
+          description: 'Physics, Chemistry and Biology practicals up to Class 12.',
         },
         {
           icon: 'monitor',
           title: 'Computer Lab',
-          description: 'Computer Education periods for Classes 9–12 — typing to basics of coding.',
+          description: 'Computer Education periods for Classes 9–12.',
         },
         {
           icon: 'trophy',
           title: 'Playground',
-          description: 'A large school ground for games periods, sports day and the annual function.',
+          description: 'School ground for games periods, sports day and the annual function.',
         },
       ],
     },
     admissions: {
       title: 'Admissions',
-      subtitle: 'Joining our family',
-      heading: 'A seat for every child of Prithvipur',
+      subtitle: '',
+      heading: '',
       description:
-        'Registrations for the 2027-28 session open in January. Visit the school office with your child\'s birth certificate, Aadhaar and the previous Transfer Certificate — our staff will help with the rest.',
+        'Registrations for the 2027-28 session open in January. Visit the school office with your child\'s birth certificate, Aadhaar and the previous Transfer Certificate.',
       highlights: [
         'Registration at the school office — 10:00 AM to 2:00 PM',
-        'Friendly interaction with the child — no stressful entrance exam',
+        'Interaction with the child — no entrance exam',
         'Sibling concession on tuition; merit scholarships from Class 9',
       ],
       officeHours: 'School office: Monday to Saturday, 8:00 AM – 2:00 PM',
     },
     contact: {
-      title: 'Visit us',
-      subtitle: 'We would be glad to show you around.',
+      title: 'Contact',
+      subtitle: '',
     },
     footer: {
       about:
-        'Hawkings High School Prithvipur — Knowledge, Character, Service. Serving Prithvipur, Ghazipur since 2004.',
+        'Hawkings High School Prithvipur — serving Prithvipur, Ghazipur since 2004.',
       social: {
         facebook: 'https://facebook.com/hawkingshighprithvipur',
         instagram: 'https://instagram.com/hawkingshigh',
@@ -187,7 +168,7 @@ async function main() {
     seo: {
       title: 'Hawkings High School Prithvipur — Ghazipur, Uttar Pradesh',
       description:
-        'CBSE-pattern English-medium school in Prithvipur, Ghazipur (UP) — Nursery to Class 12. Admissions open. Knowledge · Character · Service.',
+        'CBSE-pattern English-medium school in Prithvipur, Ghazipur (UP) — Nursery to Class 12.',
     },
   }
 

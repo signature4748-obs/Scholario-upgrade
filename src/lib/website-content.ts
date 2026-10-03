@@ -103,63 +103,53 @@ export const WEBSITE_ICON_KEYS = [
 ] as const
 
 /** Neutral, claim-free fallbacks — rendered when a school has configured
- *  nothing. NO fabricated facts (no ratios, no founding years, no facility
- *  claims): the renderer hides empty optional copy instead of inventing. */
+ *  nothing. ARCHITECTURE RESET: the neutral document is EMPTY by design —
+ *  no invented taglines, no marketing pillars, no journey stages, no
+ *  facility claims, no admissions promises. The renderer hides any section
+ *  whose content is empty; the hero falls back to the SCHOOL NAME (filled
+ *  server-side in /api/schools/public). The CMS is the source of truth —
+ *  the product never invents school content. */
 export const NEUTRAL_WEBSITE_CONTENT: WebsiteContent = {
   hero: {
-    badgePrefix: 'Admissions open for',
-    title: 'Welcome to',
-    titleAccent: 'Our School',
-    description: 'A learning community focused on curiosity, character, and growth.',
-    ctaPrimary: { label: 'Apply for Admission' },
-    ctaSecondary: { label: 'Explore Campus Life' },
+    badgePrefix: '',
+    title: '',
+    titleAccent: '',
+    description: '',
+    ctaPrimary: { label: 'Enquire about Admission' },
+    ctaSecondary: { label: 'Login Portal' },
     imageId: null,
   },
   about: {
-    title: 'Why families choose us',
-    subtitle: 'What our school stands for.',
+    title: '',
+    subtitle: '',
   },
-  pillars: [
-    { icon: 'target', title: 'Academic Focus', description: 'A structured curriculum that builds strong foundations.' },
-    { icon: 'heart', title: 'Holistic Growth', description: 'Sports, arts, and life-skills beyond the classroom.' },
-    { icon: 'building', title: 'Learning Spaces', description: 'Classrooms and labs designed for engaged learning.' },
-    { icon: 'shield', title: 'Safe & Inclusive', description: 'A secure campus where every child is valued.' },
-  ],
+  pillars: [],
   journey: {
-    title: 'A journey for every stage',
-    subtitle: 'Programs for each phase of growth.',
-    stages: [
-      { icon: 'sprout', title: 'Primary', grades: 'Grade 1–5', years: 'Ages 6–11', description: 'Foundations through discovery and play.' },
-      { icon: 'compass', title: 'Middle', grades: 'Grade 6–8', years: 'Ages 11–14', description: 'Concept depth and collaborative projects.' },
-      { icon: 'rocket', title: 'Senior', grades: 'Grade 9–12', years: 'Ages 14–18', description: 'Board-focused rigor and career mentoring.' },
-    ],
+    title: '',
+    subtitle: '',
+    stages: [],
   },
   facilities: {
-    title: 'Campus & Facilities',
-    subtitle: 'Spaces designed for curiosity and focus.',
-    items: [
-      { icon: 'library', title: 'Library', description: 'A reading and research space for all grades.' },
-      { icon: 'flask', title: 'Science Labs', description: 'Hands-on experimentation for curious minds.' },
-      { icon: 'trophy', title: 'Sports', description: 'Facilities that keep every season active.' },
-      { icon: 'monitor', title: 'Classrooms', description: 'Engaging, well-equipped learning rooms.' },
-    ],
+    title: '',
+    subtitle: '',
+    items: [],
   },
   principalMessage: {
     enabled: false,
-    title: "From the Principal's Desk",
+    title: '',
     message: '',
   },
   admissions: {
     title: 'Admissions',
-    subtitle: 'Joining our community',
-    heading: 'We look forward to meeting your family',
-    description: 'Submit an inquiry below and our admissions office will reach out with next steps.',
+    subtitle: '',
+    heading: '',
+    description: 'Submit an enquiry and the school office will follow up.',
     highlights: [],
     officeHours: '',
   },
   contact: {
-    title: 'Visit us',
-    subtitle: "We'd love to show you around.",
+    title: 'Contact',
+    subtitle: '',
   },
   footer: {
     about: '',
