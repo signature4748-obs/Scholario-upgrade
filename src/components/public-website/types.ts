@@ -4,6 +4,11 @@ export interface PublicSchoolData {
   id: string
   name: string
   slug: string
+  /** How the server resolved this tenant: 'domain' | 'slug' | 'single' | 'demo'.
+   *  ARCHITECTURE RESET — the renderer uses this to decide school-website vs
+   *  SCHOLARIO directory landing (a 'demo' fallback with no explicit slug is
+   *  a deployment-domain visit, not a school visit). */
+  resolvedVia?: string
   code: string
   address?: string
   city?: string

@@ -31,9 +31,11 @@ const StudentPanel = dynamic(() => import('@/components/student/student-panel').
 })
 
 function LoadingSpinner() {
+  // ARCHITECTURE RESET — neutral boot skeleton: no mesh background, no
+  // emerald gradient glow. A quiet white canvas + slate pulse.
   return (
-    <div className="min-h-screen mesh-bg flex items-center justify-center">
-      <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 animate-pulse shadow-lg shadow-emerald-500/30" />
+    <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="h-12 w-12 rounded-2xl bg-slate-200 animate-pulse" />
     </div>
   )
 }
@@ -188,8 +190,8 @@ export default function Home() {
   // Render a stable skeleton until mounted and hydrated.
   if (!mounted || !hydrated) {
     return (
-      <div className="min-h-screen mesh-bg flex items-center justify-center">
-        <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 animate-pulse shadow-lg shadow-emerald-500/30" />
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="h-12 w-12 rounded-2xl bg-slate-200 animate-pulse" />
       </div>
     )
   }
@@ -204,8 +206,8 @@ export default function Home() {
   // through, and a dead one is torn down by the existing 401 guard).
   if (!isAuthenticated && sessionProbe !== 'done') {
     return (
-      <div className="min-h-screen mesh-bg flex items-center justify-center">
-        <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 animate-pulse shadow-lg shadow-emerald-500/30" />
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="h-12 w-12 rounded-2xl bg-slate-200 animate-pulse" />
       </div>
     )
   }

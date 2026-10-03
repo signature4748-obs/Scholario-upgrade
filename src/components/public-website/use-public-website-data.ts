@@ -9,9 +9,18 @@ import type { PublicSchoolData } from './types'
  * No slug is sent: the server resolves the school (Host domain → ?slug →
  * single-school → demo fallback) for every anonymous visitor, so this
  * client renders whichever school actually owns the domain being browsed.
+ *
+ * ARCHITECTURE RESET — `via` + `requestedSlug` are exposed so the renderer
+ * can decide the SURFACE: a school website renders for a real tenant
+ * resolution (domain / explicit slug / single-school), while a bare
+ * deployment-domain visit that only hit the DEMO fallback (or resolved
+ * nothing at all) renders the SCHOLARIO directory landing instead — the
+ * platform never silently shows a school website as "the default school".
  */
 export function usePublicSchoolData() {
   const [schoolData, setSchoolData] = useState<PublicSchoolData | null>(null)
+  const [via, setVia] = useState<string | null>(null)
+  const [requestedSlug, setRequestedSlug] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -23,6 +32,7 @@ export function usePublicSchoolData() {
         // forwarded — otherwise School B's URL would render School A's
         // content (a UI-layer cross-tenant content bug).
         const slug = new URLSearchParams(window.location.search).get('slug')
+        setRequestedSlug(slug)
         const url = slug
           ? `/api/schools/public?slug=${encodeURIComponent(slug)}`
           : '/api/schools/public'
@@ -32,6 +42,7 @@ export function usePublicSchoolData() {
           const json = await res.json().catch(() => ({}))
           if (json.success && json.data) {
             setSchoolData(json.data)
+            setVia(String(json.data.resolvedVia ?? 'domain'))
           }
         }
       } catch (e) {
@@ -43,7 +54,7 @@ export function usePublicSchoolData() {
     fetchPublicData()
   }, [])
 
-  return { schoolData, loading }
+  return { schoolData, via, requestedSlug, loading }
 }
 
 export interface AdmissionFormState {
