@@ -48,6 +48,11 @@ export default function Home() {
   // (PHASE 6: 'platform' moved to the real /platform route namespace)
   const [viewState, setViewState] = useState<'website' | 'portal'>('website')
 
+  // PERSISTENT LOGIN — server-truth boot probe. 'pending' until the
+  // authoritative /api/auth/me answer arrives (probed only when the
+  // persisted client state says logged-OUT).
+  const [sessionProbe, setSessionProbe] = useState<'pending' | 'done'>('pending')
+
   useEffect(() => {
     setMounted(true)
     useAuth.persist.rehydrate()
@@ -58,6 +63,51 @@ export default function Home() {
     // replaces the dead skeleton with the branded recovery screen.
     document.documentElement.setAttribute('data-app-hydrated', '1')
   }, [])
+
+  // PERSISTENT LOGIN (server-session restore). The localStorage-persisted
+  // auth store is a CACHE, never the authority: browsers (notably Safari/
+  // iOS ITP) can evict script-writable storage while the HttpOnly session
+  // cookie is still server-side valid. On boot, when the persisted state
+  // says logged-OUT, ask the server ONCE before rendering any logged-out
+  // surface — a still-valid cookie session restores the dashboard without
+  // a re-login, an honest 401 falls through to the public views. The
+  // /api/auth/me round trip rides the same transports as every other API
+  // call (first-party cookie; dev-iframe Bearer via the interceptor), so
+  // embedded previews behave identically. No password/token material is
+  // ever stored client-side by this path (production never returns one).
+  useEffect(() => {
+    if (!mounted || !hydrated) return
+    if (sessionProbe !== 'pending') return
+    if (isAuthenticated) {
+      // Fast path: persisted session present — the AppShell's /api/auth/me
+      // fetch (and the 401 dead-session guard) validates it authoritatively.
+      setSessionProbe('done')
+      return
+    }
+    let alive = true
+    void (async () => {
+      await useCurrentUser.getState().refresh()
+      if (!alive) return
+      const me = useCurrentUser.getState().me
+      const serverRole = me?.role?.toLowerCase()
+      if (
+        me &&
+        (serverRole === 'principal' || serverRole === 'teacher' || serverRole === 'student')
+      ) {
+        // Server-authenticated identity wins over any client guess — the
+        // same override contract the login flow uses (id/name/email).
+        useAuth.getState().login(serverRole, {
+          id: me.id,
+          email: me.email,
+          name: me.name,
+        })
+      }
+      setSessionProbe('done')
+    })()
+    return () => {
+      alive = false
+    }
+  }, [mounted, hydrated, isAuthenticated, sessionProbe])
 
   // Canonical roster sync (Seed → DB → API → UI): replace the mock
   // STU-xxx store universe with the real database roster for the roles
@@ -137,6 +187,22 @@ export default function Home() {
 
   // Render a stable skeleton until mounted and hydrated.
   if (!mounted || !hydrated) {
+    return (
+      <div className="min-h-screen mesh-bg flex items-center justify-center">
+        <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 animate-pulse shadow-lg shadow-emerald-500/30" />
+      </div>
+    )
+  }
+
+  // PERSISTENT LOGIN — never render a logged-OUT surface before the
+  // authoritative server answer. The classic Safari/iOS failure mode is
+  // exactly this race: page loads → session initially appears null →
+  // frontend redirects to login → session hydration finishes too late →
+  // the user is incorrectly logged out. Keep the skeleton until the
+  // /api/auth/me probe completes (it only runs when the persisted client
+  // state is logged-out; a healthy persisted session skips straight
+  // through, and a dead one is torn down by the existing 401 guard).
+  if (!isAuthenticated && sessionProbe !== 'done') {
     return (
       <div className="min-h-screen mesh-bg flex items-center justify-center">
         <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 animate-pulse shadow-lg shadow-emerald-500/30" />
