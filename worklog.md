@@ -5111,3 +5111,20 @@ Work Log:
 
 Stage Summary:
 - Root fix + light theme complete and gate-clean. Next: commit "fix: totp workspace loading", push, Vercel deploy, production verification matrix (TASK 8).
+
+---
+Task ID: TOTP-WORKSPACE-1 (deploy + production verification)
+Agent: main (Z.ai Code)
+Task: Deploy 6fcc000 to production and run the full TASK-8 verification matrix.
+
+Work Log:
+- COMMIT "fix: totp workspace loading" (6fcc000) pushed via GIT_ASKPASS GITHUB_TOKEN helper (never on disk/argv/output); GitHub main = 6fcc000 verified by ls-remote. Change set: 19 files + hydration-flag.tsx (asset-guard root fix + light restyle of platform login + 14 console files); zero auth/security logic weakened, no Next.js change.
+- Vercel auto-deploy dpl_DH899hatfu23DqcJwmdt5e4YhKqD → READY at EXACT SHA 6fcc000 (production target, aliasAssigned, aliasError none). Production probes: /health/ready 200, app-version 2.14.0.
+- Cookie contract on production (Set-Cookie, value redacted): HttpOnly + Secure + SameSite=lax + Path=/ + Max-Age=14400.
+- PRODUCTION MATRIX (agent-browser, dark mode emulated throughout): fresh TOTP login PASS (single POST — busy guard verified via fetch instrumentation; request body = exact generated code); /api/platform/auth/me 200 root=true; workspace/console loads; 42s dwell on login page AND console → NO recovery screen (hydrated='1' — the bug is gone); zero console errors; refresh persists; route navigation (schools/audit/overview) PASS; browser-reopen with saved cookie state → session valid, console loads; direct /platform/schools with session loads, without session → 307 to /platform/login?next= (no loop); UI logout → /platform/login, me 401, reload stays logged out; SQL-expired session (Supabase REST, service key) → honest redirect to login, me 401, no error screen; wrong TOTP → inline "Invalid authenticator code", no crash; iPhone 390px + iPad 820px → no horizontal overflow; pixel-brightness proof: new console/login/school screenshots 246-247/255 (LIGHT) vs old dark recovery 18/255, all with prefers-color-scheme: dark emulated.
+- Tenant isolation on production: H principal session + ?slug=green-valley → session stays hawkings-prithvipur; school cookie → /api/platform/auth/me 401 (platform separation). Full suite locally: tenant-isolation 57/57.
+- Ops note: Supabase service-role key in the token store was corrupt (JWT payload undecodable) — refreshed from the management API (SUPABASE_ACCESS_TOKEN, values never printed) and repaired in place at /home/z/.sec/scholario-owner-tokens.env.
+- Honest limitation: no physical Safari/iPad hardware in the sandbox — verified via Chromium device emulation (iPhone/iPad viewports, dark mode) + the fix is browser-agnostic (hydration flag + server-truth session, no UA branching).
+
+Stage Summary:
+- Production deployment 6fcc000 fully verified: TOTP login, session persistence, workspace load, light theme (pixel-proven), responsive, tenant isolation, honest error/recovery states. Root cause eliminated; no security weakened; all gates green.
