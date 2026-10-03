@@ -100,15 +100,15 @@ const num = new Intl.NumberFormat('en-IN')
 
 const ANNOUNCEMENT_LEVELS: Record<string, { badge: string; icon: React.ReactNode }> = {
   INFO: {
-    badge: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
     icon: <Info className="h-3 w-3" aria-hidden="true" />,
   },
   WARNING: {
-    badge: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+    badge: 'border-amber-200 bg-amber-50 text-amber-700',
     icon: <AlertTriangle className="h-3 w-3" aria-hidden="true" />,
   },
   CRITICAL: {
-    badge: 'border-red-500/30 bg-red-500/10 text-red-400',
+    badge: 'border-red-200 bg-red-50 text-red-600',
     icon: <ShieldAlert className="h-3 w-3" aria-hidden="true" />,
   },
 }
@@ -138,26 +138,26 @@ function StatCard({
     <motion.div
       {...fadeUp}
       transition={{ duration: 0.35, delay }}
-      className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5 min-w-0"
+      className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5 min-w-0 shadow-sm"
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</p>
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-800/80 text-zinc-400" aria-hidden="true">
+        <p className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-500" aria-hidden="true">
           {icon}
         </span>
       </div>
-      <p className="mt-2 font-display text-2xl sm:text-3xl font-bold text-zinc-50 tabular-nums">{value}</p>
-      {children && <div className="mt-2 text-xs text-zinc-400">{children}</div>}
+      <p className="mt-2 font-display text-2xl sm:text-3xl font-bold text-slate-900 tabular-nums">{value}</p>
+      {children && <div className="mt-2 text-xs text-slate-600">{children}</div>}
     </motion.div>
   )
 }
 
 function StatSkeleton() {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5">
-      <Skeleton className="h-3 w-24 bg-zinc-800" />
-      <Skeleton className="mt-3 h-8 w-16 bg-zinc-800" />
-      <Skeleton className="mt-2 h-3 w-28 bg-zinc-800" />
+    <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
+      <Skeleton className="h-3 w-24 bg-slate-200" />
+      <Skeleton className="mt-3 h-8 w-16 bg-slate-200" />
+      <Skeleton className="mt-2 h-3 w-28 bg-slate-200" />
     </div>
   )
 }
@@ -201,18 +201,18 @@ export function OverviewModule() {
         <div>
           <h1
             id="overview-heading"
-            className="font-display text-xl sm:text-2xl font-bold tracking-tight text-zinc-50"
+            className="font-display text-xl sm:text-2xl font-bold tracking-tight text-slate-900"
           >
             Platform overview
           </h1>
-          <p className="mt-1 text-sm text-zinc-500">
+          <p className="mt-1 text-sm text-slate-500">
             Infrastructure at a glance{me ? ` · signed in as ${me.admin.name}` : ''} · every action is audited
           </p>
         </div>
         <Button
           asChild
           size="sm"
-          className="h-10 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring"
+          className="h-10 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
         >
           <Link href="/platform/schools">
             View schools
@@ -225,9 +225,9 @@ export function OverviewModule() {
       {error && (
         <div
           role="alert"
-          className="flex flex-col gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between"
         >
-          <p className="flex items-start gap-2.5 text-sm text-red-400">
+          <p className="flex items-start gap-2.5 text-sm text-red-600">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             {error}
           </p>
@@ -235,7 +235,7 @@ export function OverviewModule() {
             variant="outline"
             size="sm"
             onClick={() => void load()}
-            className="h-9 border-zinc-700 bg-transparent text-zinc-200 hover:bg-zinc-800 focus-ring"
+            className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
             Retry
@@ -261,10 +261,10 @@ export function OverviewModule() {
               delay={0}
             >
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span className="text-emerald-400 tabular-nums">{active} active</span>
-                <span className="text-red-400 tabular-nums">{suspended} suspended</span>
-                <span className="text-amber-400 tabular-nums">{pending} pending</span>
-                {trial > 0 && <span className="text-zinc-500 tabular-nums">{trial} trial</span>}
+                <span className="text-emerald-700 tabular-nums">{active} active</span>
+                <span className="text-red-600 tabular-nums">{suspended} suspended</span>
+                <span className="text-amber-600 tabular-nums">{pending} pending</span>
+                {trial > 0 && <span className="text-slate-500 tabular-nums">{trial} trial</span>}
               </span>
             </StatCard>
             <StatCard
@@ -273,7 +273,7 @@ export function OverviewModule() {
               icon={<MonitorSmartphone className="h-4 w-4" />}
               delay={0.05}
             >
-              <span className="text-zinc-500">Admin sessions live right now</span>
+              <span className="text-slate-500">Admin sessions live right now</span>
             </StatCard>
             <StatCard
               label="Active support sessions"
@@ -282,11 +282,11 @@ export function OverviewModule() {
               delay={0.1}
             >
               {data && data.activeSupportSessions.length > 0 ? (
-                <span className="block truncate text-amber-300">
+                <span className="block truncate text-amber-700">
                   {data.activeSupportSessions.map((s) => s.school).join(', ')}
                 </span>
               ) : (
-                <span className="block truncate text-zinc-500">None open — nothing is being watched</span>
+                <span className="block truncate text-slate-500">None open — nothing is being watched</span>
               )}
             </StatCard>
             <StatCard
@@ -303,36 +303,36 @@ export function OverviewModule() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Recent platform audit */}
-        <motion.div {...fadeUp} transition={{ duration: 0.35, delay: 0.1 }} className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/60">
-          <div className="flex items-center gap-2.5 border-b border-zinc-800/80 px-4 py-3.5 sm:px-5">
-            <ScrollText className="h-4 w-4 text-emerald-400" aria-hidden="true" />
-            <h2 className="font-display text-sm font-bold text-zinc-100">Recent platform audit</h2>
-            <span className="ml-auto text-[10px] font-semibold uppercase tracking-wider text-zinc-600">Read-only</span>
+        <motion.div {...fadeUp} transition={{ duration: 0.35, delay: 0.1 }} className="min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-2.5 border-b border-slate-200 px-4 py-3.5 sm:px-5">
+            <ScrollText className="h-4 w-4 text-teal-600" aria-hidden="true" />
+            <h2 className="font-display text-sm font-bold text-slate-900">Recent platform audit</h2>
+            <span className="ml-auto text-[10px] font-semibold uppercase tracking-wider text-slate-400">Read-only</span>
           </div>
           {loading ? (
             <div className="space-y-3 p-4 sm:p-5">
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-3">
-                  <Skeleton className="h-6 w-32 bg-zinc-800" />
-                  <Skeleton className="h-4 flex-1 bg-zinc-800" />
-                  <Skeleton className="h-4 w-14 bg-zinc-800" />
+                  <Skeleton className="h-6 w-32 bg-slate-200" />
+                  <Skeleton className="h-4 flex-1 bg-slate-200" />
+                  <Skeleton className="h-4 w-14 bg-slate-200" />
                 </div>
               ))}
             </div>
           ) : data && data.recentAudit.length > 0 ? (
-            <ul className="divide-y divide-zinc-800/60" aria-label="Recent platform audit events">
+            <ul className="divide-y divide-slate-200" aria-label="Recent platform audit events">
               {data.recentAudit.map((event) => (
                 <li key={event.id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
                   <Badge
                     variant="outline"
-                    className="border-zinc-700 bg-zinc-800/60 text-[11px] text-zinc-300 normal-case"
+                    className="border-slate-200 bg-slate-100 text-[11px] text-slate-700 normal-case"
                   >
                     {prettyAction(event.action)}
                   </Badge>
-                  <p className="min-w-0 flex-1 truncate text-xs text-zinc-400" title={event.reason ?? undefined}>
-                    {event.reason ?? <span className="text-zinc-600">No reason recorded</span>}
+                  <p className="min-w-0 flex-1 truncate text-xs text-slate-600" title={event.reason ?? undefined}>
+                    {event.reason ?? <span className="text-slate-400">No reason recorded</span>}
                   </p>
-                  <span className="shrink-0 text-xs tabular-nums text-zinc-500" title={new Date(event.at).toLocaleString()}>
+                  <span className="shrink-0 text-xs tabular-nums text-slate-500" title={new Date(event.at).toLocaleString()}>
                     {timeAgo(event.at)}
                   </span>
                 </li>
@@ -340,11 +340,11 @@ export function OverviewModule() {
             </ul>
           ) : (
             <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
-              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800/70 text-zinc-500 ring-1 ring-zinc-700/60">
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500 ring-1 ring-slate-200">
                 <Activity className="h-5 w-5" aria-hidden="true" />
               </div>
-              <p className="mt-3 text-sm font-semibold text-zinc-200">No audit events yet</p>
-              <p className="mt-1 max-w-xs text-xs leading-snug text-zinc-500">
+              <p className="mt-3 text-sm font-semibold text-slate-900">No audit events yet</p>
+              <p className="mt-1 max-w-xs text-xs leading-snug text-slate-500">
                 Control-plane actions (provisioning, suspensions, plan changes) will appear here.
               </p>
             </div>
@@ -352,22 +352,22 @@ export function OverviewModule() {
         </motion.div>
 
         {/* Live announcements */}
-        <motion.div {...fadeUp} transition={{ duration: 0.35, delay: 0.15 }} className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/60">
-          <div className="flex items-center gap-2.5 border-b border-zinc-800/80 px-4 py-3.5 sm:px-5">
-            <Megaphone className="h-4 w-4 text-emerald-400" aria-hidden="true" />
-            <h2 className="font-display text-sm font-bold text-zinc-100">Live announcements</h2>
+        <motion.div {...fadeUp} transition={{ duration: 0.35, delay: 0.15 }} className="min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-2.5 border-b border-slate-200 px-4 py-3.5 sm:px-5">
+            <Megaphone className="h-4 w-4 text-teal-600" aria-hidden="true" />
+            <h2 className="font-display text-sm font-bold text-slate-900">Live announcements</h2>
           </div>
           {loading ? (
             <div className="space-y-3 p-4 sm:p-5">
               {Array.from({ length: 3 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-3">
-                  <Skeleton className="h-6 w-20 bg-zinc-800" />
-                  <Skeleton className="h-4 flex-1 bg-zinc-800" />
+                  <Skeleton className="h-6 w-20 bg-slate-200" />
+                  <Skeleton className="h-4 flex-1 bg-slate-200" />
                 </div>
               ))}
             </div>
           ) : data && data.announcements.length > 0 ? (
-            <ul className="divide-y divide-zinc-800/60" aria-label="Live platform announcements">
+            <ul className="divide-y divide-slate-200" aria-label="Live platform announcements">
               {data.announcements.map((a) => {
                 const level = ANNOUNCEMENT_LEVELS[a.level] ?? ANNOUNCEMENT_LEVELS['INFO']
                 return (
@@ -376,8 +376,8 @@ export function OverviewModule() {
                       {level.icon}
                       {a.level}
                     </Badge>
-                    <p className="min-w-0 flex-1 truncate text-sm text-zinc-200">{a.title}</p>
-                    <span className="shrink-0 text-xs tabular-nums text-zinc-500" title={new Date(a.createdAt).toLocaleString()}>
+                    <p className="min-w-0 flex-1 truncate text-sm text-slate-700">{a.title}</p>
+                    <span className="shrink-0 text-xs tabular-nums text-slate-500" title={new Date(a.createdAt).toLocaleString()}>
                       {timeAgo(a.createdAt)}
                     </span>
                   </li>
@@ -386,11 +386,11 @@ export function OverviewModule() {
             </ul>
           ) : (
             <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
-              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800/70 text-zinc-500 ring-1 ring-zinc-700/60">
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500 ring-1 ring-slate-200">
                 <Megaphone className="h-5 w-5" aria-hidden="true" />
               </div>
-              <p className="mt-3 text-sm font-semibold text-zinc-200">No live announcements</p>
-              <p className="mt-1 max-w-xs text-xs leading-snug text-zinc-500">
+              <p className="mt-3 text-sm font-semibold text-slate-900">No live announcements</p>
+              <p className="mt-1 max-w-xs text-xs leading-snug text-slate-500">
                 Publish platform-wide notices from the Announcements module.
               </p>
             </div>
@@ -400,19 +400,19 @@ export function OverviewModule() {
 
       {/* Active support sessions detail (read-only) */}
       {!loading && data && data.activeSupportSessions.length > 0 && (
-        <motion.div {...fadeUp} className="min-w-0 rounded-xl border border-amber-500/30 bg-amber-500/[0.06]">
-          <div className="flex items-center gap-2.5 border-b border-amber-500/20 px-4 py-3.5 sm:px-5">
-            <LifeBuoy className="h-4 w-4 text-amber-400" aria-hidden="true" />
-            <h2 className="font-display text-sm font-bold text-amber-200">Support sessions in progress</h2>
+        <motion.div {...fadeUp} className="min-w-0 rounded-xl border border-amber-200 bg-amber-50">
+          <div className="flex items-center gap-2.5 border-b border-amber-200 px-4 py-3.5 sm:px-5">
+            <LifeBuoy className="h-4 w-4 text-amber-600" aria-hidden="true" />
+            <h2 className="font-display text-sm font-bold text-amber-700">Support sessions in progress</h2>
           </div>
-          <ul className="divide-y divide-amber-500/10" aria-label="Active support sessions">
+          <ul className="divide-y divide-amber-200" aria-label="Active support sessions">
             {data.activeSupportSessions.map((s) => (
               <li key={s.id} className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:gap-3 sm:px-5">
-                <p className="text-sm font-semibold text-zinc-100">{s.school}</p>
-                <p className="min-w-0 flex-1 truncate text-xs text-zinc-400" title={s.reason}>
+                <p className="text-sm font-semibold text-slate-900">{s.school}</p>
+                <p className="min-w-0 flex-1 truncate text-xs text-slate-600" title={s.reason}>
                   opened by {s.admin} — {s.reason}
                 </p>
-                <span className="flex items-center gap-1.5 text-xs tabular-nums text-amber-300">
+                <span className="flex items-center gap-1.5 text-xs tabular-nums text-amber-700">
                   <Clock className="h-3.5 w-3.5" aria-hidden="true" />
                   ends {timeUntil(s.expiresAt)}
                 </span>

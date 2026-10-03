@@ -3,16 +3,11 @@
  * Asset Guard system (root-cause fix for the raw/unstyled page flash).
  *
  * WHY THIS EXISTS (production asset-loading problem):
- *   The sandbox dev server restarts (watchdog respawns, OOM guard,
- *   deploys). During a restart window the browser's critical-CSS
- *   request (`/_next/static/css/app/layout.css?v=<timestamp>` — a
- *   cache-busted URL that MUST hit the server) can fail, while the
- *   stable-named dev JS chunks still load (disk cache) and React
- *   boots anyway. React then renders the full public website with
- *   ZERO stylesheets → the browser shows the raw HTML fallback
- *   (Times New Roman, blue links, "About Academics Facilities …").
- *   The same window can also kill the JS chunks themselves → the
- *   app stays an empty skeleton forever.
+ *   A critical-CSS request can fail while stable-named JS chunks
+ *   still load (server restart window, transient CDN miss) and React
+ *   boots anyway → the browser shows raw unstyled HTML. The same
+ *   window can kill the JS chunks themselves → the app stays an
+ *   empty skeleton forever.
  *
  * WHAT THIS DOES (honest recovery — never hides a real failure):
  *   1. Probe: a `<div class="scholario-asset-probe">` is appended to
@@ -20,19 +15,22 @@
  *      window load event the probe is checked — visible probe means
  *      the critical stylesheet is NOT applied.
  *   2. Retry: failed <link rel=stylesheet> elements are re-requested
- *      (cache-busted, up to 3 attempts with backoff). The dev server
- *      is usually back within seconds, so the retry normally lands
- *      and the app appears FULLY STYLED — the user never sees raw
- *      HTML. While retrying, body paint is held (`visibility:hidden`)
- *      so the unstyled flash is not shown mid-recovery.
+ *      (cache-busted, up to 3 attempts with backoff). While
+ *      retrying, body paint is held (`visibility:hidden`) so the
+ *      unstyled flash is not shown mid-recovery.
  *   3. Recovery screen: if the stylesheet cannot be loaded after all
- *      retries — or if the JS never boots (no hydration flag within
- *      30s of load while CSS is fine) — a branded, self-contained
- *      (inline-styled) recovery screen replaces the page:
- *      "Scholario couldn't load this workspace." + Retry.
- *      It is NOT a spinner and NOT a mask: it appears only when the
- *      application genuinely cannot load, and it self-dismisses the
- *      moment assets recover (background poll).
+ *      retries — or if JS never boots (no hydration flag within 30s
+ *      of load while CSS is fine; the flag is set by the root
+ *      layout's <HydrationFlag/> on EVERY route) — a branded,
+ *      self-contained (inline-styled) LIGHT recovery screen replaces
+ *      the page. It self-dismisses the moment assets recover.
+ *
+ *   THEME POLICY: the recovery screen is ALWAYS LIGHT. It must never
+ *   follow prefers-color-scheme — Scholario's production design
+ *   system is light (white background, white cards, subtle borders,
+ *   green brand accent, dark readable typography), and a failure
+ *   surface flipping black because the OS is in dark mode reads as
+ *   a second, scarier bug on top of the first.
  *
  *   Normal successful loads are 100% unchanged — the watchdog only
  *   acts when the probe/flags prove a failure.
@@ -52,11 +50,6 @@ export const ASSET_WATCHDOG_SCRIPT = String.raw`
   var STATE = 'boot'; // boot -> ok | css-retry | recovery
   var recoveryShown = false;
   var probeEl = null;
-
-  function dark() {
-    try { return window.matchMedia('(prefers-color-scheme: dark)').matches; }
-    catch (e) { return false; }
-  }
 
   /* ---------- CSS probe ---------- */
 
@@ -135,15 +128,29 @@ export const ASSET_WATCHDOG_SCRIPT = String.raw`
     document.documentElement.classList.remove('scholario-css-retry');
   }
 
-  /* ---------- branded recovery screen (inline-styled, asset-free) ---------- */
+  /* ---------- branded recovery screen (inline-styled, LIGHT, asset-free) ---------- */
+
+  function loginHref() {
+    try {
+      return location.pathname.indexOf('/platform') === 0
+        ? '/platform/login'
+        : '/';
+    } catch (e) { return '/'; }
+  }
 
   function buildRecovery(reason) {
-    var isDark = dark();
-    var bg = isDark ? '#06140f' : '#f8fbf9';
-    var fg = isDark ? '#e8f5ee' : '#0c1f17';
-    var muted = isDark ? '#8fb8a5' : '#5b7a6b';
-    var accent = '#0d9488'; // teal-600 — brand
+    // LIGHT DESIGN SYSTEM (always — never follows prefers-color-scheme):
+    // near-white page, white card, subtle border, teal-600 brand accent,
+    // dark readable typography. No glows, no gradients, no glassmorphism.
+    var pageBg = '#f8fafc';
+    var cardBg = '#ffffff';
+    var border = '#e2e8f0';
+    var fg = '#0f172a';
+    var muted = '#64748b';
+    var accent = '#0d9488';
+    var accentHover = '#0f766e';
     var accentFg = '#ffffff';
+    var borderSubtle = 'rgba(15,23,42,0.08)';
 
     var wrap = document.createElement('div');
     wrap.id = '__scholario_asset_recovery';
@@ -153,55 +160,81 @@ export const ASSET_WATCHDOG_SCRIPT = String.raw`
     wrap.style.cssText =
       'position:fixed;inset:0;z-index:2147483647;visibility:visible;' +
       'display:flex;align-items:center;justify-content:center;' +
-      'background:' + bg + ';color:' + fg + ';' +
+      'background:' + pageBg + ';color:' + fg + ';' +
       'font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;' +
       'padding:24px;text-align:center;';
 
     var card = document.createElement('div');
-    card.style.cssText = 'max-width:440px;';
+    card.style.cssText =
+      'max-width:440px;width:100%;background:' + cardBg + ';' +
+      'border:1px solid ' + border + ';border-radius:16px;' +
+      'box-shadow:0 1px 2px ' + borderSubtle + ',0 8px 24px ' + borderSubtle + ';' +
+      'padding:32px 28px;';
 
     var mark = document.createElement('div');
     mark.style.cssText =
       'display:inline-flex;align-items:center;justify-content:center;' +
-      'width:56px;height:56px;border-radius:16px;margin-bottom:20px;' +
-      'background:' + accent + ';color:' + accentFg + ';font-weight:800;font-size:26px;';
+      'width:52px;height:52px;border-radius:14px;margin-bottom:18px;' +
+      'background:' + accent + ';color:' + accentFg + ';font-weight:800;font-size:24px;';
     mark.setAttribute('aria-hidden', 'true');
     mark.textContent = 'S';
 
     var title = document.createElement('h1');
-    title.style.cssText = 'font-size:20px;font-weight:700;margin:0 0 10px;';
-    title.textContent = 'Scholario couldn\u2019t load this workspace.';
+    title.style.cssText = 'font-size:19px;font-weight:700;margin:0 0 8px;color:' + fg + ';';
+    title.textContent = 'Something went wrong';
 
     var body = document.createElement('p');
-    body.style.cssText = 'font-size:14px;line-height:1.6;margin:0 0 6px;color:' + muted + ';';
-    body.textContent = reason === 'js'
-      ? 'The application started but its scripts didn\u2019t finish loading \u2014 the server may be restarting. Nothing is lost.'
-      : 'A required stylesheet failed to load \u2014 the server may be restarting. Nothing is lost.';
+    body.style.cssText = 'font-size:14px;line-height:1.6;margin:0 0 4px;color:' + muted + ';';
+    body.textContent = 'Your session is safe. We couldn\u2019t load this workspace.';
+
+    var detail = document.createElement('p');
+    detail.style.cssText = 'font-size:13px;line-height:1.6;margin:0 0 20px;color:' + muted + ';';
+    detail.textContent = reason === 'js'
+      ? 'The application started but its scripts didn\u2019t finish loading \u2014 the server may be restarting.'
+      : 'A required part of the application failed to load \u2014 the server may be restarting.';
 
     var hint = document.createElement('p');
-    hint.style.cssText = 'font-size:12px;margin:0 0 22px;color:' + muted + ';';
+    hint.style.cssText = 'font-size:12px;margin:0 0 20px;color:' + muted + ';';
     hint.id = '__scholario_asset_recovery_hint';
     hint.textContent = 'Retrying automatically\u2026';
 
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = 'Retry now';
-    btn.style.cssText =
+    var actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:10px;justify-content:center;flex-wrap:wrap;';
+
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry';
+    retry.style.cssText =
       'appearance:none;border:0;cursor:pointer;border-radius:10px;' +
-      'padding:11px 26px;font-size:14px;font-weight:600;' +
+      'padding:10px 22px;font-size:14px;font-weight:600;' +
       'background:' + accent + ';color:' + accentFg + ';';
-    btn.onclick = function () { window.location.reload(); };
+    retry.onmouseenter = function () { retry.style.background = accentHover; };
+    retry.onmouseleave = function () { retry.style.background = accent; };
+    retry.onclick = function () { window.location.reload(); };
+
+    var toLogin = document.createElement('a');
+    toLogin.setAttribute('href', loginHref());
+    toLogin.textContent = 'Go to login';
+    toLogin.style.cssText =
+      'display:inline-flex;align-items:center;justify-content:center;' +
+      'cursor:pointer;border-radius:10px;text-decoration:none;' +
+      'padding:10px 22px;font-size:14px;font-weight:600;' +
+      'border:1px solid ' + border + ';background:' + cardBg + ';color:' + fg + ';';
+
+    actions.appendChild(retry);
+    actions.appendChild(toLogin);
 
     var word = document.createElement('div');
     word.style.cssText =
-      'margin-top:26px;font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:' + muted + ';';
+      'margin-top:24px;font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:' + muted + ';';
     word.textContent = 'SCHOLARIO \u00b7 School OS';
 
     card.appendChild(mark);
     card.appendChild(title);
     card.appendChild(body);
+    card.appendChild(detail);
     card.appendChild(hint);
-    card.appendChild(btn);
+    card.appendChild(actions);
     card.appendChild(word);
     wrap.appendChild(card);
     return wrap;

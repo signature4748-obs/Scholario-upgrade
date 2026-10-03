@@ -106,10 +106,10 @@ function timeAgo(iso: string): string {
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  ACTIVE: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  SUSPENDED: 'border-red-500/30 bg-red-500/10 text-red-400',
-  PENDING: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-  TRIAL: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400',
+  ACTIVE: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  SUSPENDED: 'border-red-200 bg-red-50 text-red-600',
+  PENDING: 'border-amber-200 bg-amber-50 text-amber-700',
+  TRIAL: 'border-slate-200 bg-slate-100 text-slate-600',
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -225,24 +225,24 @@ function ProvisionDialog({
   }
 
   const field =
-    'bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500/40 h-11'
+    'bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40 h-11'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto custom-scrollbar bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-2xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto custom-scrollbar bg-white border-slate-200 text-slate-900 sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 font-display text-zinc-50">
-            <Building2 className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+          <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
+            <Building2 className="h-4 w-4 text-teal-600" aria-hidden="true" />
             Provision a new school
           </DialogTitle>
-          <DialogDescription className="text-zinc-400">
-            Creates the tenant in <span className="text-amber-300 font-medium">PENDING</span> state with its
+          <DialogDescription className="text-slate-500">
+            Creates the tenant in <span className="text-amber-700 font-medium">PENDING</span> state with its
             founding principal account. Nobody can sign in until the school is explicitly activated.
           </DialogDescription>
         </DialogHeader>
 
         {error && (
-          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             {error}
           </div>
@@ -250,7 +250,7 @@ function ProvisionDialog({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="prov-name" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="prov-name" className="text-xs font-semibold text-slate-700">
               School name *
             </Label>
             <Input
@@ -262,7 +262,7 @@ function ProvisionDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="prov-slug" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="prov-slug" className="text-xs font-semibold text-slate-700">
               Slug *
             </Label>
             <Input
@@ -272,10 +272,10 @@ function ProvisionDialog({
               placeholder="riverside-academy"
               className={`${field} font-mono`}
             />
-            <p className="text-[10px] text-zinc-600">lowercase letters, numbers and hyphens</p>
+            <p className="text-[10px] text-slate-400">lowercase letters, numbers and hyphens</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="prov-code" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="prov-code" className="text-xs font-semibold text-slate-700">
               Code *
             </Label>
             <Input
@@ -285,10 +285,10 @@ function ProvisionDialog({
               placeholder="RVS-001"
               className={`${field} font-mono`}
             />
-            <p className="text-[10px] text-zinc-600">uppercase — must be unique platform-wide</p>
+            <p className="text-[10px] text-slate-400">uppercase — must be unique platform-wide</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="prov-domain" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="prov-domain" className="text-xs font-semibold text-slate-700">
               Domain
             </Label>
             <Input
@@ -300,7 +300,7 @@ function ProvisionDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="prov-city" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="prov-city" className="text-xs font-semibold text-slate-700">
               City
             </Label>
             <Input
@@ -312,16 +312,16 @@ function ProvisionDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="prov-plan" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="prov-plan" className="text-xs font-semibold text-slate-700">
               Plan *
             </Label>
             <Select value={form.plan} onValueChange={(v) => set('plan', v)}>
               <SelectTrigger id="prov-plan" className={`${field} w-full`}>
                 <SelectValue placeholder="Plan" />
               </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+              <SelectContent className="bg-white border-slate-200 text-slate-900">
                 {SCHOOL_PLANS.map((p) => (
-                  <SelectItem key={p} value={p} className="focus:bg-zinc-800">
+                  <SelectItem key={p} value={p} className="focus:bg-slate-100">
                     {p}
                   </SelectItem>
                 ))}
@@ -329,16 +329,16 @@ function ProvisionDialog({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="prov-board" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="prov-board" className="text-xs font-semibold text-slate-700">
               Board *
             </Label>
             <Select value={form.board} onValueChange={(v) => set('board', v)}>
               <SelectTrigger id="prov-board" className={`${field} w-full`}>
                 <SelectValue placeholder="Board" />
               </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+              <SelectContent className="bg-white border-slate-200 text-slate-900">
                 {SCHOOL_BOARDS.map((b) => (
-                  <SelectItem key={b} value={b} className="focus:bg-zinc-800">
+                  <SelectItem key={b} value={b} className="focus:bg-slate-100">
                     {b}
                   </SelectItem>
                 ))}
@@ -347,13 +347,13 @@ function ProvisionDialog({
           </div>
         </div>
 
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-emerald-400/90">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-teal-700">
             Founding principal
           </p>
           <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label htmlFor="prov-pname" className="text-xs font-semibold text-zinc-300">
+              <Label htmlFor="prov-pname" className="text-xs font-semibold text-slate-700">
                 Name *
               </Label>
               <Input
@@ -365,7 +365,7 @@ function ProvisionDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="prov-pemail" className="text-xs font-semibold text-zinc-300">
+              <Label htmlFor="prov-pemail" className="text-xs font-semibold text-slate-700">
                 Email *
               </Label>
               <Input
@@ -378,7 +378,7 @@ function ProvisionDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="prov-ppass" className="text-xs font-semibold text-zinc-300">
+              <Label htmlFor="prov-ppass" className="text-xs font-semibold text-slate-700">
                 Password *
               </Label>
               <Input
@@ -390,7 +390,7 @@ function ProvisionDialog({
                 placeholder="Set an initial password"
                 className={field}
               />
-              <p className="text-[10px] text-zinc-600">The principal resets it after first sign-in</p>
+              <p className="text-[10px] text-slate-400">The principal resets it after first sign-in</p>
             </div>
           </div>
         </div>
@@ -399,14 +399,14 @@ function ProvisionDialog({
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
-            className="border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 h-11 focus-ring"
+            className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 h-11 focus-ring"
           >
             Cancel
           </Button>
           <Button
             onClick={() => void submit()}
             disabled={busy}
-            className="bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold h-11 focus-ring"
+            className="bg-teal-600 hover:bg-teal-700 text-white font-semibold h-11 focus-ring"
           >
             {busy ? 'Provisioning…' : 'Provision school'}
           </Button>
@@ -478,11 +478,11 @@ export function SchoolsModule() {
       <div>
         <h1
           id="schools-heading"
-          className="font-display text-xl sm:text-2xl font-bold tracking-tight text-zinc-50"
+          className="font-display text-xl sm:text-2xl font-bold tracking-tight text-slate-900"
         >
           Schools
         </h1>
-        <p className="mt-1 text-sm text-zinc-500">
+        <p className="mt-1 text-sm text-slate-500">
           Every tenant on the platform{data ? ` · ${num.format(data.total)} total` : ''} · click a school to
           manage it
         </p>
@@ -492,7 +492,7 @@ export function SchoolsModule() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1 sm:max-w-xs">
           <Search
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600"
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
             aria-hidden="true"
           />
           <Input
@@ -501,7 +501,7 @@ export function SchoolsModule() {
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search name, slug, code, domain…"
             aria-label="Search schools"
-            className="bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500/40 h-11 pl-9"
+            className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40 h-11 pl-9"
           />
         </div>
         <Select
@@ -513,21 +513,21 @@ export function SchoolsModule() {
         >
           <SelectTrigger
             aria-label="Filter by status"
-            className="h-11 w-full sm:w-40 bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+            className="h-11 w-full sm:w-40 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
           >
             <SelectValue placeholder="Status" />
           </SelectTrigger>
-          <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
-            <SelectItem value="ALL" className="focus:bg-zinc-800">
+          <SelectContent className="bg-white border-slate-200 text-slate-900">
+            <SelectItem value="ALL" className="focus:bg-slate-100">
               All statuses
             </SelectItem>
-            <SelectItem value="ACTIVE" className="focus:bg-zinc-800">
+            <SelectItem value="ACTIVE" className="focus:bg-slate-100">
               ACTIVE
             </SelectItem>
-            <SelectItem value="SUSPENDED" className="focus:bg-zinc-800">
+            <SelectItem value="SUSPENDED" className="focus:bg-slate-100">
               SUSPENDED
             </SelectItem>
-            <SelectItem value="PENDING" className="focus:bg-zinc-800">
+            <SelectItem value="PENDING" className="focus:bg-slate-100">
               PENDING
             </SelectItem>
           </SelectContent>
@@ -536,7 +536,7 @@ export function SchoolsModule() {
           {canProvision && (
             <Button
               onClick={() => setProvisionOpen(true)}
-              className="h-11 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring"
+              className="h-11 w-full sm:w-auto bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
               Provision school
@@ -549,9 +549,9 @@ export function SchoolsModule() {
       {error && (
         <div
           role="alert"
-          className="flex flex-col gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between"
         >
-          <p className="flex items-start gap-2.5 text-sm text-red-400">
+          <p className="flex items-start gap-2.5 text-sm text-red-600">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             {error}
           </p>
@@ -559,7 +559,7 @@ export function SchoolsModule() {
             variant="outline"
             size="sm"
             onClick={() => void load()}
-            className="h-9 border-zinc-700 bg-transparent text-zinc-200 hover:bg-zinc-800 focus-ring"
+            className="h-9 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
             Retry
@@ -568,25 +568,25 @@ export function SchoolsModule() {
       )}
 
       {/* Ledger — table on sm+, cards below */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+      <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
         {showSkeletonRows ? (
           <div className="space-y-3 p-4 sm:p-5" aria-busy="true" aria-label="Loading schools">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="flex items-center gap-4">
-                <Skeleton className="h-10 w-44 bg-zinc-800" />
-                <Skeleton className="h-6 w-20 bg-zinc-800" />
-                <Skeleton className="hidden sm:block h-4 flex-1 bg-zinc-800" />
-                <Skeleton className="hidden lg:block h-4 w-20 bg-zinc-800" />
+                <Skeleton className="h-10 w-44 bg-slate-200" />
+                <Skeleton className="h-6 w-20 bg-slate-200" />
+                <Skeleton className="hidden sm:block h-4 flex-1 bg-slate-200" />
+                <Skeleton className="hidden lg:block h-4 w-20 bg-slate-200" />
               </div>
             ))}
           </div>
         ) : data && data.schools.length === 0 ? (
           <div className="flex flex-col items-center justify-center px-4 py-12 text-center">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800/70 text-zinc-500 ring-1 ring-zinc-700/60">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500 ring-1 ring-slate-200">
               <SchoolIcon className="h-5 w-5" aria-hidden="true" />
             </div>
-            <p className="mt-3 text-sm font-semibold text-zinc-200">No schools match</p>
-            <p className="mt-1 max-w-xs text-xs leading-snug text-zinc-500">
+            <p className="mt-3 text-sm font-semibold text-slate-900">No schools match</p>
+            <p className="mt-1 max-w-xs text-xs leading-snug text-slate-500">
               {q || status !== 'ALL'
                 ? 'Nothing matches the current search and status filters — try clearing them.'
                 : 'No schools have been provisioned yet.'}
@@ -600,7 +600,7 @@ export function SchoolsModule() {
                   setStatus('ALL')
                   setPage(1)
                 }}
-                className="mt-4 h-9 border-zinc-700 bg-transparent text-zinc-200 hover:bg-zinc-800 focus-ring"
+                className="mt-4 h-9 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
               >
                 Clear filters
               </Button>
@@ -612,15 +612,15 @@ export function SchoolsModule() {
             <div className="hidden sm:block overflow-x-auto custom-scrollbar">
               <Table className="text-xs">
                 <TableHeader>
-                  <TableRow className="border-zinc-800/80 hover:bg-transparent">
-                    <TableHead className="text-zinc-500 font-semibold h-11">School</TableHead>
-                    <TableHead className="text-zinc-500 font-semibold">Status</TableHead>
-                    <TableHead className="text-zinc-500 font-semibold">Plan</TableHead>
-                    <TableHead className="text-zinc-500 font-semibold text-right">Users</TableHead>
-                    <TableHead className="text-zinc-500 font-semibold text-right">Students</TableHead>
-                    <TableHead className="text-zinc-500 font-semibold text-right">Teachers</TableHead>
-                    <TableHead className="text-zinc-500 font-semibold">City</TableHead>
-                    <TableHead className="text-zinc-500 font-semibold">Created</TableHead>
+                  <TableRow className="border-slate-200 hover:bg-transparent">
+                    <TableHead className="text-slate-500 font-semibold h-11">School</TableHead>
+                    <TableHead className="text-slate-500 font-semibold">Status</TableHead>
+                    <TableHead className="text-slate-500 font-semibold">Plan</TableHead>
+                    <TableHead className="text-slate-500 font-semibold text-right">Users</TableHead>
+                    <TableHead className="text-slate-500 font-semibold text-right">Students</TableHead>
+                    <TableHead className="text-slate-500 font-semibold text-right">Teachers</TableHead>
+                    <TableHead className="text-slate-500 font-semibold">City</TableHead>
+                    <TableHead className="text-slate-500 font-semibold">Created</TableHead>
                     <TableHead className="w-12" aria-label="Open school" />
                   </TableRow>
                 </TableHeader>
@@ -629,7 +629,7 @@ export function SchoolsModule() {
                     <TableRow
                       key={s.id}
                       onClick={() => openSchool(s.id)}
-                      className="cursor-pointer border-zinc-800/60 hover:bg-zinc-800/40 focus:bg-zinc-800/40 focus:outline-none"
+                      className="cursor-pointer border-slate-200 hover:bg-slate-50 focus:bg-slate-100 focus:outline-none"
                       tabIndex={0}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
@@ -640,8 +640,8 @@ export function SchoolsModule() {
                       aria-label={`Open ${s.name}`}
                     >
                       <TableCell className="max-w-[16rem] py-3">
-                        <p className="truncate font-semibold text-zinc-100">{s.name}</p>
-                        <p className="truncate font-mono text-[11px] text-zinc-500">
+                        <p className="truncate font-semibold text-slate-900">{s.name}</p>
+                        <p className="truncate font-mono text-[11px] text-slate-500">
                           {s.slug} · {s.code}
                         </p>
                       </TableCell>
@@ -649,25 +649,25 @@ export function SchoolsModule() {
                         <StatusBadge status={s.status} />
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="border-zinc-700 bg-zinc-800/60 text-zinc-300">
+                        <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-700">
                           {s.plan}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right text-zinc-300 tabular-nums">
+                      <TableCell className="text-right text-slate-700 tabular-nums">
                         {num.format(s.counts.users)}
                       </TableCell>
-                      <TableCell className="text-right text-zinc-300 tabular-nums">
+                      <TableCell className="text-right text-slate-700 tabular-nums">
                         {num.format(s.counts.students)}
                       </TableCell>
-                      <TableCell className="text-right text-zinc-300 tabular-nums">
+                      <TableCell className="text-right text-slate-700 tabular-nums">
                         {num.format(s.counts.teachers)}
                       </TableCell>
-                      <TableCell className="text-zinc-400">{s.city ?? '—'}</TableCell>
-                      <TableCell className="text-zinc-500 tabular-nums" title={new Date(s.createdAt).toLocaleString()}>
+                      <TableCell className="text-slate-600">{s.city ?? '—'}</TableCell>
+                      <TableCell className="text-slate-500 tabular-nums" title={new Date(s.createdAt).toLocaleString()}>
                         {timeAgo(s.createdAt)}
                       </TableCell>
                       <TableCell className="py-3">
-                        <ChevronRight className="h-4 w-4 text-zinc-600" aria-hidden="true" />
+                        <ChevronRight className="h-4 w-4 text-slate-400" aria-hidden="true" />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -676,34 +676,34 @@ export function SchoolsModule() {
             </div>
 
             {/* Mobile cards (<sm) */}
-            <div className="sm:hidden divide-y divide-zinc-800/60" aria-label="Schools">
+            <div className="sm:hidden divide-y divide-slate-200" aria-label="Schools">
               {data?.schools.map((s) => (
                 <motion.button
                   key={s.id}
                   type="button"
                   onClick={() => openSchool(s.id)}
                   whileTap={{ scale: 0.985 }}
-                  className="w-full min-h-[44px] text-left p-4 hover:bg-zinc-800/40 focus:outline-none focus-visible:bg-zinc-800/40"
+                  className="w-full min-h-[44px] text-left p-4 hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-100"
                   aria-label={`Open ${s.name}`}
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <p className="min-w-0 truncate font-semibold text-sm text-zinc-100">{s.name}</p>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600" aria-hidden="true" />
+                    <p className="min-w-0 truncate font-semibold text-sm text-slate-900">{s.name}</p>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
                   </div>
-                  <p className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
+                  <p className="mt-0.5 truncate font-mono text-[11px] text-slate-500">
                     {s.slug} · {s.code}
                   </p>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <StatusBadge status={s.status} />
-                    <Badge variant="outline" className="border-zinc-700 bg-zinc-800/60 text-zinc-300">
+                    <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-700">
                       {s.plan}
                     </Badge>
-                    <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500 tabular-nums">
+                    <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 tabular-nums">
                       <MapPin className="h-3 w-3" aria-hidden="true" />
                       {s.city ?? '—'}
                     </span>
                   </div>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-500">
+                  <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
                     <span className="inline-flex items-center gap-1 tabular-nums">
                       <Users className="h-3 w-3" aria-hidden="true" />
                       {num.format(s.counts.users)} users
@@ -726,8 +726,8 @@ export function SchoolsModule() {
             </div>
 
             {/* Pagination */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800/80 px-4 py-3">
-              <p className="text-xs text-zinc-500 tabular-nums">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-3">
+              <p className="text-xs text-slate-500 tabular-nums">
                 Page {page} of {totalPages}
                 {data ? ` · ${num.format(data.total)} school${data.total === 1 ? '' : 's'}` : ''}
               </p>
@@ -737,7 +737,7 @@ export function SchoolsModule() {
                   size="sm"
                   disabled={page <= 1 || loading}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="h-9 min-w-[76px] border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 focus-ring"
+                  className="h-9 min-w-[76px] border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
                 >
                   ← Previous
                 </Button>
@@ -746,7 +746,7 @@ export function SchoolsModule() {
                   size="sm"
                   disabled={page >= totalPages || loading}
                   onClick={() => setPage((p) => p + 1)}
-                  className="h-9 min-w-[76px] border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 focus-ring"
+                  className="h-9 min-w-[76px] border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
                 >
                   Next →
                 </Button>

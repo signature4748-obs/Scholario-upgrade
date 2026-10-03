@@ -52,6 +52,12 @@
 }
 
 :root {
+  /* Scholario design system: LIGHT by default. color-scheme pins
+     native UI (scrollbars, form controls) to light so the app never
+     flips dark from prefers-color-scheme; only an explicit
+     user-selected dark mode (theme-store → .dark class) opts into
+     dark rendering. */
+  color-scheme: light;
   --radius: 0.75rem;
   --background: oklch(0.99 0.004 145);
   --foreground: oklch(0.18 0.02 160);
@@ -95,6 +101,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.16 0.012 165);
   --foreground: oklch(0.97 0.005 160);
   --card: oklch(0.205 0.014 165);

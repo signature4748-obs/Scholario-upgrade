@@ -5060,3 +5060,54 @@ Work Log:
 
 Stage Summary:
 - Read-only owner credential display completed. Artifact, users, sessions, and git state all untouched; credentials remain exclusively in the secure mechanism + owner chat display.
+
+---
+Task ID: TOTP-WORKSPACE-1 (core)
+Agent: main (Z.ai Code)
+Task: Root-cause + fix the production "Scholario couldn't load this workspace" failure around the TOTP flow, and force the light design system.
+
+Work Log:
+- REPRODUCED on production (agent-browser, dark mode emulated): /platform/login held 36s → recovery screen appeared with EXACT user-quoted text. Evidence: hydratedAttr=null, data-scholario-assets=ok, console EMPTY (zero JS errors), ALL /_next chunks 200 (webpack/main-app/layout/page). Auth + chunks + hydration ALL healthy → NOT an auth failure, NOT a chunk failure.
+- Reproduced second half: full TOTP login (admin@scholario.cloud, live code) → PASS (redirect /platform, /api/platform/auth/me ok root=true) → console WORKING underneath, yet recoveryShown=true after 36s on /platform with zero console errors.
+- ROOT CAUSE: inline asset watchdog (root layout, every route) requires data-app-hydrated='1' within 30s; only src/app/page.tsx (school SPA) set it → every platform page falsely flagged as dead boot ~31s after document load (users spend >30s on TOTP entry). Dark screen = watchdog's prefers-color-scheme dark() branch (#06140f) + platform pages hardcoded dark zinc palette.
+- FIX (root): new src/components/shared/asset-guard/hydration-flag.tsx rendered by root layout → EVERY route reports React-boot (flag set in effects; genuine script failures never reach it → watchdog real-failure detection preserved, verified by blocking all chunks → honest recovery at 31s).
+- FIX (theme): inline watchdog recovery screen now ALWAYS LIGHT (light palette, TASK-6 copy: "Something went wrong" / "Your session is safe. We couldn't load this workspace." / [Retry] [Go to login]); React AssetRecoveryScreen redesigned identically; /platform/login fully restyled light (white/slate/emerald, logic untouched); viewport themeColor → single #f8fafc; globals.css :root color-scheme:light (+ .dark color-scheme:dark for the supported user-selected mode); school SPA untouched (already light-default with explicit user-selected dark in Settings).
+- VERIFIED on dev: platform/login hydrated='1' + 36s dark-mode dwell → NO recovery screen; real-failure simulation (chunks blocked) → light recovery screen with new copy; reload self-heals.
+- Cookie contract verified in code: platform session HttpOnly/SameSite=Lax/Path=//Secure(prod)/Max-Age.
+
+Stage Summary:
+- Root cause fixed at the root (hydration flag on all routes, no auth weakening, no Next.js change, no guard disabling). Light theme enforced on watchdog/recovery/login/root chrome. Remaining: console-shell + 12 platform modules light restyle (subagent), gates, deploy, production verification matrix.
+
+---
+Task ID: TOTP-WORKSPACE-2
+Agent: frontend-styling-expert
+Task: Restyle the 14 platform-console files (console-shell, step-up-gate, 12 modules) from the hardcoded dark zinc palette to the Scholario LIGHT production design system — classname-only, zero logic changes.
+
+Work Log:
+- console-shell.tsx: canvas bg-zinc-950→bg-slate-50; sidebar/header/footer → bg-white + border-slate-200 (removed bg-zinc-950/85 backdrop-blur-xl glassmorphism); active nav emerald-500/10→bg-teal-50/border-teal-200/text-teal-700, inactive→text-slate-600 hover:bg-slate-50; step-up pills → border-emerald-200 bg-emerald-50 text-emerald-700 / amber equivalents; boot skeleton shadow-lg shadow-emerald-500/20→shadow-sm; mobile drawer scrim bg-zinc-950/80 backdrop-blur→bg-slate-900/40 (no blur), panel bg-white; logo marks text-zinc-950→text-white on emerald→teal-600 gradient; header comment updated to the light identity (comment-only).
+- step-up-gate.tsx + console-shell StepUpDialog: DialogContent bg-white border-slate-200; input bg-white/text-slate-900/placeholder:text-slate-400; error text-red-600; primary button bg-emerald-600 text-zinc-950 → bg-teal-600 hover:bg-teal-700 text-white.
+- modules/schools.tsx + school-detail.tsx (largest, 143 hits): STATUS_STYLES → light tinted chips (emerald/red/amber-200+50, TRIAL slate); all panels bg-zinc-900/60→bg-white border-slate-200 shadow-sm; tabs list bg-slate-100 with teal active state; Switch data-[state=unchecked]:bg-zinc-700→bg-slate-300, checked emerald→teal-600; danger zone border-red-500/30 bg-red-500/[0.04]→border-red-200 bg-red-50/60, delete button border-red-200 bg-red-50 text-red-600 hover:bg-red-100; Access-School amber solids keep dark text (text-zinc-950→text-slate-900, hover amber-600); timeline dots ring-zinc-900→ring-white; emerald focus rings → teal-500/40 (red-500/40 kept for destructive inputs).
+- modules/overview.tsx, admins.tsx, sessions.tsx, support-tools.tsx, announcements.tsx, audit.tsx, settings.tsx: same mapping — tables text-slate-700 with border-slate-200 rows and hover:bg-slate-50; badges/chips → light tinted (slate-100/emerald-50/amber-50/red-50); skeletons bg-zinc-800→bg-slate-200; inputs bg-white; primary actions → teal-600/teal-700 text-white; destructive ghost buttons border-red-200 text-red-600 hover:bg-red-50.
+- modules/school-setup.tsx: progress track bg-zinc-800→bg-slate-200 (optional bar bg-slate-400), status boxes → border-emerald-200 bg-emerald-50 text-emerald-700 / amber equivalents.
+- modules/school-domains.tsx: DNS instructions box bg-zinc-950/60→bg-slate-50, record-type label emerald-300→teal-700, verified/pending chips light.
+- modules/support-oversight.tsx (standalone): full-screen bg-slate-50; amber banner bg-amber-950/90 backdrop-blur-xl→solid bg-amber-50 border-amber-200 (amber-700/800 text); countdown pill amber-300→border-amber-300 bg-amber-100 text-amber-800 (red variants for expired/urgent); identity card amber-50/60.
+- Deviations for readability (judgment calls): amber icon accents darkened amber-400→amber-600; danger titles red-300→red-700; uppercase stat labels text-zinc-500→text-slate-500 (not 400) for contrast on white; emerald text accents on white → emerald-700, brand links/icons → teal-600/700.
+- VERIFIED: rg "zinc-950|zinc-900|zinc-800|bg-zinc|text-zinc|border-zinc|divide-zinc" src/components/platform/ → ZERO matches; no zinc CSS classes remain anywhere in the 14 files (audit.tsx's 'zinc' tone KEY is a TypeScript union/object-key, untouched to avoid logic changes — its mapped class is now slate). No backdrop-blur/shadow-black/radial-gradient/blur-3xl ambient decorations existed in these files (nothing to remove). Line counts, import counts and aria-/role/sr-only/focus-ring counts are IDENTICAL to HEAD for all 14 files; git diff contains only className strings + 2 comment lines. No imports pruned. Dev server untouched; routes /platform/login, /platform, /platform/schools all 200 after edits.
+
+Stage Summary:
+- All 14 platform console files now render the Scholario LIGHT design system (slate-50 canvas, white cards/panels, slate-200 borders, teal-600 primary, light emerald/amber/red state chips) with zero logic/state/handler/prop/import changes — ready for the orchestrator's gates (build/lint/tsc) and visual verification.
+
+---
+Task ID: TOTP-WORKSPACE-1 (gates + console)
+Agent: main (Z.ai Code) + frontend-styling-expert (TOTP-WORKSPACE-2)
+Task: Platform console light restyle, full gate run, prepare deploy.
+
+Work Log:
+- TOTP-WORKSPACE-2 (subagent): all 14 platform console files restyled dark→light (className-only; import/aria/logic byte-identical; zero zinc-* classes remain; readability deviations: amber/red icons darkened for WCAG on white).
+- Local dev verification: TOTP login → /platform light console; Schools/Sessions modules render; 38s+ dwell → NO recovery overlay (hydrated='1'); zero console errors (only benign pre-existing scroll-behavior warning).
+- Gates (dev tree stopped for tsc to avoid the documented 4GB-cgroup OOM): tsc --noEmit 0 errors; eslint 0 errors / 59 pre-existing warnings; unit 88/88; regression 18/18 (live server); tenant-isolation 57/57 (needs .env DATABASE_URL sourced into the shell — platform stale-env lesson); api+integration 88/88 (one cold-compile timeout on first run, 88/88 on warm re-run).
+- Dev-server ops: OOM killer took next-server down twice (anon-rss 2.7GB in 4GB cgroup, documented pattern); keepalive (started via spawn-detached.mjs — direct setsid children get reaped) respawned it; healthy again.
+- Change set before commit: 19 modified + 1 new file (asset-guard + platform light restyle + worklog); zero logic changes outside the watchdog/hydration-flag root fix.
+
+Stage Summary:
+- Root fix + light theme complete and gate-clean. Next: commit "fix: totp workspace loading", push, Vercel deploy, production verification matrix (TASK 8).
