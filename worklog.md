@@ -5205,3 +5205,17 @@ Work Log:
 
 Stage Summary:
 - Platform / Public Website / School Login / ERP are now four cleanly separated surfaces with explicit boundary actions; no silent default-tenant inheritance; no invented school content anywhere (CMS/DB is the source of truth); design system is neutral-premium with teal accent; onboarding is self-service and data-driven (one Vercel/Supabase/repo); Google SSO honestly architected-not-implemented; permission-aware nav foundation wired for the role-panel phase. Zero auth/isolation/security logic weakened (all isolation suites green). Ready: Phase 10 role panels (Principal/Teacher/Student/Parent).
+
+---
+Task ID: ARCH-RESET-4 (deploy + production verification)
+Agent: main (Z.ai Code)
+Task: Commit, push, deploy the architecture reset to production and verify the acceptance matrix.
+
+Work Log:
+- 7 short commits (feat: tenant directory landing / refactor: platform shell / feat: tenant onboarding / refactor: neutral design system / feat: role navigation / fix: honest school content / chore: worklog) — pushed to main 99eae230 (GIT_ASKPASS token-header pattern, values never printed).
+- Vercel production deploy dpl_2p76D8Zwxm4JLXCiA5rEXhtjduEN READY at exact SHA 99eae230.
+- Targeted production CONTENT correction (Supabase REST, service key, never printed): Hawkings tagline "Knowledge · Character · Service" → null + honest websiteContent doc (school-name hero, factual copy, no marketing pillars); GV tagline "Rooted in community, growing with curiosity" → null. Content fix only — zero user/session/school rows touched, no reset.
+- PRODUCTION MATRIX (agent-browser): bare URL → SCHOLARIO directory landing with both schools (no silent default school); ?slug=hawkings → honest site (slogan/tagline/marketing pillars GONE — verified by string check, real stats 82/16/15/2004); platform login has NO "Back to school website"; TOTP login → console with grouped nav (Users/Support/Audit Log renames live); Schools → Add School wizard renders in production; school detail shows "Preview Website" + "Open Support Session"; school principal login → ERP shell with school name + Principal chip + grouped permission-aware nav; TENANT ISOLATION: hawkings principal visiting ?slug=green-valley keeps hawkings-prithvipur session (slug never grants/switches tenant); zero page errors throughout.
+
+Stage Summary:
+- Architecture reset fully deployed and verified in production. One Vercel + one Supabase + one GitHub preserved; all isolation/provisioning/product suites green; no auth logic weakened. Phase 10 (Principal/Teacher/Student/Parent panels) is now safe to start on the permission-aware role-nav foundation.
