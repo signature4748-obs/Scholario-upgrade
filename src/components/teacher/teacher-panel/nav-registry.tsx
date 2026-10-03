@@ -8,6 +8,13 @@ import {
 import type { NavGroup } from '@/components/shell/app-shell'
 import type { PositionAssignment } from '@/lib/store/teachers-store'
 
+// ARCH-RESET-2c — permission tags use EXACT server-matrix keys
+// (src/lib/security/permissions.ts). TEACHER holds every tagged capability
+// below, so the visible nav is unchanged; untagged items are self-service
+// or role-gated by construction (dashboard / payroll / settings / profile).
+// The filter itself runs in teacher-panel.tsx where this registry's output
+// is consumed.
+
 export interface NavRegistryArgs {
   isRelieved: boolean
   /**
@@ -48,14 +55,14 @@ export function buildTeacherNavGroups({ isRelieved, classTeacherOf, hubUnread = 
     {
       label: 'Academics & Teaching',
       items: [
-        { key: 'attendance', label: 'Class Attendance', icon: <CalendarCheck className="h-4.5 w-4.5" /> },
-        { key: 'lesson-planner', label: 'Lesson Planner', icon: <BookMarked className="h-4.5 w-4.5" /> },
-        { key: 'marks', label: 'Marks Entry', icon: <FileText className="h-4.5 w-4.5" /> },
-        { key: 'students', label: 'Student Directory', icon: <Users className="h-4.5 w-4.5" /> },
+        { key: 'attendance', label: 'Class Attendance', icon: <CalendarCheck className="h-4.5 w-4.5" />, permission: 'school.students.read' },
+        { key: 'lesson-planner', label: 'Lesson Planner', icon: <BookMarked className="h-4.5 w-4.5" />, permission: 'school.students.read' },
+        { key: 'marks', label: 'Marks Entry', icon: <FileText className="h-4.5 w-4.5" />, permission: 'exams.marks.read' },
+        { key: 'students', label: 'Student Directory', icon: <Users className="h-4.5 w-4.5" />, permission: 'school.students.read' },
         // Growth lives with teaching scope — every teacher awards points to
         // the students they teach (spec §13); the module is NOT
         // class-teacher-gated.
-        { key: 'growth', label: 'Student Growth', icon: <TrendingUp className="h-4.5 w-4.5" /> },
+        { key: 'growth', label: 'Student Growth', icon: <TrendingUp className="h-4.5 w-4.5" />, permission: 'school.students.read' },
       ],
     },
   ]
@@ -69,7 +76,7 @@ export function buildTeacherNavGroups({ isRelieved, classTeacherOf, hubUnread = 
     navGroups.push({
       label: 'Class Teacher Hub',
       items: [
-        { key: 'class-hub', label: 'My Class', icon: <School className="h-4.5 w-4.5" /> },
+        { key: 'class-hub', label: 'My Class', icon: <School className="h-4.5 w-4.5" />, permission: 'school.students.read' },
       ],
     })
   }
@@ -88,7 +95,7 @@ export function buildTeacherNavGroups({ isRelieved, classTeacherOf, hubUnread = 
   navGroups.push({
     label: 'Communication',
     items: [
-      { key: 'communication', label: 'Communication Hub', icon: <MessagesSquare className="h-4.5 w-4.5" />, badge: hubUnread > 0 ? hubUnread : undefined },
+      { key: 'communication', label: 'Communication Hub', icon: <MessagesSquare className="h-4.5 w-4.5" />, permission: 'school.messages.send', badge: hubUnread > 0 ? hubUnread : undefined },
     ],
   })
 

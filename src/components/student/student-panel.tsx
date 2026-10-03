@@ -18,6 +18,12 @@ import { useTransportAssignment } from '@/lib/store/transport-store'
 import { hydrateNotifPrefsFromServer } from '@/lib/store/student-notif-prefs-store'
 import { useServerNotices } from '@/lib/store/server-notices-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
+// ARCH-RESET-2c — permission-aware navigation foundation: student groups
+// are self-scoped (no permission tags — the filter is a no-op today) but
+// wired through the same single filter as the principal/teacher panels so
+// any future tag lands consistently across all three role shells.
+import { filterNavForRole } from '@/lib/nav/role-nav'
+import { useAuth } from '@/lib/store/auth-store'
 
 // Every module is a separate lazily-loaded chunk: navigating compiles just
 // that module (small memory spikes) instead of one giant student bundle.
@@ -218,6 +224,9 @@ export function StudentPanel() {
   // SD-3 — server-resolved identity (name + enrollment) for the shell
   // surfaces; falls back to the client roster while /api/auth/me loads.
   const me = useCurrentUser((s) => s.me)
+  // ARCH-RESET-2c — the authenticated role drives the permission-aware
+  // nav filter (server session role from the auth store).
+  const authUser = useAuth((s) => s.user)
 
   // Class Captain / Monitor: the nav entry appears ONLY while the student
   // holds an ACTIVE position in the LIVE academic session — resolved
@@ -254,7 +263,9 @@ export function StudentPanel() {
   // transport opt-in (roster route), so the entry follows the real data.
   const hasTransport = useTransportAssignment(studentId ?? '')
 
-  const groups: NavGroup[] = [
+  // ARCH-RESET-2c — permission-aware filter (no-op for the self-scoped
+  // student groups today: none carry a permission key; foundation wired).
+  const groups: NavGroup[] = filterNavForRole([
     // Home first, then the (conditional) Class Leadership responsibility —
     // it earns prominence while active and vanishes the moment it ends.
     {
@@ -271,7 +282,7 @@ export function StudentPanel() {
         unreadMsgs,
       ),
     })),
-  ]
+  ], authUser?.role)
 
   // Central navigation: resolves legacy keys → consolidated modules and
   // remembers the deep-linked tab. Sidebar clicks pass a plain (new) key

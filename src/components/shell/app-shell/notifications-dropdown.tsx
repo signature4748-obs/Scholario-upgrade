@@ -145,7 +145,7 @@ export function NotificationsDropdown({
                 className={cn(
                   'inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide',
                   source === 'live'
-                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                    ? 'bg-primary/10 text-primary'
                     : source === 'error'
                       ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                       : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
@@ -161,7 +161,7 @@ export function NotificationsDropdown({
                 <span className={cn(
                   'h-1.5 w-1.5 rounded-full',
                   source === 'live'
-                    ? 'bg-emerald-500 animate-pulse'
+                    ? 'bg-teal-600 animate-pulse'
                     : source === 'error'
                       ? 'bg-rose-500'
                       : 'bg-amber-500 animate-pulse',
@@ -171,7 +171,7 @@ export function NotificationsDropdown({
               {totalBadgeCount > 0 && (
                 <span className={cn(
                   'text-[10px] font-extrabold px-1.5 py-0.2 rounded-full',
-                  role === 'principal' && liveAlertCount > 0 ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400' : 'bg-primary/15 text-emerald-700 dark:text-emerald-400'
+                  role === 'principal' && liveAlertCount > 0 ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400' : 'bg-primary/15 text-primary'
                 )}>
                   {totalBadgeCount} new
                 </span>
@@ -180,7 +180,7 @@ export function NotificationsDropdown({
             {unreadCount > 0 && (
               <button
                 onClick={onMarkAllRead}
-                className="flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-400 hover:underline font-semibold focus-ring rounded-sm"
+                className="flex items-center gap-1 text-[10px] text-primary hover:underline font-semibold focus-ring rounded-sm"
                 aria-label="Mark all notifications as read"
               >
                 <CheckCheck className="h-3 w-3" aria-hidden="true" />
@@ -215,7 +215,7 @@ export function NotificationsDropdown({
                   {t.count > 0 && (
                     <span className={cn(
                       'text-[9px] font-bold px-1 rounded-full tabular-nums',
-                      isActive ? 'bg-primary/15 text-emerald-800 dark:text-emerald-300' : 'bg-muted text-muted-foreground'
+                      isActive ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'
                     )}>
                       {t.count}
                     </span>
@@ -290,7 +290,7 @@ export function NotificationsDropdown({
                 iconBg = 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300'
               } else if (notifType === 'fee' || notifType === 'payment' || titleStr.includes('fee') || titleStr.includes('payment') || titleStr.includes('received')) {
                 iconNode = <IndianRupee className="h-3.5 w-3.5" />
-                iconBg = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                iconBg = 'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300'
               } else if (notifType === 'admission' || titleStr.includes('admission') || titleStr.includes('student') || titleStr.includes('joined')) {
                 iconNode = <UserPlus className="h-3.5 w-3.5" />
                 iconBg = 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
