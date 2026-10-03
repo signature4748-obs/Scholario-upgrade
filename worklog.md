@@ -5045,3 +5045,18 @@ Stage Summary:
 - C: persistent login fixed at the root (server-truth boot probe; cookie already 7-day persistent); verified on production across refresh/navigation/multi-tab/browser-restart-simulation/expiry/logout; Safari/iOS mechanism verified (localStorage-eviction simulation + no premature redirect), no physical Safari device available in the sandbox (honest limitation).
 - D: tenant isolation smoke PASS in both directions + platform separation.
 - E: hasLocalMatch FIXED (root-caused stale dev chunks; clean cache + fresh build + full-surface verification; production builds structurally immune).
+
+---
+Task ID: CRED-DISPLAY-1
+Agent: main (Z.ai Code)
+Task: Owner-requested read-only display of the 7 existing production demo credentials from the secure artifact /home/z/.sec/scholario-demo-credentials.md. No regeneration, no resets, no revocations, no commits, no git changes.
+
+Work Log:
+- Read /home/z/.sec/scholario-demo-credentials.md as-is (artifact untouched; last generated 2026-10-03T13:57 by scripts/gen-credential-report.ts).
+- Cross-checked FINAL-FIX-1 records: these exact artifact values are the production-reconciled set, verified 7/7 PASS against https://scholario-production.vercel.app (login -> me -> role/tenant -> logout -> dead-session 401).
+- Confirmed live .env has NO SEED_PLATFORM_ROOT_TOTP override -> production root TOTP secret = canonical seed default from prisma/seed-credentials.ts (value intentionally NOT logged here; shown to owner in chat only, per explicit owner request).
+- Verified the TOTP code-generation method end-to-end (live code computed successfully from the canonical secret; standard RFC 6238 SHA-1/6-digit/30s params).
+- Displayed the 7 accounts + TOTP mechanism to the owner in chat, in their requested format. Zero mutations: no password resets, no session revocations, no git writes, no artifact edits, no commits.
+
+Stage Summary:
+- Read-only owner credential display completed. Artifact, users, sessions, and git state all untouched; credentials remain exclusively in the secure mechanism + owner chat display.
