@@ -72,7 +72,7 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "react-compiler/react-compiler": "off",
   },
 }, {
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "mini-services/**", "upload/**", "tool-results/**", "public/**"]
+  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "mini-services/**", "upload/**", "tool-results/**", "public/**", ".audit-work/**", "db/**", "dev.log"]
 }];
 
 export default eslintConfig;
