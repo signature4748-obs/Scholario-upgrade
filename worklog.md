@@ -5001,3 +5001,20 @@ Stage Summary:
 - Preview FIXED: full stack rebuilt (PG + migrations + canonical bit-exact corpus + dev server + event-stream + keepalive) — the preview now serves the exact latest code (2.14.0, working tree at 3a96f29 = 2199417 + local-only dev-stack/docs commits).
 - All 7 launch accounts re-verified on this deployment; secure artifact regenerated.
 - Honest blocker (unchanged, now root-caused): production login access is credential-blocked — rotated values were wiped with the sandbox reset; owner recovery runbooks referenced in docs/release/LAUNCH_ACCESS.md.
+
+---
+Task ID: STATE-VERIFY
+Agent: main (Z.ai Code)
+Task: Read-only state verification before any commit: clean-state report (branch/HEAD/remote/worktree/untracked/modified/ahead-behind), classification of the files the user saw as "untracked", and proof that LATEST COMMIT = WORKSPACE CODE = PREVIEW CODE. No reset/checkout/revert/restore/commit/delete allowed.
+
+Work Log:
+- git status (verbose + porcelain -uall): working tree CLEAN — zero untracked, zero modified, zero staged; stash empty; reflog shows the docs commit was amended twice (1cea8f2 → 3a96f29 → 0ab97ce) folding in bun.lock/.gitignore/worklog.
+- HEAD = 0ab97ce "docs: launch access" (2026-10-03 14:00:40 +0000) on main. Fresh git fetch (read-only): origin/main unchanged at 2199417 (2026-10-02 18:27:09); ahead/behind = behind 0 / ahead 2 (f4fdcae "chore: embedded postgres dev stack" + 0ab97ce). development tip 3727ba2 and archive tip 30c81c2 are both older — HEAD is the newest state reachable from any ref.
+- The files reported as "untracked" are all COMMITTED & TRACKED: keepalive.mjs (tracked lineage since Sep; +32 lines in f4fdcae for :5432 supervision + .env hygiene), mini-services/postgres-db/{index.ts,package.json} (f4fdcae) + bun.lock (0ab97ce), docs/release/LAUNCH_ACCESS.md (0ab97ce, 102 lines), docs/release/FINAL_FORENSIC_* (a675a6f, already on origin/main). Explanation for the appearance: the 2 ahead commits are local-only (unpushed — no push credentials in sandbox), so these files do NOT exist on GitHub/origin; and/or a stale editor view from before the 13:57–14:00 commits.
+- Secret spot-scan of the new commits' files: no literal secret values (password/secret/totp pattern = 1 hit = artifact-path reference in LAUNCH_ACCESS.md).
+- Preview identity proof: single next-server v16.1.3 (PID 2463) with cwd /home/z/my-project (verified via /proc), spawned by `next dev --webpack -p 3000` (dev mode = on-demand compile from the LIVE worktree, no build snapshot; keepalive PID 2370 supervises :3000/:3003/:5432; embedded postgres 5432 db/pg + event-stream 3003 running). Live probes: /health/ready 200 in 24ms; GET / 200 in 31ms; /api/app-version → 2.14.0 == src/lib/app-version.ts APP_VERSION at HEAD. git diff 2199417..HEAD --stat = ZERO src/ changes (only .gitignore/docs/keepalive/mini-services/scripts/worklog) → served app code == HEAD == origin/main app code. Version triple: workspace 2.14.0 = HEAD 2.14.0 = preview 2.14.0.
+- Minor doc nits found (NOT fixed — no-commit rule): LAUNCH_ACCESS.md cites audit commit "637796d", which is not a valid object in this repo (dangling reference from a pre-rollback lineage); the substantive evidence file FINAL_FORENSIC_PRODUCTION_ACCEPTANCE.md (a675a6f) IS at HEAD. Worklog RECOVERY-PREVIEW-1 text cites the pre-amend hash 3a96f29 (final is 0ab97ce).
+- Mutations performed: NONE to git/history/files — the only write is this worklog entry itself (process log, intentionally uncommitted).
+
+Stage Summary:
+- State report delivered: main @ 0ab97ce, clean worktree, ahead 2 / behind 0 vs freshly-fetched origin/main; preview verified serving exactly the HEAD state (single dev server compiling the live worktree; app-version 2.14.0 live). "Untracked files" premise corrected: every named file is committed in the two local-ahead commits; nothing was rolled back, deleted, or committed during this task.
