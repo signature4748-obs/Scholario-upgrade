@@ -1,0 +1,10 @@
+{
+  "name": "scholario-postgres-db",
+  "private": true,
+  "scripts": {
+    "dev": "bun index.ts"
+  },
+  "dependencies": {
+    "embedded-postgres": "^18.4.0-beta.17"
+  }
+}

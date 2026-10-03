@@ -17,15 +17,29 @@
 //     before probing again.
 //
 //   :3000 → Next dev (`bun run dev`)      :3003 → event-stream mini-service
+//   :5432 → postgres-db (embedded cluster; adopts a running instance)
 //
 // All output goes to stdout — spawn-detached.mjs routes it to dev.log.
 
 import { spawn, exec } from 'node:child_process'
 import fs from 'node:fs'
+import net from 'node:net'
 
 const ROOT = '/home/z/my-project'
 const PROBE_MS = 20_000
 const HTTP_TIMEOUT_MS = 10_000
+
+// Env hygiene (forensic-acceptance Phase 33 lesson): the platform bootstrap
+// injects a stale DATABASE_URL=file:… into every shell; children inherit it
+// and Next.js never overrides an existing process env var from .env. Load
+// ROOT/.env here, OVERRIDING the process env, so every respawn (dev server,
+// event-stream, postgres-db) carries the CI-parity values from the file.
+try {
+  for (const line of fs.readFileSync(`${ROOT}/.env`, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/)
+    if (m && m[1] !== 'NODE_ENV') process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+  }
+} catch { /* no .env — keep the inherited env */ }
 
 const log = (msg) => console.log(`[keepalive ${new Date().toISOString()}] ${msg}`)
 
@@ -54,8 +68,17 @@ async function listening(port) {
   return Number(stdout.trim() || '0') > 0
 }
 
-/** Health: does the service answer HTTP OK? */
+/** Health: does the service answer HTTP OK? (postgres-db :5432 → TCP.) */
+const tcpOpen = (port) =>
+  new Promise((resolve) => {
+    const s = net.connect({ port, host: '127.0.0.1', timeout: 2000 })
+    s.once('connect', () => { s.destroy(); resolve(true) })
+    s.once('error', () => resolve(false))
+    s.once('timeout', () => { s.destroy(); resolve(false) })
+  })
+
 async function healthy(port, path) {
+  if (port === 5432) return tcpOpen(port)
   try {
     const res = await fetch(`http://localhost:${port}${path}`, {
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
@@ -152,6 +175,7 @@ async function waitForFreePort(port, patterns, cwd, timeoutMs = 20_000) {
 const state = {
   next: { downProbes: 0, compiling: false, respawnedAt: 0, warmed: false },
   stream: { downProbes: 0, respawnedAt: 0 },
+  db: { downProbes: 0, respawnedAt: 0 },
 }
 
 async function ensureService(name, port, path, patterns, spawnArgs, cwd, st) {
@@ -218,6 +242,12 @@ async function tick() {
       ['bun run dev', 'bun --hot index.ts'],
       ['--cwd', `${ROOT}/mini-services/event-stream`, 'bun', 'run', 'dev'],
       `${ROOT}/mini-services/event-stream`, state.stream,
+    )
+    await ensureService(
+      'postgres-db', 5432, null,
+      ['bun run dev', 'bun index.ts'],
+      ['--cwd', `${ROOT}/mini-services/postgres-db`, 'bun', 'run', 'dev'],
+      `${ROOT}/mini-services/postgres-db`, state.db,
     )
   } catch (e) {
     log(`tick error: ${e && e.message}`)
