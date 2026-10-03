@@ -13,7 +13,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import {
-  Building2,
   Search,
   Plus,
   ChevronRight,
@@ -27,9 +26,9 @@ import {
   CalendarDays,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from '../platform-client'
+import { ProvisionWizard } from './provision-wizard'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -47,15 +46,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { toast } from 'sonner'
 
 // ── Types (API contract, worklog Task 6-1) ────────────────────────────────
 
@@ -84,8 +74,6 @@ interface SchoolsData {
 
 type StatusFilter = 'ALL' | 'ACTIVE' | 'SUSPENDED' | 'PENDING'
 
-const SCHOOL_PLANS = ['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'] as const
-const SCHOOL_BOARDS = ['CBSE', 'UP_BOARD', 'ICSE', 'STATE', 'CUSTOM'] as const
 
 const num = new Intl.NumberFormat('en-IN')
 
@@ -120,301 +108,7 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-// ── Provision dialog ──────────────────────────────────────────────────────
-
-interface ProvisionForm {
-  name: string
-  slug: string
-  code: string
-  domain: string
-  city: string
-  plan: string
-  board: string
-  principalName: string
-  principalEmail: string
-  principalPassword: string
-}
-
-const EMPTY_FORM: ProvisionForm = {
-  name: '',
-  slug: '',
-  code: '',
-  domain: '',
-  city: '',
-  plan: 'STANDARD',
-  board: 'CBSE',
-  principalName: '',
-  principalEmail: '',
-  principalPassword: '',
-}
-
-const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-const CODE_RE = /^[A-Z0-9-]+$/
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-function ProvisionDialog({
-  open,
-  onOpenChange,
-  onProvisioned,
-}: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
-  onProvisioned: () => void
-}) {
-  const [form, setForm] = useState<ProvisionForm>(EMPTY_FORM)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (open) {
-      setForm(EMPTY_FORM)
-      setError(null)
-    }
-  }, [open])
-
-  const set = <K extends keyof ProvisionForm>(key: K, value: string) =>
-    setForm((f) => ({ ...f, [key]: value }))
-
-  const validate = (): string | null => {
-    if (form.name.trim().length < 2) return 'School name is required (2+ characters)'
-    if (!SLUG_RE.test(form.slug) || form.slug.length < 3)
-      return 'Slug must be 3+ chars — lowercase letters, numbers and hyphens only (e.g. riverside-academy)'
-    if (!CODE_RE.test(form.code) || form.code.length < 2)
-      return 'Code must be 2+ chars — uppercase letters, numbers and hyphens only (e.g. RVS-001)'
-    if (form.domain && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(form.domain.trim()))
-      return 'Domain must look like a hostname (e.g. riverside.edu.in)'
-    if (!form.principalName.trim()) return 'Principal name is required'
-    if (!EMAIL_RE.test(form.principalEmail.trim())) return 'A valid principal email is required'
-    if (form.principalPassword.length < 8) return 'Principal password must be at least 8 characters'
-    return null
-  }
-
-  const submit = async () => {
-    const invalid = validate()
-    if (invalid) {
-      setError(invalid)
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      await platformApi('/api/platform/schools', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name.trim(),
-          slug: form.slug,
-          code: form.code,
-          domain: form.domain.trim() || undefined,
-          city: form.city.trim() || undefined,
-          plan: form.plan,
-          board: form.board,
-          principalName: form.principalName.trim(),
-          principalEmail: form.principalEmail.trim(),
-          principalPassword: form.principalPassword,
-        }),
-      })
-      toast.success('School provisioned — activate it to enable sign-in')
-      onOpenChange(false)
-      onProvisioned()
-    } catch (e) {
-      const err = e as PlatformApiError
-      setError(err.error || 'Provisioning failed — please try again')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const field =
-    'bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40 h-11'
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto custom-scrollbar bg-white border-slate-200 text-slate-900 sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
-            <Building2 className="h-4 w-4 text-teal-600" aria-hidden="true" />
-            Provision a new school
-          </DialogTitle>
-          <DialogDescription className="text-slate-500">
-            Creates the tenant in <span className="text-amber-700 font-medium">PENDING</span> state with its
-            founding principal account. Nobody can sign in until the school is explicitly activated.
-          </DialogDescription>
-        </DialogHeader>
-
-        {error && (
-          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            {error}
-          </div>
-        )}
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="prov-name" className="text-xs font-semibold text-slate-700">
-              School name *
-            </Label>
-            <Input
-              id="prov-name"
-              value={form.name}
-              onChange={(e) => set('name', e.target.value)}
-              placeholder="Riverside Academy"
-              className={field}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="prov-slug" className="text-xs font-semibold text-slate-700">
-              Slug *
-            </Label>
-            <Input
-              id="prov-slug"
-              value={form.slug}
-              onChange={(e) => set('slug', e.target.value.toLowerCase())}
-              placeholder="riverside-academy"
-              className={`${field} font-mono`}
-            />
-            <p className="text-[10px] text-slate-400">lowercase letters, numbers and hyphens</p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="prov-code" className="text-xs font-semibold text-slate-700">
-              Code *
-            </Label>
-            <Input
-              id="prov-code"
-              value={form.code}
-              onChange={(e) => set('code', e.target.value.toUpperCase())}
-              placeholder="RVS-001"
-              className={`${field} font-mono`}
-            />
-            <p className="text-[10px] text-slate-400">uppercase — must be unique platform-wide</p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="prov-domain" className="text-xs font-semibold text-slate-700">
-              Domain
-            </Label>
-            <Input
-              id="prov-domain"
-              value={form.domain}
-              onChange={(e) => set('domain', e.target.value.toLowerCase())}
-              placeholder="riverside.edu.in"
-              className={`${field} font-mono`}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="prov-city" className="text-xs font-semibold text-slate-700">
-              City
-            </Label>
-            <Input
-              id="prov-city"
-              value={form.city}
-              onChange={(e) => set('city', e.target.value)}
-              placeholder="Pune"
-              className={field}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="prov-plan" className="text-xs font-semibold text-slate-700">
-              Plan *
-            </Label>
-            <Select value={form.plan} onValueChange={(v) => set('plan', v)}>
-              <SelectTrigger id="prov-plan" className={`${field} w-full`}>
-                <SelectValue placeholder="Plan" />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200 text-slate-900">
-                {SCHOOL_PLANS.map((p) => (
-                  <SelectItem key={p} value={p} className="focus:bg-slate-100">
-                    {p}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="prov-board" className="text-xs font-semibold text-slate-700">
-              Board *
-            </Label>
-            <Select value={form.board} onValueChange={(v) => set('board', v)}>
-              <SelectTrigger id="prov-board" className={`${field} w-full`}>
-                <SelectValue placeholder="Board" />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200 text-slate-900">
-                {SCHOOL_BOARDS.map((b) => (
-                  <SelectItem key={b} value={b} className="focus:bg-slate-100">
-                    {b}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-teal-700">
-            Founding principal
-          </p>
-          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="prov-pname" className="text-xs font-semibold text-slate-700">
-                Name *
-              </Label>
-              <Input
-                id="prov-pname"
-                value={form.principalName}
-                onChange={(e) => set('principalName', e.target.value)}
-                placeholder="Meera Iyer"
-                className={field}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="prov-pemail" className="text-xs font-semibold text-slate-700">
-                Email *
-              </Label>
-              <Input
-                id="prov-pemail"
-                type="email"
-                value={form.principalEmail}
-                onChange={(e) => set('principalEmail', e.target.value)}
-                placeholder="principal@riverside.edu.in"
-                className={field}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="prov-ppass" className="text-xs font-semibold text-slate-700">
-                Password *
-              </Label>
-              <Input
-                id="prov-ppass"
-                type="text"
-                autoComplete="off"
-                value={form.principalPassword}
-                onChange={(e) => set('principalPassword', e.target.value)}
-                placeholder="Set an initial password"
-                className={field}
-              />
-              <p className="text-[10px] text-slate-400">The principal resets it after first sign-in</p>
-            </div>
-          </div>
-        </div>
-
-        <DialogFooter className="gap-2">
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 h-11 focus-ring"
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() => void submit()}
-            disabled={busy}
-            className="bg-teal-600 hover:bg-teal-700 text-white font-semibold h-11 focus-ring"
-          >
-            {busy ? 'Provisioning…' : 'Provision school'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
+// ── Onboarding wizard (provision-wizard.tsx) ──────────────────────────────────────────────────────
 
 // ── Module ────────────────────────────────────────────────────────────────
 
@@ -539,7 +233,7 @@ export function SchoolsModule() {
               className="h-11 w-full sm:w-auto bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
-              Provision school
+              Add School
             </Button>
           )}
         </div>
@@ -757,7 +451,7 @@ export function SchoolsModule() {
       </div>
 
       {canProvision && (
-        <ProvisionDialog
+        <ProvisionWizard
           open={provisionOpen}
           onOpenChange={setProvisionOpen}
           onProvisioned={() => {
