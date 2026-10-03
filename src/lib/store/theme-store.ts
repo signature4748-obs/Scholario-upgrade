@@ -45,7 +45,7 @@ export const useTheme = create<ThemeState>()(
   persist(
     (set) => ({
       theme: 'light',
-      accentColor: 'emerald',
+      accentColor: 'teal',
       reduceMotion: false,
       textSize: 'default',
       hydrated: false,

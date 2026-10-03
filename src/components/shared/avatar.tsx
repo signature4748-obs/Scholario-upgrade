@@ -7,17 +7,17 @@
  *   - Deterministic color assignment (same person → same color everywhere)
  *   - Initials generated from name if not provided
  *   - Optional photo URL (falls back to initials)
- *   - Restrained palette (6 muted gradient stops — no rainbow)
+ *   - Restrained palette (6 muted solid tints — no gradients, no rainbow)
  *   - Circle (default) or square shape
  *   - Sizes: xs (24px) / sm (32px) / md (40px) / lg (48px) / xl (64px)
  *
  * This is the SINGLE source of truth for avatars across the ERP.
  * Replaces the 60+ GradientAvatar callers + the dead shadcn Avatar.
  *
- * Design language (matches Academics):
+ * Design language (matches Academics + the neutral-premium system):
  *   - rounded-full (or rounded-lg for square)
- *   - bg-gradient-to-br with deterministic gradient
- *   - font-semibold text-white
+ *   - muted solid tint with deterministic text color
+ *   - font-semibold
  *   - shadow-sm
  *   - subtle ring for emphasis variants
  */
@@ -40,7 +40,7 @@ export interface AvatarProps {
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'
   /** Shape */
   shape?: 'circle' | 'square'
-  /** Override the deterministic gradient (rarely needed) */
+  /** Override the deterministic tint (rarely needed) */
   gradient?: string
   /** Add a subtle ring (for emphasis in lists) */
   ring?: boolean
@@ -55,14 +55,15 @@ const AVATAR_SIZES: Record<string, string> = {
   xl: 'h-16 w-16 text-xl',
 }
 
-// Restrained palette — 6 muted gradient stops (no rainbow)
-const AVATAR_GRADIENTS = [
-  'from-emerald-400 to-teal-500',
-  'from-amber-400 to-orange-500',
-  'from-rose-400 to-pink-500',
-  'from-violet-400 to-purple-500',
-  'from-cyan-400 to-sky-500',
-  'from-lime-400 to-green-500',
+// Restrained palette — 6 muted solid tints, light + dark safe
+// (mirrors GradientAvatar in shared/ui.tsx — neutral-premium avatars)
+const AVATAR_TINTS = [
+  'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
+  'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
+  'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
+  'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
+  'bg-slate-200 text-slate-600 dark:bg-slate-700/60 dark:text-slate-300',
 ]
 
 function hashString(str: string): number {
@@ -84,11 +85,11 @@ function getInitials(name: string): string {
 export const Avatar = forwardRef<HTMLDivElement, AvatarProps>(
   ({ name, initials, src, size = 'md', shape = 'circle', gradient, ring, className }, ref) => {
     const text = initials ?? getInitials(name)
-    const g = gradient ?? AVATAR_GRADIENTS[hashString(name) % AVATAR_GRADIENTS.length]
+    const g = gradient ?? AVATAR_TINTS[hashString(name) % AVATAR_TINTS.length]
     const shapeClass = shape === 'circle' ? 'rounded-full' : 'rounded-lg'
 
     // If a photo URL is provided, use the Radix Avatar root (context for
-    // Image/Fallback) skinned with our gradient + sizing; falls back to
+    // Image/Fallback) skinned with our tint + sizing; falls back to
     // initials automatically if the image fails to load.
     if (src) {
       return (
@@ -104,23 +105,23 @@ export const Avatar = forwardRef<HTMLDivElement, AvatarProps>(
         >
           <UIAvatar
             className={cn(
-              'h-full w-full overflow-hidden bg-gradient-to-br font-semibold text-white shadow-sm',
+              'h-full w-full overflow-hidden font-semibold shadow-sm',
               g,
             )}
           >
             <AvatarImage src={src} alt={name} className="h-full w-full object-cover" />
-            <AvatarFallback className="bg-transparent text-white font-semibold">{text}</AvatarFallback>
+            <AvatarFallback className="bg-transparent font-semibold">{text}</AvatarFallback>
           </UIAvatar>
         </div>
       )
     }
 
-    // No photo — render initials with deterministic gradient
+    // No photo — render initials with deterministic tint
     return (
       <div
         ref={ref}
         className={cn(
-          'flex shrink-0 items-center justify-center bg-gradient-to-br font-semibold text-white shadow-sm',
+          'flex shrink-0 items-center justify-center font-semibold shadow-sm',
           shapeClass,
           g,
           AVATAR_SIZES[size],

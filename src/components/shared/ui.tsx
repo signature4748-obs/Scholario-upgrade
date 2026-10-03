@@ -103,6 +103,7 @@ interface AvatarProps {
   name: string
   initials?: string
   size?: 'sm' | 'md' | 'lg' | 'xl'
+  /** Optional custom tint class string (overrides the hashed palette). */
   gradient?: string
   className?: string
 }
@@ -114,23 +115,29 @@ const avatarSizes: Record<string, string> = {
   xl: 'h-16 w-16 text-xl',
 }
 
+// Historical name kept for API stability (~95 call sites). Renders
+// MUTED SOLID TINTS now — no multi-hue gradients (neutral-premium
+// avatars). Same hash-index mechanism + 6-entry class-count semantics
+// as the original gradient palette; `gradient` still accepts a custom
+// class string override.
+const avatarTints = [
+  'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
+  'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
+  'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
+  'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
+  'bg-slate-200 text-slate-600 dark:bg-slate-700/60 dark:text-slate-300',
+]
+
 export function GradientAvatar({ name, initials, size = 'md', gradient, className }: AvatarProps) {
   const text = initials ?? name.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase()
-  const gradients = [
-    'from-emerald-400 to-teal-500',
-    'from-amber-400 to-orange-500',
-    'from-rose-400 to-pink-500',
-    'from-violet-400 to-purple-500',
-    'from-cyan-400 to-sky-500',
-    'from-lime-400 to-green-500',
-  ]
   let hash = 0
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
-  const g = gradient ?? gradients[Math.abs(hash) % gradients.length]
+  const g = gradient ?? avatarTints[Math.abs(hash) % avatarTints.length]
   return (
     <div
       className={cn(
-        'flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br font-semibold text-white shadow-sm',
+        'flex shrink-0 items-center justify-center rounded-full font-semibold shadow-sm',
         g,
         avatarSizes[size],
         className

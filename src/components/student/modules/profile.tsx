@@ -424,14 +424,14 @@ function ParentsTab({ student: s, identity }: { student: StudentRecord; identity
     <GlassCard className="p-4 sm:p-5">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         <div className="flex items-center gap-3 rounded-xl border border-border bg-card/40 p-3">
-          <GradientAvatar name={guardianName} size="lg" gradient="from-violet-400 to-purple-500" />
+          <GradientAvatar name={guardianName} size="lg" gradient="bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300" />
           <div className="min-w-0">
             <p className="text-[11px] text-muted-foreground">Father</p>
             <p className="text-sm font-semibold truncate">{guardianName}</p>
           </div>
         </div>
         <div className="flex items-center gap-3 rounded-xl border border-border bg-card/40 p-3">
-          <GradientAvatar name={s.motherName} size="lg" gradient="from-rose-400 to-pink-500" />
+          <GradientAvatar name={s.motherName} size="lg" gradient="bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300" />
           <div className="min-w-0">
             <p className="text-[11px] text-muted-foreground">Mother</p>
             <p className="text-sm font-semibold truncate">{s.motherName}</p>
