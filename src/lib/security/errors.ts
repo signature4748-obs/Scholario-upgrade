@@ -80,6 +80,14 @@ export type AppErrorCode =
                              // the account authenticates and may read its
                              // identity surfaces, but protected module APIs
                              // reject it server-side.
+  | 'PASSWORD_CHANGE_REQUIRED' // 403 — CREDENTIAL-RESET: the account
+                             // authenticates (login succeeds) but has not
+                             // yet established its own password
+                             // (mustChangePassword). Business APIs reject
+                             // the session until /api/auth/change-password
+                             // completes; the exempt identity surface
+                             // (auth/profile/subscription/support) stays
+                             // reachable so the forced-change screen works.
   // deprecated aliases (legacy typed throws; classify to themselves)
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
@@ -137,6 +145,7 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   SCHOOL_SUSPENDED: 403,
   FEATURE_DISABLED: 403,
   SUBSCRIPTION_REQUIRED: 403,
+  PASSWORD_CHANGE_REQUIRED: 403,
 }
 
 const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
@@ -159,6 +168,8 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   EXTERNAL_SERVICE_FAILURE: 'An external service is temporarily unavailable',
   SUBSCRIPTION_REQUIRED:
     'Your SCHOLARIO subscription needs renewal. Business modules are locked until the subscription is renewed. Please contact SCHOLARIO support.',
+  PASSWORD_CHANGE_REQUIRED:
+    'You must set your own password before using Scholario. Sign-in succeeded — finish setting your new password to unlock your school workspace.',
   MFA_REQUIRED: 'Enter your authenticator code',
   MFA_INVALID: 'Invalid authenticator code',
   MFA_NOT_ENABLED: 'Platform multi-factor authentication is currently disabled',

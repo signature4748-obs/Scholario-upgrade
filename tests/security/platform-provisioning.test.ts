@@ -234,9 +234,16 @@ describe('PHASE 8C · atomic provisioning + lifecycle', () => {
       await resetLoginBuckets([body.principalEmail])
       const allowed = await schoolLoginAttempt(body.principalEmail, body.principalPassword)
       expect(allowed.status).toBe(200)
-      const loginBody = (await allowed.json()) as { ok: boolean; data?: { sessionToken?: string } }
+      const loginBody = (await allowed.json()) as {
+        ok: boolean
+        data?: { sessionToken?: string; mustChangePassword?: boolean }
+      }
       expect(loginBody.ok).toBe(true)
       expect(loginBody.data?.sessionToken).toBeTruthy()
+      // CREDENTIAL-RESET — the provisioned principal ALWAYS starts in the
+      // forced first-password-change state (the bootstrap credential is
+      // single-purpose; withUser enforces it server-side).
+      expect(loginBody.data?.mustChangePassword).toBe(true)
     },
     T,
   )

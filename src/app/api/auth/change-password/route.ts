@@ -88,13 +88,21 @@ export async function POST(req: NextRequest) {
 
     await db.user.update({
       where: { id: user.id },
-      data: { passwordHash: hashPassword(body.newPassword) },
+      data: {
+        passwordHash: hashPassword(body.newPassword),
+        // CREDENTIAL-RESET — the account has now established its own
+        // password: the forced first-change flag clears and the timestamp
+        // becomes the migration's honest "has set own password" marker.
+        mustChangePassword: false,
+        passwordChangedAt: new Date(),
+      },
     })
 
     // Revoke every OTHER session (standard practice). PHASE 8A: the row
     // stores tokenHash (never the raw token), so "not this session" is a
     // hash comparison.
     const current = await getCurrentSession()
+    const wasForced = dbUser.mustChangePassword
     const revoked = current
       ? await db.session.deleteMany({
           where: { userId: user.id, tokenHash: { not: current.tokenHash } },
@@ -119,7 +127,9 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       action: 'PASSWORD_CHANGED',
       requestId,
-      detail: `Password changed; ${revoked.count} other session(s) revoked; current session rotated`,
+      detail: `Password changed${
+        wasForced ? ' (forced first-password-change completed — credential bootstrap retired)' : ''
+      }; ${revoked.count} other session(s) revoked; current session rotated`,
     }).catch(() => {})
     if (rotatedToken) {
       await auditEvent({

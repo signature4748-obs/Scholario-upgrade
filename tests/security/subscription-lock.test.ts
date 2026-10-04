@@ -164,7 +164,12 @@ describe('Phase 10 — account-level subscription lock (server-side)', () => {
       expect(res.status).toBe(403)
       const body = await res.json().catch(() => ({}))
       expect(body.code).toBe('SUBSCRIPTION_REQUIRED')
-      expect(String(body.error)).toContain('Subscription required')
+      // SaaS-HARDENING copy (stale-test fix): the account-level lock now
+      // explains the ACCOUNT state honestly — sign-in works, business
+      // modules are locked, contact the school/SCHOLARIO. (The old
+      // 'Subscription required' wording belonged to the pre-reset
+      // account-locked era.)
+      expect(String(body.error).toLowerCase()).toContain('account is locked')
     }
   }, TEST_TIMEOUT)
 

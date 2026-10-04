@@ -330,6 +330,14 @@ export async function POST(req: NextRequest) {
           })
           // Same transaction: a principal-creation failure (concurrent
           // email claim) rolls the School row back — no orphans, ever.
+          //
+          // CREDENTIAL-RESET — the founding principal ALWAYS starts in the
+          // forced first-password-change state, whether the password was
+          // caller-supplied or server-generated: the value in the wizard
+          // is a one-time bootstrap the principal must replace at first
+          // sign-in (server-enforced in withUser, audited at completion).
+          // Production can therefore never end up running on a shared or
+          // documented password.
           const createdPrincipal = await tx.user.create({
             data: {
               schoolId: createdSchool.id,
@@ -338,6 +346,7 @@ export async function POST(req: NextRequest) {
               name: body.principalName,
               role: 'PRINCIPAL',
               status: 'ACTIVE',
+              mustChangePassword: true,
             },
           })
 
@@ -480,9 +489,12 @@ export async function POST(req: NextRequest) {
           previewUrl: `/?tenant=${encodeURIComponent(school.slug)}`,
         },
         // tempPassword convention: surfaced ONCE, only when generated
-        // server-side (the operator hands it to the principal, who changes
-        // it at first login).
+        // server-side (the operator hands it to the principal, who MUST
+        // replace it at first sign-in — server-enforced forced change).
         ...(generated ? { tempPassword: principalPassword } : {}),
+        // The forced-change contract for the client: the principal's
+        // bootstrap credential is single-purpose.
+        mustChangePassword: true,
         bootstrap: bootstrapCounts,
         nextStep: 'activate',
       }

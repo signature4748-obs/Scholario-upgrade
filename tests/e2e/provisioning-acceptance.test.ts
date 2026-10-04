@@ -55,6 +55,7 @@ const FEE_HEAD_NAME = `Acceptance Tuition ${MARKER.slice(0, 4)}`
 let rootToken = ''
 let principalToken = ''
 let schoolId = ''
+let principalUserId = ''
 let teacherUserId = ''
 let studentId = ''
 let classId = ''
@@ -186,6 +187,7 @@ describe('§37 · STEP 1 — platform admin provisions the school', () => {
     expect(res.status).toBe(200)
     const data = await okData<{ school: { id: string; status: string }; principal: { id: string }; nextStep: string }>(res)
     schoolId = data.school.id
+    principalUserId = data.principal.id
     expect(data.school.status).toBe('PENDING')
     expect(data.nextStep).toBe('activate')
 
@@ -224,7 +226,7 @@ describe('§37 · STEP 1 — platform admin provisions the school', () => {
     expect(body.code).toBe('SCHOOL_SUSPENDED')
   }, T)
 
-  test('platform activates (audited) → principal login succeeds', async () => {
+  test('platform activates (audited) → principal login succeeds (forced first-password-change)', async () => {
     const act = await platform(`/api/platform/schools/${schoolId}/activate`, { method: 'POST' })
     expect(act.status).toBe(200)
     const audit = await db.platformAuditLog.findFirst({
@@ -239,11 +241,62 @@ describe('§37 · STEP 1 — platform admin provisions the school', () => {
       body: JSON.stringify({ email: PRINCIPAL_EMAIL, password: PRINCIPAL_PASSWORD }),
     })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok: boolean; data?: { sessionToken?: string } }
+    const body = (await res.json()) as {
+      ok: boolean
+      data?: { sessionToken?: string; mustChangePassword?: boolean }
+    }
     expect(body.ok).toBe(true)
     principalToken = body.data?.sessionToken ?? ''
     expect(principalToken).toBeTruthy()
     cleanup.push(() => db.session.deleteMany({ where: { tokenHash: hashSessionToken(principalToken) } }))
+
+    // CREDENTIAL-RESET — the bootstrap credential is single-purpose:
+    // login succeeds, but business APIs reject the session until the
+    // principal sets their own password (server-side withUser gate).
+    expect(body.data?.mustChangePassword).toBe(true)
+    const gated = await fetch(`${BASE}/api/dashboard`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${principalToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ scope: 'SCHOOL' }),
+    })
+    expect(gated.status).toBe(403)
+    expect(((await gated.json().catch(() => ({}))) as { code?: string }).code).toBe('PASSWORD_CHANGE_REQUIRED')
+
+    // Complete the forced change through the REAL API — the acceptance
+    // journey continues with the ESTABLISHED credential (and the
+    // rotated token, dev bearer mode).
+    const newPassword = 'AcceptancePrincipal!7d-own'
+    const change = await fetch(`${BASE}/api/auth/change-password`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${principalToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        currentPassword: PRINCIPAL_PASSWORD,
+        newPassword,
+        confirmPassword: newPassword,
+      }),
+    })
+    expect(change.status).toBe(200)
+    const changed = (await change.json()) as { data?: { sessionToken?: string } }
+    if (changed.data?.sessionToken) {
+      // The pre-rotation token is dead — track the ROTATED one.
+      principalToken = changed.data.sessionToken
+      cleanup.push(() => db.session.deleteMany({ where: { tokenHash: hashSessionToken(principalToken) } }))
+    }
+
+    // The gate is gone: the dashboard the journey's next step needs.
+    const dash = await fetch(`${BASE}/api/dashboard`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${principalToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ scope: 'SCHOOL' }),
+    })
+    expect(dash.status).toBe(200)
+
+    // Audited: the PASSWORD_CHANGED row records the forced completion.
+    const pwAudit = await db.activityLog.findFirst({
+      where: { userId: principalUserId, action: 'PASSWORD_CHANGED' },
+      orderBy: { createdAt: 'desc' },
+    })
+    expect(pwAudit).not.toBeNull()
   }, T)
 })
 

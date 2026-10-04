@@ -124,6 +124,29 @@ export async function withUser(
         internalDetail: `withUser: account status ${user.status}`,
       })
     }
+    // ── CREDENTIAL-RESET — forced first-password-change gate ──────────
+    // The account authenticated (login ALWAYS succeeds — the auth
+    // architecture is untouched), but it has not yet established its own
+    // password (mustChangePassword: provisioned with a temp/bootstrap
+    // credential, or flagged by the credential-neutralization migration
+    // for accounts that never changed one). Business APIs reject with
+    // PASSWORD_CHANGE_REQUIRED until /api/auth/change-password completes;
+    // the SAME non-business exempt surface the subscription lock uses
+    // (auth/session, profile, subscription, support, logout) stays
+    // reachable so the forced-change screen can function. Fail-closed:
+    // unknown routes are business. The UI screen is a courtesy — THIS is
+    // the authority. Platform identities (no schoolId) never carry the
+    // flag.
+    if (user.mustChangePassword && user.schoolId) {
+      const route = await currentRouteContext()
+      if (!isEntitlementExemptRoute(route)) {
+        throw new AppError('PASSWORD_CHANGE_REQUIRED', {
+          publicMessage:
+            'Set your own password to finish signing in. Your school workspace unlocks as soon as your new password is saved.',
+          internalDetail: `withUser: mustChangePassword (route ${route ?? 'unknown'})`,
+        })
+      }
+    }
     // ── SaaS-HARDENING — tenant-subscription entitlement gate ──────────
     // Authentication NEVER depends on the subscription (login always
     // succeeds); THIS is where a restricted/suspended tenant is stopped:

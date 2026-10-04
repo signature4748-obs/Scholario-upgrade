@@ -83,6 +83,11 @@ export async function POST(req: NextRequest) {
             role: 'STUDENT',
             phone: body.phone || null,
             status: 'ACTIVE',
+            // CREDENTIAL-RESET — every server-provisioned account starts
+            // in the forced first-password-change state (the temp/
+            // supplied credential is a bootstrap, never a working
+            // password — enforced server-side in withUser).
+            mustChangePassword: true,
           },
         })
         return tx.student.create({

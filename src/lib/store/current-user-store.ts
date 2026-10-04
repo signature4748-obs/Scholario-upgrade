@@ -29,6 +29,11 @@ export interface MeUser {
   avatarUrl: string | null
   phone: string | null
   status: string
+  /** CREDENTIAL-RESET — true while this account has not yet established
+   *  its own password (server truth from /api/auth/login + /api/auth/me).
+   *  The shell renders the forced password-setup screen instead of the
+   *  role panels; withUser rejects business APIs server-side either way. */
+  mustChangePassword?: boolean
   /** Phase 10 — account-level subscription lock ('ACTIVE' | 'LOCKED').
    *  LOCKED accounts see their identity + a subscription notice instead
    *  of module surfaces; module APIs reject them server-side. */

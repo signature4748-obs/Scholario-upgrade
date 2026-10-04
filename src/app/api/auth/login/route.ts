@@ -202,6 +202,11 @@ export async function POST(req: NextRequest) {
       role: user.role,
       schoolId: user.schoolId,
       avatarUrl: user.avatarUrl,
+      // CREDENTIAL-RESET — the forced first-password-change signal rides
+      // the login response so the client renders the password-setup screen
+      // instead of the role shell. Login itself ALWAYS succeeds (Phase-1
+      // invariant); withUser rejects business APIs while the flag is set.
+      mustChangePassword: user.mustChangePassword,
       // Phase 10 — account-level subscription lock (identity stays readable;
       // module APIs gate separately in withUser).
       subscriptionStatus: user.subscriptionStatus ?? 'ACTIVE',
