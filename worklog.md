@@ -5316,3 +5316,16 @@ Work Log:
 
 Stage Summary:
 - The Product Direction Reset is integrated on the exact current production lineage (direct child, fast-forward), fully regression-verified locally with policy-aligned suites, and acceptance-proven end-to-end on the live dev tree (Add School → website → domain → principal → ERP → isolation → platform return → SaaS root). TOTP stands down behind PLATFORM_TOTP_ENABLED with the architecture intact. No school auth change, no tenant-isolation change, no secrets exposed, no fake data, no invented school facts.
+
+---
+Task ID: INTEGRATE-1 (continued — push + production verification)
+Agent: main (Z.ai Code)
+Task: Phase 11-13 — push the integrated main, wait for Vercel, verify the live production URL.
+
+Work Log:
+- PUSH: clean fast-forward 784db42..ac538eb on origin/main (no force, no history rewrite); GitHub API verified main=ac538eb51b1589144757dc7e29fa799fc3048b4e with the full lineage 387fa92→e147a20→0dc7cde→ac538eb on top of the preserved 784db42; remote src/app/platform/login/page.tsx confirmed carrying the reset header.
+- VERCEL: auto-deploy observed via behavioral markers — baseline (old code): /api/public/directory 200, /login 404; after ~3-4 min: /login 200 + /api/public/directory 404 + /api/schools/public 404 (bare domain resolves nothing) + /health/ready {database: ok}. Direct SHA comparison via Vercel API not possible from this sandbox (token wiped in the sandbox reset — the credential boundary documented in PROD-HANDOFF-1; Supabase DB password likewise rotated/owner-held, read-only connect refused).
+- PRODUCTION 13-POINT CHECK (live https://scholario-production.vercel.app, browser): (1) root = SCHOLARIO SaaS website; (2) zero directory markers; (3) platform login = ONLY email+password; (4) zero TOTP/OTP/authenticator markers; (5/6) control-plane login credential-gated — production root admin's credentials were rotated to OWNER-HELD values in PROD-HANDOFF-1 by design: old seeded creds verified DEAD (401 AUTH_REQUIRED, safe envelope), ops admin still suspended (401), endpoint + UI verified live and correct, and the full control-plane→Add School→create→activate→preview→principal-ERP flow was verified end-to-end on the identical tree locally — NO backdoor created; (7) Hawkings website intact with real CMS content (82/16/15 stats, programmes); (8) Green Valley intact (honest-empty public site, anonymous view); (9) School Login → /login?tenant=hawkings-prithvipur tenant-branded; (10) Hawkings principal password login 200; (11) ERP opens as the correct tenant; (12) refresh preserves the session (me: PRINCIPAL/hawkings-prithvipur); (13) cross-tenant blocked — forged ?tenant=green-valley never switches the session tenant, forged schoolId=green-valley query ignored (returns the session's 82 Hawkings students, not GV's 0); zero browser errors throughout.
+
+Stage Summary:
+- The integrated Product Direction Reset is LIVE on GitHub main (ac538eb, fast-forward on 784db42 — zero production work lost) and verified live on the production URL across all anonymously-verifiable and school-session-verifiable points; the only non-verifiable-from-sandbox items are the two that REQUIRE the owner-held rotated platform credentials (real production control-plane sign-in) — reported honestly, no bypass attempted, no security state touched.
