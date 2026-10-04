@@ -4882,3 +4882,22 @@ Work Log:
 
 Stage Summary:
 - Phase 8C complete to the sandbox's true boundary: every locally-verifiable gate is green (518-test fresh evidence), the live production deployment is verified healthy and isolation-correct, and the final report states exactly what remains and who holds the keys. Nothing was faked; nothing was silently skipped.
+
+---
+Task ID: RESTORE-1
+Agent: main (Z.ai Code)
+Task: Restore the preview to the latest working state after the blank-preview incident (NO rollback)
+
+Work Log:
+- DIAGNOSED: git was never the problem — main at 43920fe (auto-snapshot: docs/FINAL_PRODUCTION_RELEASE_REPORT.md + upload-route retirement) on top of 3727ba2 (FINAL-ACCEPTANCE 1/3 Hawkings rebrand), tree clean, zero reverts. The BLANK PREVIEW root cause was environmental: the sandbox was reset — /home/z/pg16 (local PG server) and the project .env were wiped, .env replaced by the sandbox default SQLite URL, and only the mini-service auto-started (3003); no Next server ever listened on 3000 (no dev.log, curl 000).
+- PROVISIONED PostgreSQL 17.11 rootlessly (Debian trixie .deb download + dpkg -x to /home/z/pg-deb, cluster at /home/z/pgdata, port 5433, self-signed SSL so the event-stream mini-service's Supabase-style ssl connection works) — same major.minor as production Supabase 17.11; zero repo changes for the server itself.
+- RESTORED .env (DATABASE_URL → local PG, DATABASE_ENV=development, RATE_LIMIT_DB_SYNC=on, REALTIME_MODE=event-stream, stable dev FILE_SIGNING_SECRET). Learned the Bash tool re-injects a stale SQLite DATABASE_URL into every call (process env beats .env for Prisma CLI and Next) — every db-touching command and the dev-server spawn now passes the correct URL explicitly.
+- MIGRATED: prisma migrate deploy — all 9 migrations applied cleanly to the fresh cluster.
+- SEEDED the canonical 10-seed CI pipeline in order (seed, platform, learning, teacher-academics, roster-150, student-dashboard, teacher-hub, tenant-isolation, website-cms, salary) — Hawkings demo tenant (80 students, 15 faculty, fees ₹10.16L/₹5.82L), Green Valley clean tenant, 3 platform admins + announcement.
+- RESTARTED the event-stream mini-service (it had booted with the broken .env; now attached to PG) and STARTED the main dev server via the established spawn-detached pattern + keepalive watchdog on :3000.
+- BROWSER-VERIFIED (agent-browser): Hawkings public website with live DB stats; Green Valley honest-empty public site; /platform/login renders; REAL TOTP MFA sign-in (root admin, computed code from the seeded secret) → /platform console; /api/platform/auth/me returns the root admin + permissions; platform Schools ledger shows both tenants; sign-out clears the session; mobile 390px no-overflow; principal login (principal@hawkingshigh.edu) → school ERP dashboard with exact ledger-parity financials; 0 console errors.
+- FIXED the false asset-watchdog on platform routes (the defect behind "TOTP workspace loading"): data-app-hydrated was only set by src/app/page.tsx, so every /platform page painted the recovery screen over a healthy hydrated app after the 30s grace. Root-layout ThemeProvider now sets the flag on mount (all routes). Verified: 35s+ on /platform → NO recovery overlay. tsc 0, eslint 0 on the file. Committed as d498297 (+10 lines, one file).
+- GIT SYNC: local main now 43920fe + d498297 (2 ahead of origin/main=3727ba2). Push remains credential-gated: no GitHub token exists in this sandbox post-reset (the documented standing boundary — docs/CI.md runbook). Vercel deploys from pushed GitHub commits; nothing to re-trigger locally.
+
+Stage Summary:
+- Preview restored to the LATEST code (no rollback, no reverts, no placeholder UI): the only code delta is the 1-file false-watchdog fix the user's checklist demanded. Infrastructure (PG 17.11 + seeds + dev server + keepalive + event-stream realtime) fully rebuilt outside the repo. The referenced commit 6fcc000 does not exist in this repository's history — the latest legitimate work here is the Phase-8C chain through 3727ba2 → 43920fe, plus d498297 from this session.
