@@ -28,12 +28,16 @@
 #               row-count comparison (no table may shrink) · F production
 #               /health/ready.
 #
-# SECRETS (GitHub Actions Secrets — never in the repo, never printed):
+# SECRETS (GitHub ENVIRONMENT "production" secrets — never in the repo,
+# never printed; the workflow's jobs declare `environment: production` to
+# access them):
 #   SUPABASE_ACCESS_TOKEN  Management API token — the ONLY credential needed
 #                          (the pooler DB password is owner-held; the
 #                          Management API executes as the schema-owning
 #                          `postgres` role).
 #   SUPABASE_PROJECT_REF   kbyknezedewvgrnqervj
+#   Provision: repo Settings → Environments → production → Add secret
+#   (or: gh secret set SUPABASE_ACCESS_TOKEN --env production --repo …).
 #
 # WHY THIS FILE IS PARKED: GitHub only accepts commits that create/modify
 # .github/workflows/* when the pushing credential has the `workflow` scope
@@ -74,6 +78,7 @@ jobs:
   preflight:
     name: Pre-flight (read-only gates + before-state snapshot)
     runs-on: ubuntu-latest
+    environment: production
     outputs:
       snapshot-artifact: ${{ steps.snapshot.outputs.artifact }}
     steps:
@@ -116,6 +121,7 @@ jobs:
     needs: preflight
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Check out the exact release commit
         uses: actions/checkout@v4
@@ -143,6 +149,7 @@ jobs:
     name: Post-migration verification (A–F)
     needs: apply
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Check out the exact release commit
         uses: actions/checkout@v4

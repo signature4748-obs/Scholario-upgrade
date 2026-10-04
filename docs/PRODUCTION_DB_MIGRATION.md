@@ -115,9 +115,12 @@ parked CI workflow (docs/CI.md): pushing `.github/workflows/*` requires a
 1. GitHub → repository → create
    `.github/workflows/production-db-migration.yml` with the parked file's
    exact content (web editor), **or** push it with a workflow-scoped PAT.
-2. Add repository Actions secrets (Settings → Secrets → Actions):
-   - `SUPABASE_ACCESS_TOKEN` — the Management API token (never in the repo)
-   - `SUPABASE_PROJECT_REF` — `kbyknezedewvgrnqervj`
+2. The workflow reads its secrets from the **`production` environment**
+   (already provisioned: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF` —
+   repo Settings → Environments → production). The jobs declare
+   `environment: production`, so no further configuration is required.
+   To rotate: Settings → Environments → production → update the secret, or
+   `gh secret set SUPABASE_ACCESS_TOKEN --env production --repo <repo>`.
 3. Run it: **Actions → Production DB Migration → Run workflow** on the exact
    release commit, with the expected pending set (e.g.
    `20261004150000_credential_neutralization,20261004153000_restore_trgm_search_indexes,20261004154000_schoolid_indexes_tenant_tables`).
