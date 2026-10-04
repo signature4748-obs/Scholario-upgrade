@@ -6,16 +6,16 @@ import type { PublicSchoolData } from './types'
 /**
  * PHASE 7.5 — tenant-resolved public data.
  *
- * No slug is sent: the server resolves the school (Host domain → ?slug →
- * single-school → demo fallback) for every anonymous visitor, so this
- * client renders whichever school actually owns the domain being browsed.
+ * No slug is sent by default: the server resolves the school (Host domain
+ * → ?slug= / ?tenant=) for every anonymous visitor, so this client
+ * renders whichever school actually owns the domain being browsed.
  *
- * ARCHITECTURE RESET — `via` + `requestedSlug` are exposed so the renderer
- * can decide the SURFACE: a school website renders for a real tenant
- * resolution (domain / explicit slug / single-school), while a bare
- * deployment-domain visit that only hit the DEMO fallback (or resolved
- * nothing at all) renders the SCHOLARIO directory landing instead — the
- * platform never silently shows a school website as "the default school".
+ * PRODUCT-DIRECTION RESET (Parts 2/11) — when nothing resolves (the bare
+ * platform domain), `schoolData` stays null and the renderer shows the
+ * SCHOLARIO SaaS website instead of any school surface. `?tenant=` is
+ * the documented development fallback before custom domains are
+ * configured (e.g. /?tenant=green-valley) — forwarded exactly like
+ * ?slug= so the right tenant's content renders.
  */
 export function usePublicSchoolData() {
   const [schoolData, setSchoolData] = useState<PublicSchoolData | null>(null)
@@ -27,11 +27,12 @@ export function usePublicSchoolData() {
     async function fetchPublicData() {
       try {
         // Production: domains carry no slug — the Host header resolves the
-        // tenant server-side. But when the URL DOES carry ?slug= (sandbox
-        // per-tenant links, explicit school deep-links), it MUST be
+        // tenant server-side. But when the URL DOES carry ?slug= or ?tenant=
+        // (sandbox per-tenant links, explicit school deep-links), it MUST be
         // forwarded — otherwise School B's URL would render School A's
         // content (a UI-layer cross-tenant content bug).
-        const slug = new URLSearchParams(window.location.search).get('slug')
+        const params = new URLSearchParams(window.location.search)
+        const slug = params.get('slug') ?? params.get('tenant')
         setRequestedSlug(slug)
         const url = slug
           ? `/api/schools/public?slug=${encodeURIComponent(slug)}`

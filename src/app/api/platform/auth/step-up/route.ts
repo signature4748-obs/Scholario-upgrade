@@ -6,6 +6,7 @@ import { RATE_LIMITS, enforceRateLimitStrict } from '@/lib/security/rate-limit'
 import { platformAuditEvent } from '@/lib/platform/audit'
 import { getPlatformSession, markStepUp, STEP_UP_WINDOW_MS } from '@/lib/platform/auth'
 import { verifyTotp } from '@/lib/platform/totp'
+import { isPlatformTotpEnabled } from '@/lib/platform/mfa-config'
 
 export const runtime = 'nodejs'
 
@@ -19,6 +20,11 @@ const stepUpSchema = strictBody({ code: passwordInputSchema })
  * changes, permission changes, support sessions) rejects with
  * STEP_UP_REQUIRED when the window is stale; the console shows the
  * step-up dialog and retries.
+ *
+ * PRODUCT-DIRECTION RESET (Part 1) — while platform TOTP is stood down
+ * (lib/platform/mfa-config.ts) there is no second factor, so this route
+ * answers honestly instead of pretending: MFA is off. The verification
+ * path below is the intact re-enable path.
  */
 export async function POST(req: NextRequest) {
   const requestId = newRequestId()
@@ -26,6 +32,13 @@ export async function POST(req: NextRequest) {
     const auth = await getPlatformSession()
     if (!auth) {
       throw new AppError('AUTH_REQUIRED', { internalDetail: 'step-up: no platform session' })
+    }
+
+    if (!isPlatformTotpEnabled()) {
+      throw new AppError('MFA_NOT_ENABLED', {
+        publicMessage: 'Platform multi-factor authentication is currently disabled.',
+        internalDetail: 'step-up: refused — platform TOTP policy is off (mfa-config)',
+      })
     }
 
     // Brake-force on code guessing (per admin + per session).

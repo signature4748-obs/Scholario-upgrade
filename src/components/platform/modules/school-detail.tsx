@@ -867,7 +867,7 @@ export function SchoolDetailModule() {
               school's application context. */}
         <div className="flex flex-wrap items-center gap-2">
           <a
-            href={`/?slug=${encodeURIComponent(school.slug)}`}
+            href={`/?tenant=${encodeURIComponent(school.slug)}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"

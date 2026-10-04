@@ -34,6 +34,7 @@ import {
 } from './auth'
 import { loadEffectivePermissions, STEP_UP_REQUIRED_HINT } from './permissions'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { isPlatformTotpEnabled } from './mfa-config'
 
 export interface PlatformCtx {
   admin: PlatformAdminAuth
@@ -45,7 +46,12 @@ export interface PlatformCtx {
 export interface PlatformPolicy {
   /** Required capability key (fail-closed). */
   permission?: string
-  /** Require a live step-up (recent MFA) — destructive actions. */
+  /** Require a live step-up (recent MFA) — destructive actions.
+   * PRODUCT-DIRECTION RESET (Part 1): while platform TOTP is stood down
+   * (lib/platform/mfa-config.ts) there is no second factor to step up
+   * with, so this gate is dormant — it re-arms automatically the moment
+   * MFA is re-enabled. The password-authenticated session, permissions
+   * and per-admin rate limits above are unaffected. */
   stepUp?: boolean
 }
 
@@ -69,7 +75,7 @@ export async function authorizePlatform(policy: PlatformPolicy = {}): Promise<Pl
     })
   }
 
-  if (policy.stepUp && !hasLiveStepUp(auth.session)) {
+  if (policy.stepUp && isPlatformTotpEnabled() && !hasLiveStepUp(auth.session)) {
     throw new AppError('STEP_UP_REQUIRED', {
       publicMessage: STEP_UP_REQUIRED_HINT,
       internalDetail: `authorizePlatform: step-up expired (last=${auth.session.stepUpAt?.toISOString() ?? 'never'})`,

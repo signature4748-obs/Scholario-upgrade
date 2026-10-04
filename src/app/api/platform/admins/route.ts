@@ -8,6 +8,7 @@ import { platformAuditEvent } from '@/lib/platform/audit'
 import { parseJsonBody, strictBody, emailSchema, passwordInputSchema, safeText } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { generateTotpSecret } from '@/lib/platform/totp'
+import { isPlatformTotpEnabled } from '@/lib/platform/mfa-config'
 import { PLATFORM_PERMISSION_KEYS, OPS_DEFAULT_PERMISSIONS } from '@/lib/platform/permissions'
 
 export const runtime = 'nodejs'
@@ -54,10 +55,16 @@ const createSchema = strictBody({
  * POST /api/platform/admins — create a platform admin account.
  * DESTRUCTIVE (platform permissions) → admins.manage + STEP-UP.
  *
- * A random TOTP secret is generated server-side. In the dev preview the
- * secret is returned so the enrollment QR can be rendered; in
- * production the same response shape feeds the QR flow — the secret is
- * shown ONCE at enrollment, never stored client-side, never re-served.
+ * A random TOTP secret is generated server-side (kept on the account so
+ * proper MFA can be re-enabled later without re-provisioning admins).
+ * In the dev preview the secret is returned so the enrollment QR can be
+ * rendered; in production the same response shape feeds the QR flow — the
+ * secret is shown ONCE at enrollment, never stored client-side, never
+ * re-served.
+ *
+ * PRODUCT-DIRECTION RESET (Part 1) — while platform TOTP is stood down
+ * (mfa-config) the enrollment payload is NOT returned: there is nothing
+ * to enroll into yet, so the console shows no authenticator setup flow.
  */
 export async function POST(req: NextRequest) {
   return withPlatform(
@@ -106,10 +113,17 @@ export async function POST(req: NextRequest) {
         isRoot: admin.isRoot,
         grants: body.isRoot ? [...PLATFORM_PERMISSION_KEYS] : body.permissions,
         // Enrollment payload — shown once (QR provisioning in production).
-        enrollment: {
-          totpSecret,
-          otpauthUrl: `otpauth://totp/Scholario:${encodeURIComponent(admin.email)}?secret=${totpSecret}&issuer=Scholario`,
-        },
+        // PART 1 reset: only surfaced while platform MFA is actually on —
+        // no enrollment UX (and no secret exposure surface) while the
+        // challenge is stood down.
+        ...(isPlatformTotpEnabled()
+          ? {
+              enrollment: {
+                totpSecret,
+                otpauthUrl: `otpauth://totp/Scholario:${encodeURIComponent(admin.email)}?secret=${totpSecret}&issuer=Scholario`,
+              },
+            }
+          : {}),
       }
     },
     { method: 'POST' },

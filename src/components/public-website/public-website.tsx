@@ -41,7 +41,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/lib/store/auth-store'
 import { usePublicSchoolData, useAdmissionForm } from './use-public-website-data'
-import { DirectoryLanding } from './directory-landing'
+import { SaasLanding } from '@/components/marketing/saas-landing'
 import type { PublicSchoolData, PublicGalleryAlbum } from './types'
 import {
   NEUTRAL_WEBSITE_CONTENT,
@@ -225,6 +225,43 @@ function BrandLogo({
 /*  school-primary rule / subtitle (only when the CMS provides one).   */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/*  SectionPlaceholder — PRODUCT-DIRECTION RESET (Part 6): a newly
+ *  onboarded school gets a functional website shell; sections it has
+ *  not configured render a CLEAN PLACEHOLDER instead of hiding
+ *  ("About this school" / "Content will appear here once configured
+ *  by the school."). No invented facts — ever.
+ * ------------------------------------------------------------------ */
+function SectionPlaceholder({
+  eyebrow,
+  title,
+  sectionId,
+  alternate,
+  note,
+}: {
+  eyebrow: string
+  title: string
+  sectionId: string
+  alternate?: boolean
+  note?: string
+}) {
+  return (
+    <section id={sectionId} className={alternate ? 'bg-slate-50' : ''}>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-14 sm:py-16 lg:py-20">
+        <SectionHeader eyebrow={eyebrow} title={title} />
+        <FadeIn>
+          <div className="mx-auto max-w-2xl rounded-xl border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+            <Sparkles className="mx-auto mb-3 h-5 w-5 text-slate-300" aria-hidden="true" />
+            <p className="text-sm text-slate-500">
+              {note ?? 'Content will appear here once configured by the school.'}
+            </p>
+          </div>
+        </FadeIn>
+      </div>
+    </section>
+  )
+}
+
 function SectionHeader({
   eyebrow,
   title,
@@ -263,9 +300,7 @@ function SectionHeader({
 /*  Main component                                                     */
 /* ------------------------------------------------------------------ */
 
-export function PublicWebsite({ onOpenPortal }: {
-  onOpenPortal: () => void
-}) {
+export function PublicWebsite() {
   const { isAuthenticated, user, logout } = useAuth()
   void isAuthenticated
   void user
@@ -286,45 +321,37 @@ export function PublicWebsite({ onOpenPortal }: {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
 
-  /* ARCHITECTURE RESET — surface switch. A bare deployment-domain visit
-   * that only hit the demo fallback (or resolved nothing at all) renders
-   * the SCHOLARIO directory landing, never a silently-defaulted school
-   * site; an explicitly requested ?slug= that failed surfaces the
-   * not-found notice on that landing. */
-  const isDirectoryLanding =
-    !loading && (!schoolData || (via === 'demo' && requestedSlug == null))
-
   // The CMS document (server merges neutral fallbacks for unconfigured
   // schools; the hero title falls back to the school name server-side).
   const content: WebsiteContent = schoolData?.websiteContent ?? NEUTRAL_WEBSITE_CONTENT
 
-  // Content gating — the CMS is the source of truth; sections render ONLY
-  // when the school actually configured them (never invented copy).
+  // Content gating — the CMS is the source of truth; sections render their
+  // real content when the school configured it and a clean placeholder
+  // when it has not (Part 6) — never invented copy.
   const pillars = Array.isArray(content.pillars) ? content.pillars : []
-  const stages = Array.isArray(content.journey?.stages) ? content.journey.stages : []
-  const facilityItems = Array.isArray(content.facilities?.items) ? content.facilities.items : []
   const albums = (schoolData?.gallery ?? []).filter(
     (a) => Array.isArray(a?.images) && a.images.length > 0,
   )
   const notices = schoolData?.announcements ?? []
 
-  // Nav links exist ONLY for sections that render (admissions always
-  // renders — it is the enquiry channel; the footer is always contact).
+  // Nav links (Part 6): Home/About/Academics/Campus/Notices/Admissions/
+  // Contact all exist as sections — with real content OR the clean
+  // placeholder state — so the shell is a complete school website from
+  // the moment of onboarding.
   const navLinks = [
-    ...(pillars.length > 0 ? [{ label: 'About', href: '#about' }] : []),
-    ...(stages.length > 0 ? [{ label: 'Academics', href: '#journey' }] : []),
-    ...(facilityItems.length > 0 ? [{ label: 'Facilities', href: '#facilities' }] : []),
-    ...(albums.length > 0 ? [{ label: 'Campus Life', href: '#campus-life' }] : []),
-    ...(notices.length > 0 ? [{ label: 'Notices', href: '#notices' }] : []),
+    { label: 'About', href: '#about' },
+    { label: 'Academics', href: '#journey' },
+    { label: 'Campus Life', href: '#campus-life' },
+    { label: 'Notices', href: '#notices' },
     { label: 'Admissions', href: '#admissions' },
     { label: 'Contact', href: '#footer' },
   ]
 
   // SEO — client-rendered <title>/<meta description> from the CMS doc.
-  // Runs ONLY on the school-website branch (the directory landing keeps
-  // the app default head).
+  // Runs ONLY on the school-website branch (the SaaS landing manages its
+  // own head).
   useEffect(() => {
-    if (!schoolData || isDirectoryLanding) return
+    if (!schoolData) return
     const prevTitle = document.title
     const seo = websiteSeo(content, schoolData.name)
     document.title = seo.title
@@ -335,7 +362,7 @@ export function PublicWebsite({ onOpenPortal }: {
       document.title = prevTitle
       if (meta && prevDesc !== null) meta.setAttribute('content', prevDesc)
     }
-  }, [schoolData, content, isDirectoryLanding])
+  }, [schoolData, content])
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8)
@@ -367,15 +394,29 @@ export function PublicWebsite({ onOpenPortal }: {
     )
   }
 
-  // ── SCHOLARIO directory landing (no tenant owns this domain visit) ──
+  // ── SCHOLARIO SaaS website (no tenant owns this domain visit) ────
   // (inline condition — guarantees `schoolData` narrowing below)
-  if (!schoolData || (via === 'demo' && requestedSlug == null)) {
-    return <DirectoryLanding onOpenPortal={onOpenPortal} notFoundForSlug={requestedSlug} />
+  if (!schoolData) {
+    return <SaasLanding notFoundForSlug={requestedSlug} />
   }
+  void via
 
   // ── The school website (tenant-branded, content-gated) ──
   const schoolName = schoolData.name || 'Our School'
   const shortName = schoolData.shortName || schoolName.split(' ')[0] || 'Our School'
+
+  /* PRODUCT-DIRECTION RESET (Part 7) — the School Login door is the
+   * tenant-scoped /login route. On the school's own domain (via ===
+   * 'domain') the hostname carries the tenant; everywhere else the
+   * tenant link parameter is forwarded so the login is THAT school's
+   * door — never a platform-wide school picker. */
+  const openSchoolLogin = () => {
+    const href =
+      via === 'domain'
+        ? '/login'
+        : `/login?tenant=${encodeURIComponent(schoolData.slug)}`
+    window.location.assign(href)
+  }
 
   return (
     <div
@@ -388,7 +429,7 @@ export function PublicWebsite({ onOpenPortal }: {
         scrolled={scrolled}
         mobileMenuOpen={mobileMenuOpen}
         setMobileMenuOpen={setMobileMenuOpen}
-        onOpenPortal={onOpenPortal}
+        onOpenPortal={openSchoolLogin}
         navLinks={navLinks}
       />
 
@@ -396,7 +437,7 @@ export function PublicWebsite({ onOpenPortal }: {
         <Hero
           schoolData={schoolData}
           hero={content.hero}
-          onOpenPortal={onOpenPortal}
+          onOpenPortal={openSchoolLogin}
         />
 
         <WhyChooseUs shortName={shortName} about={content.about} pillars={pillars} />
@@ -415,7 +456,7 @@ export function PublicWebsite({ onOpenPortal }: {
 
         <CampusLife shortName={shortName} albums={albums} />
 
-        <NoticeBoard notices={notices} onOpenPortal={onOpenPortal} />
+        <NoticeBoard notices={notices} onOpenPortal={openSchoolLogin} />
 
         <Admissions
           admissions={content.admissions}
@@ -444,7 +485,7 @@ export function PublicWebsite({ onOpenPortal }: {
         footer={content.footer}
         contact={content.contact}
         quickLinks={navLinks.filter((l) => l.href !== '#footer')}
-        onOpenPortal={onOpenPortal}
+        onOpenPortal={openSchoolLogin}
       />
     </div>
   )
@@ -507,7 +548,7 @@ function Header({
             style={{ backgroundColor: 'var(--school-primary)' }}
           >
             <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-            Login Portal
+            School Login
             <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" aria-hidden="true" />
           </button>
         </div>
@@ -553,7 +594,7 @@ function Header({
                 style={{ backgroundColor: 'var(--school-primary)' }}
               >
                 <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-                Login Portal
+                School Login
                 <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             </div>
@@ -619,7 +660,7 @@ function Hero({
 
   const ctaPrimaryLabel = hero.ctaPrimary?.label || 'Apply for Admission'
   const ctaPrimaryHref = hero.ctaPrimary?.href || '#admissions'
-  const secondaryLabel = hero.ctaSecondary?.label?.trim() || 'Login Portal'
+  const secondaryLabel = hero.ctaSecondary?.label?.trim() || 'School Login'
   const secondaryHref = hero.ctaSecondary?.href?.trim() || ''
 
   // Hero photograph — ONLY when the school configured one via the CMS.
@@ -788,7 +829,17 @@ function WhyChooseUs({
   about: WebsiteContent['about']
   pillars: PillarItem[]
 }) {
-  if (pillars.length === 0) return null
+  if (pillars.length === 0) {
+    // Part 6 — clean placeholder until the school writes its own content.
+    return (
+      <SectionPlaceholder
+        eyebrow="About"
+        title={about.title?.trim() || `About ${shortName}`}
+        sectionId="about"
+        alternate
+      />
+    )
+  }
 
   const title = about.title?.trim() || `Why families choose ${shortName}`
   const subtitle = about.subtitle?.trim() || ''
@@ -829,7 +880,16 @@ function Journey({
   journey: WebsiteContent['journey']
 }) {
   const stages = Array.isArray(journey?.stages) ? journey.stages : []
-  if (stages.length === 0) return null
+  if (stages.length === 0) {
+    // Part 6 — clean placeholder until the school configures academics.
+    return (
+      <SectionPlaceholder
+        eyebrow="Academics"
+        title={journey.title?.trim() || 'Academics'}
+        sectionId="journey"
+      />
+    )
+  }
 
   const title = journey.title?.trim() || 'Academic stages'
   const subtitle = journey.subtitle?.trim() || ''
@@ -879,7 +939,18 @@ function Facilities({
   facilities: WebsiteContent['facilities']
 }) {
   const items = Array.isArray(facilities?.items) ? facilities.items : []
-  if (items.length === 0) return null
+  if (items.length === 0) {
+    // Part 6 — clean placeholder; facilities are never invented.
+    return (
+      <SectionPlaceholder
+        eyebrow="Campus"
+        title={facilities.title?.trim() || 'Our facilities'}
+        sectionId="facilities"
+        alternate
+        note="Facility information will appear here once configured by the school."
+      />
+    )
+  }
 
   const title = facilities.title?.trim() || 'Our facilities'
   const subtitle = facilities.subtitle?.trim() || ''
@@ -995,8 +1066,18 @@ function CampusLife({
   albums: PublicGalleryAlbum[]
 }) {
   // Per-school imagery is never fabricated: no published albums with
-  // images → the section hides entirely.
-  if (albums.length === 0) return null
+  // images → a clean placeholder (Part 6), never stock or invented media.
+  if (albums.length === 0) {
+    return (
+      <SectionPlaceholder
+        eyebrow="Gallery"
+        title={`Life at ${shortName}`}
+        sectionId="campus-life"
+        alternate
+        note="Photos and campus albums will appear here once the school publishes them."
+      />
+    )
+  }
 
   return (
     <section id="campus-life" className="bg-slate-50">
@@ -1126,9 +1207,18 @@ function NoticeDateTile({ iso }: { iso: string }) {
 }
 
 function NoticeBoard({ notices, onOpenPortal }: { notices: PublicNotice[]; onOpenPortal: () => void }) {
-  // No published announcements → the section hides entirely (an honest
-  // skip; the portal remains the authoritative notice channel).
-  if (!notices || notices.length === 0) return null
+  // No published announcements → a clean placeholder (Part 6); the
+  // portal remains the authoritative notice channel.
+  if (!notices || notices.length === 0) {
+    return (
+      <SectionPlaceholder
+        eyebrow="Notice Board"
+        title="Events & notices"
+        sectionId="notices"
+        note="School notices and event announcements will appear here once published."
+      />
+    )
+  }
 
   return (
     <section id="notices">
@@ -1648,7 +1738,7 @@ function Footer({
 
           {/* Portal */}
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 mb-5">Portal Access</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 mb-5">School Login</h3>
             <p className="text-sm text-slate-400 mb-5 leading-relaxed">
               Students, teachers, and staff — access your dashboard.
             </p>
@@ -1656,7 +1746,7 @@ function Footer({
               onClick={onOpenPortal}
               className="group inline-flex items-center gap-2 px-5 py-2.5 h-10 border border-slate-700 text-slate-200 rounded-lg text-sm font-semibold transition-colors hover:bg-slate-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
             >
-              Open Login Portal
+              School Login
               <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" aria-hidden="true" />
             </button>
           </div>

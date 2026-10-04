@@ -5,13 +5,19 @@ import { isSandboxHost, normalizeHostname } from './hostname'
 /**
  * tenant/resolution — the PUBLIC tenant resolution pipeline.
  *
- * PHASE 8B (§10/§11) canonical order:
+ * PRODUCT-DIRECTION RESET (Parts 2/3/11) — canonical order:
  *
  *   Host header → VERIFIED TenantDomain row (hostname unique per tenant)
  *               → legacy School.domain exact match (admin-set)
- *   → explicit ?slug=
- *   → single-school tenant inference (one ACTIVE school in the DB)
- *   → registered demo school (sandbox / marketing default)
+ *   → explicit ?slug= / ?tenant=   (development / deep-link fallback:
+ *     e.g. /?tenant=hawkings-prithvipur — the documented pre-custom-domain
+ *     path; NEVER the final customer UX)
+ *
+ * Everything else resolves to NOTHING: the bare platform domain
+ * (scholario.cloud) is the SCHOLARIO SaaS website, not a school
+ * directory and not a silently-defaulted school. The single-school and
+ * demo-fallback paths are retired — a school is reached only through
+ * its own identity (its domain, or an explicit tenant link).
  *
  * Security properties:
  *  - The Host header is normalized (lowercase, no protocol/port, no
@@ -34,16 +40,16 @@ import { isSandboxHost, normalizeHostname } from './hostname'
 export interface ResolvedTenant {
   schoolId: string
   slug: string
-  via: 'domain' | 'slug' | 'single' | 'demo'
+  via: 'domain' | 'slug' | 'tenant'
 }
 
 /**
  * Resolve the public tenant for an anonymous request.
  *
  * Priority: Host-header domain match (verified mapping or legacy column)
- * → ?slug= → exactly-one-school DB → the registered demo school. Returns
- * null only when nothing can be resolved safely (multi-school DB with no
- * matching slug/domain).
+ * → ?slug= / ?tenant= (the dev/deep-link fallback). Returns null when
+ * nothing resolves — the caller then renders the SCHOLARIO SaaS website
+ * (the platform's own root experience), never a guessed school.
  */
 export async function resolvePublicSchool(req: NextRequest): Promise<ResolvedTenant | null> {
   // 1. Domain (Host header) — the production custom-domain path.
@@ -67,38 +73,33 @@ export async function resolvePublicSchool(req: NextRequest): Promise<ResolvedTen
     if (byDomain) return { schoolId: byDomain.id, slug: byDomain.slug, via: 'domain' }
   }
 
-  // 2. Explicit slug (tenant-chosen link identity).
-  const slug = req.nextUrl.searchParams.get('slug')
+  // 2. Explicit tenant link identity — ?slug= (canonical) and ?tenant=
+  //    (the documented development fallback before custom domains are
+  //    configured, e.g. /?tenant=green-valley). Both are exact-match
+  //    only; an explicit but unknown value fails-safe (null — no demo
+  //    fallback leak, no guessing).
+  const params = req.nextUrl.searchParams
+  const slug = params.get('slug') ?? params.get('tenant')
   if (slug) {
     const bySlug = await db.school.findFirst({
       where: { slug: slug.trim().toLowerCase(), status: 'ACTIVE' },
       select: { id: true, slug: true },
     })
-    if (bySlug) return { schoolId: bySlug.id, slug: bySlug.slug, via: 'slug' }
+    if (bySlug) {
+      return {
+        schoolId: bySlug.id,
+        slug: bySlug.slug,
+        via: params.get('tenant') && !params.get('slug') ? 'tenant' : 'slug',
+      }
+    }
     // An explicit but unknown slug fails-safe (no demo fallback leak).
     return null
   }
 
-  // 3. Single-school deployment: the one ACTIVE school is the tenant.
-  const active = await db.school.findMany({
-    where: { status: 'ACTIVE' },
-    select: { id: true, slug: true, isDemo: true },
-  })
-  if (active.length === 1) {
-    return { schoolId: active[0].id, slug: active[0].slug, via: 'single' }
-  }
-
-  // 4. Sandbox / marketing default: the REGISTERED demo school only.
-  //    ARCHITECTURE RESET — the arbitrary "first active school" fallback is
-  //    retired: a bare deployment-domain visit on a multi-tenant DB must
-  //    never silently show whichever school happens to sort first. Only an
-  //    explicitly isDemo-flagged school (the sanctioned sandbox/marketing
-  //    tenant) still resolves; everything else returns null so the client
-  //    renders the SCHOLARIO directory landing (a platform surface, not a
-  //    school surface). Authorization is never derived from any of this —
-  //    resolution selects public branding only.
-  const demo = active.find((s) => s.isDemo)
-  if (demo) return { schoolId: demo.id, slug: demo.slug, via: 'demo' }
-
+  // PRODUCT-DIRECTION RESET (Parts 2/11): no single-school inference, no
+  // demo-school fallback. The bare platform domain is the SCHOLARIO SaaS
+  // website; each school lives on its own domain (or an explicit
+  // ?tenant= link during development). Authorization is never derived
+  // from any of this — resolution selects public branding only.
   return null
 }

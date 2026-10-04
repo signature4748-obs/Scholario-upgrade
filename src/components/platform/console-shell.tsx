@@ -198,6 +198,11 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
 
   const countdown = useCountdown(me?.session.stepUpUntil ?? null)
   const stepUpActive = Boolean(me?.session.stepUpActive && countdown)
+  // PRODUCT-DIRECTION RESET (Part 1) — with platform TOTP stood down
+  // (mfa-config) there is no second factor, so the step-up pill and its
+  // TOTP dialog are hidden entirely (no dead-end authenticator prompt).
+  // The server-side step-up gate is dormant under the same flag.
+  const mfaEnabled = Boolean(me?.mfaEnabled)
 
   // Close the mobile drawer on navigation.
   useEffect(() => {
@@ -330,8 +335,8 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
               </p>
             </div>
             <div className="flex items-center gap-2 sm:gap-3">
-              {/* Step-up status */}
-              {stepUpActive ? (
+              {/* Step-up status — only while platform MFA is enabled */}
+              {mfaEnabled && stepUpActive ? (
                 <button
                   onClick={() => setStepUpOpen(true)}
                   className="hidden sm:inline-flex items-center gap-2 h-9 px-3.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-semibold focus-ring"
@@ -340,7 +345,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
                   <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
                   <span className="tabular-nums">{countdown}</span>
                 </button>
-              ) : (
+              ) : mfaEnabled ? (
                 <button
                   onClick={() => setStepUpOpen(true)}
                   className="inline-flex items-center gap-2 h-9 px-3.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold focus-ring"
@@ -350,7 +355,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
                   <span className="hidden sm:inline">Verify step-up</span>
                   <span className="sm:hidden" aria-hidden="true">MFA</span>
                 </button>
-              )}
+              ) : null}
               <Button
                 variant="outline"
                 size="sm"

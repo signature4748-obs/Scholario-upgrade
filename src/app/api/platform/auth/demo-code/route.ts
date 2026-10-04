@@ -5,6 +5,7 @@ import { AppError, newRequestId } from '@/lib/security/errors'
 import { parseJsonBody, strictBody, emailSchema } from '@/lib/security/validation'
 import { enforceRateLimit, clientIpFromHeaders, RATE_LIMITS } from '@/lib/security/rate-limit'
 import { totpAt, secondsIntoStep } from '@/lib/platform/totp'
+import { isPlatformTotpEnabled } from '@/lib/platform/mfa-config'
 
 export const runtime = 'nodejs'
 
@@ -29,6 +30,16 @@ export async function POST(req: NextRequest) {
       throw new AppError('RESOURCE_NOT_FOUND', {
         publicMessage: 'Not found',
         internalDetail: 'demo-code: production hard-disable',
+      })
+    }
+
+    // PRODUCT-DIRECTION RESET (Part 1) — with platform TOTP stood down
+    // (mfa-config) there is no authenticator code to demo. Answer
+    // honestly instead of serving a code nobody will be asked for.
+    if (!isPlatformTotpEnabled()) {
+      throw new AppError('MFA_NOT_ENABLED', {
+        publicMessage: 'Platform multi-factor authentication is currently disabled',
+        internalDetail: 'demo-code: refused — platform TOTP policy is off (mfa-config)',
       })
     }
 

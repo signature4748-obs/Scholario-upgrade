@@ -72,6 +72,7 @@ export type AppErrorCode =
   // PHASE 6 — platform control plane
   | 'MFA_REQUIRED' // 401 — platform login: authenticator code missing
   | 'MFA_INVALID' // 401 — platform login/step-up: bad authenticator code
+  | 'MFA_NOT_ENABLED' // 403 — platform MFA policy is currently OFF (Part 1 reset)
   | 'STEP_UP_REQUIRED' // 403 — destructive action needs recent MFA
   | 'SCHOOL_SUSPENDED' // 403 — school tenant suspended by the platform
   | 'FEATURE_DISABLED' // 403 — module disabled by platform/school flags
@@ -131,6 +132,7 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   EXTERNAL_SERVICE_FAILURE: 503,
   MFA_REQUIRED: 401,
   MFA_INVALID: 401,
+  MFA_NOT_ENABLED: 403,
   STEP_UP_REQUIRED: 403,
   SCHOOL_SUSPENDED: 403,
   FEATURE_DISABLED: 403,
@@ -159,6 +161,7 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
     'Subscription required. Your account can access profile information only until the subscription is renewed. Please contact your school office.',
   MFA_REQUIRED: 'Enter your authenticator code',
   MFA_INVALID: 'Invalid authenticator code',
+  MFA_NOT_ENABLED: 'Platform multi-factor authentication is currently disabled',
   STEP_UP_REQUIRED: 'This action requires recent multi-factor verification',
   SCHOOL_SUSPENDED: "Your school's Scholario access is currently suspended",
   FEATURE_DISABLED: 'This module is currently disabled',

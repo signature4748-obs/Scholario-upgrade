@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server'
+import { randomBytes } from 'node:crypto'
 import { db } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { resolveProvisionedPassword } from '@/lib/account-provisioning'
@@ -7,6 +8,7 @@ import { withPlatform } from '@/lib/platform/authz'
 import { platformAuditEvent } from '@/lib/platform/audit'
 import { parseQuery, parseJsonBody, strictBody, emailSchema, safeText } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
+import { hostnameRejectionReason, normalizeHostname } from '@/lib/tenant/hostname'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -87,6 +89,8 @@ export async function GET(req: NextRequest) {
 
 const provisionSchema = strictBody({
   name: safeText(80),
+  /// STEP 2 — name display (crest label, footers, login wordmark).
+  shortName: safeText(40).optional(),
   slug: z
     .string()
     .min(3)
@@ -94,7 +98,11 @@ const provisionSchema = strictBody({
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'lowercase letters, numbers and hyphens only'),
   code: z.string().min(2).max(16).regex(/^[A-Z0-9-]+$/, 'uppercase letters, numbers and hyphens only'),
   domain: z.string().max(120).optional(),
+  /// STEP 1 — school basics.
+  address: safeText(120).optional(),
   city: safeText(60).optional(),
+  state: safeText(60).optional(),
+  phone: safeText(20).optional(),
   plan: z.enum(SCHOOL_PLANS).default('STANDARD'),
   board: z.enum(['CBSE', 'UP_BOARD', 'ICSE', 'STATE', 'CUSTOM']).default('CBSE'),
   principalName: safeText(80),
@@ -110,10 +118,23 @@ const provisionSchema = strictBody({
   academicYear: z.string().max(20).regex(/^[0-9]{4}[-/][0-9]{4}$/, 'format: YYYY-YYYY').optional(),
   officialEmail: emailSchema.optional(),
   authMethod: z.enum(['PASSWORD', 'GOOGLE_SSO']).default('PASSWORD'),
+  /// STEP 2 — branding (colors + optional school-provided tagline; the
+  /// platform never invents copy). Contrast validation for colors is
+  /// enforced on the school-settings write path; provisioning accepts
+  /// well-formed hex so the tenant can refine it later.
   themeColor: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, '6-digit hex color')
     .optional(),
+  accentColor: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, '6-digit hex color')
+    .optional(),
+  tagline: safeText(120).optional(),
+  /// STEP 3 — website: enabled by default, custom domain is recorded
+  /// PENDING with a real verification token (no faked DNS verification).
+  websiteEnabled: z.boolean().default(true),
+  customDomain: z.string().min(4).max(253).optional(),
   // Bootstrap academic configuration (optional; the readiness tracker
   // honestly reports what was and was not configured).
   classes: z
@@ -121,6 +142,11 @@ const provisionSchema = strictBody({
     .max(40)
     .optional(),
   subjects: z.array(safeText(40)).max(60).optional(),
+  rooms: z.array(safeText(40)).max(40).optional(),
+  workingDays: z
+    .array(z.enum(['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']))
+    .max(7)
+    .optional(),
 })
 
 /**
@@ -211,7 +237,31 @@ export async function POST(req: NextRequest) {
       // crypto-random temp password surfaced ONCE in the response.
       const { password: principalPassword, generated } = resolveProvisionedPassword(body.principalPassword)
 
+      // STEP 3 — custom domain: validate + normalize BEFORE the
+      // transaction (a bad hostname is a plain 400, never a 500). The
+      // TenantDomain row itself is created inside the transaction below
+      // with a REAL verification token — status PENDING until the school
+      // proves ownership with the DNS TXT record. DNS verification is
+      // never faked.
+      let customDomainHostname: string | null = null
+      if (body.customDomain) {
+        customDomainHostname = normalizeHostname(body.customDomain)
+        if (!customDomainHostname) {
+          throw new AppError('INVALID_INPUT', { publicMessage: 'customDomain could not be normalized' })
+        }
+        const rejection = hostnameRejectionReason(customDomainHostname)
+        if (rejection) {
+          throw new AppError('INVALID_INPUT', {
+            publicMessage: `Invalid custom domain: ${rejection}`,
+          })
+        }
+      }
+
       const principalEmail = body.principalEmail.toLowerCase()
+      // The school's platform subdomain — DATA derived from the slug
+      // (Part 4 STEP 3): <slug>.scholario.cloud, with the ?tenant= link
+      // as the pre-DNS development fallback. Never a custom domain.
+      const tempDomain = `${body.slug}.scholario.cloud`
       let school: {
         id: string
         name: string
@@ -221,19 +271,27 @@ export async function POST(req: NextRequest) {
         plan: string
       }
       let principal: { id: string; email: string; name: string | null }
-      let bootstrapCounts: { classes: number; sections: number; subjects: number } = {
+      let domainRecord: { hostname: string; status: string } | null = null
+      let bootstrapCounts: { classes: number; sections: number; subjects: number; rooms: number } = {
         classes: 0,
         sections: 0,
         subjects: 0,
+        rooms: 0,
       }
 
       try {
-        ;({ school, principal } = await db.$transaction(async (tx) => {
+        ;({ school, principal, domainRecord } = await db.$transaction(async (tx) => {
           // Onboarding settings (data-driven, no schema change): country,
-          // timezone, and the chosen auth method live in School.settings.
+          // state, timezone, the website toggle, working days, the derived
+          // temporary platform domain, and the chosen auth method live in
+          // School.settings.
           const settings: Record<string, unknown> = {}
           if (body.country) settings.country = body.country
+          if (body.state) settings.state = body.state
           if (body.timezone) settings.timezone = body.timezone
+          if (body.workingDays?.length) settings.workingDays = body.workingDays
+          settings.websiteEnabled = body.websiteEnabled
+          settings.tempDomain = tempDomain
           settings.authMethod = 'PASSWORD'
 
           const createdSchool = await tx.school.create({
@@ -242,10 +300,15 @@ export async function POST(req: NextRequest) {
               slug: body.slug,
               code: body.code,
               domain: body.domain || null,
+              address: body.address || null,
               city: body.city || null,
+              phone: body.phone || null,
               email: body.officialEmail || null,
+              shortName: body.shortName || null,
+              tagline: body.tagline || null,
               academicYear: body.academicYear || null,
               themeColor: body.themeColor || '#0f766e',
+              accentColor: body.accentColor || '#f59e0b',
               plan: body.plan,
               board: body.board,
               status: 'PENDING', // sign-in blocked until platform activation
@@ -266,8 +329,25 @@ export async function POST(req: NextRequest) {
             },
           })
 
-          // Academic bootstrap (optional): classes (+ sections) and
-          // school-level subjects, same transaction, tenant-scoped.
+          // STEP 3 — the canonical TenantDomain record (custom domain,
+          // PENDING with a real verification token). The platform never
+          // routes traffic through an unverified mapping.
+          let createdDomain: { hostname: string; status: string } | null = null
+          if (customDomainHostname) {
+            const row = await tx.tenantDomain.create({
+              data: {
+                schoolId: createdSchool.id,
+                hostname: customDomainHostname,
+                isPrimary: true,
+                status: 'PENDING',
+                verificationToken: randomBytes(16).toString('hex'),
+              },
+            })
+            createdDomain = { hostname: row.hostname, status: row.status }
+          }
+
+          // Academic bootstrap (optional): classes (+ sections),
+          // school-level subjects and rooms — same transaction, tenant-scoped.
           const usedSubjectCodes = new Set<string>()
           if (body.subjects?.length) {
             for (const subjectName of body.subjects) {
@@ -298,10 +378,26 @@ export async function POST(req: NextRequest) {
               bootstrapCounts.classes += 1
             }
           }
+          if (body.rooms?.length) {
+            const seen = new Set<string>()
+            for (const roomName of body.rooms) {
+              if (seen.has(roomName)) continue
+              seen.add(roomName)
+              await tx.room.create({
+                data: {
+                  schoolId: createdSchool.id,
+                  name: roomName,
+                  type: 'Classroom',
+                },
+              })
+              bootstrapCounts.rooms += 1
+            }
+          }
 
           return {
             school: createdSchool,
             principal: createdPrincipal,
+            domainRecord: createdDomain,
           }
         }))
       } catch (err) {
@@ -320,6 +416,11 @@ export async function POST(req: NextRequest) {
           }
           if (target.includes('email')) {
             throw new AppError('CONFLICT', { publicMessage: 'Principal email is already registered' })
+          }
+          if (target.includes('hostname') || target.includes('TenantDomain')) {
+            throw new AppError('CONFLICT', {
+              publicMessage: 'The custom domain is already mapped to a school',
+            })
           }
         }
         throw err
@@ -341,6 +442,8 @@ export async function POST(req: NextRequest) {
           timezone: body.timezone ?? null,
           academicYear: body.academicYear ?? null,
           authMethod: 'PASSWORD',
+          customDomain: customDomainHostname,
+          websiteEnabled: body.websiteEnabled,
           bootstrap: bootstrapCounts,
         },
       })
@@ -355,6 +458,15 @@ export async function POST(req: NextRequest) {
           plan: school.plan,
         },
         principal: { id: principal.id, email: principal.email, name: principal.name },
+        // The created tenant-domain ecosystem (Part 5): the custom-domain
+        // record (PENDING — real DNS verification happens later from the
+        // school record's Domains tab) + the derived temporary platform
+        // domain + the tenant link for previewing the website now.
+        domain: {
+          customDomain: domainRecord,
+          tempDomain,
+          previewUrl: `/?tenant=${encodeURIComponent(school.slug)}`,
+        },
         // tempPassword convention: surfaced ONCE, only when generated
         // server-side (the operator hands it to the principal, who changes
         // it at first login).

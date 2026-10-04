@@ -94,11 +94,12 @@ function useLoginSchoolBranding(): LoginBranding {
   const [branding, setBranding] = useState<LoginBranding>(NEUTRAL_BRANDING)
   useEffect(() => {
     let alive = true
-    // Forward the URL's ?slug= when present (sandbox per-tenant links /
-    // explicit school deep-links): the login must brand itself as the
-    // school whose site the visitor came from — NOT the demo fallback.
+    // Forward the URL's ?slug= / ?tenant= when present (sandbox
+    // per-tenant links / explicit school deep-links): the login must
+    // brand itself as the school whose site the visitor came from.
     // Production domains carry no slug; the Host header resolves there.
-    const slug = new URLSearchParams(window.location.search).get('slug')
+    const params = new URLSearchParams(window.location.search)
+    const slug = params.get('slug') ?? params.get('tenant')
     const url = slug
       ? `/api/schools/public?slug=${encodeURIComponent(slug)}`
       : '/api/schools/public'
@@ -107,12 +108,10 @@ function useLoginSchoolBranding(): LoginBranding {
       .then((body: PublicSchoolBrandingBody | null) => {
         const d = body?.success ? body.data : undefined
         if (!alive || !d?.name) return
-        // ARCHITECTURE RESET — same surface rule as the public website:
-        // a demo fallback with NO explicit slug is a deployment-domain
-        // visit, so the generic portal door stays NEUTRAL (platform)
-        // instead of branding itself as the demo school.
-        const resolvedVia = typeof d.resolvedVia === 'string' ? d.resolvedVia : 'domain'
-        if (!slug && resolvedVia === 'demo') return
+        // PRODUCT-DIRECTION RESET — with the demo fallback retired,
+        // resolution succeeds ONLY for the school that actually owns
+        // this domain/link; a bare platform-domain visit never reaches
+        // this code path with a school payload.
         const name = d.name
         setBranding({
           name,

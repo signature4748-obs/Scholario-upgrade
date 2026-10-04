@@ -28,6 +28,8 @@ installPlatformBearerInterceptor()
 export interface PlatformMe {
   admin: { id: string; email: string; name: string; isRoot: boolean }
   permissions: string[]
+  /** Current platform MFA posture (Part 1 reset: false while TOTP is stood down). */
+  mfaEnabled?: boolean
   session: {
     id: string
     createdAt: string

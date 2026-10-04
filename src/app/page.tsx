@@ -262,14 +262,13 @@ export default function Home() {
     )
   }
 
-  // Default: Public School Website (the registered school).
-  // The platform console is reachable ONLY at /platform (its own route
-  // namespace) — never rendered inside the school SPA.
+  // Default: the tenant-resolved school website (custom domain or the
+  // ?tenant= / ?slug= link). When no tenant resolves, the website
+  // component renders the SCHOLARIO SaaS landing (the platform's own
+  // root experience — never a school directory).
   return (
     <AssetErrorBoundary>
-      <PublicWebsite
-        onOpenPortal={() => setViewState('portal')}
-      />
+      <PublicWebsite />
     </AssetErrorBoundary>
   )
 }

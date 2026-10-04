@@ -18,6 +18,7 @@ import {
   PLATFORM_SESSION_TTL_MS,
 } from '@/lib/platform/auth'
 import { verifyTotp } from '@/lib/platform/totp'
+import { isPlatformTotpEnabled } from '@/lib/platform/mfa-config'
 import { loadEffectivePermissions } from '@/lib/platform/permissions'
 
 export const runtime = 'nodejs'
@@ -25,18 +26,26 @@ export const runtime = 'nodejs'
 const loginBodySchema = strictBody({
   email: emailSchema,
   password: passwordInputSchema,
-  /// 6-digit authenticator code — REQUIRED at every platform sign-in.
+  /// 6-digit authenticator code — only read while platform MFA is on
+  /// (see lib/platform/mfa-config.ts; Part 1 reset: stood down for now).
   totpCode: passwordInputSchema.optional(),
 })
 
 /**
  * POST /api/platform/auth/login — the ONLY platform entry point.
  *
- * Full MFA: email + password + TOTP in one round trip. On success a
- * PlatformAdminSession is created (fresh TOTP ⇒ live step-up window) and
- * the `scholario_platform_session` HttpOnly cookie is set. In dev
- * preview the raw token is also returned (cross-site iframe cookie
- * block — same pattern/justification as the school login).
+ * PRODUCT-DIRECTION RESET (Part 1) — sign-in is email + password for
+ * now: the TOTP challenge is stood down through the single MFA policy
+ * switch (lib/platform/mfa-config.ts). The TOTP architecture below is
+ * preserved verbatim behind that flag so proper MFA can be reintroduced
+ * later without code surgery. This is NOT a bypass — password checks,
+ * dual rate limits, anti-enumeration and auditing are unchanged, and
+ * school-user authentication is untouched.
+ *
+ * On success a PlatformAdminSession is created and the
+ * `scholario_platform_session` HttpOnly cookie is set. In dev preview
+ * the raw token is also returned (cross-site iframe cookie block — same
+ * pattern/justification as the school login).
  *
  * Hardening: dual rate-limit buckets (IP + account), anti-enumeration
  * timing burn, generic failure messages, audited failures/lockouts.
@@ -120,20 +129,24 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ── MFA (TOTP) — required at EVERY platform sign-in ───────────────
-    if (!body.totpCode) {
-      await fail('mfa missing')
-      throw new AppError('MFA_REQUIRED', {
-        publicMessage: 'Enter your authenticator code',
-        internalDetail: 'platform login: no totp code supplied',
-      })
-    }
-    if (!verifyTotp(body.totpCode, admin.totpSecret)) {
-      await fail('mfa invalid')
-      throw new AppError('MFA_INVALID', {
-        publicMessage: 'Invalid authenticator code',
-        internalDetail: 'platform login: totp verification failed',
-      })
+    // ── MFA (TOTP) — enforced ONLY while the platform MFA policy is on ──
+    // (PRODUCT-DIRECTION RESET Part 1: password-only sign-in for now;
+    // the challenge below is the intact re-enable path.)
+    if (isPlatformTotpEnabled()) {
+      if (!body.totpCode) {
+        await fail('mfa missing')
+        throw new AppError('MFA_REQUIRED', {
+          publicMessage: 'Enter your authenticator code',
+          internalDetail: 'platform login: no totp code supplied',
+        })
+      }
+      if (!verifyTotp(body.totpCode, admin.totpSecret)) {
+        await fail('mfa invalid')
+        throw new AppError('MFA_INVALID', {
+          publicMessage: 'Invalid authenticator code',
+          internalDetail: 'platform login: totp verification failed',
+        })
+      }
     }
 
     // ── Success ───────────────────────────────────────────────────────
@@ -142,7 +155,11 @@ export async function POST(req: NextRequest) {
     const { token } = await createPlatformSession(admin.id, {
       userAgent: req.headers.get('user-agent'),
       ipAddress: forwarded?.split(',')[0]?.trim() || null,
-      stepUp: true, // fresh TOTP verification
+      // A fresh TOTP verification only opens a live step-up window when
+      // the challenge actually ran (flag on). With MFA stood down there
+      // is no second factor to step up with — the step-up policy gate is
+      // disabled by the same switch (lib/platform/authz.ts).
+      stepUp: isPlatformTotpEnabled(),
     })
     await setPlatformSessionCookie(token)
 
@@ -153,7 +170,7 @@ export async function POST(req: NextRequest) {
       targetId: admin.id,
       ip,
       requestId,
-      metadata: { root: admin.isRoot },
+      metadata: { root: admin.isRoot, mfa: isPlatformTotpEnabled() },
     }).catch(() => {})
 
     const permissions = await loadEffectivePermissions(admin.id, admin.isRoot)

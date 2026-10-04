@@ -213,7 +213,10 @@ export function AdminsModule() {
     setCreating(true)
     try {
       const result = await gate(() =>
-        platformApi<{ enrollment: EnrollmentPayload }>('/api/platform/admins', {
+        // PART 1 reset: enrollment is only returned while platform MFA
+        // is enabled (mfa-config) — otherwise it is absent and no
+        // authenticator setup dialog is shown.
+        platformApi<{ enrollment?: EnrollmentPayload }>('/api/platform/admins', {
           method: 'POST',
           body: JSON.stringify({
             name: form.name.trim(),
@@ -229,7 +232,7 @@ export function AdminsModule() {
       }
       toast.success(`Created ${form.email.trim()}`)
       setCreateOpen(false)
-      setEnrollment(result.enrollment)
+      setEnrollment(result.enrollment ?? null)
       setForm({ name: '', email: '', password: '', isRoot: false, permissions: new Set(DEFAULT_GRANTS) })
       await load()
     } catch (e) {
@@ -643,7 +646,7 @@ export function AdminsModule() {
               Create platform admin
             </DialogTitle>
             <DialogDescription className="text-slate-500">
-              A new control-plane account. TOTP enrollment is shown once after creation.
+              A new control-plane account with its own credentials and permissions.
             </DialogDescription>
           </DialogHeader>
           <form
