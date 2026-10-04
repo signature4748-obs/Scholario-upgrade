@@ -19,13 +19,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp'
 import { savePlatformToken } from '@/lib/platform-session-token'
+import { AuthFailure, authFailureRefLine, classifyAuthFetchError } from '@/lib/auth-failure'
 import { toast } from 'sonner'
-
-interface LoginError {
-  message: string
-  code: string
-  retryAfter?: number
-}
 
 function DemoAuthenticator({ email, onCode }: { email: string; onCode: (code: string) => void }) {
   const [code, setCode] = useState<string | null>(null)
@@ -137,13 +132,13 @@ export default function PlatformLoginPage() {
   const [password, setPassword] = useState('')
   const [totp, setTotp] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<LoginError | null>(null)
+  const [failure, setFailure] = useState<AuthFailure | null>(null)
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault()
     if (busy) return
     setBusy(true)
-    setError(null)
+    setFailure(null)
     try {
       const res = await fetch('/api/platform/auth/login', {
         method: 'POST',
@@ -155,9 +150,18 @@ export default function PlatformLoginPage() {
         data?: { sessionToken?: string }
         error?: string
         code?: string
+        requestId?: string
       }
       if (!res.ok || !body.ok) {
-        setError({ message: body.error ?? 'Sign-in failed', code: body.code ?? 'AUTH_REQUIRED' })
+        // Server-rejected: safe envelope message + stable code +
+        // correlation ref (opaque — safe to display for support).
+        setFailure(
+          new AuthFailure(
+            body.error ?? 'Sign-in failed',
+            body.code ?? 'AUTH_REQUIRED',
+            body.requestId,
+          ),
+        )
         return
       }
       // Dev-preview bearer persistence (iframe cookie block); in
@@ -167,7 +171,9 @@ export default function PlatformLoginPage() {
       const next = searchParams.get('next')
       router.replace(next && next.startsWith('/platform') ? next : '/platform')
     } catch {
-      setError({ message: 'Network error — please try again', code: 'NETWORK' })
+      // Transport failure (fetch rejected before any response):
+      // classified — never the raw browser string ("Load failed").
+      setFailure(classifyAuthFetchError(new Error('transport')))
     } finally {
       setBusy(false)
     }
@@ -269,17 +275,24 @@ export default function PlatformLoginPage() {
                 </p>
               </div>
 
-              {error && (
+              {failure && (
                 <div
                   role="alert"
-                  className={`flex items-start gap-2.5 rounded-xl border p-3 text-sm ${
-                    error.code === 'RATE_LIMITED' || error.code === 'ACCOUNT_LOCKED'
+                  className={`flex flex-col gap-1 rounded-xl border p-3 text-sm ${
+                    failure.code === 'RATE_LIMITED' || failure.code === 'ACCOUNT_LOCKED'
                       ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
                       : 'border-red-500/30 bg-red-500/10 text-red-400'
                   }`}
                 >
-                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
-                  <span>{error.message}</span>
+                  <span className="flex items-start gap-2.5">
+                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
+                    {failure.message}
+                  </span>
+                  {authFailureRefLine(failure) && (
+                    <span className="font-mono text-[11px] leading-none opacity-70">
+                      {authFailureRefLine(failure)}
+                    </span>
+                  )}
                 </div>
               )}
 
@@ -330,6 +343,25 @@ export default function PlatformLoginPage() {
                     ))}
                   </InputOTPGroup>
                 </InputOTP>
+                {/* AUTH GATE (Phase 7) — enrollment transparency: the user
+                    must never have to guess where this code comes from.
+                    The setup key is issued ONCE when the account is created
+                    (the creating root admin sees it in the console and
+                    hands it over out-of-band); the secret is never shown
+                    again. Recovery is a root-admin action, by design. */}
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 space-y-1.5">
+                  <p className="text-[11px] leading-relaxed text-zinc-400">
+                    Open your authenticator app — Google Authenticator, Microsoft Authenticator,
+                    1Password, Authy, or any RFC 6238-compatible app — and enter the 6-digit code
+                    it shows for <span className="text-zinc-200">Scholario</span>. Codes rotate
+                    every 30 seconds.
+                  </p>
+                  <p className="text-[11px] leading-relaxed text-zinc-500">
+                    No device or setup key? Your account was enrolled with a one-time setup key
+                    when it was created — contact your root platform administrator to reissue
+                    enrollment. Scholario support can never read your secret.
+                  </p>
+                </div>
               </div>
 
               {process.env.NODE_ENV !== 'production' && (
