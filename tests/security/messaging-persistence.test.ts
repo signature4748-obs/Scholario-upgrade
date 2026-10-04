@@ -1,4 +1,5 @@
 import { db } from '../helpers/db'
+import { Prisma } from '@prisma/client'
 /**
  * Task 8B-7-d — Persistent student/principal messaging (LIVE HTTP).
  *
@@ -78,6 +79,24 @@ beforeAll(async () => {
   tokenStudent = randomBytes(32).toString('hex')
   tokenTeacher = randomBytes(32).toString('hex')
   tokenPrincipal = randomBytes(32).toString('hex')
+
+  // Re-run hygiene (same class as tests/helpers/login-buckets): the message
+  // budget is DATABASE-backed (rl:msg:<userId>, 10/window) with production
+  // semantics, so a rapid re-run of this suite can start inside a leftover
+  // blocked window and every send-fetch 429-shadows. Deleting the fixture
+  // users' rows heals the app within one request — dev/test DB only.
+  try {
+    await db.$executeRaw`DELETE FROM "RateLimitBucket" WHERE "key" IN (${Prisma.join([
+      `rl:msg:${sa.id}`,
+      `rl:msg:${ta.id}`,
+      `rl:msg:${pa.id}`,
+      `rl:msg:${probe.id}`,
+      `rl:msg:${pb.id}`,
+    ])})`
+  } catch {
+    /* non-fatal — the suite will surface a 429 if the limiter disagrees */
+  }
+
   await db.session.createMany({
     data: [
       { userId: sa.id, tokenHash: hashSessionToken(tokenStudent), expiresAt: new Date(Date.now() + 3600_000) },

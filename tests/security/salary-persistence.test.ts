@@ -104,6 +104,18 @@ beforeAll(async () => {
 
   tokenPrincipal = randomBytes(32).toString('hex')
   tokenTeacher = randomBytes(32).toString('hex')
+
+  // Re-run hygiene (same class as tests/helpers/login-buckets + the
+  // messaging suite): the salary-mutation budget is DATABASE-backed
+  // (rl:salary:usr:<userId>, 30/window) with production semantics, so a
+  // rapid re-run can start inside a leftover blocked window. Deleting the
+  // principal fixture's row heals the app — dev/test DB only.
+  try {
+    await db.$executeRaw`DELETE FROM "RateLimitBucket" WHERE "key" = ${'rl:salary:usr:' + pa.id}`
+  } catch {
+    /* non-fatal — the suite will surface a 429 if the limiter disagrees */
+  }
+
   await db.session.createMany({
     data: [
       { userId: pa.id, tokenHash: hashSessionToken(tokenPrincipal), expiresAt: new Date(Date.now() + 3600_000) },
