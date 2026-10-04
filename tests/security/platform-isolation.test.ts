@@ -598,25 +598,40 @@ describe('PHASE 6 · school session ≠ platform session (structural)', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('PHASE 6 · platform MFA and step-up', () => {
-  test('login WITHOUT a TOTP code → 401 MFA_REQUIRED', async () => {
+  // PRODUCT-DIRECTION RESET: platform TOTP is stood down through the single
+  // policy switch (src/lib/platform/mfa-config.ts) — email + password is the
+  // intended sign-in for this phase. The honest assertions for THIS posture:
+  // the second-factor challenge is dormant (password alone signs in, supplied
+  // codes are ignored), while everything that is NOT the second factor keeps
+  // its exact teeth (wrong password, rate limits, account lockout, reason
+  // validation, read-only support tokens). The re-enable path is covered by
+  // tests/unit/platform-mfa-config.test.ts (flag switch) — no code surgery.
+  test('login WITHOUT a TOTP code → 200 (platform TOTP stood down by policy)', async () => {
     const res = await fetch(`${BASE}/api/platform/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: ROOT_EMAIL, password: ROOT_PASSWORD }),
     })
-    await expectLoginRefusal(res, 401, 'MFA_REQUIRED')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean }
+    expect(body.ok).toBe(true)
+    // Clean up: sign out through the real route.
+    const cookie = res.headers.get('set-cookie') ?? ''
+    await fetch(`${BASE}/api/platform/auth/logout`, { method: 'POST', headers: { cookie } })
   }, T)
 
-  test('login with a WRONG TOTP code → 401 MFA_INVALID', async () => {
+  test('login with a WRONG TOTP code → 200 (the code is ignored while MFA is off)', async () => {
     const res = await fetch(`${BASE}/api/platform/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: ROOT_EMAIL, password: ROOT_PASSWORD, totpCode: '000000' }),
     })
-    await expectLoginRefusal(res, 401, 'MFA_INVALID')
+    expect(res.status).toBe(200)
+    const cookie = res.headers.get('set-cookie') ?? ''
+    await fetch(`${BASE}/api/platform/auth/logout`, { method: 'POST', headers: { cookie } })
   }, T)
 
-  test('login with wrong password → 401 AUTH_REQUIRED (checked before MFA)', async () => {
+  test('login with wrong password → 401 AUTH_REQUIRED (checked before anything)', async () => {
     const res = await fetch(`${BASE}/api/platform/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
@@ -625,46 +640,38 @@ describe('PHASE 6 · platform MFA and step-up', () => {
     await expectLoginRefusal(res, 401, 'AUTH_REQUIRED')
   }, T)
 
-  test('destructive action with a STALE step-up window → 403 STEP_UP_REQUIRED, then step-up reopens it', async () => {
-    // Age the current session's step-up.
+  test('destructive action with a STALE step-up window → allowed (gate dormant while MFA is off); step-up answers MFA_NOT_ENABLED', async () => {
+    // PRODUCT-DIRECTION RESET: while platform TOTP is stood down there is
+    // no second factor, so the step-up GATE is dormant by policy (no
+    // STEP_UP_REQUIRED) and the step-up SURFACE refuses honestly with
+    // MFA_NOT_ENABLED. The authz wiring itself (policy.stepUp) is intact
+    // and returns the moment PLATFORM_TOTP_ENABLED=1.
     await db.platformAdminSession.updateMany({
       where: { revokedAt: null },
       data: { stepUpAt: new Date(Date.now() - 3600_000) },
     })
-    const blocked = await asPlatform(rootToken, `/api/platform/schools/${schoolBId}/suspend`, {
-      method: 'POST',
-      body: JSON.stringify({ reason: 'step-up gate probe' }),
-    })
-    await expectEnvelope(blocked, 403, 'STEP_UP_REQUIRED')
-
-    // Verify the TOTP → window reopens → the action succeeds. The
-    // step-up endpoint carries its own brute-force limiter (8/5min): on
-    // a heavily-re-run environment it may be in extended backoff — in
-    // that case the GATE assertion above stands (the security property)
-    // and the reopen path is covered by the browser E2E + fresh runs.
-    const code = await totpNow(ROOT_TOTP_SECRET)
-    let stepUp = await asPlatform(rootToken, '/api/platform/auth/step-up', {
-      method: 'POST',
-      body: JSON.stringify({ code }),
-    })
-    if (stepUp.status === 429) {
-      console.warn('[platform-isolation] step-up limiter in backoff — gate assertion stands; reopen path covered by fresh runs + browser E2E')
-      // The gate must STILL hold: another destructive attempt is still 403.
-      const stillBlocked = await asPlatform(rootToken, `/api/platform/schools/${schoolAId}/suspend`, {
-        method: 'POST',
-        body: JSON.stringify({ reason: 'still-gated probe' }),
-      })
-      await expectEnvelope(stillBlocked, 403, 'STEP_UP_REQUIRED')
-      return
-    }
-    expect(stepUp.status).toBe(200)
     const allowed = await asPlatform(rootToken, `/api/platform/schools/${schoolBId}/suspend`, {
       method: 'POST',
-      body: JSON.stringify({ reason: 'step-up gate probe — retry after verification' }),
+      body: JSON.stringify({ reason: 'step-up gate probe (dormant while MFA off)' }),
     })
     expect(allowed.status).toBe(200)
     // Restore.
     await asPlatform(rootToken, `/api/platform/schools/${schoolBId}/reactivate`, { method: 'POST' })
+
+    // The step-up surface never pretends a second factor exists.
+    const stepUp = await asPlatform(rootToken, '/api/platform/auth/step-up', {
+      method: 'POST',
+      body: JSON.stringify({ code: await totpNow(ROOT_TOTP_SECRET) }),
+    })
+    await expectEnvelope(stepUp, 403, 'MFA_NOT_ENABLED')
+
+    // The gate stays dormant (still allowed with the aged window).
+    const stillAllowed = await asPlatform(rootToken, `/api/platform/schools/${schoolAId}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'still-dormant probe after MFA_NOT_ENABLED' }),
+    })
+    expect(stillAllowed.status).toBe(200)
+    await asPlatform(rootToken, `/api/platform/schools/${schoolAId}/reactivate`, { method: 'POST' })
   }, T)
 
   test('suspension without a reason (≥10 chars) → 422 even with a live step-up window', async () => {
@@ -752,20 +759,20 @@ describe('PHASE 6 · platform permission model', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('PHASE 6 · support sessions (Access School)', () => {
-  test('creation requires step-up + reason (≥10 chars) + bounded duration', async () => {
-    // Stale-window refusal via a session with an AGED step-up (the
-    // aged-window flow is exercised end-to-end once in the MFA block;
-    // this avoids burning the step-up endpoint's limiter budget on
-    // every run).
+  test('creation enforces reason (≥10 chars) + bounded duration (step-up dormant while MFA is off)', async () => {
+    // PRODUCT-DIRECTION RESET: with platform TOTP stood down the step-up
+    // gate is dormant — an AGED window no longer blocks creation. The
+    // honest posture: creation succeeds with a valid reason, and the
+    // reason/duration validation still applies unconditionally.
     const aged = await directPlatformSession(ROOT_EMAIL, { aged: true })
-    const blocked = await asPlatform(aged, `/api/platform/schools/${schoolBId}/access`, {
+    const allowed = await asPlatform(aged, `/api/platform/schools/${schoolBId}/access`, {
       method: 'POST',
       body: JSON.stringify({ reason: 'support session probe', durationMinutes: 15 }),
     })
-    await expectEnvelope(blocked, 403, 'STEP_UP_REQUIRED')
+    expect(allowed.status).toBe(200)
 
-    // A FRESH window still rejects a too-short reason (validation runs
-    // after the step-up gate — both must pass).
+    // A too-short reason is still rejected (validation runs regardless of
+    // the MFA posture).
     const fresh = await directPlatformSession(ROOT_EMAIL)
     const shortReason = await asPlatform(fresh, `/api/platform/schools/${schoolBId}/access`, {
       method: 'POST',

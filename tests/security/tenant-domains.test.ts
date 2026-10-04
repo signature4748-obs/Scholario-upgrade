@@ -160,11 +160,15 @@ describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
     }
   }, T)
 
-  test('PENDING mapping does NOT resolve (falls back to demo school, never GV)', async () => {
+  test('PENDING mapping does NOT resolve (nothing is served — no fallback, never GV)', async () => {
     const r = await fetch(`${BASE}/api/schools/public`, { headers: { Host: TEST_HOSTNAME } })
     const j = (await r.json().catch(() => null)) as { data?: { slug?: string } } | null
-    expect(r.status).toBe(200)
-    expect(j?.data?.slug).not.toBe('green-valley')
+    // PRODUCT-DIRECTION RESET: the demo/single-school fallback is retired —
+    // an unverified mapping resolves NOTHING (404). Strictly stronger than
+    // the old "falls back to the demo school" behavior: no tenant data of
+    // ANY kind is served for an unverified hostname.
+    expect(r.status).toBe(404)
+    expect(j?.data?.slug ?? null).toBe(null)
   }, T)
 
   test('cross-tenant duplicate: demo principal requests the SAME hostname → 409', async () => {

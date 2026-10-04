@@ -403,15 +403,17 @@ describe('PHASE 7.5 · client schoolId never switches tenant', () => {
 // 6. School login does not expose Super Admin
 // ─────────────────────────────────────────────────────────────────────────
 describe('PHASE 7.5 · login surface exposes no platform plane', () => {
-  test('public payload carries one school, no school list, no platform keys', async () => {
+  test('public payload resolves NO school on the bare platform domain (no directory, no platform keys)', async () => {
     const res = await fetch(`${BASE}/api/schools/public`)
     const body = await res.json()
-    expect(res.status).toBe(200)
-    expect(body.data).toBeDefined()
+    // PRODUCT-DIRECTION RESET: the bare platform domain resolves no tenant
+    // (the SCHOLARIO SaaS root) — strictly stronger than the old
+    // single-school payload: no tenant data at all, never a directory.
+    expect(res.status).toBe(404)
     const txt = JSON.stringify(body)
     expect(txt).not.toContain('SUPER_ADMIN')
     expect(txt).not.toContain('PlatformAdmin')
-    expect(body.data.schools).toBeUndefined() // never a tenant directory
+    expect(body.data?.schools).toBeUndefined() // never a tenant directory
   }, 30000)
 
   test('the legacy superadmin identity cannot obtain a school session', async () => {

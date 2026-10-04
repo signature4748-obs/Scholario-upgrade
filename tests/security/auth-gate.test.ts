@@ -393,28 +393,70 @@ describe('AUTH-08 platform admin TOTP', () => {
   )
 })
 
-// ─── AUTH-09 · invalid TOTP ────────────────────────────────────────────
-describe('AUTH-09 invalid TOTP', () => {
+// ─── AUTH-09 · platform TOTP stand-down (policy switch) ─────────────────
+// PRODUCT-DIRECTION RESET: platform MFA is TEMPORARILY stood down through
+// the single policy switch (src/lib/platform/mfa-config.ts). The honest
+// assertions for THIS posture — while the switch is off:
+//   · email + password alone signs in (the intended sign-in flow now);
+//   · a supplied authenticator code is neither required nor verified
+//     (AUTH-08's valid-code login is unaffected — the code is ignored);
+//   · the step-up and demo-code surfaces refuse with MFA_NOT_ENABLED
+//     instead of pretending a second factor exists;
+//   · the underlying TOTP architecture stays intact for re-enable
+//     (verified at the unit level in tests/unit/platform-mfa-config.test.ts).
+describe('AUTH-09 platform TOTP stand-down', () => {
   test(
-    'valid password + wrong code → 401 MFA_INVALID, no session minted',
+    'password alone signs in; a supplied totpCode is ignored while the policy is off',
     async () => {
       const before = await db.platformAdminSession.count()
-      const { res, body } = await platformLogin(PLATFORM_ROOT, PLATFORM_ROOT_PASSWORD, '000000')
-      expect(res.status).toBe(401)
-      expect(body.ok).toBe(false)
-      expect(body.code).toBe('MFA_INVALID')
-      expect(body.error).toBe('Invalid authenticator code')
-      expect(await db.platformAdminSession.count()).toBe(before)
+      const { res, body, cookieRaw } = await platformLogin(PLATFORM_ROOT, PLATFORM_ROOT_PASSWORD, '000000')
+      expect(res.status).toBe(200)
+      expect(body.ok).toBe(true)
+      expect((body.data as { admin?: { isRoot?: boolean } } | undefined)?.admin?.isRoot).toBe(true)
+      expect(cookieRaw).toContain('scholario_platform_session=')
+      expect(cookieRaw).toContain('HttpOnly')
+      expect(await db.platformAdminSession.count()).toBe(before + 1)
+      // Clean up: sign out through the real route; the session dies.
+      const out = await fetch(`${BASE}/api/platform/auth/logout`, {
+        method: 'POST',
+        headers: { cookie: cookieRaw },
+      })
+      expect(out.status).toBe(200)
+      const meAfter = await fetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookieRaw } })
+      expect(meAfter.status).toBe(401)
     },
     T,
   )
   test(
-    'missing code → 401 MFA_REQUIRED (password alone NEVER signs in)',
+    'step-up surface refuses honestly: 403 MFA_NOT_ENABLED while the policy is off',
     async () => {
-      const { res, body } = await platformLogin(PLATFORM_ROOT, PLATFORM_ROOT_PASSWORD, undefined)
-      expect(res.status).toBe(401)
-      expect(body.code).toBe('MFA_REQUIRED')
-      expect(body.error).toBe('Enter your authenticator code')
+      const { cookieRaw } = await platformLogin(PLATFORM_ROOT, PLATFORM_ROOT_PASSWORD)
+      const res = await fetch(`${BASE}/api/platform/auth/step-up`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: cookieRaw },
+        body: JSON.stringify({ code: '000000' }),
+      })
+      const body = (await res.json().catch(() => null)) as LoginEnvelope
+      expect(res.status).toBe(403)
+      expect(body.code).toBe('MFA_NOT_ENABLED')
+      await fetch(`${BASE}/api/platform/auth/logout`, {
+        method: 'POST',
+        headers: { cookie: cookieRaw },
+      })
+    },
+    T,
+  )
+  test(
+    'demo-code surface refuses honestly: 403 MFA_NOT_ENABLED while the policy is off',
+    async () => {
+      const res = await fetch(`${BASE}/api/platform/auth/demo-code`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: PLATFORM_ROOT }),
+      })
+      const body = (await res.json().catch(() => null)) as LoginEnvelope
+      expect(res.status).toBe(403)
+      expect(body.code).toBe('MFA_NOT_ENABLED')
     },
     T,
   )

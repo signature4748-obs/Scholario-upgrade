@@ -49,6 +49,7 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     // PHASE 6 — platform control plane codes.
     MFA_REQUIRED: 401,
     MFA_INVALID: 401,
+    MFA_NOT_ENABLED: 403, // product-direction reset — honest refusal while platform TOTP is stood down
     STEP_UP_REQUIRED: 403,
     SCHOOL_SUSPENDED: 403,
     FEATURE_DISABLED: 403,
