@@ -56,8 +56,10 @@ function argValue(flag: string): string | undefined {
 }
 
 async function tableExists(name: string): Promise<boolean> {
+  // to_regclass needs the identifier QUOTED — Prisma table names are
+  // CamelCase, which an unquoted literal would lowercase and miss.
   const rows = (await mgmtQuery(
-    `SELECT to_regclass(${sqlLiteral('public.' + name)}) AS oid`,
+    `SELECT to_regclass(${sqlLiteral(`public."${name.replace(/"/g, '""')}"`)}) AS oid`,
   )) as Array<{ oid: string | null }>
   return rows.length > 0 && rows[0].oid != null
 }
@@ -175,6 +177,11 @@ async function main(): Promise<void> {
   // ── Final state ─────────────────────────────────────────────────────────
   const finalGate = await migrationHistoryGate()
   console.log(`\n  final history : ${finalGate.applied.length} applied / ${finalGate.repo.length} in repo / ${finalGate.pending.length} pending`)
+  if (dryRun) {
+    console.log('  DRY RUN complete — nothing was applied; pending migrations remain by design.')
+    console.log('\n[prod-migration:apply] ✓ DRY RUN GREEN — plan verified, no writes performed')
+    return
+  }
   if (finalGate.pending.length) {
     exitWithProblems('apply', ['pipeline finished with pending migrations remaining — refusing to report success'])
   }
