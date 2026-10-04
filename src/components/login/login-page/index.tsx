@@ -7,6 +7,12 @@ import { Eye, EyeOff, Info, AlertTriangle } from 'lucide-react'
 import { useAuth, type Role } from '@/lib/store/auth-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
 import { saveSessionToken } from '@/lib/auth-session-token'
+import {
+  AuthFailure,
+  authFailureFromEnvelope,
+  authFailureRefLine,
+  classifyAuthFetchError,
+} from '@/lib/auth-failure'
 import { isValidHexColor } from '@/lib/branding-contrast'
 import { LoadingPhase } from './loading-phase'
 
@@ -139,13 +145,17 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
   const [phase, setPhase] = useState<'form' | 'loading'>('form')
   const [forgotOpen, setForgotOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
+  // AUTH GATE — structured failure model (src/lib/auth-failure.ts):
+  // server rejections carry a safe message + stable code + requestId;
+  // transport failures classify as AUTH_NETWORK_UNAVAILABLE. Raw
+  // browser fetch errors ("Load failed") are never displayed.
+  const [failure, setFailure] = useState<AuthFailure | null>(null)
 
   const handleLogin = async () => {
     // 1) Validate BEFORE any network work — a doomed request must never
     //    fire before the user sees the empty-fields error.
     if (!email.trim() || !password) {
-      setError('Please enter your email and password.')
+      setFailure(new AuthFailure('Please enter your email and password.', 'AUTH_INPUT_MISSING'))
       return
     }
     // Duplicate-submission guard: the button is disabled while submitting,
@@ -154,7 +164,7 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
     if (submitting) return
 
     setSubmitting(true)
-    setError('')
+    setFailure(null)
     startAuth()
     setPhase('loading')
 
@@ -170,6 +180,8 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       const payload = (await res.json().catch(() => null)) as {
         ok?: boolean
         error?: string
+        code?: string
+        requestId?: string
         data?: {
           id?: string
           email?: string
@@ -181,7 +193,13 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       } | null
 
       if (!res.ok || !payload?.ok) {
-        throw new Error(payload?.error || 'Unable to complete sign in. Please try again.')
+        // Server-rejected: surface the safe envelope message + its
+        // stable code + correlation id (opaque — safe to display).
+        throw authFailureFromEnvelope(
+          res.status,
+          payload,
+          'Unable to complete sign in. Please try again.',
+        )
       }
 
       const serverRole = payload.data?.role?.toLowerCase()
@@ -222,15 +240,15 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       })
     } catch (e) {
       // 4) Failure returns to the form WITH a visible, actionable error —
-      //    never a silent bounce back to the same screen.
+      //    never a silent bounce back to the same screen. A non-AuthFailure
+      //    throwable here is a TRANSPORT failure (fetch rejected before any
+      //    response existed: offline, DNS, proxy drop, browser-blocked
+      //    request) — classified, never shown as the raw browser string
+      //    ("Load failed" / "Failed to fetch").
       endAuth()
       setPhase('form')
       setSubmitting(false)
-      setError(
-        e instanceof Error && e.message
-          ? e.message
-          : 'Network error — please check your connection and try again.'
-      )
+      setFailure(classifyAuthFetchError(e))
     }
   }
 
@@ -260,9 +278,15 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
               email={email}
               password={password}
               submitting={submitting}
-              error={error}
-              onEmailChange={(v) => { setEmail(v); setError('') }}
-              onPasswordChange={(v) => { setPassword(v); setError('') }}
+              failure={failure}
+              onEmailChange={(v) => {
+                setEmail(v)
+                setFailure(null)
+              }}
+              onPasswordChange={(v) => {
+                setPassword(v)
+                setFailure(null)
+              }}
               onLogin={() => handleLogin()}
               onForgotPassword={() => setForgotOpen(true)}
             />
@@ -524,7 +548,7 @@ interface RightPaneProps {
   email: string
   password: string
   submitting: boolean
-  error: string
+  failure: AuthFailure | null
   onEmailChange: (v: string) => void
   onPasswordChange: (v: string) => void
   onLogin: () => void
@@ -536,7 +560,7 @@ function RightPane({
   email,
   password,
   submitting,
-  error,
+  failure,
   onEmailChange,
   onPasswordChange,
   onLogin,
@@ -600,14 +624,21 @@ function RightPane({
         <PlatformAnnouncementBanner />
 
         {/* Error message — rendered ABOVE the fields so it is always
-            visible without scrolling, on every viewport. */}
-        {error && (
+            visible without scrolling, on every viewport. Structured model:
+            safe message + machine code + correlation ref (support can
+            quote the ref to find the exact server log/audit rows). */}
+        {failure && (
           <div
             role="alert"
             aria-live="polite"
-            className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm font-medium text-destructive"
+            className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-2.5"
           >
-            {error}
+            <p className="text-sm font-medium text-destructive">{failure.message}</p>
+            {authFailureRefLine(failure) && (
+              <p className="mt-1 font-mono text-[11px] leading-none text-destructive/70">
+                {authFailureRefLine(failure)}
+              </p>
+            )}
           </div>
         )}
 
