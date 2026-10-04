@@ -1,5 +1,5 @@
 import { withUser, schoolScoped } from '@/lib/api'
-import { getPaymentProvider } from '@/lib/payments/provider'
+import { getTenantPaymentProvider } from '@/lib/payments/tenant-gateway'
 
 export const runtime = 'nodejs'
 
@@ -21,9 +21,13 @@ export const runtime = 'nodejs'
 export async function GET() {
   return withUser(
     async (user) => {
-      schoolScoped(user) // RLS — every student route is school-scoped
+      const schoolId = schoolScoped(user) // RLS — every student route is school-scoped
 
-      const provider = getPaymentProvider()
+      // SaaS-HARDENING (§3B) — tenant-scoped resolution: the school's OWN
+      // gateway account (if configured + ACTIVE) wins over the deployment
+      // provider. Only the PUBLIC key id/mode reach the browser here —
+      // secrets never leave the server.
+      const provider = await getTenantPaymentProvider(schoolId)
       return {
         available: !!provider,
         provider: provider?.name ?? null,

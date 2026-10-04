@@ -3,7 +3,7 @@ import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { applyPaymentToLedger, resolveFeeIdForTxn } from '@/lib/fee-workflow'
-import { getPaymentProvider } from '@/lib/payments/provider'
+import { getTenantPaymentProvider } from '@/lib/payments/tenant-gateway'
 import { paymentMethodFor, prettyMethod } from '@/lib/payments/methods'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { auditEvent } from '@/lib/security/audit'
@@ -132,8 +132,9 @@ export async function POST(req: NextRequest) {
       }
       if (txn.status !== 'PENDING') throw new Error('TRANSACTION_NOT_VERIFIABLE')
 
-      // ── 3. Verify the checkout signature (server-held secret) ──────
-      const provider = getPaymentProvider()
+      // ── 3. Verify the checkout signature (server-held secret; §3B:
+      //      tenant-scoped — the txn's OWN school gateway account) ──
+      const provider = await getTenantPaymentProvider(txn.schoolId)
       if (!provider) throw new Error('ONLINE_PAYMENTS_UNAVAILABLE')
       const verdict = provider.verifyCheckoutConfirmation({ orderId, paymentId, signature })
       if (!verdict.ok) {

@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
-import { getPaymentProvider } from '@/lib/payments/provider'
+import { getTenantPaymentProvider } from '@/lib/payments/tenant-gateway'
 import { normalizeMethod } from '@/lib/payments/methods'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 
@@ -63,8 +63,8 @@ export async function POST(req: NextRequest) {
       const feeHeadName = body?.feeHead ? String(body.feeHead).slice(0, 120) : null
       const _purpose = body?.purpose ? String(body.purpose).slice(0, 200) : null
 
-      // ── Resolve the payment provider ──────────────────────────────
-      const provider = getPaymentProvider()
+      // ── Resolve the payment provider (§3B: tenant-scoped) ────────
+      const provider = await getTenantPaymentProvider(schoolId)
       if (!provider) throw new Error('ONLINE_PAYMENTS_UNAVAILABLE')
 
       // ── Mint the receipt number server-side ────────────────────────

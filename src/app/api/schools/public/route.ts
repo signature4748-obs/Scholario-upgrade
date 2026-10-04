@@ -26,11 +26,26 @@ export const runtime = 'nodejs'
  *     identity (name/shortName/tagline/affiliation/contact/…),
  *     branding (primaryColor/accentColor/logoUrl), the website CMS
  *     document (hero/sections/admissions/footer/SEO), published gallery
- *     albums, and ONLY published+visible announcements (audience
- *     ALL/PUBLIC + status PUBLISHED + publishAt/expiresAt window).
+ *     albums, ONLY published+visible announcements (audience
+ *     ALL/PUBLIC + status PUBLISHED + publishAt/expiresAt window), and
+ *     — task 2-a — the Website CMS surfaces: live-published website
+ *     notices & announcements (lazy promotion/expiry evaluated HERE),
+ *     the published admissions singleton, and the social-link list.
  *   · The demo school's isDemo flag keeps the sandbox default view;
  *     a real multi-domain deployment resolves by Host header.
  */
+
+/** Parse the admissions JSON string array defensively (task 2-a). */
+function safeParseClasses(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw || '[]')
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((c) => String(c)).filter((c) => c.trim().length > 0)
+  } catch {
+    return []
+  }
+}
+
 const publicInclude = (now: Date) =>
   Prisma.validator<Prisma.SchoolInclude>()({
     _count: {
@@ -66,6 +81,32 @@ const publicInclude = (now: Date) =>
           select: { id: true, fileId: true, caption: true },
         },
       },
+    },
+    // Task 2-a — Website CMS notices + announcements (both kinds share
+    // the WebsiteNotice table; live-published only — drafts and
+    // not-yet-due scheduled rows never leave the server). Bounded fetch,
+    // split by kind below (notices ≤20, announcements ≤6).
+    websiteNotices: {
+      where: {
+        OR: [
+          { status: 'PUBLISHED' },
+          { status: 'SCHEDULED', publishAt: { lte: now } },
+        ],
+        AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gte: now } }] }],
+      },
+      orderBy: [{ pinned: 'desc' }, { publishAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+      take: 26,
+      select: {
+        id: true, kind: true, title: true, body: true, category: true, pinned: true,
+        publishAt: true, expiresAt: true, attachmentFileId: true, createdAt: true,
+      },
+    },
+    // Task 2-a — admissions singleton (serialised only when published).
+    websiteAdmission: true,
+    // Task 2-a — managed social links (all, ordered).
+    websiteSocialLinks: {
+      orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, platform: true, url: true, label: true },
     },
   })
 
@@ -175,6 +216,54 @@ export async function GET(req: NextRequest) {
             priority: n.priority,
             imageId: n.imageId,
             imageUrl: n.imageId ? `/api/public/website/media/${n.imageId}` : null,
+          })),
+          // Task 2-a — CMS notices + announcements (both kinds, split by
+          // kind, bounded: notices ≤ 20 / announcements ≤ 6).
+          ...(() => {
+            const serialize = (n: (typeof school.websiteNotices)[number]) => ({
+              id: n.id,
+              title: n.title,
+              body: n.body,
+              category: n.category,
+              pinned: n.pinned,
+              publishedAt: (n.publishAt ?? n.createdAt).toISOString(),
+              attachmentFileId: n.attachmentFileId,
+              attachmentUrl: n.attachmentFileId
+                ? `/api/public/website/media/${n.attachmentFileId}`
+                : null,
+            })
+            return {
+              notices: school.websiteNotices
+                .filter((n) => n.kind === 'NOTICE')
+                .slice(0, 20)
+                .map(serialize),
+              websiteAnnouncements: school.websiteNotices
+                .filter((n) => n.kind === 'ANNOUNCEMENT')
+                .slice(0, 6)
+                .map(serialize),
+            }
+          })(),
+          // Task 2a — admissions singleton ONLY while published.
+          admissions: school.websiteAdmission?.published
+            ? {
+                status: school.websiteAdmission.status === 'OPEN' ? 'OPEN' : 'CLOSED',
+                session: school.websiteAdmission.session,
+                classesAccepting: safeParseClasses(school.websiteAdmission.classesAccepting),
+                openingDate: school.websiteAdmission.openingDate?.toISOString() ?? null,
+                closingDate: school.websiteAdmission.closingDate?.toISOString() ?? null,
+                noticeTitle: school.websiteAdmission.noticeTitle,
+                noticeBody: school.websiteAdmission.noticeBody,
+                applicationUrl: school.websiteAdmission.applicationUrl,
+                contactEmail: school.websiteAdmission.contactEmail,
+                contactPhone: school.websiteAdmission.contactPhone,
+              }
+            : null,
+          // Task 2-a — managed social links (ordered).
+          socialLinks: school.websiteSocialLinks.map((l) => ({
+            id: l.id,
+            platform: l.platform,
+            url: l.url,
+            label: l.label,
           })),
         },
       },

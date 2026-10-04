@@ -1,5 +1,6 @@
 import { getCurrentUser, getCurrentSession, parseUserAgent } from '@/lib/auth'
 import { api } from '@/lib/api'
+import { publicEntitlementForUser } from '@/lib/entitlement/server'
 
 export const runtime = 'nodejs'
 
@@ -10,6 +11,11 @@ export const runtime = 'nodejs'
  * CURRENT session's context (started/expires/device) — never the token —
  * and the account's lastLoginAt so Login & Security can render real
  * sign-in information instead of fabricating it.
+ *
+ * SaaS-HARDENING — the response carries the TENANT ENTITLEMENT state so
+ * every role shell can render the correct posture (full ERP / grace
+ * warning / locked renewal shell). The entitlement is evaluated
+ * server-side from the session's school row (never client input).
  *
  * SD-3 — STUDENT users additionally get their server-resolved enrollment
  * context (class label + roll number) so the shell identity surfaces
@@ -28,6 +34,7 @@ export async function GET() {
 
     return {
       user: { ...user, student: user.role === 'STUDENT' ? await getStudentContext(user) : undefined },
+      entitlement: publicEntitlementForUser(user),
       session: session
         ? {
             createdAt: session.createdAt,

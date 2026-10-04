@@ -316,6 +316,18 @@ export async function POST(req: NextRequest) {
               settings: JSON.stringify(settings),
             },
           })
+          // SaaS-HARDENING — the tenant's subscription row is part of the
+          // SAME transaction: ACTIVE (no expiry until the first recorded
+          // payment — honest default: billing starts when billing starts).
+          await tx.schoolSubscription.create({
+            data: {
+              schoolId: createdSchool.id,
+              status: 'ACTIVE',
+              plan: body.plan,
+              periodStart: new Date(),
+              periodEnd: null,
+            },
+          })
           // Same transaction: a principal-creation failure (concurrent
           // email claim) rolls the School row back — no orphans, ever.
           const createdPrincipal = await tx.user.create({

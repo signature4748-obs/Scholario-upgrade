@@ -625,23 +625,29 @@ describe('PHASE 7.5 · subscription access policy (domain layer)', () => {
       const blocked = await as(tokenB, '/api/dashboard')
       expect(blocked.status).toBe(403)
       const blockedBody = await blocked.json()
+      expect(blockedBody.code).toBe('SUBSCRIPTION_REQUIRED')
       expect(String(blockedBody.error ?? '').toLowerCase()).toContain('suspended')
 
       // school A keeps working in the same instant
       const okA = await as(tokenA, '/api/dashboard')
       expect(okA.status).toBe(200)
 
-      // login is blocked while suspended (no new session can be minted)
+      // SaaS-HARDENING (§2): login is NOT blocked while suspended — the
+      // user authenticates and receives the SUSPENDED entitlement (the
+      // locked shell + business-API rejection is the enforcement). A 429
+      // (login limiter on re-runs) is the only other acceptable verdict.
       const loginRes = await fetch(`${BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email: principalB.email, password: PW }),
       })
       const loginBody = await loginRes.json().catch(() => ({}))
-      expect([401, 403, 429]).toContain(loginRes.status)
-      if (loginRes.status !== 429) {
-        expect(loginRes.status).toBe(403)
-        expect(loginBody.data?.sessionToken ?? loginBody.data?.token).toBeUndefined()
+      if (loginRes.status === 429) {
+        expect(loginRes.status).toBe(429)
+      } else {
+        expect(loginRes.status).toBe(200)
+        expect(loginBody.data?.entitlement?.state).toBe('SUSPENDED')
+        expect(loginBody.data?.entitlement?.businessAllowed).toBe(false)
       }
 
       // the suspended tenant's public website presence goes dark

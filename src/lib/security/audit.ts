@@ -80,6 +80,16 @@ export const AUDIT_ACTIONS = [
   'DOMAIN_REQUESTED',
   'DOMAIN_VERIFIED',
   'DOMAIN_CHECK_FAILED',
+  // SaaS-HARDENING — subscription entitlement / identity-request /
+  // support surfaces on the school plane (all school-scoped).
+  'SUBSCRIPTION_RENEWAL_REQUESTED',
+  'IDENTITY_CHANGE_REQUESTED',
+  'IDENTITY_CHANGE_APPLIED',
+  'SUPPORT_REQUESTED',
+  // SaaS-HARDENING — school website CMS notices/admissions lifecycle.
+  'WEBSITE_NOTICE_PUBLISHED',
+  'WEBSITE_NOTICE_UNPUBLISHED',
+  'WEBSITE_ADMISSIONS_UPDATED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

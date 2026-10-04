@@ -199,6 +199,7 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
           role?: string
           sessionToken?: string
           subscriptionStatus?: string
+          entitlement?: { businessAllowed?: boolean; state?: string; message?: string | null }
         }
       } | null
 
@@ -235,7 +236,13 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       // renders with the full profile (guardian, contact, enrollment
       // context) and no module surface ever fires — their APIs reject
       // LOCKED accounts server-side (403 SUBSCRIPTION_REQUIRED) anyway.
-      if (payload.data?.subscriptionStatus && payload.data.subscriptionStatus !== 'ACTIVE') {
+      // SaaS-HARDENING: the same hydration runs for a RESTRICTED/
+      // SUSPENDED tenant entitlement (login still succeeds — /api/auth/me
+      // carries the state and the shell renders the locked renewal UX).
+      if (
+        (payload.data?.subscriptionStatus && payload.data.subscriptionStatus !== 'ACTIVE') ||
+        payload.data?.entitlement?.businessAllowed === false
+      ) {
         await useCurrentUser.getState().refresh().catch(() => undefined)
       }
 

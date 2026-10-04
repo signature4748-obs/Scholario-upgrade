@@ -8,6 +8,7 @@ import { log } from '@/lib/observability/logger'
 import { runWithContext } from '@/lib/observability/context'
 import { sanitizeRequestId, newRequestId } from '@/lib/observability/http'
 import { rupeesFromPaise } from '@/lib/money'
+import { webhookSecretCandidates } from '@/lib/payments/tenant-gateway'
 
 /**
  * Razorpay webhook receiver — real signature verification + DB-persisted
@@ -142,17 +143,6 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
     )
   }
 
-  const secret = process.env.RAZORPAY_WEBHOOK_SECRET
-  if (!secret) {
-    // Misconfiguration — surface it loudly so the operator sets the secret.
-    console.error('[webhooks/razorpay] RAZORPAY_WEBHOOK_SECRET is not set — rejecting event.')
-    return NextResponse.json(
-      { received: false, error: 'Webhook secret not configured on the server.' },
-      { status: 503 },
-    )
-  }
-
-  // Razorpay signs the RAW body, so we must read it as text (not .json()).
   const rawBody = await req.text()
   const signature = req.headers.get('x-razorpay-signature') || ''
 
@@ -163,8 +153,25 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
     )
   }
 
-  if (!verifySignature(rawBody, signature, secret)) {
-    console.warn('[webhooks/razorpay] signature verification failed — rejecting event.')
+  // SaaS-HARDENING (§3B) — multi-account verification: the signature may
+  // be minted with the deployment secret OR any tenant-scoped gateway
+  // webhook secret (School A / School B run their OWN Razorpay
+  // accounts). Every candidate is checked timing-safe; the matching
+  // secret identifies the account (matchedTenant — settlement
+  // attribution later derives the school from order ids, which is the
+  // authoritative mapping).
+  const candidates = await webhookSecretCandidates()
+  if (candidates.length === 0) {
+    // Misconfiguration — surface it loudly so the operator sets the secret.
+    console.error('[webhooks/razorpay] no webhook secret configured (env or tenant) — rejecting event.')
+    return NextResponse.json(
+      { received: false, error: 'Webhook secret not configured on the server.' },
+      { status: 503 },
+    )
+  }
+  const matched = candidates.find((c) => verifySignature(rawBody, signature, c.secret))
+  if (!matched) {
+    console.warn('[webhooks/razorpay] signature verification failed (all candidates) — rejecting event.')
     return NextResponse.json(
       { received: false, error: 'Invalid signature.' },
       { status: 400 },
@@ -201,7 +208,7 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
     req.headers.get('x-razorpay-event-id') ||
     payload?.meta?.event_id ||
     payload?.event_id ||
-    `evt_${createHmac('sha256', secret).update(rawBody).digest('hex').slice(0, 32)}`
+    `evt_${createHmac('sha256', matched.secret).update(rawBody).digest('hex').slice(0, 32)}`
 
   if (seenEventIds.has(eventId)) {
     // Phase 4 (item 9): count the re-delivery on the durable event row

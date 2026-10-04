@@ -5,7 +5,8 @@ import { AppError, classifyError, newRequestId } from './security/errors'
 import { runWithContext, patchRequestContext } from './observability/context'
 import { log } from './observability/logger'
 import { sanitizeRequestId } from './observability/http'
-import { evaluateSchoolAccess } from './access-policy'
+import { entitlementForUser } from './entitlement/server'
+import { isEntitlementExemptRoute } from './entitlement/entitlement'
 
 export type Ctx = { user: AuthUser }
 
@@ -123,38 +124,29 @@ export async function withUser(
         internalDetail: `withUser: account status ${user.status}`,
       })
     }
-    // PHASE 7.5 — subscription/tenant access policy at the API boundary.
-    // evaluateSchoolAccess is the single domain-layer decision for
-    // "may this school's users use the product right now?": a SUSPENDED
-    // tenant is blocked for EVERY school-scoped API call — not just at
-    // login — while the school record and its data are preserved (the
-    // platform control plane retains access via its own boundary).
-    // Fail-closed: an unknown/missing school status is denied, never open.
+    // ── SaaS-HARDENING — tenant-subscription entitlement gate ──────────
+    // Authentication NEVER depends on the subscription (login always
+    // succeeds); THIS is where a restricted/suspended tenant is stopped:
+    // every BUSINESS API rejects with SUBSCRIPTION_REQUIRED while the
+    // exempt non-business surface (auth/session, profile, subscription
+    // status, renewal, support, logout) stays reachable so the school
+    // understands "Your SCHOLARIO subscription needs renewal."
+    // Fail-closed: unknown routes are business; unknown states restrict.
+    // UI lock screens are convenience only — THIS is the authority.
     if (user.role !== 'SUPER_ADMIN' && user.schoolId) {
-      const access = evaluateSchoolAccess(user.school)
-      if (!access.allowed) {
-        throw new AppError('FORBIDDEN', {
-          publicMessage: access.reason,
-          internalDetail: `withUser: school access denied (tenant status ${access.status})`,
+      const entitlement = entitlementForUser(user)
+      const route = await currentRouteContext()
+      const routeExempt = isEntitlementExemptRoute(route)
+      const bypass =
+        routeExempt ||
+        // Legacy account-lock escape hatch preserved for identity surfaces.
+        (opts?.allowLockedSubscription && !entitlement.businessAllowed)
+      if (!entitlement.businessAllowed && !bypass) {
+        throw new AppError('SUBSCRIPTION_REQUIRED', {
+          publicMessage: entitlement.message ?? undefined,
+          internalDetail: `withUser: entitlement ${entitlement.state} (route ${route ?? 'unknown'})`,
         })
       }
-    }
-    // FINAL-ACCEPTANCE Phase 10 — ACCOUNT-level subscription lock.
-    // A LOCKED account authenticates and may read its own identity
-    // surfaces (auth/me/logout/sessions/change-password opt in via
-    // allowLockedSubscription), but every protected module API rejects
-    // it here — server-side, regardless of what the client renders.
-    // Fail-closed: unknown states other than ACTIVE are treated as
-    // locked, never open.
-    if (
-      user.schoolId &&
-      user.role !== 'SUPER_ADMIN' &&
-      (user.subscriptionStatus ?? 'ACTIVE') !== 'ACTIVE' &&
-      !opts?.allowLockedSubscription
-    ) {
-      throw new AppError('SUBSCRIPTION_REQUIRED', {
-        internalDetail: `withUser: account subscriptionStatus ${user.subscriptionStatus}`,
-      })
     }
     if (opts?.roles && !opts.roles.includes(user.role)) {
       throw new AppError('FORBIDDEN', {
@@ -166,6 +158,18 @@ export async function withUser(
     patchRequestContext({ userId: user.id, schoolId: user.schoolId ?? undefined })
     return handler(user)
   })
+}
+
+/** The middleware-injected route path (x-scholario-route) for the
+ *  current request — the entitlement exemption matcher input. Falls
+ *  back to null outside a request scope (fail-closed: business). */
+async function currentRouteContext(): Promise<string | null> {
+  try {
+    const h = await headers()
+    return h.get('x-scholario-route')
+  } catch {
+    return null
+  }
 }
 
 export function schoolScoped(user: AuthUser): string {

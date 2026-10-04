@@ -313,6 +313,15 @@ export type AuthUser = {
      * illustrative client-side seed content to the showcase tenant only
      * (real production tenants must start honest-empty). */
     isDemo: boolean
+    /** SaaS-HARDENING — tenant subscription snapshot (server-loaded; the
+     *  entitlement input. NEVER a client value). */
+    subscription?: {
+      status: string
+      plan: string
+      periodEnd: Date | null
+      graceDays: number
+      overrideStatus: string | null
+    } | null
   } | null
 }
 
@@ -322,7 +331,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   const session = await db.session.findUnique({
     where: { tokenHash: hashSessionToken(token) },
     include: {
-      user: { include: { school: true } },
+      user: { include: { school: { include: { subscription: true } } } },
     },
   })
   if (!session) return null
@@ -354,6 +363,15 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
           plan: u.school.plan,
           status: u.school.status,
           isDemo: u.school.isDemo,
+          subscription: u.school.subscription
+            ? {
+                status: u.school.subscription.status,
+                plan: u.school.subscription.plan,
+                periodEnd: u.school.subscription.periodEnd,
+                graceDays: u.school.subscription.graceDays,
+                overrideStatus: u.school.subscription.overrideStatus,
+              }
+            : null,
         }
       : null,
   }

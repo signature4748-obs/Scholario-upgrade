@@ -36,12 +36,23 @@ describe('security headers — production profile', () => {
     expect(csp).toContain("form-action 'self'")
   })
 
-  test('connect-src stays strict in production (no localhost ports, no ws)', () => {
+  test('connect-src stays strict in production (self + at most the configured Supabase origin; no localhost, no plain ws)', () => {
     const csp = prod['Content-Security-Policy']
     const connect = /connect-src ([^;]+)/.exec(csp)?.[1] ?? ''
-    expect(connect.trim()).toBe("'self'")
+    const allowed = new Set(["'self'"])
+    const supabase = process.env.SUPABASE_URL?.trim()
+    if (supabase) {
+      const host = /^https?:\/\//.test(supabase) ? new URL(supabase).host : supabase.replace(/\/$/, '')
+      allowed.add(`https://${host}`)
+      allowed.add(`wss://${host}`) // Supabase realtime (verified wss only)
+    }
+    for (const token of connect.trim().split(/\s+/)) {
+      expect(allowed.has(token)).toBe(true)
+    }
+    expect(allowed.size).toBeGreaterThan(0)
     expect(connect).not.toContain('localhost')
-    expect(connect).not.toContain('ws:')
+    expect(connect).not.toContain('ws:') // plain ws: (wss:// is the only allowed scheme)
+    expect(connect).not.toContain('*')
   })
 
   test('frame protection: production defaults to self (+embed origins)', () => {

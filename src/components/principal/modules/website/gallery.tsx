@@ -1,17 +1,21 @@
 'use client'
 
 /**
- * Gallery manager (PHASE 7.5) — lives inside the School Settings Website
- * tab. Album + image management against the real gallery APIs:
+ * Website Management — Gallery section (task 2-a).
  *
+ * ADAPTED from the settings Website tab's gallery manager
+ * (website-gallery.tsx): same albums + images APIs, same sequential
+ * multi-file upload with per-file progress, publish toggles and
+ * reorder-by-swap semantics — plus a cover-image field (the first image
+ * is the album cover on the public site).
+ *
+ * APIs:
  *   GET/POST/PATCH/DELETE /api/school/website/gallery        (albums)
- *   POST/PATCH/DELETE   /api/school/website/gallery/images   (images)
- *   POST                /api/school/website/upload           (files)
+ *   POST/PATCH/DELETE       /api/school/website/gallery/images (images)
+ *   POST                    /api/school/website/upload         (files)
  *
  * Honest states everywhere: skeleton → content; error → the server's
- * verbatim message + retry; empty → "no albums yet". Multi-file uploads
- * run SEQUENTIALLY with per-file progress + per-file error text (never a
- * silent batch failure).
+ * verbatim message + retry; empty → "no albums yet".
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -25,14 +29,14 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog'
+import { GlassCard } from '@/components/shared/ui'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { uploadWebsiteImage } from './server-api'
-import { SettingsTab } from './shared'
+import { apiJson } from './shared'
 
-// ── API plumbing ────────────────────────────────────────────────────
+// ── API plumbing (from website-gallery.tsx) ──────────────────────────
 
 interface GalleryImage {
   id: string
@@ -52,32 +56,23 @@ interface GalleryAlbum {
   images: GalleryImage[]
 }
 
-async function galleryError(res: Response): Promise<string> {
-  const j = (await res.json().catch(() => null)) as { error?: string } | null
-  return j?.error ?? 'The gallery server returned an error. Please retry.'
-}
-
-async function fetchAlbums(): Promise<{ ok: boolean; error: string | null; albums: GalleryAlbum[] }> {
-  try {
-    const r = await fetch('/api/school/website/gallery', { cache: 'no-store' })
-    if (!r.ok) return { ok: false, error: await galleryError(r), albums: [] }
-    const j = (await r.json()) as { success?: boolean; data?: { albums?: GalleryAlbum[] } }
-    return { ok: true, error: null, albums: j.data?.albums ?? [] }
-  } catch {
-    return { ok: false, error: 'Gallery server is unreachable — check your connection and retry.', albums: [] }
+async function uploadWebsiteImage(file: File): Promise<{ ok: boolean; error: string | null; fileId: string | null }> {
+  if (file.size > 4 * 1024 * 1024) {
+    return { ok: false, error: 'Image is too large. Maximum size is 4 MB.', fileId: null }
   }
-}
-
-async function apiCall(
-  url: string,
-  init: RequestInit,
-): Promise<{ ok: boolean; error: string | null }> {
+  const form = new FormData()
+  form.append('file', file)
   try {
-    const r = await fetch(url, init)
-    if (!r.ok) return { ok: false, error: await galleryError(r) }
-    return { ok: true, error: null }
+    const r = await fetch('/api/school/website/upload', { method: 'POST', body: form })
+    const j = (await r.json().catch(() => null)) as
+      | { success?: boolean; error?: string; data?: { fileId?: string } }
+      | null
+    if (!r.ok || !j?.success || !j.data?.fileId) {
+      return { ok: false, error: j?.error ?? 'Upload failed. Please try again.', fileId: null }
+    }
+    return { ok: true, error: null, fileId: j.data.fileId }
   } catch {
-    return { ok: false, error: 'Gallery server is unreachable — check your connection and retry.' }
+    return { ok: false, error: 'Upload server is unreachable — check your connection and retry.', fileId: null }
   }
 }
 
@@ -89,7 +84,7 @@ interface UploadState {
   error: string | null
 }
 
-export function GalleryManager() {
+export function GallerySection() {
   const [albums, setAlbums] = useState<GalleryAlbum[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
@@ -100,9 +95,9 @@ export function GalleryManager() {
 
   const load = useCallback(async () => {
     setLoadError(null)
-    const result = await fetchAlbums()
+    const result = await apiJson<{ albums: GalleryAlbum[] }>('/api/school/website/gallery')
     if (result.ok) {
-      setAlbums(result.albums)
+      setAlbums(result.data?.albums ?? [])
     } else {
       setLoadError(result.error)
     }
@@ -119,7 +114,7 @@ export function GalleryManager() {
       return
     }
     setCreating(true)
-    const result = await apiCall('/api/school/website/gallery', {
+    const result = await apiJson('/api/school/website/gallery', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, description: newDescription.trim() || undefined }),
@@ -137,7 +132,7 @@ export function GalleryManager() {
   }
 
   const handleDeleteAlbum = async (album: GalleryAlbum) => {
-    const result = await apiCall(`/api/school/website/gallery?albumId=${encodeURIComponent(album.id)}`, { method: 'DELETE' })
+    const result = await apiJson(`/api/school/website/gallery?albumId=${encodeURIComponent(album.id)}`, { method: 'DELETE' })
     if (result.ok) {
       toast.success(`Album “${album.title}” deleted`)
       setDeleteTarget(null)
@@ -148,12 +143,15 @@ export function GalleryManager() {
   }
 
   return (
-    <div className="space-y-4">
-      <SettingsTab
-        icon={Images}
-        title="Photo Gallery"
-        description="Albums published to the public website's gallery."
-        action={
+    <div className="space-y-5">
+      <GlassCard className="p-5 sm:p-6 space-y-2">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <h3 className="font-bold text-sm text-foreground">Photo Gallery</h3>
+            <p className="text-xs text-muted-foreground mt-0.5 max-w-xl">
+              Albums published to the public website&apos;s Campus Life section. Only published albums are visible to visitors.
+            </p>
+          </div>
           <div className="flex items-center gap-1.5">
             <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => void load()} aria-label="Refresh gallery">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -166,54 +164,54 @@ export function GalleryManager() {
               <Plus className="h-3.5 w-3.5" /> New Album
             </Button>
           </div>
-        }
-      >
-        {albums === null && loadError === null && (
-          <div className="space-y-3" aria-busy="true" aria-live="polite">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading albums…
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-hidden>
-              {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="h-24 rounded-xl bg-muted/60 animate-pulse" />
-              ))}
-            </div>
-          </div>
-        )}
+        </div>
+      </GlassCard>
 
-        {loadError !== null && (
-          <div className="space-y-3">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold text-foreground">Gallery could not be loaded</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">{loadError}</p>
-              </div>
-            </div>
-            <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => void load()}>
-              <RefreshCw className="h-3.5 w-3.5" /> Retry
-            </Button>
+      {albums === null && loadError === null && (
+        <GlassCard className="p-6 space-y-4" aria-busy="true" aria-live="polite">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading albums…
           </div>
-        )}
-
-        {albums !== null && albums.length === 0 && (
-          <div className="py-10 text-center space-y-2">
-            <ImageIcon className="h-10 w-10 mx-auto text-muted-foreground/40" aria-hidden />
-            <p className="text-xs font-semibold text-muted-foreground">No albums yet</p>
-            <p className="text-[11px] text-muted-foreground/70 max-w-xs mx-auto">
-              Create an album, upload photos, then publish it to the website gallery.
-            </p>
-          </div>
-        )}
-
-        {albums !== null && albums.length > 0 && (
-          <div className="space-y-3">
-            {albums.map((album) => (
-              <AlbumCard key={album.id} album={album} onChanged={load} onDelete={() => setDeleteTarget(album)} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-hidden>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="h-24 rounded-xl bg-muted/60 animate-pulse" />
             ))}
           </div>
-        )}
-      </SettingsTab>
+        </GlassCard>
+      )}
+
+      {loadError !== null && (
+        <GlassCard className="p-5 space-y-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-foreground">Gallery could not be loaded</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{loadError}</p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Retry
+          </Button>
+        </GlassCard>
+      )}
+
+      {albums !== null && albums.length === 0 && (
+        <GlassCard className="py-10 text-center space-y-2">
+          <ImageIcon className="h-10 w-10 mx-auto text-muted-foreground/40" aria-hidden />
+          <p className="text-xs font-semibold text-muted-foreground">No albums yet</p>
+          <p className="text-[11px] text-muted-foreground/70 max-w-xs mx-auto">
+            Create an album, upload photos, then publish it to the website gallery.
+          </p>
+        </GlassCard>
+      )}
+
+      {albums !== null && albums.length > 0 && (
+        <div className="space-y-3 max-h-[75vh] overflow-y-auto custom-scrollbar pr-0.5">
+          {albums.map((album) => (
+            <AlbumCard key={album.id} album={album} onChanged={load} onDelete={() => setDeleteTarget(album)} />
+          ))}
+        </div>
+      )}
 
       {/* Create-album dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -222,6 +220,9 @@ export function GalleryManager() {
             <DialogTitle className="flex items-center gap-2 text-base font-bold">
               <Images className="h-5 w-5 text-emerald-600" /> New Album
             </DialogTitle>
+            <DialogDescription>
+              Albums group photos into the public website&apos;s Campus Life gallery.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2 text-xs">
             <div>
@@ -260,12 +261,12 @@ export function GalleryManager() {
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-base font-bold">Delete album?</DialogTitle>
+            <DialogDescription>
+              “{deleteTarget?.title}” and its {deleteTarget?.imageCount ?? 0}{' '}
+              {deleteTarget?.imageCount === 1 ? 'photo' : 'photos'} will be removed from the gallery.
+              This cannot be undone.
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-xs text-muted-foreground">
-            “{deleteTarget?.title}” and its {deleteTarget?.imageCount ?? 0}{' '}
-            {deleteTarget?.imageCount === 1 ? 'photo' : 'photos'} will be removed from the gallery.
-            This cannot be undone.
-          </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
             <Button
@@ -312,7 +313,7 @@ function AlbumCard({
         continue
       }
       setUploadStates((prev) => prev.map((u, idx) => (idx === i ? { ...u, status: 'attaching' } : u)))
-      const attach = await apiCall('/api/school/website/gallery/images', {
+      const attach = await apiJson('/api/school/website/gallery/images', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ albumId: album.id, fileId: up.fileId }),
@@ -334,7 +335,7 @@ function AlbumCard({
 
   const handleTogglePublished = async () => {
     setToggleBusy(true)
-    const result = await apiCall('/api/school/website/gallery', {
+    const result = await apiJson('/api/school/website/gallery', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ albumId: album.id, published: !album.published }),
@@ -349,7 +350,8 @@ function AlbumCard({
   }
 
   /** Swap this image's order with its neighbour (two PATCHes keep the
-   *  order field unique; ties get nudged apart so the swap always lands). */
+   *  order field unique; ties get nudged apart so the swap always lands).
+   *  Moving an image to position 0 makes it the album COVER. */
   const moveImage = async (idx: number, dir: -1 | 1) => {
     const target = idx + dir
     if (target < 0 || target >= album.images.length) return
@@ -358,7 +360,7 @@ function AlbumCard({
     const aOrder = a.order
     const bOrder = b.order
     const newA = bOrder === aOrder ? bOrder + dir : bOrder
-    const first = await apiCall('/api/school/website/gallery/images', {
+    const first = await apiJson('/api/school/website/gallery/images', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageId: a.id, order: newA }),
@@ -367,7 +369,7 @@ function AlbumCard({
       toast.error(first.error)
       return
     }
-    const second = await apiCall('/api/school/website/gallery/images', {
+    const second = await apiJson('/api/school/website/gallery/images', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageId: b.id, order: aOrder }),
@@ -454,7 +456,7 @@ function AlbumCard({
           Upload Photos
         </Button>
         <p className="mt-1 text-[11px] text-muted-foreground">
-          JPG / PNG / WebP · max 4 MB each · uploads run one at a time.
+          JPG / PNG / WebP · max 4 MB each · uploads run one at a time. The first photo is the album cover.
         </p>
       </div>
 
@@ -501,6 +503,7 @@ function AlbumCard({
             <GalleryImageTile
               key={img.id}
               image={img}
+              isCover={idx === 0}
               isFirst={idx === 0}
               isLast={idx === album.images.length - 1}
               onMove={(dir) => void moveImage(idx, dir)}
@@ -517,12 +520,14 @@ function AlbumCard({
 
 function GalleryImageTile({
   image,
+  isCover,
   isFirst,
   isLast,
   onMove,
   onChanged,
 }: {
   image: GalleryImage
+  isCover: boolean
   isFirst: boolean
   isLast: boolean
   onMove: (dir: -1 | 1) => void
@@ -538,7 +543,7 @@ function GalleryImageTile({
 
   const saveCaption = async () => {
     setBusy(true)
-    const result = await apiCall('/api/school/website/gallery/images', {
+    const result = await apiJson('/api/school/website/gallery/images', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageId: image.id, caption: caption.trim() || null }),
@@ -552,10 +557,9 @@ function GalleryImageTile({
     }
   }
 
-  /** Remove the image row from the album. */
   const remove = async () => {
     setBusy(true)
-    const result = await apiCall(`/api/school/website/gallery/images?imageId=${encodeURIComponent(image.id)}`, { method: 'DELETE' })
+    const result = await apiJson(`/api/school/website/gallery/images?imageId=${encodeURIComponent(image.id)}`, { method: 'DELETE' })
     setBusy(false)
     if (result.ok) {
       toast.success('Photo removed')
@@ -569,6 +573,11 @@ function GalleryImageTile({
     <figure className="rounded-xl border border-border bg-card overflow-hidden">
       <div className="relative aspect-[4/3] bg-muted/40">
         <img src={image.url} alt={image.caption ?? 'Gallery photo'} className="h-full w-full object-cover" loading="lazy" />
+        {isCover && (
+          <span className="absolute left-1.5 top-1.5 rounded-full bg-black/60 px-2 py-0.5 text-[9px] font-semibold text-white" title="Album cover">
+            Cover
+          </span>
+        )}
         {busy && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/40">
             <Loader2 className="h-5 w-5 animate-spin text-white" aria-hidden />
@@ -592,7 +601,7 @@ function GalleryImageTile({
               className="h-7 w-7 p-0"
               disabled={isFirst || busy}
               onClick={() => onMove(-1)}
-              aria-label="Move photo earlier"
+              aria-label="Move photo earlier (first photo is the cover)"
               title="Move earlier"
             >
               <ChevronUp className="h-3.5 w-3.5" />

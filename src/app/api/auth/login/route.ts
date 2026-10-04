@@ -13,7 +13,7 @@ import {
 } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, emailSchema, passwordInputSchema } from '@/lib/security/validation'
 import { auditEvent, auditRateLimit } from '@/lib/security/audit'
-import { evaluateSchoolAccess } from '@/lib/access-policy'
+import { evaluateTenantEntitlement, publicEntitlement } from '@/lib/entitlement/entitlement'
 
 export const runtime = 'nodejs'
 
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     // ── Credential verification ─────────────────────────────────────────
     const user = await db.user.findUnique({
       where: { email: body.email },
-      include: { school: true },
+      include: { school: { include: { subscription: true } } },
     })
 
     // Anti-enumeration: burn one scrypt round when the user doesn't exist
@@ -123,11 +123,13 @@ export async function POST(req: NextRequest) {
         internalDetail: 'school login refused a platform identity (Phase 6 invariant)',
       })
     }
-    // 2. Suspended or not-yet-activated tenants cannot sign in (school
-    //    suspension is a destructive platform action; activation is the
-    //    second provisioning step). PHASE 7.5: the decision now flows
-    //    through the domain-layer access policy (lib/access-policy.ts)
-    //    — the same model every school API boundary uses.
+    // 2. SaaS-HARDENING (§2): authentication NEVER depends on subscription
+    //    status. An expired / suspended subscription still signs in — the
+    //    entitlement state travels with the response so the client renders
+    //    the locked shell + renewal UX, and withUser enforces the business
+    //    lock server-side. ONLY a never-activated tenant (PENDING) refuses
+    //    login (provisioning — there is no product to lock into yet), and
+    //    a user with no school binding cannot authenticate here.
     if (!user.schoolId || !user.school) {
       await auditEvent({
         schoolId: user.schoolId,
@@ -144,8 +146,20 @@ export async function POST(req: NextRequest) {
         internalDetail: 'school login blocked: no school binding',
       })
     }
-    const access = evaluateSchoolAccess(user.school)
-    if (!access.allowed) {
+    const entitlement = evaluateTenantEntitlement({
+      schoolStatus: user.school.status,
+      accountSubscriptionStatus: user.subscriptionStatus,
+      subscription: user.school.subscription
+        ? {
+            status: user.school.subscription.status,
+            plan: user.school.subscription.plan,
+            periodEnd: user.school.subscription.periodEnd,
+            graceDays: user.school.subscription.graceDays,
+            overrideStatus: user.school.subscription.overrideStatus,
+          }
+        : null,
+    })
+    if (!entitlement.loginAllowed) {
       await auditEvent({
         schoolId: user.schoolId,
         userId: user.id,
@@ -153,11 +167,11 @@ export async function POST(req: NextRequest) {
         actorLabel: body.email,
         ip,
         requestId,
-        detail: `School ${access.status} (subscription access policy)`,
+        detail: `School ${user.school.status} (never activated)`,
       }).catch(() => {})
       throw new AppError('SCHOOL_SUSPENDED', {
-        publicMessage: access.reason,
-        internalDetail: `school login blocked by access policy: tenant status ${access.status}`,
+        publicMessage: entitlement.message ?? undefined,
+        internalDetail: `school login blocked: tenant not activated (status ${user.school.status})`,
       })
     }
 
@@ -191,6 +205,11 @@ export async function POST(req: NextRequest) {
       // Phase 10 — account-level subscription lock (identity stays readable;
       // module APIs gate separately in withUser).
       subscriptionStatus: user.subscriptionStatus ?? 'ACTIVE',
+      // SaaS-HARDENING (§2) — the tenant entitlement travels WITH the
+      // successful login (any state except never-activated) so the client
+      // renders the correct shell: full ERP (ACTIVE/GRACE, warning on
+      // GRACE) or the locked renewal shell (RESTRICTED/SUSPENDED).
+      entitlement: publicEntitlement(entitlement),
       // DEV PREVIEW ONLY (isDevSessionBearerEnabled): the sandbox preview
       // renders this app inside a cross-site iframe where the browser
       // refuses the SameSite=Lax cookie — the client persists this token

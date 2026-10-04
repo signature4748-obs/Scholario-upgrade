@@ -5,7 +5,7 @@ import {
   LayoutDashboard, UserPlus, GraduationCap, School, CalendarCheck, IndianRupee,
   Wallet, FileText, Megaphone, CalendarDays, ClipboardList,
   BookMarked, Bus, Package, Award, Settings, MessageSquare,
-  PieChart, Download, Clock
+  PieChart, Download, Clock, Globe
 } from 'lucide-react'
 import { AppShell, type NavGroup } from '@/components/shell/app-shell'
 import { lazyModule } from '@/components/shared/lazy-module'
@@ -74,6 +74,7 @@ const moduleRegistry: Record<string, React.ComponentType<any>> = {
   certificates: lazy(() => import('./modules/certificates'), 'CertificatesModule'),
   downloads: lazy(() => import('./modules/downloads'), 'DownloadsModule'),
   settings: lazy(() => import('./modules/school-settings'), 'SchoolSettingsModule'),
+  website: lazy(() => import('./modules/website'), 'WebsiteManagementModule'),
 }
 
 // ARCH-RESET-2c — permission tags (EXACT server-matrix keys from
@@ -121,6 +122,12 @@ const navGroups: NavGroup[] = [
       { key: 'inventory', label: 'Inventory', icon: <Package className="h-4.5 w-4.5" />, permission: 'school.masterdata.read' },
       { key: 'certificates', label: 'Certificates', icon: <Award className="h-4.5 w-4.5" />, permission: 'school.students.read' },
       { key: 'downloads', label: 'Downloads', icon: <Download className="h-4.5 w-4.5" />, permission: 'school.masterdata.read' },
+    ],
+  },
+  {
+    label: 'Website',
+    items: [
+      { key: 'website', label: 'Website Management', icon: <Globe className="h-4.5 w-4.5" />, permission: 'school.masterdata.read' },
     ],
   },
   {

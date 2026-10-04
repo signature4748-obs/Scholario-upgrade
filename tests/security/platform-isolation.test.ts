@@ -379,47 +379,63 @@ describe('PHASE 6 · platform admin manages multiple schools', () => {
     }).catch(() => {})
   }, T)
 
-  test('suspend school B → B users blocked at school login → reactivate restores', async () => {
+  test('suspend school B → B users see the LOCKED shell (login allowed, business locked) → reactivate restores', async () => {
     const suspend = await asPlatform(rootToken, `/api/platform/schools/${schoolBId}/suspend`, {
       method: 'POST',
       body: JSON.stringify({ reason: 'isolation-suite suspension probe' }),
     })
     expect(suspend.status).toBe(200)
 
-    // B's principal can no longer sign in (SCHOOL_SUSPENDED on a fresh
-    // bucket; 429 on a rate-limited re-run — BOTH are refusals).
+    // SaaS-HARDENING (§2): authentication NEVER depends on subscription
+    // status. A SUSPENDED tenant still SIGNS IN — the entitlement travels
+    // with the success envelope and withUser locks business APIs
+    // server-side (SUBSCRIPTION_REQUIRED). A 429 from the login limiter
+    // (repeated runs) is the only other acceptable verdict.
     const loginRes = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: 'principal.b@greenvalley.test', password: SCHOOL_PW }),
     })
-    await expectLoginRefusal(loginRes, 403, 'SCHOOL_SUSPENDED')
+    if (loginRes.status === 200) {
+      const loginBody = (await loginRes.json().catch(() => null)) as {
+        ok?: boolean
+        data?: { entitlement?: { state?: string; businessAllowed?: boolean } }
+      } | null
+      expect(loginBody?.ok).toBe(true)
+      expect(loginBody?.data?.entitlement?.state).toBe('SUSPENDED')
+      expect(loginBody?.data?.entitlement?.businessAllowed).toBe(false)
+    } else {
+      expect(loginRes.status).toBe(429)
+    }
+
+    // Business APIs stay locked for B's session (server-side truth).
+    // NOTE: suspension also revokes B's live sessions — a FRESH session
+    // (what a new sign-in creates, per §2 login-never-blocked) is the
+    // honest probe: withUser must reject its business calls.
+    const freshB = await directSchoolSession('principal.b@greenvalley.test')
+    const bBlocked = await asSchool(freshB, '/api/students')
+    expect([403, 429]).toContain(bBlocked.status)
+    if (bBlocked.status === 403) {
+      const blockedBody = (await bBlocked.json().catch(() => null)) as { code?: string } | null
+      expect(blockedBody?.code).toBe('SUBSCRIPTION_REQUIRED')
+    }
 
     // A's users are UNAFFECTED (isolation of the blast radius) — proven
     // through the already-issued A session (rate-limit independent).
     const aSession = await asSchool(principalA, '/api/auth/me')
     expect(aSession.status).toBe(200)
 
-    // Reactivate → B restored (fresh login on a fresh bucket; on a
+    // Reactivate → B fully restored (fresh login on a fresh bucket; on a
     // rate-limited re-run, prove the account works via a direct
     // session + /api/auth/me).
     const reactivate = await asPlatform(rootToken, `/api/platform/schools/${schoolBId}/reactivate`, {
       method: 'POST',
     })
     expect(reactivate.status).toBe(200)
-    const bLogin = await fetch(`${BASE}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
-      body: JSON.stringify({ email: 'principal.b@greenvalley.test', password: SCHOOL_PW }),
-    })
-    if (bLogin.status === 200) {
-      expect(bLogin.status).toBe(200)
-    } else {
-      expect(bLogin.status).toBe(429) // limiter — prove access via fixture
-      const bToken = await directSchoolSession('principal.b@greenvalley.test')
-      const me = await asSchool(bToken, '/api/auth/me')
-      expect(me.status).toBe(200)
-    }
+    // The fresh post-suspension session (the original fixture was revoked
+    // by the suspension) now reaches business APIs again — restored.
+    const bRestored = await asSchool(freshB, '/api/students')
+    expect(bRestored.status).toBe(200)
   }, T)
 
   test('provision → PENDING (no sign-in) → activate → sign-in works → delete (typed confirmation)', async () => {

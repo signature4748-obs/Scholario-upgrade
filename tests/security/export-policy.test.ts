@@ -274,7 +274,9 @@ describe('PIH-5 · suspended tenant cannot export (withUser fail-closed)', () =>
       expect(blocked.status).toBe(403)
       const blockedBody = (await blocked.json()) as { ok: boolean; code: string }
       expect(blockedBody.ok).toBe(false)
-      expect(blockedBody.code).toBe('FORBIDDEN')
+      // SaaS-HARDENING (§2): the entitlement gate names the lock honestly
+      // (SUBSCRIPTION_REQUIRED) while the tenant stays suspended.
+      expect(blockedBody.code).toBe('SUBSCRIPTION_REQUIRED')
     } finally {
       // Data was never deleted — reactivation restores the SAME session.
       await db.school.update({ where: { id: schoolB.id }, data: { status: 'ACTIVE' } })

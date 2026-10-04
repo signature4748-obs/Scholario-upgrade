@@ -42,6 +42,9 @@ import { usePlatformSession, platformApi, type PlatformApiError } from '../platf
 import { useStepUpGate } from '../step-up-gate'
 import { SchoolDomainsTab } from './school-domains'
 import { SchoolSetupTab } from './school-setup'
+import { SchoolSubscriptionTab } from './school-subscription'
+import { SchoolIdentityRequestsTab } from './school-identity-requests'
+import { SchoolPaymentGatewayTab } from './school-payment-gateway'
 import { saveSupportToken } from '@/lib/platform-session-token'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -921,12 +924,36 @@ export function SchoolDetailModule() {
               Metadata
             </TabsTrigger>
           )}
+          {canManage && (
+            <TabsTrigger
+              value="identity"
+              className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
+            >
+              Identity
+            </TabsTrigger>
+          )}
           <TabsTrigger
             value="plan"
             className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
           >
             Plan &amp; Modules
           </TabsTrigger>
+          {canBill && (
+            <TabsTrigger
+              value="subscription"
+              className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
+            >
+              Subscription
+            </TabsTrigger>
+          )}
+          {canBill && (
+            <TabsTrigger
+              value="gateway"
+              className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
+            >
+              Fee gateway
+            </TabsTrigger>
+          )}
           <TabsTrigger
             value="domains"
             className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
@@ -1316,6 +1343,27 @@ export function SchoolDetailModule() {
             )}
           </div>
         </TabsContent>
+
+        {/* ── Identity change requests (schools.manage) — SAAS §8 ── */}
+        {canManage && (
+          <TabsContent value="identity" className="space-y-4">
+            <SchoolIdentityRequestsTab schoolId={id} onChanged={() => void reload()} />
+          </TabsContent>
+        )}
+
+        {/* ── Subscription & billing ledger (billing.manage) — §3A ── */}
+        {canBill && (
+          <TabsContent value="subscription" className="space-y-4">
+            <SchoolSubscriptionTab schoolId={id} />
+          </TabsContent>
+        )}
+
+        {/* ── Tenant fee gateway (billing.manage) — §3B ─────────────── */}
+        {canBill && (
+          <TabsContent value="gateway" className="space-y-4">
+            <SchoolPaymentGatewayTab schoolId={id} />
+          </TabsContent>
+        )}
 
         {/* ── Custom Domains tab (PHASE 8B — multi-tenant domains) ─────── */}
         <TabsContent value="domains" className="space-y-4">

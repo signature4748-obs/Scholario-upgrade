@@ -17,15 +17,20 @@ import {
   Instagram,
   Laptop,
   Library,
+  Link2,
   Linkedin,
   Lock,
   Mail,
   MapPin,
   Menu,
+  MessageCircle,
   MonitorPlay,
   Music,
   Palette,
+  Paperclip,
+  PartyPopper,
   Phone,
+  Pin,
   Quote,
   Rocket,
   Rss,
@@ -42,7 +47,13 @@ import {
 import { useAuth } from '@/lib/store/auth-store'
 import { usePublicSchoolData, useAdmissionForm } from './use-public-website-data'
 import { SaasLanding } from '@/components/marketing/saas-landing'
-import type { PublicSchoolData, PublicGalleryAlbum } from './types'
+import type {
+  PublicSchoolData,
+  PublicGalleryAlbum,
+  PublicWebsiteNotice,
+  PublicAdmissionsStatus,
+  PublicSocialLink,
+} from './types'
 import {
   NEUTRAL_WEBSITE_CONTENT,
   websiteSeo,
@@ -332,7 +343,40 @@ export function PublicWebsite() {
   const albums = (schoolData?.gallery ?? []).filter(
     (a) => Array.isArray(a?.images) && a.images.length > 0,
   )
-  const notices = schoolData?.announcements ?? []
+
+  // Task 2-a — the notice board merges the ERP broadcast announcements
+  // with the CMS website notices (kind NOTICE): PINNED CMS notices first,
+  // then newest-first across both sources. Nothing here renders a draft —
+  // the public payload only ever carries live-published rows.
+  const cmsNotices = schoolData?.notices ?? []
+  const celebrationItems = schoolData?.websiteAnnouncements ?? []
+  const notices: PublicNotice[] = [
+    ...cmsNotices.map((n) => ({
+      id: `cms-${n.id}`,
+      title: n.title,
+      message: n.body,
+      createdAt: n.publishedAt,
+      priority: 'NORMAL',
+      imageUrl: null as string | null,
+      category: n.category,
+      pinned: n.pinned,
+      attachmentUrl: n.attachmentUrl,
+    })),
+    ...(schoolData?.announcements ?? []).map((n) => ({
+      id: `bc-${n.id}`,
+      title: n.title,
+      message: n.message,
+      createdAt: n.createdAt,
+      priority: n.priority,
+      imageUrl: n.imageUrl ?? null,
+      category: null as string | null,
+      pinned: false,
+      attachmentUrl: null as string | null,
+    })),
+  ].sort((a, b) => {
+    if ((b.pinned ?? false) !== (a.pinned ?? false)) return (b.pinned ?? false) ? 1 : -1
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  })
 
   // Nav links (Part 6): Home/About/Academics/Campus/Notices/Admissions/
   // Contact all exist as sections — with real content OR the clean
@@ -456,10 +500,16 @@ export function PublicWebsite() {
 
         <CampusLife shortName={shortName} albums={albums} />
 
+        {/* Task 2-a — celebrations & achievements highlights strip
+            (CMS announcements, kind ANNOUNCEMENT). Renders nothing when
+            the school has none — honest-empty discipline. */}
+        <AnnouncementsStrip items={celebrationItems} />
+
         <NoticeBoard notices={notices} onOpenPortal={openSchoolLogin} />
 
         <Admissions
           admissions={content.admissions}
+          status={schoolData.admissions ?? null}
           phone={schoolData.phone || ''}
           admForm={admForm}
           setAdmForm={setAdmForm}
@@ -484,6 +534,7 @@ export function PublicWebsite() {
         established={schoolData.established || ''}
         footer={content.footer}
         contact={content.contact}
+        socialLinks={schoolData.socialLinks ?? []}
         quickLinks={navLinks.filter((l) => l.href !== '#footer')}
         onOpenPortal={openSchoolLogin}
       />
@@ -1132,6 +1183,8 @@ function CampusLife({
 
 /* ------------------------------------------------------------------ */
 /*  Notice board — live school announcements (render only when any)    */
+/*  Task 2-a — also carries the CMS website notices (category badges,  */
+/*  pinned-first ordering, document attachment links).                 */
 /* ------------------------------------------------------------------ */
 
 const NOTICE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -1144,6 +1197,84 @@ interface PublicNotice {
   priority: string
   imageId?: string | null
   imageUrl?: string | null
+  /** Task 2-a — CMS notice badge label ("Examination", "Holiday"…). */
+  category?: string | null
+  /** Task 2-a — pinned CMS notices render before everything else. */
+  pinned?: boolean
+  /** Task 2-a — same-origin document link (served while published). */
+  attachmentUrl?: string | null
+}
+
+/** Task 2-a — a dated document/link chip for notice attachments. */
+function NoticeAttachmentLink({ url }: { url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-400 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+      aria-label="Open the notice attachment (opens in a new tab)"
+      title="Open attachment"
+    >
+      <Paperclip className="h-3 w-3" aria-hidden="true" />
+      Attachment
+    </a>
+  )
+}
+
+/** Task 2-a — celebrations & achievements highlights strip (CMS
+ *  announcements, kind ANNOUNCEMENT). Renders NOTHING when the school
+ *  has none (honest-empty discipline — no placeholder strip). */
+function AnnouncementsStrip({ items }: { items: PublicWebsiteNotice[] }) {
+  if (!items || items.length === 0) return null
+  return (
+    <section aria-label="Announcements and achievements" className="bg-white border-y border-slate-200">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 sm:py-12">
+        <div className="flex items-center gap-2.5 mb-5">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg school-brand-soft school-brand-text">
+            <PartyPopper className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Announcements</p>
+            <h2 className="font-display text-lg sm:text-xl font-bold text-slate-900">Celebrations &amp; achievements</h2>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {items.map((n) => (
+            <FadeIn key={n.id} className="min-w-0">
+              <article
+                aria-label={`Announcement: ${n.title}`}
+                className="h-full rounded-xl border border-slate-200 bg-white shadow-sm p-5 transition-all hover:shadow-md"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  {n.pinned ? (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                      <Pin className="h-2.5 w-2.5" aria-hidden="true" /> Pinned
+                    </span>
+                  ) : null}
+                  {n.category ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full school-brand-chip px-2.5 py-0.5 text-[11px] font-bold">
+                      {n.category}
+                    </span>
+                  ) : null}
+                  <time dateTime={n.publishedAt} className="text-[11px] text-slate-500">
+                    {noticeRelativeTime(n.publishedAt)}
+                  </time>
+                </div>
+                <h3 className="mt-2.5 text-sm font-bold leading-snug text-slate-900">{n.title}</h3>
+                <p className="mt-1.5 text-xs leading-relaxed text-slate-600 line-clamp-3">{n.body}</p>
+                {n.attachmentUrl ? (
+                  <div className="mt-3">
+                    <NoticeAttachmentLink url={n.attachmentUrl} />
+                  </div>
+                ) : null}
+              </article>
+            </FadeIn>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
 }
 
 const PRIORITY_TONES: Record<string, { label: string; chip: string; bar: string; dot: string }> = {
@@ -1275,10 +1406,20 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
                 <NoticeDateTile iso={featured.createdAt} />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2.5">
+                    {featured.pinned ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                        <Pin className="h-2.5 w-2.5" aria-hidden="true" /> Pinned
+                      </span>
+                    ) : null}
                     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${featuredTone.chip}`}>
                       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${featuredTone.dot}`} />
                       {featuredTone.label}
                     </span>
+                    {featured.category ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full school-brand-chip px-2.5 py-0.5 text-[11px] font-bold">
+                        {featured.category}
+                      </span>
+                    ) : null}
                     <time
                       dateTime={featured.createdAt}
                       className="text-xs font-medium text-slate-500"
@@ -1292,6 +1433,11 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
                   <p className="mt-3 leading-relaxed text-slate-600 line-clamp-5">
                     {featured.message}
                   </p>
+                  {featured.attachmentUrl ? (
+                    <div className="mt-4">
+                      <NoticeAttachmentLink url={featured.attachmentUrl} />
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -1324,10 +1470,20 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
                       ) : null}
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
+                          {n.pinned ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                              <Pin className="h-2.5 w-2.5" aria-hidden="true" /> Pinned
+                            </span>
+                          ) : null}
                           <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.chip}`}>
                             <span aria-hidden="true" className={`h-1 w-1 rounded-full ${tone.dot}`} />
                             {tone.label}
                           </span>
+                          {n.category ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-full school-brand-chip px-2 py-0.5 text-[10px] font-bold">
+                              {n.category}
+                            </span>
+                          ) : null}
                           <time dateTime={n.createdAt} className="text-[11px] text-slate-500">
                             {noticeRelativeTime(n.createdAt)}
                           </time>
@@ -1336,6 +1492,11 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
                         <p className="mt-1 text-xs leading-relaxed text-slate-600 line-clamp-2">
                           {n.message}
                         </p>
+                        {n.attachmentUrl ? (
+                          <div className="mt-2">
+                            <NoticeAttachmentLink url={n.attachmentUrl} />
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </article>
@@ -1362,6 +1523,158 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
 }
 
 /* ------------------------------------------------------------------ */
+/*  Task 2-a — admissions status block (the published singleton).      */
+/*  OPEN → the full status banner (classes, dates, notice, contacts,   */
+/*  application CTA); CLOSED → a calm note; unpublished → nothing.     */
+/* ------------------------------------------------------------------ */
+
+function admissionsDateLabel(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function AdmissionsStatusBlock({ status }: { status: PublicAdmissionsStatus }) {
+  if (status.status === 'CLOSED') {
+    // Calm, factual closed note — no marketing pressure.
+    return (
+      <FadeIn className="min-w-0">
+        <div
+          role="status"
+          className="rounded-xl border border-slate-200 bg-white px-6 py-5 flex items-start gap-3.5 shadow-sm"
+        >
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+            <Lock className="h-4 w-4 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <p className="font-display text-base font-bold text-slate-900">
+              Admissions are currently closed{status.session ? ` for session ${status.session}` : ''}
+            </p>
+            {status.noticeBody?.trim() ? (
+              <p className="mt-1 text-sm leading-relaxed text-slate-600">{status.noticeBody}</p>
+            ) : null}
+            {(status.contactEmail || status.contactPhone) && (
+              <p className="mt-2 text-xs text-slate-500">
+                Questions?{' '}
+                {status.contactEmail ? (
+                  <a href={`mailto:${status.contactEmail}`} className="font-semibold text-slate-700 hover:underline">
+                    {status.contactEmail}
+                  </a>
+                ) : null}
+                {status.contactEmail && status.contactPhone ? ' · ' : null}
+                {status.contactPhone ? (
+                  <a href={`tel:${status.contactPhone}`} className="font-semibold text-slate-700 hover:underline">
+                    {status.contactPhone}
+                  </a>
+                ) : null}
+              </p>
+            )}
+          </div>
+        </div>
+      </FadeIn>
+    )
+  }
+
+  const classes = Array.isArray(status.classesAccepting) ? status.classesAccepting.filter(Boolean) : []
+  const dateLine = [
+    status.openingDate ? `from ${admissionsDateLabel(status.openingDate)}` : '',
+    status.closingDate ? `until ${admissionsDateLabel(status.closingDate)}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <FadeIn className="min-w-0">
+      <div
+        className="rounded-xl border px-6 sm:px-8 py-6 sm:py-7 shadow-sm"
+        style={{
+          borderColor: 'color-mix(in srgb, var(--school-primary) 25%, transparent)',
+          backgroundColor: 'color-mix(in srgb, var(--school-primary) 4%, white)',
+        }}
+        role="region"
+        aria-label="Admissions status"
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg school-brand-soft school-brand-text">
+            <Check className="h-5 w-5" strokeWidth={2.25} aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="font-display text-xl sm:text-2xl font-bold text-slate-900">
+              Admissions Open{status.session ? ` for Session ${status.session}` : ''}
+            </h3>
+            {dateLine ? (
+              <p className="mt-0.5 text-sm text-slate-600">Applications {dateLine}.</p>
+            ) : null}
+          </div>
+        </div>
+
+        {classes.length > 0 ? (
+          <div className="mt-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Classes accepting applications</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {classes.map((c) => (
+                <span
+                  key={c}
+                  className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--school-primary) 30%, transparent)',
+                    color: 'var(--school-primary)',
+                    backgroundColor: 'color-mix(in srgb, var(--school-primary) 8%, white)',
+                  }}
+                >
+                  {c}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {(status.noticeTitle?.trim() || status.noticeBody?.trim()) ? (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-white/70 px-4 py-3.5">
+            {status.noticeTitle?.trim() ? (
+              <p className="text-sm font-bold text-slate-900">{status.noticeTitle}</p>
+            ) : null}
+            {status.noticeBody?.trim() ? (
+              <p className="mt-1 text-sm leading-relaxed text-slate-600">{status.noticeBody}</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          {status.applicationUrl ? (
+            <a
+              href={status.applicationUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-lg text-sm font-semibold text-white transition-all hover:brightness-110 active:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              style={{ backgroundColor: 'var(--school-primary)' }}
+              aria-label="Apply online (opens the application form in a new tab)"
+            >
+              Apply Online
+              <ArrowRight className="w-4 h-4" aria-hidden="true" />
+            </a>
+          ) : null}
+          {(status.contactEmail || status.contactPhone) ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+              {status.contactPhone ? (
+                <a href={`tel:${status.contactPhone}`} className="inline-flex items-center gap-1.5 font-semibold text-slate-700 hover:underline">
+                  <Phone className="h-3.5 w-3.5" aria-hidden="true" /> {status.contactPhone}
+                </a>
+              ) : null}
+              {status.contactEmail ? (
+                <a href={`mailto:${status.contactEmail}`} className="inline-flex items-center gap-1.5 font-semibold text-slate-700 hover:underline">
+                  <Mail className="h-3.5 w-3.5" aria-hidden="true" /> {status.contactEmail}
+                </a>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </FadeIn>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Admissions — ALWAYS renders (the enquiry form is a product         */
 /*  channel, not marketing copy). CMS copy when set, neutral factual   */
 /*  copy otherwise.                                                    */
@@ -1369,6 +1682,7 @@ function NoticeBoardList({ notices, onOpenPortal }: { notices: PublicNotice[]; o
 
 function Admissions({
   admissions,
+  status,
   phone,
   admForm,
   setAdmForm,
@@ -1379,6 +1693,9 @@ function Admissions({
   handleAdmissionSubmit,
 }: {
   admissions: WebsiteContent['admissions']
+  /** Task 2-a — the published admissions singleton (null when the block
+   *  is unpublished or not configured: nothing renders). */
+  status: PublicAdmissionsStatus | null
   phone: string
   admForm: any
   setAdmForm: (f: any) => void
@@ -1405,6 +1722,12 @@ function Admissions({
     <section id="admissions" className="bg-slate-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-14 sm:py-16 lg:py-20">
         <SectionHeader title={title} />
+
+        {/* Task 2-a — the admissions STATUS block (published singleton
+            only): "Admissions Open for Session 2027–28" with classes,
+            dates, notice, contacts and the application CTA when OPEN; a
+            calm closed note when CLOSED; NOTHING when unpublished. */}
+        {status ? <AdmissionsStatusBlock status={status} /> : null}
 
         <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-start">
           {/* Left — admission copy + highlights + office hours (CMS) */}
@@ -1588,6 +1911,32 @@ const SOCIAL_LINKS: Array<{
   { key: 'linkedin', label: 'LinkedIn', icon: Linkedin },
 ]
 
+/** Task 2-a — managed social links: platform → icon (the managed set
+ *  supports facebook/instagram/youtube/x/linkedin/whatsapp/website/other). */
+const SOCIAL_PLATFORM_ICONS: Record<string, LucideIcon> = {
+  facebook: Facebook,
+  instagram: Instagram,
+  youtube: Youtube,
+  x: Twitter,
+  twitter: Twitter,
+  linkedin: Linkedin,
+  whatsapp: MessageCircle,
+  website: Globe,
+  other: Link2,
+}
+
+const SOCIAL_PLATFORM_LABELS: Record<string, string> = {
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+  youtube: 'YouTube',
+  x: 'X (Twitter)',
+  twitter: 'X (Twitter)',
+  linkedin: 'LinkedIn',
+  whatsapp: 'WhatsApp',
+  website: 'Website',
+  other: 'Link',
+}
+
 function Footer({
   schoolName,
   shortName,
@@ -1601,6 +1950,7 @@ function Footer({
   established,
   footer,
   contact,
+  socialLinks: managedSocialLinks,
   quickLinks,
   onOpenPortal,
 }: {
@@ -1616,6 +1966,7 @@ function Footer({
   established: string
   footer: WebsiteContent['footer']
   contact: WebsiteContent['contact']
+  socialLinks?: PublicSocialLink[]
   quickLinks: Array<{ label: string; href: string }>
   onOpenPortal: () => void
 }) {
@@ -1625,13 +1976,34 @@ function Footer({
   const aboutLine = footer.about?.trim() || ''
   const taglineLine = tagline?.trim() || ''
 
-  const socialLinks = SOCIAL_LINKS.flatMap(({ key, label, icon }) => {
+  // Task 2-a — the MANAGED social links (WebsiteSocialLink rows, ordered)
+  // render first; legacy CMS footer.social entries follow for platforms
+  // the managed set does not already cover (http(s) only — a non-http(s)
+  // value never becomes a clickable link).
+  const managedLinks = (managedSocialLinks ?? []).flatMap((l) => {
+    const icon = SOCIAL_PLATFORM_ICONS[l.platform]
+    if (!icon) return []
+    if (!/^https?:\/\//i.test(l.url)) return []
+    return [{
+      key: `m-${l.id}`,
+      platform: l.platform,
+      label: l.label?.trim() || SOCIAL_PLATFORM_LABELS[l.platform] || l.platform,
+      icon,
+      url: l.url,
+    }]
+  })
+  const managedPlatforms = new Set(managedLinks.map((m) => m.platform))
+  const legacyLinks = SOCIAL_LINKS.flatMap(({ key, label, icon }) => {
+    // Dedupe: a managed link for this platform (or an 'x' link covering
+    // the legacy 'twitter' key) wins over the CMS footer entry.
+    if (managedPlatforms.has(key) || (key === 'twitter' && managedPlatforms.has('x'))) return []
     const href = footer.social?.[key]
     if (typeof href !== 'string') return []
     const url = href.trim()
     if (!/^https?:\/\//i.test(url)) return []
-    return [{ key, label, icon, url }]
+    return [{ key: `c-${key}`, platform: key, label, icon, url }]
   })
+  const socialLinks = [...managedLinks, ...legacyLinks]
 
   const contactTitle = contact.title?.trim() || 'Contact'
   const contactSubtitle = contact.subtitle?.trim() || ''

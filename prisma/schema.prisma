@@ -150,6 +150,20 @@ model School {
   // admins through the control plane. See SupportSession.
   supportSessions SupportSession[]
 
+  // ═════════════════════════════════════════════════════════════════════
+  // SaaS-HARDENING — tenant subscription entitlement, platform billing
+  // ledger, school-website CMS entities, identity change requests, and
+  // the tenant-scoped school-fee gateway. All additive.
+  // ═════════════════════════════════════════════════════════════════════
+  subscription          SchoolSubscription?
+  platformPayments      PlatformPayment[]
+  websiteNotices        WebsiteNotice[]
+  websiteAdmission      WebsiteAdmission?
+  websiteSocialLinks    WebsiteSocialLink[]
+  websiteMedia          WebsiteMedia[]
+  profileChangeRequests SchoolProfileChangeRequest[]
+  paymentGateway        SchoolPaymentGateway?
+
   // PHASE 8B — verified custom-domain mapping (multi-tenant resolution)
   tenantDomains TenantDomain[]
 
@@ -2451,6 +2465,8 @@ model PlatformAdmin {
   sessions    PlatformAdminSession[]
   permissions PlatformPermission[]
   supportSessions SupportSession[]
+  /// SaaS-HARDENING — offline platform payments this admin recorded.
+  paymentRecordings PlatformPayment[] @relation("PlatformPaymentRecorder")
 
   @@index([status])
 }
@@ -2680,4 +2696,259 @@ model EmailDelivery {
   @@unique([dedupeKey])
   @@index([schoolId, createdAt])
   @@index([status, createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SaaS-HARDENING — TENANT SUBSCRIPTION ENTITLEMENT
+//
+// The subscription model is TENANT-level (one row per school) and is
+// evaluated ONLY server-side (src/lib/entitlement). Authentication NEVER
+// depends on it: a user always signs in; the entitlement then decides
+// which business surface their session may reach. States:
+//
+//   ACTIVE    full ERP access
+//   GRACE     full ERP access + persistent renewal warning
+//   RESTRICTED login works, ERP shell locks, business APIs reject with
+//             SUBSCRIPTION_REQUIRED (exempt surface: auth/session,
+//             profile, subscription status, renewal, support, logout)
+//   SUSPENDED login works, locked shell + subscription/support info
+//
+// School.status (platform lifecycle) stays authoritative for
+// provisioning: PENDING (created, not yet activated) blocks login.
+// A platform SUSPENDED school maps to the SUSPENDED entitlement state
+// (login still allowed — the locked shell carries the message).
+// ═══════════════════════════════════════════════════════════════════════════
+model SchoolSubscription {
+  id       String @id @default(cuid())
+  schoolId String @unique
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// ACTIVE | GRACE | RESTRICTED | SUSPENDED (computed + stored snapshot;
+  /// the authoritative evaluation lives in src/lib/entitlement).
+  status      String   @default("ACTIVE")
+  plan        String   @default("STANDARD")
+  periodStart DateTime?
+  /// End of the paid period. null = no expiry set (ACTIVE).
+  periodEnd   DateTime?
+  /// Days after periodEnd that stay GRACE before RESTRICTED. Default 14.
+  graceDays   Int      @default(14)
+  /// Manual platform override ('ACTIVE'|'GRACE'|'RESTRICTED'|'SUSPENDED').
+  /// When set, it wins over the computed state until cleared (null).
+  overrideStatus String?
+  notes        String?
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+
+  payments PlatformPayment[]
+}
+
+/// PLATFORM subscription billing ledger — School pays SCHOLARIO.
+/// Completely disjoint from the school's own student-fee gateway
+/// (SchoolPaymentGateway / FeeTransaction). Every activation/extension
+/// of a SchoolSubscription MUST trace to one VERIFIED row here (offline
+/// payment recorded by a platform admin, or a signature-verified webhook).
+/// A browser report of payment success is NEVER sufficient.
+model PlatformPayment {
+  id       String @id @default(cuid())
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  amount   Decimal @db.Decimal(12, 2)
+  currency String  @default("INR")
+  /// ONLINE_PAYMENT | CASH | BANK_TRANSFER | CHEQUE | OTHER
+  mode     String
+  paymentDate DateTime
+  /// Subscription period this payment covers (months).
+  periodMonths Int     @default(12)
+  /// Offline: reference / UTR / cheque number. Online: provider payment id.
+  reference    String?
+  notes        String?
+  /// PlatformAdmin that recorded the payment (offline path). Null for
+  /// webhook-recorded online payments.
+  recordedById String?
+  recordedBy   PlatformAdmin? @relation("PlatformPaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+  /// VERIFIED (admin-recorded or webhook-verified) — only VERIFIED rows
+  /// ever activate a subscription.
+  verification String   @default("VERIFIED")
+  verifiedAt   DateTime @default(now())
+  /// Entitlement snapshot this payment produced (audit truth).
+  statusAfter    String?
+  periodEndAfter DateTime?
+  /// Human-readable receipt number (SCH-RCP-<seq>).
+  receiptNo      String? @unique
+  subscription   SchoolSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  subscriptionId String?
+  createdAt      DateTime @default(now())
+
+  @@index([schoolId, paymentDate])
+  @@index([recordedById])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SaaS-HARDENING — SCHOOL WEBSITE CMS (tenant-scoped)
+//
+// DB-backed, tenant-owned public-website entities. Every row carries an
+// explicit schoolId and every query path goes through session-derived
+// tenant scoping (principal writes) or public-tenant resolution
+// (anonymous reads of PUBLISHED rows only). Cross-tenant access is
+// impossible by construction (schoolId in every where clause).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Public notices & announcements ("Half Yearly Examination Schedule
+/// Released"). kind NOTICE (circulars, dated) | ANNOUNCEMENT
+/// (celebrations/achievements). Lifecycle: DRAFT → SCHEDULED (publishAt)
+/// → PUBLISHED → EXPIRED (expiresAt). Expiry is lazy-evaluated at read.
+model WebsiteNotice {
+  id       String @id @default(cuid())
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  kind     String @default("NOTICE")
+  title    String
+  body     String @db.Text
+  /// Free-form category for badges ("Examination", "Holiday", "Event").
+  category String?
+  status   String @default("DRAFT")
+  /// When SCHEDULED: becomes public at this time (lazy promotion).
+  publishAt DateTime?
+  /// Auto-unpublish after this time (lazy expiry at read).
+  expiresAt DateTime?
+  pinned    Boolean @default(false)
+  /// UploadedFile id (scope 'website') — public only while published.
+  attachmentFileId String?
+  createdById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId, status])
+  @@index([schoolId, kind, pinned, publishAt])
+}
+
+/// Admissions status block the principal controls ("Admissions Open for
+/// Session 2027–28"). One row per school (lazily created). Renders on the
+/// public website ONLY while published=true.
+model WebsiteAdmission {
+  id       String @id @default(cuid())
+  schoolId String @unique
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// OPEN | CLOSED
+  status       String @default("CLOSED")
+  /// e.g. "2027-28"
+  session      String?
+  /// JSON string array of class labels accepting applications.
+  classesAccepting String @default("[]")
+  openingDate  DateTime?
+  closingDate  DateTime?
+  /// Headline + body shown on the public admissions section.
+  noticeTitle  String?
+  noticeBody   String?
+  applicationUrl String?
+  contactEmail   String?
+  contactPhone   String?
+  published    Boolean @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// Social links rendered in the public website footer/contact.
+model WebsiteSocialLink {
+  id       String @id @default(cuid())
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// facebook | instagram | youtube | x | twitter | linkedin | whatsapp | website | other
+  platform String
+  url      String
+  label    String?
+  order    Int     @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([schoolId, platform])
+  @@index([schoolId, order])
+}
+
+/// Media-library metadata over uploaded website assets. The BYTES live
+/// in Supabase Storage (tenant-scoped path) and the registry row
+/// (UploadedFile, scope 'website') is the storage truth; this row adds
+/// curation metadata (title/alt/usage/published).
+model WebsiteMedia {
+  id       String @id @default(cuid())
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// UploadedFile id (scope 'website').
+  fileId    String
+  /// IMAGE | DOCUMENT
+  mediaType String @default("IMAGE")
+  title     String?
+  altText   String?
+  /// LIBRARY | GALLERY | HERO | LOGO
+  usage     String @default("LIBRARY")
+  published Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([schoolId, fileId])
+  @@index([schoolId, usage])
+}
+
+/// Controlled workflow for LEGAL school-identity changes requested by
+/// the principal (name, affiliation number). Platform-controlled
+/// identity fields are never directly editable by a principal; a
+/// platform admin reviews and applies (or rejects) each request.
+model SchoolProfileChangeRequest {
+  id       String @id @default(cuid())
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// Requested field: 'name' | 'code' | 'affiliation'.
+  field          String
+  currentValue   String?
+  requestedValue String
+  reason         String
+  /// PENDING | APPROVED | REJECTED
+  status         String @default("PENDING")
+  /// School User that requested (null = system).
+  requestedById  String?
+  /// PlatformAdmin that reviewed.
+  reviewedById   String?
+  reviewNote     String?
+  reviewedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([schoolId, status])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SaaS-HARDENING — SCHOOL FEE PAYMENT GATEWAY (tenant-scoped)
+//
+// Each school may run its OWN provider account for collecting STUDENT
+// FEES. Secrets are stored AES-256-GCM encrypted (key from
+// SCHOOL_GATEWAY_ENC_KEY, server-only env) and are NEVER returned to the
+// browser — the public key id is the only browser-safe value. Managed by
+// PLATFORM ADMIN (billing domain), never by school users.
+// ═══════════════════════════════════════════════════════════════════════════
+model SchoolPaymentGateway {
+  id       String @id @default(cuid())
+  schoolId String @unique
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// 'razorpay' (provider abstraction — future providers plug in here).
+  provider    String @default("razorpay")
+  /// PUBLIC key id (browser-safe, used by checkout).
+  publicKeyId String?
+  /// AES-256-GCM: base64 ciphertext + nonce of the SECRET key.
+  secretKeyCipher     String?
+  secretKeyNonce      String?
+  webhookSecretCipher String?
+  webhookSecretNonce  String?
+  /// ACTIVE | PENDING | DISABLED
+  status       String @default("PENDING")
+  /// PlatformAdmin that last configured the gateway.
+  configuredById String?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }

@@ -107,7 +107,7 @@ function randomToken(bytes = 12): string {
 
 // ─── Razorpay (real gateway, plain fetch — no SDK) ─────────────────────
 
-class RazorpayProvider implements PaymentProvider {
+export class RazorpayProvider implements PaymentProvider {
   name = 'razorpay' as const
   keyId: string
   private keySecret: string

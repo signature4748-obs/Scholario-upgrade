@@ -158,14 +158,32 @@ export function brandingContrastIssue(primaryHex: string): string | null {
   return null
 }
 
-/** Validated identity patch (School columns). Only known keys pass. */
+/**
+ * Validated identity patch (School columns). Only known keys pass.
+ *
+ * SaaS-HARDENING (§8 — protect school identity): the LEGAL school
+ * identity (name, code, affiliation) is PLATFORM-CONTROLLED — a
+ * principal cannot mutate it directly. Attempts to patch these keys
+ * fail loudly with the change-request workflow pointer (no silent
+ * drop). shortName/tagline/address/city/phone/email/website/
+ * principalName/established remain school-controlled presentation.
+ */
 export function identityPatchFrom(body: Record<string, unknown>): Partial<School> {
+  // Platform-controlled identity keys — request workflow only.
+  const PROTECTED_KEYS = ['name', 'code', 'affiliation'] as const
+  for (const key of PROTECTED_KEYS) {
+    if (key in body) {
+      throw new Error(
+        `The school ${key === 'affiliation' ? 'affiliation' : key} is platform-controlled. ` +
+          'Request a change through School Settings → School → "Request identity change" ' +
+          '(a platform admin reviews and applies it).',
+      )
+    }
+  }
   const patch: Record<string, string | null> = {}
   const textKeys: Array<[string, number]> = [
-    ['name', 120],
     ['shortName', 40],
     ['tagline', MAX_LONG_TEXT],
-    ['affiliation', MAX_LONG_TEXT],
     ['address', MAX_LONG_TEXT],
     ['city', 80],
     ['phone', 40],
@@ -177,7 +195,6 @@ export function identityPatchFrom(body: Record<string, unknown>): Partial<School
   for (const [key, max] of textKeys) {
     if (key in body) {
       const v = cleanText(body[key], max)
-      if (key === 'name' && !v) throw new Error('School name cannot be empty')
       patch[key] = v
     }
   }

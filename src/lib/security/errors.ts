@@ -158,7 +158,7 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   INTERNAL_ERROR: 'Internal server error',
   EXTERNAL_SERVICE_FAILURE: 'An external service is temporarily unavailable',
   SUBSCRIPTION_REQUIRED:
-    'Subscription required. Your account can access profile information only until the subscription is renewed. Please contact your school office.',
+    'Your SCHOLARIO subscription needs renewal. Business modules are locked until the subscription is renewed. Please contact SCHOLARIO support.',
   MFA_REQUIRED: 'Enter your authenticator code',
   MFA_INVALID: 'Invalid authenticator code',
   MFA_NOT_ENABLED: 'Platform multi-factor authentication is currently disabled',

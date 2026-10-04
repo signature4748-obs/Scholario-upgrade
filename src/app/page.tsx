@@ -8,6 +8,7 @@ import { useCurrentUser } from '@/lib/store/current-user-store'
 import { installApiBearerInterceptor } from '@/lib/auth-session-token'
 import { AssetErrorBoundary } from '@/components/shared/asset-guard/asset-error-boundary'
 import { SubscriptionLockScreen } from '@/components/shared/subscription-lock-screen'
+import { EntitlementLockScreen, EntitlementBanner } from '@/components/shared/entitlement-lock-screen'
 
 // Install once, before any component can fire an API call. In embedded
 // (cross-site iframe) contexts the session cookie is blocked, so API auth
@@ -162,6 +163,7 @@ export default function Home() {
   // so every consumer renders its honest empty state.
   const isDemoTenant = useIsDemoTenant()
   const me = useCurrentUser((s) => s.me)
+  const entitlement = useCurrentUser((s) => s.entitlement)
   const meLoaded = useCurrentUser((s) => s.me !== null)
   useEffect(() => {
     if (!meLoaded) return
@@ -226,6 +228,7 @@ export default function Home() {
   // errors) the normal panel path runs — its API calls will 403/401
   // through the same server-side gate.
   if (isAuthenticated && user) {
+    // SaaS-HARDENING (§2) — ACCOUNT-level lock (Phase-10 semantics).
     if (me?.subscriptionStatus && me.subscriptionStatus !== 'ACTIVE') {
       return (
         <AssetErrorBoundary>
@@ -233,22 +236,46 @@ export default function Home() {
         </AssetErrorBoundary>
       )
     }
+    // SaaS-HARDENING (§2) — TENANT entitlement lock: RESTRICTED /
+    // SUSPENDED render the locked renewal shell (sign-in worked — the
+    // shell carries the message + renewal CTAs + support). GRACE keeps
+    // full ERP access under a PERSISTENT renewal banner. The gates are
+    // UX courtesy: withUser rejects business APIs server-side either way.
+    if (entitlement && !entitlement.businessAllowed) {
+      return me ? (
+        <AssetErrorBoundary>
+          <EntitlementLockScreen user={me} entitlement={entitlement} />
+        </AssetErrorBoundary>
+      ) : (
+        <LoadingSpinner />
+      )
+    }
+    const banner = entitlement ? <EntitlementBanner entitlement={entitlement} /> : null
     if (user.role === 'principal')
       return (
         <AssetErrorBoundary>
-          <PrincipalPanel />
+          <div className="min-h-screen flex flex-col">
+            {banner}
+            <PrincipalPanel />
+          </div>
         </AssetErrorBoundary>
       )
     if (user.role === 'teacher')
       return (
         <AssetErrorBoundary>
-          <TeacherPanel />
+          <div className="min-h-screen flex flex-col">
+            {banner}
+            <TeacherPanel />
+          </div>
         </AssetErrorBoundary>
       )
     if (user.role === 'student')
       return (
         <AssetErrorBoundary>
-          <StudentPanel />
+          <div className="min-h-screen flex flex-col">
+            {banner}
+            <StudentPanel />
+          </div>
         </AssetErrorBoundary>
       )
   }

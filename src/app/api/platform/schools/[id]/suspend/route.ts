@@ -18,9 +18,10 @@ const suspendSchema = strictBody({ reason: z.string().min(10).max(400) })
  *   · school.status → SUSPENDED;
  *   · every live school Session for the tenant is revoked (users are
  *     signed out immediately);
- *   · school login refuses the tenant's users (SCHOOL_SUSPENDED).
- *
- * Permission: schools.manage + a live step-up (recent MFA).
+ *   · SaaS-HARDENING: sign-in still WORKS for the tenant's users — the
+ *     entitlement model maps a SUSPENDED school to the locked-shell
+ *     state (login allowed, business APIs reject SUBSCRIPTION_REQUIRED,
+ *     subscription/support information shown).
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params

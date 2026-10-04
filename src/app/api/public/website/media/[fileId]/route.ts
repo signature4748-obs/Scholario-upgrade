@@ -12,29 +12,42 @@ import {
 export const runtime = 'nodejs'
 
 /**
- * GET /api/public/website/media/<fileId> — PUBLIC website image bytes.
+ * GET /api/public/website/media/<fileId> — PUBLIC website image/document
+ * bytes.
  *
- * PRIVACY BY DEFAULT: a stored website-scope image is only served when a
+ * PRIVACY BY DEFAULT: a stored website-scope file is only served when a
  * PUBLISHED reference exists —
  *   · a GalleryImage whose album is published, OR
  *   · a PUBLISHED + visible announcement carrying the image, OR
  *   · the image is the school's branding (logo referenced by School.logoUrl
- *     of an ACTIVE school).
+ *     of an ACTIVE school), OR
+ *   · (task 2-a) the file is the attachment of a LIVE-PUBLISHED
+ *     WebsiteNotice (lazy promotion/expiry evaluated here), OR
+ *   · (task 2-a) a PUBLISHED WebsiteMedia library item.
  * Unpublished/draft/private uploads fail-safe 404. No school data beyond
  * the image bytes is ever exposed. Anonymous per-IP rate limited.
  *
  * Phase 8A (8A-C9) — the bytes live in the PUBLIC 'public-media' bucket
  * (`website/<schoolId>/<fileId>`). This gate route still decides WHO
  * may fetch: when (and only when) the published-reference check passes,
- * the route REDIRECTS (302) to the object's public URL. TRUST MODEL
- * (documented per mission): the public URL is unguessable-ish — the
- * fileId is an opaque server-minted id — but PUBLIC once known; that is
- * the same trust model the local-disk public media had (the gate has
- * always been the only thing standing between an unpublished upload and
- * the world). The public Cache-Control policy is preserved on the
- * redirect; existence is probed first so "row exists but bytes gone"
- * keeps the honest 404.
+ * the route streams the object's bytes SAME-ORIGIN (see the Phase 8C-N
+ * note below — the earlier 302-redirect design broke the Next <Image>
+ * optimizer). TRUST MODEL (documented per mission): the public URL is
+ * unguessable-ish — the fileId is an opaque server-minted id — but PUBLIC
+ * once known; that is the same trust model the local-disk public media
+ * had (the gate has always been the only thing standing between an
+ * unpublished upload and the world). The public Cache-Control policy is
+ * preserved on the byte response; existence is probed first so "row
+ * exists but bytes gone" keeps the honest 404.
+ *
+ * Task 2-a — the stored-id extension allowlist now also admits `pdf`
+ * (notice attachments are documents). Every other gate (ownership,
+ * published-reference, active school) is unchanged; PDFs are served with
+ * `application/pdf` + `X-Content-Type-Options: nosniff` and an explicit
+ * `Content-Disposition` so a browser never guesses a content type.
  */
+const SERVABLE_EXTS = [...WEBSITE_UPLOAD_POLICY.allowedExts, 'pdf'] as const
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ fileId: string }> },
@@ -51,7 +64,7 @@ export async function GET(
     }
 
     const { fileId } = await params
-    if (!isValidStoredFileId(fileId, WEBSITE_UPLOAD_POLICY.allowedExts)) {
+    if (!isValidStoredFileId(fileId, SERVABLE_EXTS)) {
       return new NextResponse('Not found', { status: 404, headers: { 'X-Request-Id': requestId } })
     }
 
@@ -63,7 +76,7 @@ export async function GET(
 
     const now = new Date()
 
-    const [publishedGalleryImage, publishedAnnouncement, brandLogo] = await Promise.all([
+    const [publishedGalleryImage, publishedAnnouncement, brandLogo, publishedNoticeAttachment, publishedMediaItem] = await Promise.all([
       db.galleryImage.findFirst({
         where: { fileId, album: { published: true, school: { status: 'ACTIVE' } } },
         select: { id: true },
@@ -81,9 +94,31 @@ export async function GET(
         where: { logoUrl: fileId, status: 'ACTIVE' },
         select: { id: true },
       }),
+      // Task 2-a — live-published notice attachment (lazy promotion +
+      // lazy expiry, evaluated HERE exactly like the public payload).
+      db.websiteNotice.findFirst({
+        where: {
+          attachmentFileId: fileId,
+          school: { status: 'ACTIVE' },
+          OR: [{ status: 'PUBLISHED' }, { status: 'SCHEDULED', publishAt: { lte: now } }],
+          AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gte: now } }] }],
+        },
+        select: { id: true },
+      }),
+      // Task 2-a — published media-library item.
+      db.websiteMedia.findFirst({
+        where: { fileId, published: true, school: { status: 'ACTIVE' } },
+        select: { id: true },
+      }),
     ])
 
-    if (!publishedGalleryImage && !publishedAnnouncement && !brandLogo) {
+    if (
+      !publishedGalleryImage &&
+      !publishedAnnouncement &&
+      !brandLogo &&
+      !publishedNoticeAttachment &&
+      !publishedMediaItem
+    ) {
       return new NextResponse('Not found', { status: 404, headers: { 'X-Request-Id': requestId } })
     }
 
@@ -105,12 +140,21 @@ export async function GET(
     // gated the id; the bucket objects were magic-byte-validated at upload).
     const ext = fileId.toLowerCase().split('.').pop() ?? ''
     const contentType =
-      ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
+      ext === 'png'
+        ? 'image/png'
+        : ext === 'webp'
+          ? 'image/webp'
+          : ext === 'pdf'
+            ? 'application/pdf'
+            : 'image/jpeg'
 
     const res = new NextResponse(Buffer.from(bytes), {
       status: 200,
       headers: {
         'Content-Type': contentType,
+        // Documents (notice attachments) render inline; browsers only
+        // ever trust the explicit content type above (nosniff).
+        'Content-Disposition': 'inline',
         'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
         'X-Content-Type-Options': 'nosniff',
         'Content-Length': String(bytes.byteLength),

@@ -70,10 +70,25 @@ interface CurrentUserState {
   lastLoginAt: string | null
   loading: boolean
   error: boolean
+  /** SaaS-HARDENING — tenant entitlement snapshot from /api/auth/me
+   *  (server-evaluated; drives the locked/grace UX. NULL until known —
+   *  the server APIs enforce regardless of what the client shows). */
+  entitlement: EntitlementInfo | null
   /** Fetch (or re-fetch) /api/auth/me. Safe to call repeatedly. */
   refresh: () => Promise<void>
   /** Drop the cached identity (after sign-out). */
   clear: () => void
+}
+
+/** Server-evaluated tenant entitlement (serializable projection). */
+export interface EntitlementInfo {
+  state: 'ACTIVE' | 'GRACE' | 'RESTRICTED' | 'SUSPENDED' | 'NOT_ACTIVATED'
+  businessAllowed: boolean
+  plan: string
+  periodEnd: string | null
+  graceUntil: string | null
+  renewalRequired: boolean
+  message: string | null
 }
 
 export const useCurrentUser = create<CurrentUserState>((set) => ({
@@ -82,6 +97,7 @@ export const useCurrentUser = create<CurrentUserState>((set) => ({
   lastLoginAt: null,
   loading: false,
   error: false,
+  entitlement: null,
   refresh: async () => {
     if (useCurrentUser.getState().loading) return
     set({ loading: true, error: false })
@@ -94,11 +110,13 @@ export const useCurrentUser = create<CurrentUserState>((set) => ({
         me: data?.user ?? null,
         session: data?.session ?? null,
         lastLoginAt: data?.lastLoginAt ?? null,
+        entitlement: data?.entitlement ?? null,
         loading: false,
       })
     } catch {
       set({ me: null, session: null, lastLoginAt: null, loading: false, error: true })
     }
   },
-  clear: () => set({ me: null, session: null, lastLoginAt: null, error: false }),
+  clear: () =>
+    set({ me: null, session: null, lastLoginAt: null, entitlement: null, error: false }),
 }))
