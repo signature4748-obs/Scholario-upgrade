@@ -137,39 +137,9 @@ async function realPrincipalLogin(email: string, password: string): Promise<stri
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password }),
   })
-  const body = (await res.json()) as {
-    ok: boolean
-    data?: { sessionToken?: string; mustChangePassword?: boolean }
-  }
+  const body = (await res.json()) as { ok: boolean; data?: { sessionToken?: string } }
   if (!body.data?.sessionToken) throw new Error(`principal login failed for ${email}: ${JSON.stringify(body)}`)
-  let token = body.data.sessionToken
-  // CREDENTIAL-RESET — every freshly provisioned principal starts in the
-  // forced first-password-change state. Complete it through the REAL
-  // API (asserting the gate fires first) so the subsequent cross-tenant
-  // matrix exercises the ESTABLISHED credential, exactly like a real
-  // principal who finished onboarding.
-  if (body.data.mustChangePassword === true) {
-    // 1) business APIs reject the bootstrap credential server-side.
-    const gated = await fetch(`${BASE}/api/dashboard`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ scope: 'SCHOOL' }),
-    })
-    expect(gated.status).toBe(403)
-    expect(((await gated.json().catch(() => ({}))) as { code?: string }).code).toBe('PASSWORD_CHANGE_REQUIRED')
-    // 2) complete the change (new random password, policy-valid).
-    const newPassword = `E2e-${randomBytes(12).toString('hex')}9`
-    const change = await fetch(`${BASE}/api/auth/change-password`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ currentPassword: password, newPassword, confirmPassword: newPassword }),
-    })
-    expect(change.status).toBe(200)
-    // 3) use the rotated token the change-password route returns (dev
-    //    bearer mode) — the bootstrap-era token is dead after rotation.
-    const changed = (await change.json()) as { data?: { sessionToken?: string } }
-    if (changed.data?.sessionToken) token = changed.data.sessionToken
-  }
+  const token = body.data.sessionToken
   cleanup.push(() => db.session.deleteMany({ where: { tokenHash: hashSessionToken(token) } }))
   return token
 }
@@ -501,24 +471,7 @@ describe('§36 · STEP 3 — cross-tenant access attempts all fail safe', () => 
   }, T)
 
   test('teacher B (fixture session) → class hub scoped to School B only', async () => {
-    let teacherBToken = await teacherFixture(B.teacherEmail)
-    // CREDENTIAL-RESET — an API-provisioned teacher starts in the forced
-    // first-password-change state (the supplied password is a bootstrap).
-    // Complete it through the REAL API before probing the class hub —
-    // exactly what the real teacher does at first sign-in.
-    const teacherNewPw = 'BetaTeacherOwn!9d'
-    const change = await asP(teacherBToken, '/api/auth/change-password', {
-      method: 'POST',
-      body: JSON.stringify({
-        currentPassword: 'BetaTeacher!8c',
-        newPassword: teacherNewPw,
-        confirmPassword: teacherNewPw,
-      }),
-    })
-    expect(change.status).toBe(200)
-    const changed = (await change.json().catch(() => null)) as { data?: { sessionToken?: string } } | null
-    if (changed?.data?.sessionToken) teacherBToken = changed.data.sessionToken
-
+    const teacherBToken = await teacherFixture(B.teacherEmail)
     const res = await asP(teacherBToken, '/api/teacher/students')
     expect(res.status).toBe(200)
     const body = (await res.json()) as {

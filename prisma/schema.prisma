@@ -217,19 +217,6 @@ model User {
   ///             lifecycle): a LOCKED account on an ACTIVE tenant keeps
   ///             login/session; a suspended tenant blocks everyone.
   subscriptionStatus String @default("ACTIVE")
-  /// CREDENTIAL-RESET — forced first-password-change flag. true while the
-  /// account has NOT yet established its own password: set at
-  /// provisioning (platform wizard / school-plane create routes use
-  /// account-provisioning) and by the credential-neutralization migration
-  /// for every pre-existing account that never changed its password
-  /// (passwordChangedAt IS NULL). Login still succeeds (authentication
-  /// architecture unchanged); every BUSINESS API rejects the session with
-  /// PASSWORD_CHANGE_REQUIRED via withUser until the change completes.
-  mustChangePassword Boolean @default(false)
-  /// CREDENTIAL-RESET — when the user last set their own password via
-  /// /api/auth/change-password (null = never; the migration's
-  /// mustChangePassword input).
-  passwordChangedAt DateTime?
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

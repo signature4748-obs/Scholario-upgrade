@@ -55,9 +55,6 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     FEATURE_DISABLED: 403,
     // FINAL-ACCEPTANCE Phase 10 — account-level subscription lock.
     SUBSCRIPTION_REQUIRED: 403,
-    // CREDENTIAL-RESET — forced first-password-change gate (business APIs
-    // reject a bootstrap-credential session; exempt surfaces stay open).
-    PASSWORD_CHANGE_REQUIRED: 403,
   }
 
   test('the table is exactly the documented taxonomy (no stray/missing codes)', () => {

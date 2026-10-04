@@ -101,18 +101,12 @@ const patchSchema = strictBody({
  * PATCH /api/platform/schools/[id] — school metadata (profile, branding,
  * domain configuration). Audited field-by-field.
  *
- * Permission: schools.manage + live step-up (VERIFY-FIX: identity/domain
- * metadata is platform-controlled school identity — the same policy
- * class as the domain-mapping, plan and suspend mutations. `domain`
- * changes school routing; `name`/`email` are the school's legal/brand
- * identity. While platform TOTP is stood down the step-up gate is
- * dormant (re-arms automatically when MFA is re-enabled) — identical
- * posture to every other step-up route.)
+ * Permission: schools.manage.
  */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withPlatform(
-    { permission: 'schools.manage', stepUp: true },
+    { permission: 'schools.manage' },
     async (ctx) => {
       const body = await parseJsonBody(req, patchSchema)
       const ip = clientIpFromHeaders(req.headers)

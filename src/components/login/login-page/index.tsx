@@ -199,7 +199,6 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
           role?: string
           sessionToken?: string
           subscriptionStatus?: string
-          mustChangePassword?: boolean
           entitlement?: { businessAllowed?: boolean; state?: string; message?: string | null }
         }
       } | null
@@ -240,13 +239,9 @@ export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void })
       // SaaS-HARDENING: the same hydration runs for a RESTRICTED/
       // SUSPENDED tenant entitlement (login still succeeds — /api/auth/me
       // carries the state and the shell renders the locked renewal UX).
-      // CREDENTIAL-RESET: ditto for the forced first-password-change
-      // state — the shell must render the password-setup screen, not a
-      // role panel whose API calls would all 403.
       if (
         (payload.data?.subscriptionStatus && payload.data.subscriptionStatus !== 'ACTIVE') ||
-        payload.data?.entitlement?.businessAllowed === false ||
-        payload.data?.mustChangePassword === true
+        payload.data?.entitlement?.businessAllowed === false
       ) {
         await useCurrentUser.getState().refresh().catch(() => undefined)
       }
