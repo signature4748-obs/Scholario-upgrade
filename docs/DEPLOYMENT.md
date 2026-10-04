@@ -23,14 +23,21 @@ no infrastructure changes.
 ## Promotion flow
 
 ```
-development ──► (PR / push) ──► main ──► Vercel production deployment
-                                     │
+development ──► (PR / push) ──► main ──► production DB migration ──► Vercel production deployment
+                                     │            (workflow/ scripts      │
+                                     │             — MUST be green)      │
                                      └──► production domain (verified)
 ```
 
 - `main` is the production branch (Vercel Git integration, auto-deploy on push).
 - `development` is the working branch. Feature branches merge into development;
   development merges into main after QA.
+- **The production database migration runs BEFORE the application deployment
+  that depends on it** — dispatch the Production DB Migration workflow (or run
+  the `scripts/prod-migration/` stages) on the exact release commit and wait
+  for green BEFORE pushing main. See `docs/PRODUCTION_DB_MIGRATION.md` — the
+  authoritative, repeatable pipeline (pre-flight gates → transactional apply
+  with true Prisma checksums → A–F verification).
 - Production deployments always correspond to a Git commit SHA — no manual
   source edits on Vercel, no local-only builds.
 - Preview deployments run for every branch push (Vercel preview env).
@@ -82,7 +89,7 @@ scheme of the same origin) because the realtime bridge connects to
 | --- | --- |
 | Deploy | push to `main` (auto) |
 | Check health | `GET /health/live`, `GET /health/ready` (checks DB) |
-| Migrations | `DATABASE_URL=<pooler session URL> npx prisma migrate deploy` |
+| Migrations | **Production DB Migration pipeline** — `scripts/prod-migration/` (or the GitHub Actions workflow once enabled): pre-flight → transactional apply → verify. See `docs/PRODUCTION_DB_MIGRATION.md`. Runs from the exact release commit; secrets: `SUPABASE_ACCESS_TOKEN` + `SUPABASE_PROJECT_REF`. (When a dedicated pooler credential is provisioned, `DATABASE_URL=<pooler session URL> npx prisma migrate deploy` from the same checkout is the drop-in equivalent — the pipeline writes byte-identical history.) |
 | Rotation (DB password) | Supabase dashboard/API → update `DATABASE_URL` on Vercel → redeploy → verify `/health/ready` |
 | Rotation (Resend key) | Resend dashboard → update `RESEND_API_KEY` on Vercel → redeploy → send probe |
 | Backup | logical backup procedure in `docs/BACKUP_RECOVERY.md` |

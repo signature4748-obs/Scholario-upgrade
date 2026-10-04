@@ -1,0 +1,177 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Scholario — PRODUCTION DATABASE MIGRATION (the authoritative pipeline)
+#
+# WHAT THIS IS: the single authoritative, repeatable production DB migration
+# job (docs/PRODUCTION_DB_MIGRATION.md). Order of release:
+#
+#     development ──► tests ──► staging/preview ──► migration verification
+#        ──► main ──► PRODUCTION DB MIGRATION (this workflow) ──► application
+#        deployment (Vercel)
+#
+# The database migration runs BEFORE any application code that depends on the
+# new schema reaches production. Concretely: dispatch this workflow on the
+# exact release commit; only after it is green does main get pushed / the
+# Vercel production deploy happen (see §"Release sequencing" in the runbook
+# for the fully automated main-gating variant).
+#
+# STAGES (all fail-loud; a red stage = the run is RED, never "successful"):
+#   preflight — read-only: production history must match the checkout, the
+#               expected pending set must match, target objects must not
+#               exist yet, before-state snapshot (every table's row count,
+#               user/credential counts) is captured as an artifact.
+#   apply     — each pending migration in exact timestamp order inside ONE
+#               transaction that also writes its _prisma_migrations row with
+#               the TRUE Prisma checksum (sha256 of migration.sql). Failure
+#               = rollback + non-zero exit + pipeline halt.
+#   verify    — A migration status · B schema · C indexes (24 trgm + 11
+#               schoolId) · D credential flags (never passwords) · E
+#               row-count comparison (no table may shrink) · F production
+#               /health/ready.
+#
+# SECRETS (GitHub Actions Secrets — never in the repo, never printed):
+#   SUPABASE_ACCESS_TOKEN  Management API token — the ONLY credential needed
+#                          (the pooler DB password is owner-held; the
+#                          Management API executes as the schema-owning
+#                          `postgres` role).
+#   SUPABASE_PROJECT_REF   kbyknezedewvgrnqervj
+#
+# WHY THIS FILE IS PARKED: GitHub only accepts commits that create/modify
+# .github/workflows/* when the pushing credential has the `workflow` scope
+# (or via the web UI). The repo's push tokens have carried `repo` scope only
+# — the exact constraint that parked .github/ci.yml.parked (docs/CI.md).
+# ENABLE IN 60 SECONDS: create .github/workflows/production-db-migration.yml
+# with this exact content via the GitHub web UI (Settings → file editor), or
+# push this file there with a workflow-scoped PAT. No other configuration is
+# required — the secrets above are the only inputs.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Production DB Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_pending:
+        description: 'Comma-separated migration names that must be exactly the pending set (empty = any)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Pre-flight only (no writes; apply/verify jobs are skipped)'
+        type: boolean
+        default: false
+
+# Exactly one production migration run at a time — never concurrent.
+concurrency:
+  group: production-db-migration
+  cancel-in-progress: false
+
+timeout-minutes: 20
+
+# Least privilege: the pipeline only reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Pre-flight (read-only gates + before-state snapshot)
+    runs-on: ubuntu-latest
+    outputs:
+      snapshot-artifact: ${{ steps.snapshot.outputs.artifact }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Report the exact commit being released
+        run: |
+          echo "release commit: ${GITHUB_SHA}"
+          git log -1 --format='%H %s'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Pre-flight
+        id: snapshot
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          EXPECTED_PENDING: ${{ inputs.expected_pending }}
+        run: |
+          bun scripts/prod-migration/preflight.ts \
+            --out "$RUNNER_TEMP/prod-migration-snapshot.json" \
+            ${EXPECTED_PENDING:+--expect "$EXPECTED_PENDING"}
+
+      - name: Upload before-state snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-migration-snapshot
+          path: ${{ runner.temp }}/prod-migration-snapshot.json
+          retention-days: 30
+
+  apply:
+    name: Apply migrations (transactional, true checksums)
+    needs: preflight
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Apply pending migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          EXPECTED_PENDING: ${{ inputs.expected_pending }}
+        run: |
+          bun scripts/prod-migration/apply.ts \
+            ${EXPECTED_PENDING:+--expect "$EXPECTED_PENDING"}
+          # A failed migration exits non-zero → this job is RED and the
+          # deployment can never be reported successful.
+
+  verify:
+    name: Post-migration verification (A–F)
+    needs: apply
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Download before-state snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-migration-snapshot
+          path: ${{ runner.temp }}
+
+      - name: Verify production
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          bun scripts/prod-migration/verify.ts \
+            --snapshot "$RUNNER_TEMP/prod-migration-snapshot.json"
+
+      - name: Migration pipeline summary
+        if: always()
+        run: |
+          echo "## Production DB migration — ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "release commit: ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "stages: preflight ${{ needs.preflight.result }} · apply ${{ needs.apply.result }} · verify ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
