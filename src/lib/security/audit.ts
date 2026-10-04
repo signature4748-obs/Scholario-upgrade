@@ -63,6 +63,9 @@ export const AUDIT_ACTIONS = [
   // ActivityLog so principals see platform oversight of their tenant).
   'PLATFORM_SUPPORT_SESSION',
   'PLATFORM_LOGIN_BLOCKED',
+  // CREDENTIAL-RESET — school-visible marker for a platform credential
+  // reset (single-account or whole-roster) on this tenant.
+  'PLATFORM_CREDENTIAL_RESET',
   // PHASE 7.5 — school configuration / website CMS / announcement
   // lifecycle mutations (all school-scoped, principal-authored).
   'SCHOOL_SETTINGS_UPDATED',

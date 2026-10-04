@@ -142,6 +142,10 @@ export async function POST(req: NextRequest) {
             role: 'PRINCIPAL',
             phone: body.principalPhone || null,
             status: 'ACTIVE',
+            // CREDENTIAL-RESET — same forced first-password-change
+            // contract as the platform wizard: the bootstrap credential
+            // is single-purpose (server-enforced in withUser).
+            mustChangePassword: true,
           },
         })
         await tx.activityLog.create({

@@ -293,6 +293,12 @@ export type AuthUser = {
   avatarUrl: string | null
   phone: string | null
   status: string
+  /** CREDENTIAL-RESET — true while the account has not yet established
+   *  its own password (provisioned with a temp/bootstrap credential, or
+   *  flagged by the credential-neutralization migration). Login still
+   *  succeeds; withUser rejects business APIs with
+   *  PASSWORD_CHANGE_REQUIRED until the change completes. */
+  mustChangePassword: boolean
   /** ACCOUNT-level subscription lock (Phase 10): 'ACTIVE' | 'LOCKED'.
    *  LOCKED accounts authenticate and read identity surfaces only —
    *  protected module APIs reject them with SUBSCRIPTION_REQUIRED. */
@@ -349,6 +355,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     avatarUrl: u.avatarUrl,
     phone: u.phone,
     status: u.status,
+    mustChangePassword: u.mustChangePassword,
     subscriptionStatus: u.subscriptionStatus ?? 'ACTIVE',
     school: u.school
       ? {

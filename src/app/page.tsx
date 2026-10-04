@@ -9,6 +9,7 @@ import { installApiBearerInterceptor } from '@/lib/auth-session-token'
 import { AssetErrorBoundary } from '@/components/shared/asset-guard/asset-error-boundary'
 import { SubscriptionLockScreen } from '@/components/shared/subscription-lock-screen'
 import { EntitlementLockScreen, EntitlementBanner } from '@/components/shared/entitlement-lock-screen'
+import { ForcePasswordChangeScreen } from '@/components/shared/force-password-change-screen'
 
 // Install once, before any component can fire an API call. In embedded
 // (cross-site iframe) contexts the session cookie is blocked, so API auth
@@ -228,6 +229,21 @@ export default function Home() {
   // errors) the normal panel path runs — its API calls will 403/401
   // through the same server-side gate.
   if (isAuthenticated && user) {
+    // CREDENTIAL-RESET — forced first-password-change: the account
+    // authenticated but has not yet established its own password
+    // (provisioned with a bootstrap credential or migrated from the
+    // seeded-credential era). Render the password-setup screen instead
+    // of the role panels. UI courtesy: withUser rejects business APIs
+    // server-side (403 PASSWORD_CHANGE_REQUIRED) either way; the
+    // exempt identity surface (auth/profile/subscription/support)
+    // keeps the screen functional.
+    if (me?.mustChangePassword) {
+      return (
+        <AssetErrorBoundary>
+          <ForcePasswordChangeScreen user={me} />
+        </AssetErrorBoundary>
+      )
+    }
     // SaaS-HARDENING (§2) — ACCOUNT-level lock (Phase-10 semantics).
     if (me?.subscriptionStatus && me.subscriptionStatus !== 'ACTIVE') {
       return (

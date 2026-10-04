@@ -1,16 +1,26 @@
 /**
- * PHASE 8B (§10–§13) — multi-tenant custom-domain architecture tests.
+ * PHASE 8B (§10–§13) + PRODUCT-DIRECTION RESET — multi-tenant custom-domain
+ * architecture tests.
  *
  * Layer 1 (unit, pure): hostname normalization + validation.
- * Layer 2 (live HTTP + DB): the full domain→tenant pipeline —
- *   request (school plane) → PENDING does NOT resolve → DNS verify fails
- *   honestly → VERIFIED mapping resolves THE school (over the demo
- *   fallback) → www-variant resolves → cross-tenant duplicate rejected
- *   (409) → cross-tenant verify rejected (404) → role/auth boundaries.
+ * Layer 2 (live HTTP + DB): the domain→tenant pipeline under the
+ * PLATFORM-OWNED domain model (SaaS-HARDENING §4):
+ *   · school-plane /api/school/domains is READ-ONLY STATUS (GET) —
+ *     principal domain request/self-verify/DNS-instruction endpoints
+ *     were REMOVED (mutation lives exclusively behind
+ *     /api/platform/schools/[id]/domains with schools.manage + step-up);
+ *   · an unverified TenantDomain mapping resolves NOTHING (404);
+ *   · a VERIFIED mapping resolves THE school (over any fallback) and
+ *     its www-variant too;
+ *   · hostile hosts never resolve a foreign tenant; cache isolation
+ *     between hosts holds;
+ *   · role/auth boundaries (teacher 403, anonymous 401, school session
+ *     can never reach the platform domain API).
  *
- * Fixture tenants: Hawkings High School (demo) + Green Valley (clean). All
- * created rows are cleaned up in afterAll (TenantDomain rows with the
- * `it-` hostname marker only).
+ * Fixture tenants: Hawkings High School (demo) + Green Valley (clean).
+ * Domain rows are planted DIRECTLY (db) — simulating exactly what a
+ * platform admin's verified mapping looks like — and cleaned up in
+ * afterAll (`it-` hostname marker only).
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'node:crypto'
@@ -111,6 +121,20 @@ describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
     demoCookie = await login(DEMO_PRINCIPAL, DEMO_PRINCIPAL_PASSWORD)
     // clean any residue from an interrupted earlier run
     await db.tenantDomain.deleteMany({ where: { hostname: { startsWith: 'it-' } } })
+    // The platform-owned pipeline simulation: a mapping a platform admin
+    // created (PENDING, real token — exactly the wizard's shape).
+    const gv = await db.school.findUniqueOrThrow({ where: { slug: 'green-valley' } })
+    gvSchoolId = gv.id
+    const row = await db.tenantDomain.create({
+      data: {
+        schoolId: gv.id,
+        hostname: TEST_HOSTNAME,
+        isPrimary: true,
+        status: 'PENDING',
+        verificationToken: randomBytes(16).toString('hex'),
+      },
+    })
+    gvDomainId = row.id
   }, T)
 
   afterAll(async () => {
@@ -132,32 +156,27 @@ describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
     expect(status).toBe(403)
   }, T)
 
-  test('principal requests a domain → PENDING + exact DNS instructions', async () => {
+  test('principal domain REQUEST is retired: POST /api/school/domains → 405 (platform-owned)', async () => {
+    // PRODUCT-DIRECTION RESET + SaaS-HARDENING §4: the school-plane
+    // surface is GET-only status. DNS instructions, verification
+    // tokens and routing control are NEVER exposed to school users.
     const { status, json } = await api(gvCookie, '/api/school/domains', {
       method: 'POST',
-      body: { hostname: `WWW.${TEST_HOSTNAME}` }, // normalization happens server-side
+      body: { hostname: `WWW.${TEST_HOSTNAME}` },
     })
-    expect(status).toBe(200)
-    expect(json?.data?.domain?.hostname).toBe(TEST_HOSTNAME)
-    expect(json?.data?.domain?.status).toBe('PENDING')
-    const inst = json?.data?.instructions
-    expect(inst?.verificationTxt?.name).toBe(`_scholario-verify.${TEST_HOSTNAME}`)
-    expect(String(inst?.verificationTxt?.value ?? '')).toMatch(/^scholario-verify=[0-9a-f]{32}$/)
-    expect(['CNAME', 'A']).toContain(inst?.routing?.type)
-    gvDomainId = json?.data?.domain?.id
-    gvSchoolId = await db.school.findUniqueOrThrow({ where: { slug: 'green-valley' } }).then((s) => s.id)
-    expect(gvDomainId).toBeTruthy()
+    expect([405, 404]).toContain(status) // no school-plane mutation exists
+    expect(json?.data?.domain ?? null).toBe(null)
   }, T)
 
-  test('invalid hostnames are rejected with a reason (400)', async () => {
-    for (const bad of ['school', '10.0.0.1', 'x.vercel.app', 'https://x']) {
-      const { status, json } = await api(gvCookie, '/api/school/domains', {
-        method: 'POST',
-        body: { hostname: bad },
-      })
-      expect(status).toBe(422) // INVALID_INPUT taxonomy (validated rejects)
-      expect(String(json?.error ?? '')).not.toBe('')
-    }
+  test('removed school-plane verify endpoint → 404 for any caller', async () => {
+    const { status } = await api(gvCookie, `/api/school/domains/${gvDomainId}/verify`, {
+      method: 'POST',
+    })
+    expect(status).toBe(404)
+    const cross = await api(demoCookie, `/api/school/domains/${gvDomainId}/verify`, {
+      method: 'POST',
+    })
+    expect(cross.status).toBe(404)
   }, T)
 
   test('PENDING mapping does NOT resolve (nothing is served — no fallback, never GV)', async () => {
@@ -171,33 +190,20 @@ describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
     expect(j?.data?.slug ?? null).toBe(null)
   }, T)
 
-  test('cross-tenant duplicate: demo principal requests the SAME hostname → 409', async () => {
-    const { status, json } = await api(demoCookie, '/api/school/domains', {
+  test('cross-tenant duplicate request is retired with the POST surface (405, platform-owned)', async () => {
+    // The duplicate-hostname CONFLICT logic still exists — on the
+    // platform plane (covered by the saas-hardening suite). The school
+    // plane no longer accepts hostname submissions at all.
+    const { status } = await api(demoCookie, '/api/school/domains', {
       method: 'POST',
       body: { hostname: TEST_HOSTNAME },
     })
-    expect(status).toBe(409)
-    expect(String(json?.error ?? '')).toContain(TEST_HOSTNAME)
+    expect([405, 404]).toContain(status)
   }, T)
 
-  test('cross-tenant verify: demo principal cannot verify GV domain (404, no oracle)', async () => {
-    const { status } = await api(demoCookie, `/api/school/domains/${gvDomainId}/verify`, {
-      method: 'POST',
-    })
-    expect(status).toBe(404)
-  }, T)
-
-  test('self-verify fails honestly while DNS records are absent (stays PENDING with summary)', async () => {
-    const { status, json } = await api(gvCookie, `/api/school/domains/${gvDomainId}/verify`, {
-      method: 'POST',
-    })
-    expect(status).toBe(200)
-    expect(json?.data?.domain?.status).toBe('PENDING')
-    expect(String(json?.data?.summary ?? '')).toContain('Pending')
-  }, T)
-
-  test('VERIFIED mapping resolves GREEN VALLEY on that host (overrides demo fallback)', async () => {
-    // flip the row to VERIFIED exactly like a successful DNS TXT check would
+  test('VERIFIED mapping (platform-verified) resolves GREEN VALLEY on that host', async () => {
+    // flip the row to VERIFIED exactly like a successful platform-side
+    // DNS TXT check would
     await db.tenantDomain.update({
       where: { id: gvDomainId },
       data: { status: 'VERIFIED', verifiedAt: new Date() },
@@ -245,13 +251,22 @@ describe('Phase 8B · tenant domain pipeline (live HTTP + DB)', () => {
     expect((rr.headers.get('cache-control') ?? '')).toContain('no-store')
   }, T)
 
-  test('principal GET lists the school domains with instructions', async () => {
+  test('principal GET lists the school domains WITHOUT infrastructure detail (platform-owned)', async () => {
     const { status, json } = await api(gvCookie, '/api/school/domains')
     expect(status).toBe(200)
-    const rows = (json?.data?.domains ?? []) as Array<{ hostname: string; status: string; instructions: unknown }>
+    const rows = (json?.data?.domains ?? []) as Array<{
+      hostname: string
+      status: string
+      verificationToken?: unknown
+      instructions?: unknown
+    }>
     const mine = rows.find((d) => d.hostname === TEST_HOSTNAME)
     expect(mine?.status).toBe('VERIFIED')
-    expect(mine?.instructions).toBeTruthy()
+    // The read-only status surface must never carry DNS instructions or
+    // verification tokens (infrastructure credentials).
+    expect(mine?.verificationToken).toBeUndefined()
+    expect(mine?.instructions).toBeUndefined()
+    expect(String(json?.data?.note ?? '')).not.toBe('')
   }, T)
 
   test('platform boundary: school session cannot call the platform domain API (401)', async () => {
