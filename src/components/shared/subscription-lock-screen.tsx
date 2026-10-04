@@ -61,7 +61,7 @@ export function SubscriptionLockScreen({ user }: { user: MeUser }) {
   const roleLabel = ROLE_LABELS[user.role] ?? user.role
 
   return (
-    <div className="min-h-screen mesh-bg flex flex-col">
+    <div className="min-h-screen bg-background flex flex-col">
       <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
         <Card className="w-full max-w-md border-border/80 shadow-xl">
           <CardContent className="p-6 space-y-6">
@@ -69,7 +69,7 @@ export function SubscriptionLockScreen({ user }: { user: MeUser }) {
             <div className="flex items-center gap-4">
               <div
                 aria-hidden
-                className="h-14 w-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-lg font-bold shrink-0"
+                className="h-14 w-14 rounded-2xl bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300 flex items-center justify-center text-lg font-bold shrink-0"
               >
                 {initials(user.name)}
               </div>

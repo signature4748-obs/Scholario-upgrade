@@ -133,13 +133,13 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
     <div className="space-y-4">
       {stepUpNode}
 
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/60">
-        <div className="border-b border-zinc-800/80 px-4 py-3.5 sm:px-5">
-          <h2 className="font-display text-sm font-bold text-zinc-100 flex items-center gap-2">
-            <Globe className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+          <h2 className="font-display text-sm font-bold text-slate-900 flex items-center gap-2">
+            <Globe className="h-4 w-4 text-teal-600" aria-hidden="true" />
             Custom domains
           </h2>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-slate-500">
             Verified hostnames resolve this school on the public website and login portal. One
             hostname maps to exactly one school — enforced at the storage layer.
           </p>
@@ -153,7 +153,7 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
                 onChange={(e) => setNewHostname(e.target.value)}
                 placeholder="school-a.com"
                 aria-label="New hostname"
-                className="bg-zinc-950 border-zinc-800 text-zinc-200 font-mono text-sm"
+                className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 font-mono text-sm"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && newHostname.trim().length >= 4 && !addBusy) void add()
                 }}
@@ -161,7 +161,7 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
               <Button
                 onClick={() => void add()}
                 disabled={addBusy || newHostname.trim().length < 4}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white min-h-[36px]"
+                className="bg-teal-600 hover:bg-teal-700 text-white min-h-[36px]"
               >
                 <Plus className="h-4 w-4" aria-hidden="true" />
                 {addBusy ? 'Adding…' : 'Add domain'}
@@ -169,7 +169,7 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
             </div>
           )}
           {addError && (
-            <p className="text-xs text-red-400 flex items-start gap-1.5" role="alert">
+            <p className="text-xs text-red-600 flex items-start gap-1.5" role="alert">
               <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden="true" />
               {addError}
             </p>
@@ -182,32 +182,32 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
             </div>
           )}
           {loadError && (
-            <p className="text-xs text-red-400" role="alert">
+            <p className="text-xs text-red-600" role="alert">
               {loadError}
             </p>
           )}
           {domains !== null && domains.length === 0 && (
-            <p className="text-xs text-zinc-500 py-2">
+            <p className="text-xs text-slate-500 py-2">
               No custom domains yet. The school can also request one from its own settings
               (Identity → Custom domain).
             </p>
           )}
 
-          <ul className="divide-y divide-zinc-800/80" aria-label="Domain list">
+          <ul className="divide-y divide-slate-200" aria-label="Domain list">
             {domains?.map((d) => (
               <li key={d.id} className="py-3 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <span className="font-mono text-sm text-zinc-200 break-all">{d.hostname}</span>
+                  <span className="font-mono text-sm text-slate-700 break-all">{d.hostname}</span>
                   {d.isPrimary && (
-                    <span className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-zinc-400">
+                    <span className="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500">
                       primary
                     </span>
                   )}
                   <span
                     className={
                       d.status === 'VERIFIED'
-                        ? 'inline-flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-300'
-                        : 'inline-flex items-center gap-1 rounded bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[11px] font-semibold text-amber-300'
+                        ? 'inline-flex items-center gap-1 rounded bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[11px] font-semibold text-emerald-700'
+                        : 'inline-flex items-center gap-1 rounded bg-amber-50 border border-amber-200 px-2 py-0.5 text-[11px] font-semibold text-amber-700'
                     }
                   >
                     {d.status === 'VERIFIED' ? (
@@ -223,7 +223,7 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
                       size="sm"
                       onClick={() => void verify(d)}
                       disabled={verifyBusy === d.id || d.status === 'VERIFIED'}
-                      className="h-8 border-zinc-700 text-zinc-300 hover:text-zinc-100"
+                      className="h-8 border-slate-300 text-slate-700 hover:text-slate-900 hover:bg-slate-50"
                     >
                       <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                       {verifyBusy === d.id ? 'Checking…' : d.status === 'VERIFIED' ? 'Verified' : 'Verify DNS'}
@@ -234,7 +234,7 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
                         size="sm"
                         onClick={() => void remove(d)}
                         disabled={deleteBusy === d.id}
-                        className="h-8 border-red-900/60 text-red-400 hover:text-red-300"
+                        className="h-8 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50"
                         aria-label={`Remove ${d.hostname}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -247,21 +247,21 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
                   <p
                     className={
                       'mt-2 text-xs ' +
-                      (verifyMsg[d.id].startsWith('Pending') ? 'text-amber-300/90' : 'text-zinc-400')
+                      (verifyMsg[d.id].startsWith('Pending') ? 'text-amber-700' : 'text-slate-600')
                     }
                   >
                     {verifyMsg[d.id]}
                   </p>
                 )}
                 {d.lastCheckResult && d.status !== 'VERIFIED' && (
-                  <p className="mt-1.5 text-xs text-zinc-500">{d.lastCheckResult}</p>
+                  <p className="mt-1.5 text-xs text-slate-500">{d.lastCheckResult}</p>
                 )}
                 {d.status !== 'VERIFIED' && (
                   <div className="mt-2">
                     <button
                       type="button"
                       onClick={() => setExpanded(expanded === d.id ? null : d.id)}
-                      className="text-[11px] text-zinc-500 underline underline-offset-2 hover:text-zinc-300"
+                      className="text-[11px] text-slate-500 underline underline-offset-2 hover:text-slate-700"
                     >
                       {expanded === d.id ? 'Hide DNS instructions' : 'Show DNS instructions'}
                     </button>
@@ -288,17 +288,17 @@ function DnsInstructions({ hostname }: { hostname: string }) {
       : { type: 'CNAME', name: hostname, value: 'cname.vercel-dns.com' },
   ]
   return (
-    <div className="mt-2 space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+    <div className="mt-2 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
       {records.map((r) => (
         <div key={r.type + r.name} className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-          <span className="font-mono font-semibold text-emerald-300">{r.type}</span>
-          <span className="font-mono text-zinc-300 break-all">{r.name}</span>
+          <span className="font-mono font-semibold text-teal-700">{r.type}</span>
+          <span className="font-mono text-slate-700 break-all">{r.name}</span>
           <span className="sr-only">value</span>
-          <span className="font-mono text-zinc-400 break-all">{r.value}</span>
+          <span className="font-mono text-slate-600 break-all">{r.value}</span>
         </div>
       ))}
-      <p className="flex items-start gap-1.5 text-[11px] text-zinc-500">
-        <CheckCircle2 className="h-3 w-3 mt-0.5 shrink-0 text-zinc-600" aria-hidden="true" />
+      <p className="flex items-start gap-1.5 text-[11px] text-slate-500">
+        <CheckCircle2 className="h-3 w-3 mt-0.5 shrink-0 text-slate-400" aria-hidden="true" />
         After the school creates these records, run Verify DNS. The platform must also attach the
         domain to the deployment (Vercel) — see docs/CUSTOM_DOMAINS.md.
       </p>

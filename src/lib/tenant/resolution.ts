@@ -88,10 +88,17 @@ export async function resolvePublicSchool(req: NextRequest): Promise<ResolvedTen
     return { schoolId: active[0].id, slug: active[0].slug, via: 'single' }
   }
 
-  // 4. Sandbox / marketing default: the registered demo school.
+  // 4. Sandbox / marketing default: the REGISTERED demo school only.
+  //    ARCHITECTURE RESET — the arbitrary "first active school" fallback is
+  //    retired: a bare deployment-domain visit on a multi-tenant DB must
+  //    never silently show whichever school happens to sort first. Only an
+  //    explicitly isDemo-flagged school (the sanctioned sandbox/marketing
+  //    tenant) still resolves; everything else returns null so the client
+  //    renders the SCHOLARIO directory landing (a platform surface, not a
+  //    school surface). Authorization is never derived from any of this —
+  //    resolution selects public branding only.
   const demo = active.find((s) => s.isDemo)
   if (demo) return { schoolId: demo.id, slug: demo.slug, via: 'demo' }
-  if (active.length) return { schoolId: active[0].id, slug: active[0].slug, via: 'demo' }
 
   return null
 }

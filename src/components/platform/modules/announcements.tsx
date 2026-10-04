@@ -62,17 +62,17 @@ const LEVEL_CONFIG: Record<
   { badge: string; icon: React.ComponentType<{ className?: string }>; label: string }
 > = {
   INFO: {
-    badge: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+    badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
     icon: Info,
     label: 'Info',
   },
   WARNING: {
-    badge: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+    badge: 'border-amber-200 bg-amber-50 text-amber-700',
     icon: AlertTriangle,
     label: 'Warning',
   },
   CRITICAL: {
-    badge: 'border-red-500/40 bg-red-500/10 text-red-300',
+    badge: 'border-red-200 bg-red-50 text-red-600',
     icon: OctagonAlert,
     label: 'Critical',
   },
@@ -200,21 +200,21 @@ export function AnnouncementsModule() {
         <div>
           <h1
             id="announcements-heading"
-            className="font-display text-xl sm:text-2xl font-bold text-zinc-100 flex items-center gap-2.5"
+            className="font-display text-xl sm:text-2xl font-bold text-slate-900 flex items-center gap-2.5"
           >
-            <span className="h-9 w-9 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-              <Megaphone className="h-4.5 w-4.5 text-emerald-400" aria-hidden="true" />
+            <span className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center">
+              <Megaphone className="h-4.5 w-4.5 text-teal-600" aria-hidden="true" />
             </span>
             Platform announcements
           </h1>
-          <p className="text-sm text-zinc-400 mt-2 max-w-2xl">
+          <p className="text-sm text-slate-500 mt-2 max-w-2xl">
             Notices shown on school login pages. Publishing is immediate; expiry hides them
             automatically.
           </p>
         </div>
         <Button
           onClick={() => setCreateOpen(true)}
-          className="h-11 px-5 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring"
+          className="h-11 px-5 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
         >
           <Plus className="h-4 w-4" aria-hidden="true" />
           New announcement
@@ -225,7 +225,7 @@ export function AnnouncementsModule() {
       {error && (
         <div
           role="alert"
-          className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
         >
           {error}
         </div>
@@ -235,17 +235,17 @@ export function AnnouncementsModule() {
       {loading && (
         <div className="space-y-3" aria-hidden="true">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-32 w-full rounded-xl bg-zinc-800/70" />
+            <Skeleton key={i} className="h-32 w-full rounded-xl bg-slate-200" />
           ))}
         </div>
       )}
 
       {/* Empty */}
       {!loading && !error && announcements.length === 0 && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-10 text-center">
-          <Megaphone className="h-8 w-8 text-zinc-600 mx-auto mb-3" aria-hidden="true" />
-          <p className="text-sm font-semibold text-zinc-300">No announcements yet</p>
-          <p className="text-xs text-zinc-500 mt-1">
+        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+          <Megaphone className="h-8 w-8 text-slate-400 mx-auto mb-3" aria-hidden="true" />
+          <p className="text-sm font-semibold text-slate-900">No announcements yet</p>
+          <p className="text-xs text-slate-500 mt-1">
             Publish the first notice — it appears on every school login page.
           </p>
         </div>
@@ -261,7 +261,7 @@ export function AnnouncementsModule() {
             return (
               <article
                 key={a.id}
-                className={`rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5 transition-opacity ${
+                className={`rounded-xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm transition-opacity ${
                   a.expired ? 'opacity-60' : ''
                 }`}
                 aria-label={`${level.label} announcement: ${a.title}`}
@@ -272,11 +272,11 @@ export function AnnouncementsModule() {
                       <LevelIcon className="h-3 w-3" aria-hidden="true" />
                       {level.label}
                     </Badge>
-                    <Badge variant="outline" className="border-zinc-700/80 bg-zinc-800/60 text-zinc-400">
+                    <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-600">
                       {a.audience === 'ALL' ? 'All surfaces' : 'School login'}
                     </Badge>
                     {a.expired && (
-                      <Badge variant="outline" className="border-zinc-700/80 bg-zinc-800/60 text-zinc-500">
+                      <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-500">
                         expired
                       </Badge>
                     )}
@@ -286,14 +286,14 @@ export function AnnouncementsModule() {
                     size="icon"
                     onClick={() => setDeleteTarget(a)}
                     aria-label={`Retract announcement "${a.title}"`}
-                    className="h-11 w-11 shrink-0 text-zinc-500 hover:text-red-400 hover:bg-red-500/10"
+                    className="h-11 w-11 shrink-0 text-slate-500 hover:text-red-600 hover:bg-red-50"
                   >
                     <Trash2 className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
-                <h2 className="font-semibold text-sm text-zinc-100 mt-3">{a.title}</h2>
+                <h2 className="font-semibold text-sm text-slate-900 mt-3">{a.title}</h2>
                 <p
-                  className={`mt-1.5 text-sm leading-relaxed text-zinc-400 ${
+                  className={`mt-1.5 text-sm leading-relaxed text-slate-600 ${
                     isOpen ? '' : 'line-clamp-3'
                   }`}
                 >
@@ -303,16 +303,16 @@ export function AnnouncementsModule() {
                   <button
                     type="button"
                     onClick={() => setExpanded(isOpen ? null : a.id)}
-                    className="mt-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 focus-ring rounded-md px-1 -mx-1"
+                    className="mt-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 focus-ring rounded-md px-1 -mx-1"
                     aria-expanded={isOpen}
                   >
                     {isOpen ? 'Show less' : 'Show more'}
                   </button>
                 )}
-                <div className="mt-3 pt-3 border-t border-zinc-800/80 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-zinc-500 tabular-nums">
+                <div className="mt-3 pt-3 border-t border-slate-200 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500 tabular-nums">
                   <span>Created {when(a.createdAt)}</span>
                   {a.expiresAt && (
-                    <span className={a.expired ? 'text-zinc-600' : ''}>
+                    <span className={a.expired ? 'text-slate-400' : ''}>
                       Expires {when(a.expiresAt)}
                     </span>
                   )}
@@ -325,13 +325,13 @@ export function AnnouncementsModule() {
 
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-lg">
+        <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-zinc-50">
-              <Megaphone className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+            <DialogTitle className="flex items-center gap-2 text-slate-900">
+              <Megaphone className="h-4 w-4 text-teal-600" aria-hidden="true" />
               New announcement
             </DialogTitle>
-            <DialogDescription className="text-zinc-400">
+            <DialogDescription className="text-slate-500">
               Publishes immediately to school login pages.
             </DialogDescription>
           </DialogHeader>
@@ -343,8 +343,8 @@ export function AnnouncementsModule() {
             }}
           >
             <div className="space-y-1.5">
-              <label htmlFor="ann-title" className="text-xs font-semibold text-zinc-300">
-                Title <span className="text-zinc-500 font-normal">(≤ 120 chars)</span>
+              <label htmlFor="ann-title" className="text-xs font-semibold text-slate-700">
+                Title <span className="text-slate-500 font-normal">(≤ 120 chars)</span>
               </label>
               <Input
                 id="ann-title"
@@ -353,12 +353,12 @@ export function AnnouncementsModule() {
                 required
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 placeholder="Scheduled maintenance window"
-                className="bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 h-11 focus-visible:ring-emerald-500/40"
+                className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 h-11 focus-visible:ring-teal-500/40"
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="ann-body" className="text-xs font-semibold text-zinc-300">
-                Body <span className="text-zinc-500 font-normal">(≤ 1,000 chars)</span>
+              <label htmlFor="ann-body" className="text-xs font-semibold text-slate-700">
+                Body <span className="text-slate-500 font-normal">(≤ 1,000 chars)</span>
               </label>
               <Textarea
                 id="ann-body"
@@ -368,13 +368,13 @@ export function AnnouncementsModule() {
                 rows={5}
                 onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))}
                 placeholder="What schools should know…"
-                className="bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500/40"
+                className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40"
               />
-              <p className="text-[10px] text-zinc-600 tabular-nums">{form.body.length}/1000</p>
+              <p className="text-[10px] text-slate-400 tabular-nums">{form.body.length}/1000</p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label htmlFor="ann-level" className="text-xs font-semibold text-zinc-300">
+                <label htmlFor="ann-level" className="text-xs font-semibold text-slate-700">
                   Level
                 </label>
                 <Select
@@ -383,11 +383,11 @@ export function AnnouncementsModule() {
                 >
                   <SelectTrigger
                     id="ann-level"
-                    className="w-full h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-ring"
+                    className="w-full h-11 bg-white border-slate-200 text-slate-900 focus-ring"
                   >
                     <SelectValue placeholder="Level" />
                   </SelectTrigger>
-                  <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+                  <SelectContent className="bg-white border-slate-200 text-slate-900">
                     <SelectItem value="INFO">Info</SelectItem>
                     <SelectItem value="WARNING">Warning</SelectItem>
                     <SelectItem value="CRITICAL">Critical</SelectItem>
@@ -395,7 +395,7 @@ export function AnnouncementsModule() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <label htmlFor="ann-audience" className="text-xs font-semibold text-zinc-300">
+                <label htmlFor="ann-audience" className="text-xs font-semibold text-slate-700">
                   Audience
                 </label>
                 <Select
@@ -406,11 +406,11 @@ export function AnnouncementsModule() {
                 >
                   <SelectTrigger
                     id="ann-audience"
-                    className="w-full h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-ring"
+                    className="w-full h-11 bg-white border-slate-200 text-slate-900 focus-ring"
                   >
                     <SelectValue placeholder="Audience" />
                   </SelectTrigger>
-                  <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+                  <SelectContent className="bg-white border-slate-200 text-slate-900">
                     <SelectItem value="ALL">All surfaces</SelectItem>
                     <SelectItem value="SCHOOLS">School login only</SelectItem>
                   </SelectContent>
@@ -418,7 +418,7 @@ export function AnnouncementsModule() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="ann-expiry" className="text-xs font-semibold text-zinc-300">
+              <label htmlFor="ann-expiry" className="text-xs font-semibold text-slate-700">
                 Expires after (days)
               </label>
               <Input
@@ -429,11 +429,11 @@ export function AnnouncementsModule() {
                 value={form.expiresInDays}
                 required
                 onChange={(e) => setForm((f) => ({ ...f, expiresInDays: e.target.value }))}
-                className="bg-zinc-950 border-zinc-800 text-zinc-100 h-11 w-32 focus-visible:ring-emerald-500/40"
+                className="bg-white border-slate-200 text-slate-900 h-11 w-32 focus-visible:ring-teal-500/40"
               />
-              <p className="text-[10px] text-zinc-500">1–90 days, then it stops showing.</p>
+              <p className="text-[10px] text-slate-500">1–90 days, then it stops showing.</p>
             </div>
-            <p className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[11px] text-emerald-300">
+            <p className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">
               <Info className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               Publishes immediately to school login pages.
             </p>
@@ -442,14 +442,14 @@ export function AnnouncementsModule() {
                 type="button"
                 variant="outline"
                 onClick={() => setCreateOpen(false)}
-                className="border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 h-11"
+                className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 h-11"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={creating}
-                className="bg-emerald-600 hover:bg-emerald-500 text-zinc-950 h-11 font-semibold focus-ring"
+                className="bg-teal-600 hover:bg-teal-700 text-white h-11 font-semibold focus-ring"
               >
                 {creating ? 'Publishing…' : 'Publish'}
               </Button>
@@ -463,10 +463,10 @@ export function AnnouncementsModule() {
         open={Boolean(deleteTarget)}
         onOpenChange={(v) => !v && setDeleteTarget(null)}
       >
-        <AlertDialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+        <AlertDialogContent className="bg-white border-slate-200 text-slate-900">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-zinc-50">Retract announcement?</AlertDialogTitle>
-            <AlertDialogDescription className="text-zinc-400">
+            <AlertDialogTitle className="text-slate-900">Retract announcement?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-500">
               “{deleteTarget?.title}” will be removed from school login pages immediately. The
               retraction is recorded in the audit trail.
             </AlertDialogDescription>
@@ -474,7 +474,7 @@ export function AnnouncementsModule() {
           <AlertDialogFooter>
             <AlertDialogCancel
               disabled={deleting}
-              className="border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 h-11"
+              className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 h-11"
             >
               Keep it
             </AlertDialogCancel>

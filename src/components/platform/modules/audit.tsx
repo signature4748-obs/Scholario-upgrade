@@ -64,10 +64,10 @@ function actionTone(action: string): 'zinc' | 'red' | 'amber' | 'emerald' {
 }
 
 const TONE_CLASS: Record<'zinc' | 'red' | 'amber' | 'emerald', string> = {
-  zinc: 'border-zinc-700/80 bg-zinc-800/60 text-zinc-300',
-  red: 'border-red-500/40 bg-red-500/10 text-red-300',
-  amber: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
-  emerald: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+  zinc: 'border-slate-200 bg-slate-100 text-slate-700',
+  red: 'border-red-200 bg-red-50 text-red-600',
+  amber: 'border-amber-200 bg-amber-50 text-amber-700',
+  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
 }
 
 function ActionBadge({ action }: { action: string }) {
@@ -156,26 +156,26 @@ export function AuditModule() {
       <div>
         <h1
           id="audit-heading"
-          className="font-display text-xl sm:text-2xl font-bold text-zinc-100 flex items-center gap-2.5"
+          className="font-display text-xl sm:text-2xl font-bold text-slate-900 flex items-center gap-2.5"
         >
-          <span className="h-9 w-9 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-            <ScrollText className="h-4.5 w-4.5 text-emerald-400" aria-hidden="true" />
+          <span className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center">
+            <ScrollText className="h-4.5 w-4.5 text-teal-600" aria-hidden="true" />
           </span>
           Platform audit trail
         </h1>
-        <p className="text-sm text-zinc-400 mt-2 max-w-2xl">
+        <p className="text-sm text-slate-500 mt-2 max-w-2xl">
           Append-only record of every control-plane action. Rows survive school and admin
-          deletion — entries may reference an <span className="text-zinc-300">unknown admin</span>{' '}
+          deletion — entries may reference an <span className="text-slate-700">unknown admin</span>{' '}
           when the account has since been removed.
         </p>
       </div>
 
       {/* Toolbar */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <Search
-              className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500 pointer-events-none"
+              className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none"
               aria-hidden="true"
             />
             <Input
@@ -183,7 +183,7 @@ export function AuditModule() {
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search action or reason…"
               aria-label="Search audit events"
-              className="pl-9 bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 h-11 focus-visible:ring-emerald-500/40"
+              className="pl-9 bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 h-11 focus-visible:ring-teal-500/40"
             />
           </div>
           <Input
@@ -191,11 +191,11 @@ export function AuditModule() {
             onChange={(e) => setAction(e.target.value)}
             placeholder="Action prefix e.g. platform.school"
             aria-label="Filter by action prefix"
-            className="sm:w-72 font-mono text-[13px] bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 h-11 focus-visible:ring-emerald-500/40"
+            className="sm:w-72 font-mono text-[13px] bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 h-11 focus-visible:ring-teal-500/40"
           />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-zinc-500 tabular-nums" aria-live="polite">
+          <p className="text-xs text-slate-500 tabular-nums" aria-live="polite">
             {loading ? 'Loading…' : `${data?.total ?? 0} events`}
           </p>
           <div className="flex items-center gap-2">
@@ -205,11 +205,11 @@ export function AuditModule() {
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={loading || page <= 1}
               aria-label="Previous page"
-              className="h-11 w-11 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+              className="h-11 w-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900"
             >
               <ChevronLeft className="h-4 w-4" aria-hidden="true" />
             </Button>
-            <span className="text-xs text-zinc-500 tabular-nums min-w-[4.5rem] text-center">
+            <span className="text-xs text-slate-500 tabular-nums min-w-[4.5rem] text-center">
               Page {page} / {totalPages}
             </span>
             <Button
@@ -218,7 +218,7 @@ export function AuditModule() {
               onClick={() => setPage((p) => (p < totalPages ? p + 1 : p))}
               disabled={loading || page >= totalPages}
               aria-label="Next page"
-              className="h-11 w-11 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+              className="h-11 w-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900"
             >
               <ChevronRight className="h-4 w-4" aria-hidden="true" />
             </Button>
@@ -230,7 +230,7 @@ export function AuditModule() {
       {error && (
         <div
           role="alert"
-          className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
         >
           {error}
         </div>
@@ -240,17 +240,17 @@ export function AuditModule() {
       {loading && (
         <div className="space-y-2" aria-hidden="true">
           {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 w-full rounded-xl bg-zinc-800/70" />
+            <Skeleton key={i} className="h-12 w-full rounded-xl bg-slate-200" />
           ))}
         </div>
       )}
 
       {/* Empty */}
       {!loading && !error && events.length === 0 && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-10 text-center">
-          <ScrollText className="h-8 w-8 text-zinc-600 mx-auto mb-3" aria-hidden="true" />
-          <p className="text-sm font-semibold text-zinc-300">No audit events match the filters</p>
-          <p className="text-xs text-zinc-500 mt-1">
+        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+          <ScrollText className="h-8 w-8 text-slate-400 mx-auto mb-3" aria-hidden="true" />
+          <p className="text-sm font-semibold text-slate-900">No audit events match the filters</p>
+          <p className="text-xs text-slate-500 mt-1">
             Try clearing the search or action filter — the trail records every platform action.
           </p>
         </div>
@@ -260,16 +260,16 @@ export function AuditModule() {
       {!loading && events.length > 0 && (
         <>
           {/* Table (≥ sm) */}
-          <div className="hidden sm:block rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
-            <Table className="text-zinc-300">
+          <div className="hidden sm:block rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <Table className="text-slate-700">
               <TableHeader>
-                <TableRow className="border-zinc-800 hover:bg-transparent">
-                  <TableHead className="text-zinc-500 font-medium h-11">Time</TableHead>
-                  <TableHead className="text-zinc-500 font-medium">Action</TableHead>
-                  <TableHead className="text-zinc-500 font-medium">Admin</TableHead>
-                  <TableHead className="text-zinc-500 font-medium">Target</TableHead>
-                  <TableHead className="text-zinc-500 font-medium">Reason</TableHead>
-                  <TableHead className="text-zinc-500 font-medium">IP</TableHead>
+                <TableRow className="border-slate-200 hover:bg-transparent">
+                  <TableHead className="text-slate-500 font-medium h-11">Time</TableHead>
+                  <TableHead className="text-slate-500 font-medium">Action</TableHead>
+                  <TableHead className="text-slate-500 font-medium">Admin</TableHead>
+                  <TableHead className="text-slate-500 font-medium">Target</TableHead>
+                  <TableHead className="text-slate-500 font-medium">Reason</TableHead>
+                  <TableHead className="text-slate-500 font-medium">IP</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -281,8 +281,8 @@ export function AuditModule() {
                       <TableRow
                         className={
                           hasMeta
-                            ? 'cursor-pointer border-zinc-800/80 hover:bg-zinc-800/40'
-                            : 'border-zinc-800/80'
+                            ? 'cursor-pointer border-slate-200 hover:bg-slate-50'
+                            : 'border-slate-200'
                         }
                         onClick={() => hasMeta && setExpanded(open ? null : ev.id)}
                         aria-expanded={hasMeta ? open : undefined}
@@ -295,14 +295,14 @@ export function AuditModule() {
                           }
                         }}
                       >
-                        <TableCell className="whitespace-nowrap tabular-nums text-xs text-zinc-400">
+                        <TableCell className="whitespace-nowrap tabular-nums text-xs text-slate-600">
                           {when(ev.at)}
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1.5">
                             {hasMeta && (
                               <ChevronDown
-                                className={`h-3.5 w-3.5 text-zinc-600 transition-transform ${
+                                className={`h-3.5 w-3.5 text-slate-400 transition-transform ${
                                   open ? 'rotate-180' : ''
                                 }`}
                                 aria-hidden="true"
@@ -311,20 +311,20 @@ export function AuditModule() {
                             <ActionBadge action={ev.action} />
                           </div>
                         </TableCell>
-                        <TableCell className="max-w-[10rem] truncate text-zinc-300">
+                        <TableCell className="max-w-[10rem] truncate text-slate-700">
                           {ev.admin ? (
                             <span title={ev.admin.id}>{ev.admin.name}</span>
                           ) : (
-                            <span className="text-zinc-600">system</span>
+                            <span className="text-slate-400">system</span>
                           )}
                         </TableCell>
                         <TableCell className="text-xs">
                           {ev.targetType ? (
-                            <span className="text-zinc-300">
+                            <span className="text-slate-700">
                               {ev.targetType}
                               {ev.targetId && (
                                 <span
-                                  className="text-zinc-500 font-mono ml-1.5"
+                                  className="text-slate-500 font-mono ml-1.5"
                                   title={ev.targetId}
                                 >
                                   {shortId(ev.targetId)}
@@ -332,11 +332,11 @@ export function AuditModule() {
                               )}
                             </span>
                           ) : (
-                            <span className="text-zinc-600">—</span>
+                            <span className="text-slate-400">—</span>
                           )}
                           {ev.schoolId && (
                             <span
-                              className="block text-zinc-600 font-mono text-[10px]"
+                              className="block text-slate-400 font-mono text-[10px]"
                               title={ev.schoolId}
                             >
                               school {shortId(ev.schoolId)}
@@ -345,21 +345,21 @@ export function AuditModule() {
                         </TableCell>
                         <TableCell className="max-w-[16rem]">
                           {ev.reason ? (
-                            <span className="block truncate text-xs text-zinc-400" title={ev.reason}>
+                            <span className="block truncate text-xs text-slate-600" title={ev.reason}>
                               {ev.reason}
                             </span>
                           ) : (
-                            <span className="text-zinc-600">—</span>
+                            <span className="text-slate-400">—</span>
                           )}
                         </TableCell>
-                        <TableCell className="whitespace-nowrap font-mono text-xs text-zinc-500">
+                        <TableCell className="whitespace-nowrap font-mono text-xs text-slate-500">
                           {ev.ip ?? '—'}
                         </TableCell>
                       </TableRow>
                       {open && ev.metadata && (
-                        <TableRow className="border-zinc-800/80 hover:bg-transparent">
-                          <TableCell colSpan={6} className="bg-zinc-950/60">
-                            <pre className="max-h-64 overflow-auto custom-scrollbar rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-[11px] leading-relaxed text-zinc-300 font-mono">
+                        <TableRow className="border-slate-200 hover:bg-transparent">
+                          <TableCell colSpan={6} className="bg-slate-50">
+                            <pre className="max-h-64 overflow-auto custom-scrollbar rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700 font-mono">
                               {formatMetadata(ev.metadata)}
                             </pre>
                           </TableCell>
@@ -380,40 +380,40 @@ export function AuditModule() {
               return (
                 <div
                   key={ev.id}
-                  className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-2.5"
+                  className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <ActionBadge action={ev.action} />
-                    <span className="text-[10px] text-zinc-500 tabular-nums shrink-0">
+                    <span className="text-[10px] text-slate-500 tabular-nums shrink-0">
                       {when(ev.at)}
                     </span>
                   </div>
                   <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1.5 text-xs">
-                    <dt className="text-zinc-500">Admin</dt>
-                    <dd className="text-zinc-300 truncate">{ev.admin?.name ?? 'system'}</dd>
-                    <dt className="text-zinc-500">Target</dt>
-                    <dd className="text-zinc-300">
+                    <dt className="text-slate-500">Admin</dt>
+                    <dd className="text-slate-700 truncate">{ev.admin?.name ?? 'system'}</dd>
+                    <dt className="text-slate-500">Target</dt>
+                    <dd className="text-slate-700">
                       {ev.targetType ?? '—'}
                       {ev.targetId && (
-                        <span className="text-zinc-500 font-mono ml-1.5" title={ev.targetId}>
+                        <span className="text-slate-500 font-mono ml-1.5" title={ev.targetId}>
                           {shortId(ev.targetId)}
                         </span>
                       )}
                     </dd>
                     {ev.schoolId && (
                       <>
-                        <dt className="text-zinc-500">School</dt>
-                        <dd className="text-zinc-400 font-mono" title={ev.schoolId}>
+                        <dt className="text-slate-500">School</dt>
+                        <dd className="text-slate-600 font-mono" title={ev.schoolId}>
                           {shortId(ev.schoolId)}
                         </dd>
                       </>
                     )}
-                    <dt className="text-zinc-500">Reason</dt>
-                    <dd className="text-zinc-400 col-span-1" title={ev.reason ?? undefined}>
+                    <dt className="text-slate-500">Reason</dt>
+                    <dd className="text-slate-600 col-span-1" title={ev.reason ?? undefined}>
                       <span className="block truncate">{ev.reason ?? '—'}</span>
                     </dd>
-                    <dt className="text-zinc-500">IP</dt>
-                    <dd className="text-zinc-500 font-mono">{ev.ip ?? '—'}</dd>
+                    <dt className="text-slate-500">IP</dt>
+                    <dd className="text-slate-500 font-mono">{ev.ip ?? '—'}</dd>
                   </dl>
                   {hasMeta && (
                     <Button
@@ -421,7 +421,7 @@ export function AuditModule() {
                       size="sm"
                       onClick={() => setExpanded(open ? null : ev.id)}
                       aria-expanded={open}
-                      className="w-full h-11 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60"
+                      className="w-full h-11 text-slate-500 hover:text-slate-900 hover:bg-slate-100"
                     >
                       <ChevronDown
                         className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`}
@@ -431,7 +431,7 @@ export function AuditModule() {
                     </Button>
                   )}
                   {open && ev.metadata && (
-                    <pre className="max-h-56 overflow-auto custom-scrollbar rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-[10px] leading-relaxed text-zinc-300 font-mono">
+                    <pre className="max-h-56 overflow-auto custom-scrollbar rounded-lg border border-slate-200 bg-slate-50 p-3 text-[10px] leading-relaxed text-slate-700 font-mono">
                       {formatMetadata(ev.metadata)}
                     </pre>
                   )}
@@ -442,7 +442,7 @@ export function AuditModule() {
 
           {/* Pagination footer */}
           <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-zinc-500 tabular-nums">
+            <p className="text-xs text-slate-500 tabular-nums">
               Showing page {page} of {totalPages}
             </p>
             <div className="flex items-center gap-2">
@@ -451,7 +451,7 @@ export function AuditModule() {
                 size="sm"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page <= 1}
-                className="h-11 px-4 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+                className="h-11 px-4 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900"
               >
                 <ChevronLeft className="h-4 w-4" aria-hidden="true" />
                 Prev
@@ -461,7 +461,7 @@ export function AuditModule() {
                 size="sm"
                 onClick={() => setPage((p) => (p < totalPages ? p + 1 : p))}
                 disabled={page >= totalPages}
-                className="h-11 px-4 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+                className="h-11 px-4 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900"
               >
                 Next
                 <ChevronRight className="h-4 w-4" aria-hidden="true" />

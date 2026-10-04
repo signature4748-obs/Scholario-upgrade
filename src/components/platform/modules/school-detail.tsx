@@ -16,6 +16,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import {
   ArrowLeft,
+  ExternalLink,
   RefreshCw,
   AlertTriangle,
   LifeBuoy,
@@ -138,10 +139,10 @@ function timeAgo(iso: string): string {
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  ACTIVE: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  SUSPENDED: 'border-red-500/30 bg-red-500/10 text-red-400',
-  PENDING: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-  TRIAL: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400',
+  ACTIVE: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  SUSPENDED: 'border-red-200 bg-red-50 text-red-600',
+  PENDING: 'border-amber-200 bg-amber-50 text-amber-700',
+  TRIAL: 'border-slate-200 bg-slate-100 text-slate-600',
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -210,20 +211,20 @@ function AccessDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-lg">
+      <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 font-display text-zinc-50">
-            <LifeBuoy className="h-4 w-4 text-amber-400" aria-hidden="true" />
-            Access {schoolName} — read-only support session
+          <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
+            <LifeBuoy className="h-4 w-4 text-amber-600" aria-hidden="true" />
+            Open Support Session — {schoolName} (read-only)
           </DialogTitle>
-          <DialogDescription className="text-zinc-400">
+          <DialogDescription className="text-slate-500">
             Opens a time-boxed, audited oversight session. No school identity is assumed and no school data
             can be modified — the school sees a record of this visit.
           </DialogDescription>
         </DialogHeader>
 
         {error && (
-          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             {error}
           </div>
@@ -231,7 +232,7 @@ function AccessDialog({
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="access-reason" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="access-reason" className="text-xs font-semibold text-slate-700">
               Reason (required, visible to the school) *
             </Label>
             <Textarea
@@ -241,30 +242,30 @@ function AccessDialog({
               placeholder="e.g. Principal reported fee ledger mismatch after the February gateway batch…"
               rows={3}
               maxLength={400}
-              className="bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500/40 min-h-[88px]"
+              className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40 min-h-[88px]"
             />
-            <p className="text-[10px] text-zinc-600 tabular-nums">{reason.trim().length}/400 · minimum 10</p>
+            <p className="text-[10px] text-slate-400 tabular-nums">{reason.trim().length}/400 · minimum 10</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="access-duration" className="text-xs font-semibold text-zinc-300">
+            <Label htmlFor="access-duration" className="text-xs font-semibold text-slate-700">
               Duration
             </Label>
             <Select value={duration} onValueChange={setDuration}>
               <SelectTrigger
                 id="access-duration"
-                className="h-11 w-full bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+                className="h-11 w-full bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
               >
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+              <SelectContent className="bg-white border-slate-200 text-slate-900">
                 {DURATION_OPTIONS.map((m) => (
-                  <SelectItem key={m} value={String(m)} className="focus:bg-zinc-800">
+                  <SelectItem key={m} value={String(m)} className="focus:bg-slate-100">
                     {m} minutes
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-[10px] text-zinc-600">Capped by the platform&apos;s maximum support duration</p>
+            <p className="text-[10px] text-slate-400">Capped by the platform&apos;s maximum support duration</p>
           </div>
         </div>
 
@@ -272,14 +273,14 @@ function AccessDialog({
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
-            className="h-11 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 focus-ring"
+            className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
           >
             Cancel
           </Button>
           <Button
             onClick={() => void submit()}
             disabled={busy}
-            className="h-11 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold focus-ring"
+            className="h-11 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold focus-ring"
           >
             {busy ? 'Opening…' : 'Open support session'}
           </Button>
@@ -347,27 +348,27 @@ function SuspendDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-lg">
+      <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 font-display text-zinc-50">
-            <Ban className="h-4 w-4 text-red-400" aria-hidden="true" />
+          <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
+            <Ban className="h-4 w-4 text-red-600" aria-hidden="true" />
             Suspend {schoolName}
           </DialogTitle>
-          <DialogDescription className="text-zinc-400">
+          <DialogDescription className="text-slate-500">
             Every user of this school is signed out immediately and school sign-in is blocked until it is
             explicitly reactivated. This action requires step-up verification and is audited with your reason.
           </DialogDescription>
         </DialogHeader>
 
         {error && (
-          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             {error}
           </div>
         )}
 
         <div className="space-y-1.5">
-          <Label htmlFor="suspend-reason" className="text-xs font-semibold text-zinc-300">
+          <Label htmlFor="suspend-reason" className="text-xs font-semibold text-slate-700">
             Reason (required) *
           </Label>
           <Textarea
@@ -377,16 +378,16 @@ function SuspendDialog({
             placeholder="e.g. Repeated fee reconciliation failures pending the Q1 audit review…"
             rows={3}
             maxLength={400}
-            className="bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-red-500/40 min-h-[88px]"
+            className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-red-500/40 min-h-[88px]"
           />
-          <p className="text-[10px] text-zinc-600 tabular-nums">{reason.trim().length}/400 · minimum 10</p>
+          <p className="text-[10px] text-slate-400 tabular-nums">{reason.trim().length}/400 · minimum 10</p>
         </div>
 
         <DialogFooter className="gap-2">
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
-            className="h-11 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 focus-ring"
+            className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
           >
             Cancel
           </Button>
@@ -463,10 +464,10 @@ function ColorField({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <Label htmlFor={id} className="text-xs font-semibold text-zinc-300">
+        <Label htmlFor={id} className="text-xs font-semibold text-slate-700">
           {label}
         </Label>
-        <span className="font-mono text-[10px] text-zinc-500">{value}</span>
+        <span className="font-mono text-[10px] text-slate-500">{value}</span>
       </div>
       <div className="flex items-center gap-2">
         <input
@@ -475,14 +476,14 @@ function ColorField({
           value={/^#[0-9A-Fa-f]{6}$/.test(value) ? value : '#000000'}
           onChange={(e) => onChange(e.target.value)}
           aria-label={`${label} color picker`}
-          className="h-11 w-14 shrink-0 cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950 p-1 focus-ring"
+          className="h-11 w-14 shrink-0 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 focus-ring"
         />
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="#0f766e"
           aria-label={`${label} hex value`}
-          className="h-11 flex-1 bg-zinc-950 border-zinc-800 text-zinc-100 font-mono focus-visible:ring-emerald-500/40"
+          className="h-11 flex-1 bg-white border-slate-200 text-slate-900 font-mono focus-visible:ring-teal-500/40"
         />
       </div>
     </div>
@@ -503,19 +504,19 @@ function StatCard({
   tone?: 'default' | 'amber'
 }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
       <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</p>
+        <p className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
         <span
           className={`flex h-7 w-7 items-center justify-center rounded-lg ${
-            tone === 'amber' ? 'bg-amber-500/10 text-amber-400' : 'bg-zinc-800/80 text-zinc-400'
+            tone === 'amber' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
           }`}
           aria-hidden="true"
         >
           {icon}
         </span>
       </div>
-      <p className="mt-2 font-display text-2xl font-bold text-zinc-50 tabular-nums">{value}</p>
+      <p className="mt-2 font-display text-2xl font-bold text-slate-900 tabular-nums">{value}</p>
     </div>
   )
 }
@@ -714,11 +715,11 @@ export function SchoolDetailModule() {
 
   if (!id) {
     return (
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
-        <p className="text-sm font-semibold text-zinc-200">No school selected</p>
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm p-8 text-center">
+        <p className="text-sm font-semibold text-slate-900">No school selected</p>
         <Link
           href="/platform/schools"
-          className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-400 hover:text-emerald-300 focus-ring rounded"
+          className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-teal-600 hover:text-teal-700 focus-ring rounded"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           Back to schools
@@ -730,31 +731,31 @@ export function SchoolDetailModule() {
   if (loading && !data) {
     return (
       <section className="space-y-4 sm:space-y-5" aria-busy="true">
-        <Skeleton className="h-8 w-64 bg-zinc-800" />
+        <Skeleton className="h-8 w-64 bg-slate-200" />
         <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <Skeleton className="h-3 w-20 bg-zinc-800" />
-              <Skeleton className="mt-3 h-7 w-12 bg-zinc-800" />
+            <div key={i} className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
+              <Skeleton className="h-3 w-20 bg-slate-200" />
+              <Skeleton className="mt-3 h-7 w-12 bg-slate-200" />
             </div>
           ))}
         </div>
-        <Skeleton className="h-64 w-full bg-zinc-800/60" />
+        <Skeleton className="h-64 w-full bg-slate-100" />
       </section>
     )
   }
 
   if (notFound) {
     return (
-      <section className="flex flex-col items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-16 text-center">
-        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800/70 text-zinc-500 ring-1 ring-zinc-700/60">
+      <section className="flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm px-4 py-16 text-center">
+        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500 ring-1 ring-slate-200">
           <ShieldAlert className="h-5 w-5" aria-hidden="true" />
         </div>
-        <h1 className="mt-3 font-display text-lg font-bold text-zinc-100">School not found</h1>
-        <p className="mt-1 max-w-sm text-sm text-zinc-500">
+        <h1 className="mt-3 font-display text-lg font-bold text-slate-900">School not found</h1>
+        <p className="mt-1 max-w-sm text-sm text-slate-500">
           This tenant does not exist (or was deleted). Platform audit entries survive deletions by design.
         </p>
-        <Button asChild size="sm" className="mt-5 h-10 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring">
+        <Button asChild size="sm" className="mt-5 h-10 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring">
           <Link href="/platform/schools">
             <ArrowLeft className="h-4 w-4" aria-hidden="true" />
             Back to schools
@@ -768,9 +769,9 @@ export function SchoolDetailModule() {
     return (
       <section
         role="alert"
-        className="flex flex-col gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-5 sm:flex-row sm:items-center sm:justify-between"
+        className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-5 sm:flex-row sm:items-center sm:justify-between"
       >
-        <p className="flex items-start gap-2.5 text-sm text-red-400">
+        <p className="flex items-start gap-2.5 text-sm text-red-600">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           {error}
         </p>
@@ -778,7 +779,7 @@ export function SchoolDetailModule() {
           variant="outline"
           size="sm"
           onClick={() => void reload()}
-          className="h-9 border-zinc-700 bg-transparent text-zinc-200 hover:bg-zinc-800 focus-ring"
+          className="h-9 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
         >
           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
           Retry
@@ -835,7 +836,7 @@ export function SchoolDetailModule() {
         <div className="min-w-0">
           <Link
             href="/platform/schools"
-            className="inline-flex items-center gap-1.5 rounded text-xs font-semibold text-zinc-400 hover:text-emerald-300 focus-ring"
+            className="inline-flex items-center gap-1.5 rounded text-xs font-semibold text-slate-600 hover:text-teal-700 focus-ring"
           >
             <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
             Back to schools
@@ -843,30 +844,47 @@ export function SchoolDetailModule() {
           <div className="mt-2 flex flex-wrap items-center gap-2.5">
             <h1
               id="school-heading"
-              className="font-display text-xl sm:text-2xl font-bold tracking-tight text-zinc-50 break-words"
+              className="font-display text-xl sm:text-2xl font-bold tracking-tight text-slate-900 break-words"
             >
               {school.name}
             </h1>
             <StatusBadge status={school.status} />
             {school.isDemo && (
-              <Badge variant="outline" className="border-zinc-600 bg-zinc-800/60 text-zinc-400 normal-case">
+              <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-600 normal-case">
                 demo
               </Badge>
             )}
           </div>
-          <p className="mt-1 font-mono text-xs text-zinc-500">
+          <p className="mt-1 font-mono text-xs text-slate-500">
             {school.slug} · {school.code}
           </p>
         </div>
-        {canSupport && (
-          <Button
-            onClick={() => setAccessOpen(true)}
-            className="h-11 shrink-0 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold focus-ring"
+        {/* ARCHITECTURE RESET — explicit, boundary-respecting actions:
+            · "Preview Website" opens the PUBLIC school website in a new tab
+              (an explicit look, never an inherited tenant context).
+            · "Open Support Session" (renamed from "Access School") is the
+              explicit, audited, step-up-gated, read-only entry into the
+              school's application context. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href={`/?slug=${encodeURIComponent(school.slug)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
           >
-            <LifeBuoy className="h-4 w-4" aria-hidden="true" />
-            Access School
-          </Button>
-        )}
+            <ExternalLink className="h-4 w-4" aria-hidden="true" />
+            Preview Website
+          </a>
+          {canSupport && (
+            <Button
+              onClick={() => setAccessOpen(true)}
+              className="h-11 shrink-0 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold focus-ring"
+            >
+              <LifeBuoy className="h-4 w-4" aria-hidden="true" />
+              Open Support Session
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Stat cards */}
@@ -882,43 +900,43 @@ export function SchoolDetailModule() {
       </motion.div>
 
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="w-full bg-zinc-900/80 border border-zinc-800 h-auto flex-wrap p-1 gap-1">
+        <TabsList className="w-full bg-slate-100 border border-slate-200 h-auto flex-wrap p-1 gap-1">
           <TabsTrigger
             value="overview"
-            className="data-[state=active]:bg-emerald-500/10 data-[state=active]:text-emerald-300 data-[state=active]:border-emerald-500/20 text-zinc-400 px-3 py-1.5 min-h-[36px]"
+            className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
           >
             Overview
           </TabsTrigger>
           <TabsTrigger
             value="setup"
-            className="data-[state=active]:bg-emerald-500/10 data-[state=active]:text-emerald-300 data-[state=active]:border-emerald-500/20 text-zinc-400 px-3 py-1.5 min-h-[36px]"
+            className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
           >
             Setup
           </TabsTrigger>
           {canManage && (
             <TabsTrigger
               value="metadata"
-              className="data-[state=active]:bg-emerald-500/10 data-[state=active]:text-emerald-300 data-[state=active]:border-emerald-500/20 text-zinc-400 px-3 py-1.5 min-h-[36px]"
+              className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
             >
               Metadata
             </TabsTrigger>
           )}
           <TabsTrigger
             value="plan"
-            className="data-[state=active]:bg-emerald-500/10 data-[state=active]:text-emerald-300 data-[state=active]:border-emerald-500/20 text-zinc-400 px-3 py-1.5 min-h-[36px]"
+            className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
           >
             Plan &amp; Modules
           </TabsTrigger>
           <TabsTrigger
             value="domains"
-            className="data-[state=active]:bg-emerald-500/10 data-[state=active]:text-emerald-300 data-[state=active]:border-emerald-500/20 text-zinc-400 px-3 py-1.5 min-h-[36px]"
+            className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
           >
             Domains
           </TabsTrigger>
           {canManage && (
             <TabsTrigger
               value="danger"
-              className="data-[state=active]:bg-red-500/10 data-[state=active]:text-red-400 data-[state=active]:border-red-500/20 text-zinc-400 px-3 py-1.5 min-h-[36px]"
+              className="data-[state=active]:bg-red-50 data-[state=active]:text-red-600 data-[state=active]:border-red-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
             >
               Danger zone
             </TabsTrigger>
@@ -927,20 +945,20 @@ export function SchoolDetailModule() {
 
         {/* ── Overview tab ─────────────────────────────────────────────── */}
         <TabsContent value="overview" className="space-y-4">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60">
-            <div className="border-b border-zinc-800/80 px-4 py-3.5 sm:px-5">
-              <h2 className="font-display text-sm font-bold text-zinc-100">School profile</h2>
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+              <h2 className="font-display text-sm font-bold text-slate-900">School profile</h2>
             </div>
             <dl className="grid grid-cols-1 gap-x-6 gap-y-3.5 p-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-4">
               {profile.map((p) => (
                 <div key={p.label} className="min-w-0">
-                  <dt className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-                    <span className="text-zinc-600" aria-hidden="true">
+                  <dt className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                    <span className="text-slate-400" aria-hidden="true">
                       {p.icon}
                     </span>
                     {p.label}
                   </dt>
-                  <dd className="mt-1 truncate text-sm text-zinc-200" title={p.value}>
+                  <dd className="mt-1 truncate text-sm text-slate-700" title={p.value}>
                     {p.value}
                   </dd>
                 </div>
@@ -948,9 +966,9 @@ export function SchoolDetailModule() {
             </dl>
           </div>
 
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60">
-            <div className="border-b border-zinc-800/80 px-4 py-3.5 sm:px-5">
-              <h2 className="font-display text-sm font-bold text-zinc-100">Recent school activity</h2>
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+              <h2 className="font-display text-sm font-bold text-slate-900">Recent school activity</h2>
             </div>
             {data.recentActivity.length > 0 ? (
               <ol className="relative p-4 sm:px-5" aria-label="Recent school activity">
@@ -958,26 +976,26 @@ export function SchoolDetailModule() {
                   <li key={a.id} className="relative flex gap-3.5 pb-4 last:pb-0">
                     {i < data.recentActivity.length - 1 && (
                       <span
-                        className="absolute left-[7px] top-4 h-full w-px bg-zinc-800"
+                        className="absolute left-[7px] top-4 h-full w-px bg-slate-200"
                         aria-hidden="true"
                       />
                     )}
                     <span
-                      className="relative mt-1.5 h-[7px] w-[7px] shrink-0 rounded-full bg-emerald-500/70 ring-4 ring-zinc-900"
+                      className="relative mt-1.5 h-[7px] w-[7px] shrink-0 rounded-full bg-emerald-500/70 ring-4 ring-white"
                       aria-hidden="true"
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-                        <p className="font-mono text-xs font-semibold text-zinc-200">{a.action}</p>
+                        <p className="font-mono text-xs font-semibold text-slate-700">{a.action}</p>
                         <span
-                          className="text-[11px] tabular-nums text-zinc-500"
+                          className="text-[11px] tabular-nums text-slate-500"
                           title={new Date(a.at).toLocaleString()}
                         >
                           {timeAgo(a.at)}
                         </span>
                       </div>
                       {a.detail && (
-                        <p className="mt-0.5 break-words text-xs leading-snug text-zinc-500">{a.detail}</p>
+                        <p className="mt-0.5 break-words text-xs leading-snug text-slate-500">{a.detail}</p>
                       )}
                     </div>
                   </li>
@@ -985,11 +1003,11 @@ export function SchoolDetailModule() {
               </ol>
             ) : (
               <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800/70 text-zinc-500 ring-1 ring-zinc-700/60">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500 ring-1 ring-slate-200">
                   <History className="h-5 w-5" aria-hidden="true" />
                 </div>
-                <p className="mt-3 text-sm font-semibold text-zinc-200">No school activity recorded yet</p>
-                <p className="mt-1 max-w-xs text-xs leading-snug text-zinc-500">
+                <p className="mt-3 text-sm font-semibold text-slate-900">No school activity recorded yet</p>
+                <p className="mt-1 max-w-xs text-xs leading-snug text-slate-500">
                   Tenant-side events (sign-ins, marks, fee actions) will appear here.
                 </p>
               </div>
@@ -1000,17 +1018,17 @@ export function SchoolDetailModule() {
         {/* ── Metadata tab (schools.manage) ───────────────────────────── */}
         {canManage && meta && (
           <TabsContent value="metadata">
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/60">
-              <div className="flex flex-col gap-1 border-b border-zinc-800/80 px-4 py-3.5 sm:px-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-col gap-1 border-b border-slate-200 px-4 py-3.5 sm:px-5 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h2 className="font-display text-sm font-bold text-zinc-100">School metadata</h2>
-                  <p className="mt-0.5 text-xs text-zinc-500">
+                  <h2 className="font-display text-sm font-bold text-slate-900">School metadata</h2>
+                  <p className="mt-0.5 text-xs text-slate-500">
                     Profile, contact and branding — audited field-by-field.
                   </p>
                 </div>
                 <span
                   className={`text-xs font-semibold tabular-nums ${
-                    metaChangedKeys.length > 0 ? 'text-amber-300' : 'text-zinc-600'
+                    metaChangedKeys.length > 0 ? 'text-amber-700' : 'text-slate-400'
                   }`}
                   aria-live="polite"
                 >
@@ -1024,18 +1042,18 @@ export function SchoolDetailModule() {
 
               <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="meta-name" className="text-xs font-semibold text-zinc-300">
+                  <Label htmlFor="meta-name" className="text-xs font-semibold text-slate-700">
                     Name
                   </Label>
                   <Input
                     id="meta-name"
                     value={meta.name}
                     onChange={(e) => setMetaField('name', e.target.value)}
-                    className="h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+                    className="h-11 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="meta-domain" className="text-xs font-semibold text-zinc-300">
+                  <Label htmlFor="meta-domain" className="text-xs font-semibold text-slate-700">
                     Domain
                   </Label>
                   <Input
@@ -1043,44 +1061,44 @@ export function SchoolDetailModule() {
                     value={meta.domain}
                     onChange={(e) => setMetaField('domain', e.target.value)}
                     placeholder="school.edu.in"
-                    className="h-11 bg-zinc-950 border-zinc-800 text-zinc-100 font-mono focus-visible:ring-emerald-500/40"
+                    className="h-11 bg-white border-slate-200 text-slate-900 font-mono focus-visible:ring-teal-500/40"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="meta-city" className="text-xs font-semibold text-zinc-300">
+                  <Label htmlFor="meta-city" className="text-xs font-semibold text-slate-700">
                     City
                   </Label>
                   <Input
                     id="meta-city"
                     value={meta.city}
                     onChange={(e) => setMetaField('city', e.target.value)}
-                    className="h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+                    className="h-11 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
                   />
                 </div>
                 <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor="meta-address" className="text-xs font-semibold text-zinc-300">
+                  <Label htmlFor="meta-address" className="text-xs font-semibold text-slate-700">
                     Address
                   </Label>
                   <Input
                     id="meta-address"
                     value={meta.address}
                     onChange={(e) => setMetaField('address', e.target.value)}
-                    className="h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+                    className="h-11 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="meta-phone" className="text-xs font-semibold text-zinc-300">
+                  <Label htmlFor="meta-phone" className="text-xs font-semibold text-slate-700">
                     Phone
                   </Label>
                   <Input
                     id="meta-phone"
                     value={meta.phone}
                     onChange={(e) => setMetaField('phone', e.target.value)}
-                    className="h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+                    className="h-11 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="meta-email" className="text-xs font-semibold text-zinc-300">
+                  <Label htmlFor="meta-email" className="text-xs font-semibold text-slate-700">
                     Contact email
                   </Label>
                   <Input
@@ -1088,23 +1106,23 @@ export function SchoolDetailModule() {
                     type="email"
                     value={meta.email}
                     onChange={(e) => setMetaField('email', e.target.value)}
-                    className="h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+                    className="h-11 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="meta-board" className="text-xs font-semibold text-zinc-300">
+                  <Label htmlFor="meta-board" className="text-xs font-semibold text-slate-700">
                     Board
                   </Label>
                   <Select value={meta.board} onValueChange={(v) => setMetaField('board', v)}>
                     <SelectTrigger
                       id="meta-board"
-                      className="h-11 w-full bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+                      className="h-11 w-full bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
                     >
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+                    <SelectContent className="bg-white border-slate-200 text-slate-900">
                       {SCHOOL_BOARDS.map((b) => (
-                        <SelectItem key={b} value={b} className="focus:bg-zinc-800">
+                        <SelectItem key={b} value={b} className="focus:bg-slate-100">
                           {b}
                         </SelectItem>
                       ))}
@@ -1112,7 +1130,7 @@ export function SchoolDetailModule() {
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="meta-year" className="text-xs font-semibold text-zinc-300">
+                  <Label htmlFor="meta-year" className="text-xs font-semibold text-slate-700">
                     Academic year
                   </Label>
                   <Input
@@ -1120,7 +1138,7 @@ export function SchoolDetailModule() {
                     value={meta.academicYear}
                     onChange={(e) => setMetaField('academicYear', e.target.value)}
                     placeholder="2025-26"
-                    className="h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40"
+                    className="h-11 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
                   />
                 </div>
                 <ColorField
@@ -1137,8 +1155,8 @@ export function SchoolDetailModule() {
                 />
               </div>
 
-              <div className="flex flex-wrap items-center justify-end gap-3 border-t border-zinc-800/80 p-4 sm:px-5">
-                <p className="mr-auto hidden items-center gap-1.5 text-[11px] text-zinc-600 sm:flex">
+              <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 p-4 sm:px-5">
+                <p className="mr-auto hidden items-center gap-1.5 text-[11px] text-slate-400 sm:flex">
                   <Palette className="h-3.5 w-3.5" aria-hidden="true" />
                   Colors apply to the school workspace
                 </p>
@@ -1146,14 +1164,14 @@ export function SchoolDetailModule() {
                   variant="outline"
                   onClick={() => setMeta(metaFromSchool(school))}
                   disabled={metaBusy || metaChangedKeys.length === 0}
-                  className="h-11 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 focus-ring"
+                  className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
                 >
                   Reset
                 </Button>
                 <Button
                   onClick={() => void saveMeta()}
                   disabled={metaBusy || metaChangedKeys.length === 0}
-                  className="h-11 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring"
+                  className="h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
                 >
                   {metaBusy ? 'Saving…' : `Save ${metaChangedKeys.length > 0 ? `(${metaChangedKeys.length})` : ''}`}
                 </Button>
@@ -1165,20 +1183,20 @@ export function SchoolDetailModule() {
         {/* ── Plan & Modules tab ───────────────────────────────────────── */}
         <TabsContent value="plan" className="space-y-4">
           {/* Plan (billing.manage) */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60">
-            <div className="border-b border-zinc-800/80 px-4 py-3.5 sm:px-5">
-              <h2 className="font-display text-sm font-bold text-zinc-100">Subscription plan</h2>
-              <p className="mt-0.5 text-xs text-zinc-500">
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+              <h2 className="font-display text-sm font-bold text-slate-900">Subscription plan</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
                 Billing-impacting change — requires billing.manage and step-up verification.
               </p>
             </div>
             <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-end sm:px-5">
               <div className="shrink-0">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Current plan</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Current plan</p>
                 <p className="mt-1 flex items-center gap-2">
                   <Badge
                     variant="outline"
-                    className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm px-3 py-1"
+                    className="border-emerald-200 bg-emerald-50 text-emerald-700 text-sm px-3 py-1"
                   >
                     {school.plan}
                   </Badge>
@@ -1187,19 +1205,19 @@ export function SchoolDetailModule() {
               {canBill ? (
                 <>
                   <div className="flex-1 space-y-1.5">
-                    <Label htmlFor="plan-select" className="text-xs font-semibold text-zinc-300">
+                    <Label htmlFor="plan-select" className="text-xs font-semibold text-slate-700">
                       Change plan to
                     </Label>
                     <Select value={planChoice} onValueChange={setPlanChoice}>
                       <SelectTrigger
                         id="plan-select"
-                        className="h-11 w-full bg-zinc-950 border-zinc-800 text-zinc-100 focus-visible:ring-emerald-500/40 sm:w-56"
+                        className="h-11 w-full bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40 sm:w-56"
                       >
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+                      <SelectContent className="bg-white border-slate-200 text-slate-900">
                         {SCHOOL_PLANS.map((p) => (
-                          <SelectItem key={p} value={p} className="focus:bg-zinc-800">
+                          <SelectItem key={p} value={p} className="focus:bg-slate-100">
                             {p}
                             {p === school.plan ? ' (current)' : ''}
                           </SelectItem>
@@ -1210,21 +1228,21 @@ export function SchoolDetailModule() {
                   <Button
                     onClick={() => void changePlan()}
                     disabled={planBusy || planChoice === school.plan}
-                    className="h-11 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring"
+                    className="h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
                   >
                     {planBusy ? 'Changing…' : 'Change plan'}
                   </Button>
                 </>
               ) : (
-                <p className="flex-1 rounded-xl border border-zinc-800 bg-zinc-950/60 px-3.5 py-2.5 text-xs text-zinc-500">
-                  You do not hold <span className="font-mono text-zinc-400">billing.manage</span> — plan
+                <p className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-500">
+                  You do not hold <span className="font-mono text-slate-600">billing.manage</span> — plan
                   changes are read-only for you.
                 </p>
               )}
             </div>
             {canBill && (
-              <div className="space-y-1.5 border-t border-zinc-800/80 p-4 sm:px-5">
-                <Label htmlFor="plan-reason" className="text-xs font-semibold text-zinc-300">
+              <div className="space-y-1.5 border-t border-slate-200 p-4 sm:px-5">
+                <Label htmlFor="plan-reason" className="text-xs font-semibold text-slate-700">
                   Reason (optional, audited)
                 </Label>
                 <Textarea
@@ -1234,23 +1252,23 @@ export function SchoolDetailModule() {
                   placeholder="e.g. Upgraded to PRO after the signed Q2 order #4412"
                   rows={2}
                   maxLength={400}
-                  className="bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-emerald-500/40"
+                  className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40"
                 />
               </div>
             )}
           </div>
 
           {/* Feature flags (schools.manage) */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60">
-            <div className="border-b border-zinc-800/80 px-4 py-3.5 sm:px-5">
-              <h2 className="font-display text-sm font-bold text-zinc-100">Module availability</h2>
-              <p className="mt-0.5 text-xs text-zinc-500">
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+              <h2 className="font-display text-sm font-bold text-slate-900">Module availability</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
                 Effective availability ={' '}
-                <span className="font-mono text-zinc-400">school override ?? platform master ?? enabled</span>{' '}
+                <span className="font-mono text-slate-600">school override ?? platform master ?? enabled</span>{' '}
                 — a missing override falls back to the platform-wide master switch.
               </p>
             </div>
-            <ul className="divide-y divide-zinc-800/60">
+            <ul className="divide-y divide-slate-200">
               {FLAGGABLE_MODULES.map((module) => {
                 const label = module.charAt(0).toUpperCase() + module.slice(1)
                 const override = typeof flags[module] === 'boolean' ? flags[module] : null
@@ -1261,20 +1279,20 @@ export function SchoolDetailModule() {
                     className="flex min-h-[56px] items-center justify-between gap-4 px-4 py-3 sm:px-5"
                   >
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-zinc-100">{label}</p>
-                      <p className="mt-0.5 text-xs text-zinc-500">
+                      <p className="text-sm font-semibold text-slate-900">{label}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
                         {override === null ? (
-                          <span className="text-zinc-500">No override — platform default applies</span>
+                          <span className="text-slate-500">No override — platform default applies</span>
                         ) : override ? (
-                          <span className="text-emerald-400">Enabled for this school (override)</span>
+                          <span className="text-emerald-700">Enabled for this school (override)</span>
                         ) : (
-                          <span className="text-red-400">Disabled for this school (override)</span>
+                          <span className="text-red-600">Disabled for this school (override)</span>
                         )}
                       </p>
                     </div>
                     <div className="flex items-center gap-2.5">
                       {flagBusy === module && (
-                        <span className="text-[11px] text-zinc-500" role="status">
+                        <span className="text-[11px] text-slate-500" role="status">
                           saving…
                         </span>
                       )}
@@ -1283,7 +1301,7 @@ export function SchoolDetailModule() {
                         disabled={!canManage || flagBusy === module}
                         onCheckedChange={(next) => void toggleFlag(module, label, next)}
                         aria-label={`${label} module ${checked ? 'enabled' : 'disabled'} — toggle override for this school`}
-                        className="data-[state=checked]:bg-emerald-600 data-[state=unchecked]:bg-zinc-700 focus-ring"
+                        className="data-[state=checked]:bg-teal-600 data-[state=unchecked]:bg-slate-300 focus-ring"
                       />
                     </div>
                   </li>
@@ -1291,8 +1309,8 @@ export function SchoolDetailModule() {
               })}
             </ul>
             {!canManage && (
-              <p className="border-t border-zinc-800/80 px-4 py-3 text-xs text-zinc-500 sm:px-5">
-                You do not hold <span className="font-mono text-zinc-400">schools.manage</span> — the switches
+              <p className="border-t border-slate-200 px-4 py-3 text-xs text-slate-500 sm:px-5">
+                You do not hold <span className="font-mono text-slate-600">schools.manage</span> — the switches
                 are read-only for you.
               </p>
             )}
@@ -1312,14 +1330,14 @@ export function SchoolDetailModule() {
         {/* ── Danger zone (schools.manage) ────────────────────────────── */}
         {canManage && (
           <TabsContent value="danger">
-            <div className="space-y-4 rounded-xl border-2 border-red-500/30 bg-red-500/[0.04] p-4 sm:p-6">
+            <div className="space-y-4 rounded-xl border-2 border-red-200 bg-red-50/60 p-4 sm:p-6">
               <div className="flex items-start gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-500/10 text-red-400">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600">
                   <ShieldAlert className="h-4.5 w-4.5" aria-hidden="true" />
                 </div>
                 <div>
-                  <h2 className="font-display text-sm font-bold text-red-300">Danger zone</h2>
-                  <p className="mt-0.5 text-xs text-zinc-500">
+                  <h2 className="font-display text-sm font-bold text-red-700">Danger zone</h2>
+                  <p className="mt-0.5 text-xs text-slate-500">
                     Status control and irreversible deletion. Suspend and delete require step-up
                     verification; everything is audited.
                   </p>
@@ -1327,9 +1345,9 @@ export function SchoolDetailModule() {
               </div>
 
               {/* Status actions */}
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 sm:p-5">
-                <h3 className="text-sm font-semibold text-zinc-100">School status</h3>
-                <p className="mt-1 text-xs text-zinc-500">
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4 sm:p-5">
+                <h3 className="text-sm font-semibold text-slate-900">School status</h3>
+                <p className="mt-1 text-xs text-slate-500">
                   Current status:{' '}
                   <StatusBadge status={school.status} />{' '}
                   {school.status === 'PENDING' &&
@@ -1342,7 +1360,7 @@ export function SchoolDetailModule() {
                     <Button
                       onClick={() => void runStatusAction('activate')}
                       disabled={statusBusy !== null}
-                      className="h-11 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring"
+                      className="h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
                     >
                       <Power className="h-4 w-4" aria-hidden="true" />
                       {statusBusy === 'activate' ? 'Activating…' : 'Activate school'}
@@ -1362,14 +1380,14 @@ export function SchoolDetailModule() {
                     <Button
                       onClick={() => void runStatusAction('reactivate')}
                       disabled={statusBusy !== null}
-                      className="h-11 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring"
+                      className="h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
                     >
                       <Power className="h-4 w-4" aria-hidden="true" />
                       {statusBusy === 'reactivate' ? 'Reactivating…' : 'Reactivate school'}
                     </Button>
                   )}
                   {school.status === 'TRIAL' && (
-                    <p className="text-xs text-zinc-500">
+                    <p className="text-xs text-slate-500">
                       This school is in TRIAL state — status actions apply to PENDING, ACTIVE and SUSPENDED.
                     </p>
                   )}
@@ -1377,14 +1395,14 @@ export function SchoolDetailModule() {
               </div>
 
               {/* Delete */}
-              <div className="rounded-xl border border-red-500/30 bg-zinc-900/60 p-4 sm:p-5">
-                <h3 className="text-sm font-semibold text-zinc-100">Delete this school</h3>
-                <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-zinc-500">
-                  Permanently deletes <span className="font-semibold text-zinc-300">{school.name}</span> and{' '}
-                  <span className="font-semibold text-red-400">every tenant row</span> — users, students,
+              <div className="rounded-xl border border-red-200 bg-white p-4 sm:p-5">
+                <h3 className="text-sm font-semibold text-slate-900">Delete this school</h3>
+                <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-slate-500">
+                  Permanently deletes <span className="font-semibold text-slate-700">{school.name}</span> and{' '}
+                  <span className="font-semibold text-red-600">every tenant row</span> — users, students,
                   teachers, classes, subjects, exams, marks, fees, payments, attendance, timetables, homework,
                   library records and messages. This is a full cascade and{' '}
-                  <span className="font-semibold text-zinc-300">cannot be undone</span>. Platform audit
+                  <span className="font-semibold text-slate-700">cannot be undone</span>. Platform audit
                   entries survive (by design) so the deletion itself remains traceable.
                 </p>
                 <Button
@@ -1394,7 +1412,7 @@ export function SchoolDetailModule() {
                     setDeleteOpen(true)
                   }}
                   disabled={deleteBusy}
-                  className="mt-4 h-11 border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 font-semibold focus-ring"
+                  className="mt-4 h-11 border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700 font-semibold focus-ring"
                 >
                   <Trash2 className="h-4 w-4" aria-hidden="true" />
                   Delete school
@@ -1425,12 +1443,12 @@ export function SchoolDetailModule() {
       />
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent className="bg-zinc-900 border-red-500/40 text-zinc-100 sm:max-w-lg">
+        <AlertDialogContent className="bg-white border-red-200 text-slate-900 sm:max-w-lg">
           <AlertDialogHeader>
-            <AlertDialogTitle className="font-display text-red-300">
+            <AlertDialogTitle className="font-display text-red-700">
               Delete {school.name} permanently?
             </AlertDialogTitle>
-            <AlertDialogDescription className="text-zinc-400">
+            <AlertDialogDescription className="text-slate-500">
               This cascades through the entire tenant — {num.format(data.counts.users)} users,{' '}
               {num.format(data.counts.students)} students, {num.format(data.counts.teachers)} teachers and
               every dependent row (exams, marks, fees, payments, attendance, timetables, homework, library,
@@ -1438,8 +1456,8 @@ export function SchoolDetailModule() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-1.5">
-            <Label htmlFor="delete-confirm" className="text-xs font-semibold text-zinc-300">
-              Type <span className="font-mono font-bold text-red-300">{school.name}</span> to confirm
+            <Label htmlFor="delete-confirm" className="text-xs font-semibold text-slate-700">
+              Type <span className="font-mono font-bold text-red-700">{school.name}</span> to confirm
             </Label>
             <Input
               id="delete-confirm"
@@ -1448,10 +1466,10 @@ export function SchoolDetailModule() {
               placeholder={school.name}
               autoComplete="off"
               aria-invalid={deleteTyped.length > 0 && deleteTyped.trim() !== school.name}
-              className="h-11 bg-zinc-950 border-zinc-800 text-zinc-100 font-mono focus-visible:ring-red-500/40"
+              className="h-11 bg-white border-slate-200 text-slate-900 font-mono focus-visible:ring-red-500/40"
             />
             {deleteTyped.length > 0 && deleteTyped.trim() !== school.name && (
-              <p role="alert" className="text-[11px] text-red-400">
+              <p role="alert" className="text-[11px] text-red-600">
                 The name does not match yet.
               </p>
             )}
@@ -1461,7 +1479,7 @@ export function SchoolDetailModule() {
               variant="outline"
               onClick={() => setDeleteOpen(false)}
               disabled={deleteBusy}
-              className="h-11 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 focus-ring"
+              className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
             >
               Cancel
             </Button>

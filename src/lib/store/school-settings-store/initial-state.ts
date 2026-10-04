@@ -7,16 +7,21 @@ const activeTenant = getActiveTenantSync()
 
 // The school's `general` seed — composed from the tenant identity (no
 // scattered school conditionals; the identity IS the data).
+// ARCHITECTURE RESET — NO INVENTED IDENTITY: the identity facts that used
+// to seed Greenwood-flavored defaults (tagline, affiliation, address,
+// city, phone, email, website) are now EMPTY. A tenant that has not
+// configured a value shows nothing rather than a fabricated one — the
+// server sync (server-sync.ts) fills only what the DB actually carries.
 const tenantGeneral = {
   schoolName: activeTenant.name,
   shortName: activeTenant.shortName,
-  tagline: 'Excellence in Education & Innovation',
-  affiliation: 'CBSE — Affiliation No. 1730456',
-  address: '100 Knowledge Parkway, Sector 47, Gurugram, Haryana 122003',
-  city: 'Gurugram',
-  phone: '9876543210',
-  email: 'info@greenwood.edu.in',
-  website: 'www.greenwood.edu.in',
+  tagline: '',
+  affiliation: '',
+  address: '',
+  city: '',
+  phone: '',
+  email: '',
+  website: '',
   principalName: activeTenant.principalName,
   vicePrincipalName: activeTenant.vicePrincipalName,
   established: activeTenant.established,

@@ -143,14 +143,14 @@ export function SettingsModule() {
       <div>
         <h1
           id="settings-heading"
-          className="font-display text-xl sm:text-2xl font-bold text-zinc-100 flex items-center gap-2.5"
+          className="font-display text-xl sm:text-2xl font-bold text-slate-900 flex items-center gap-2.5"
         >
-          <span className="h-9 w-9 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-            <Settings2 className="h-4.5 w-4.5 text-emerald-400" aria-hidden="true" />
+          <span className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center">
+            <Settings2 className="h-4.5 w-4.5 text-teal-600" aria-hidden="true" />
           </span>
           Platform settings
         </h1>
-        <p className="text-sm text-zinc-400 mt-2">
+        <p className="text-sm text-slate-500 mt-2">
           Product-wide configuration for the control plane and every tenant.
         </p>
       </div>
@@ -159,7 +159,7 @@ export function SettingsModule() {
       {error && (
         <div
           role="alert"
-          className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
         >
           {error}
         </div>
@@ -168,18 +168,18 @@ export function SettingsModule() {
       {/* Skeletons */}
       {loading && (
         <div className="space-y-4" aria-hidden="true">
-          <Skeleton className="h-52 w-full rounded-xl bg-zinc-800/70" />
-          <Skeleton className="h-64 w-full rounded-xl bg-zinc-800/70" />
+          <Skeleton className="h-52 w-full rounded-xl bg-slate-200" />
+          <Skeleton className="h-64 w-full rounded-xl bg-slate-200" />
         </div>
       )}
 
       {!loading && data && draft && (
         <>
           {/* Platform section */}
-          <Card className="rounded-xl border-zinc-800 bg-zinc-900/60">
+          <Card className="rounded-xl border-slate-200 bg-white shadow-sm">
             <CardHeader>
-              <CardTitle className="text-zinc-100 text-base font-semibold">Platform</CardTitle>
-              <CardDescription className="text-zinc-500 text-xs">
+              <CardTitle className="text-slate-900 text-base font-semibold">Platform</CardTitle>
+              <CardDescription className="text-slate-500 text-xs">
                 Global platform behaviour.
               </CardDescription>
             </CardHeader>
@@ -188,11 +188,11 @@ export function SettingsModule() {
                 <div className="space-y-0.5 min-w-0">
                   <label
                     htmlFor="setting-demo-school"
-                    className="text-sm font-medium text-zinc-200"
+                    className="text-sm font-medium text-slate-900"
                   >
                     Show demo school in public listings
                   </label>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-slate-500">
                     The demo tenant appears on public school surfaces when enabled.
                   </p>
                 </div>
@@ -204,18 +204,18 @@ export function SettingsModule() {
                   }
                   disabled={saving}
                   aria-label="Show demo school in public listings"
-                  className="data-[state=checked]:bg-emerald-500 focus-ring"
+                  className="data-[state=checked]:bg-teal-600 focus-ring"
                 />
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-0.5 min-w-0">
                   <label
                     htmlFor="setting-support-duration"
-                    className="text-sm font-medium text-zinc-200"
+                    className="text-sm font-medium text-slate-900"
                   >
                     Support-session ceiling (minutes)
                   </label>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-slate-500">
                     Upper bound for support-session duration. 5–480 minutes.
                   </p>
                 </div>
@@ -229,19 +229,19 @@ export function SettingsModule() {
                     setDraft((d) => (d ? { ...d, supportMaxDuration: e.target.value } : d))
                   }
                   disabled={saving}
-                  className="bg-zinc-950 border-zinc-800 text-zinc-100 h-11 w-28 tabular-nums focus-visible:ring-emerald-500/40"
+                  className="bg-white border-slate-200 text-slate-900 h-11 w-28 tabular-nums focus-visible:ring-teal-500/40"
                 />
               </div>
             </CardContent>
           </Card>
 
           {/* Module master switches */}
-          <Card className="rounded-xl border-zinc-800 bg-zinc-900/60">
+          <Card className="rounded-xl border-slate-200 bg-white shadow-sm">
             <CardHeader>
-              <CardTitle className="text-zinc-100 text-base font-semibold">
+              <CardTitle className="text-slate-900 text-base font-semibold">
                 Module master switches
               </CardTitle>
-              <CardDescription className="text-zinc-500 text-xs">
+              <CardDescription className="text-slate-500 text-xs">
                 Applies to every school without an explicit override
                 (school override ?? this master ?? enabled).
               </CardDescription>
@@ -250,13 +250,13 @@ export function SettingsModule() {
               {data.flaggableModules.map((key) => (
                 <div
                   key={key}
-                  className="flex items-center justify-between gap-4 rounded-lg px-3 -mx-3 py-3 hover:bg-zinc-800/40 transition-colors"
+                  className="flex items-center justify-between gap-4 rounded-lg px-3 -mx-3 py-3 hover:bg-slate-50 transition-colors"
                 >
                   <div className="space-y-0.5 min-w-0">
-                    <label htmlFor={`setting-module-${key}`} className="text-sm font-medium text-zinc-200">
+                    <label htmlFor={`setting-module-${key}`} className="text-sm font-medium text-slate-900">
                       {MODULE_LABELS[key] ?? key}
                     </label>
-                    <p className="text-xs text-zinc-500">
+                    <p className="text-xs text-slate-500">
                       {draft.modules[key] ?? true ? 'Available' : 'Disabled'} for tenants without
                       an override.
                     </p>
@@ -267,7 +267,7 @@ export function SettingsModule() {
                     onCheckedChange={(v) => setModule(key, v)}
                     disabled={saving}
                     aria-label={`Master switch for the ${MODULE_LABELS[key] ?? key} module`}
-                    className="data-[state=checked]:bg-emerald-500 focus-ring"
+                    className="data-[state=checked]:bg-teal-600 focus-ring"
                   />
                 </div>
               ))}
@@ -275,10 +275,10 @@ export function SettingsModule() {
           </Card>
 
           {/* Save bar */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-            <p className="text-xs text-zinc-500" aria-live="polite">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-xs text-slate-500" aria-live="polite">
               {dirty ? (
-                <span className="text-amber-300 font-medium">Unsaved changes</span>
+                <span className="text-amber-700 font-medium">Unsaved changes</span>
               ) : (
                 'All changes saved'
               )}
@@ -289,7 +289,7 @@ export function SettingsModule() {
                   variant="outline"
                   onClick={() => setDraft(draftFrom(data))}
                   disabled={saving}
-                  className="h-11 px-4 border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 focus-ring"
+                  className="h-11 px-4 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 focus-ring"
                 >
                   <RotateCcw className="h-4 w-4" aria-hidden="true" />
                   Discard
@@ -298,7 +298,7 @@ export function SettingsModule() {
               <Button
                 onClick={() => void save()}
                 disabled={saving || !dirty || !canManage}
-                className="h-11 px-5 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold focus-ring"
+                className="h-11 px-5 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
               >
                 <Save className="h-4 w-4" aria-hidden="true" />
                 {saving ? 'Saving…' : 'Save changes'}
@@ -308,7 +308,7 @@ export function SettingsModule() {
 
           {!canManage && (
             <p
-              className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300"
+              className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700"
               role="note"
             >
               <Info className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />

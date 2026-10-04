@@ -37,7 +37,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
 import { resetLoginBuckets } from '../helpers/login-buckets'
-import { DEMO_PRINCIPAL_EMAIL, DEMO_PRINCIPAL_PASSWORD } from '../helpers/credentials'
+import { DEMO_PRINCIPAL_EMAIL, DEMO_PRINCIPAL_PASSWORD, DEMO_TEACHER_1_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -91,12 +91,12 @@ let parityBefore: ParityRow = { pay: '', txn: '', fee: '' }
 
 const tokens: Record<string, string> = {}
 
-async function login(email: string): Promise<string> {
+async function login(email: string, password: string = DEMO_PW): Promise<string> {
   if (tokens[email]) return tokens[email]
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
-    body: JSON.stringify({ email, password: DEMO_PW }),
+    body: JSON.stringify({ email, password }),
   })
   if (res.status === 429) {
     console.warn(`[pg-money] login rate-limited for ${email}; using direct session fixture`)
@@ -164,7 +164,9 @@ beforeAll(async () => {
 
   // Real logins (principal + class teacher).
   principalToken = await login(PRINCIPAL_EMAIL)
-  teacherToken = await login(TEACHER_EMAIL)
+  // The featured teacher carries its OWN password family (final-acceptance
+  // family split) — log in with the teacher family, not the principal's.
+  teacherToken = await login(TEACHER_EMAIL, DEMO_TEACHER_1_PASSWORD)
 }, 60_000)
 
 afterAll(async () => {

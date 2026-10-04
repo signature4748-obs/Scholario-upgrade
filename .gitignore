@@ -88,3 +88,9 @@ db/*.db-journal
 
 # Phase 8A ops — logical backup archives (contain password hashes; never commit)
 /backups/
+
+# embedded PostgreSQL cluster (mini-services/postgres-db) — local dev only
+db/pg/
+
+# local audit workspace (verification scripts — never committed)
+.audit-work/

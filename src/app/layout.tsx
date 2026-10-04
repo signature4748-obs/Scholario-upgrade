@@ -6,6 +6,7 @@ import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/shared/theme-provider";
 import { VersionGuard } from "@/components/shared/version-guard";
 import { ASSET_WATCHDOG_SCRIPT } from "@/components/shared/asset-guard/inline-watchdog";
+import { HydrationFlag } from "@/components/shared/asset-guard/hydration-flag";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -93,10 +94,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f9fdfa" },
-    { media: "(prefers-color-scheme: dark)", color: "#06140f" },
-  ],
+  // Scholario's production design system is LIGHT by default (a
+  // user-selected dark mode exists in Settings → Appearance, but the
+  // browser chrome/tint must never flip dark from prefers-color-scheme).
+  themeColor: "#f8fafc",
   width: "device-width",
   initialScale: 1,
 };
@@ -118,6 +119,10 @@ export default function RootLayout({
             recovery screen — NEVER raw browser-default HTML. */}
         <script dangerouslySetInnerHTML={{ __html: ASSET_WATCHDOG_SCRIPT }} />
         <ThemeProvider>
+          {/* Asset Guard JS-boot proof on EVERY route (root fix for the
+              watchdog falsely covering platform pages after 30s — the
+              flag was previously set only by the school SPA page). */}
+          <HydrationFlag />
           {/* Global a11y (SR-UI §21/§27): every framer-motion animation
               respects the OS "prefers-reduced-motion" setting. */}
           <MotionConfig reducedMotion="user">

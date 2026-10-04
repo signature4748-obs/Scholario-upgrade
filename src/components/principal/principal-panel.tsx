@@ -9,6 +9,12 @@ import {
 } from 'lucide-react'
 import { AppShell, type NavGroup } from '@/components/shell/app-shell'
 import { lazyModule } from '@/components/shared/lazy-module'
+import { useAuth } from '@/lib/store/auth-store'
+// ARCH-RESET-2c — permission-aware navigation: nav items carry server-
+// matrix permission keys and are filtered through the authenticated role
+// before reaching the shell (UI courtesy only — the API layer remains the
+// authorization authority).
+import { filterNavForRole } from '@/lib/nav/role-nav'
 import { useLiveAlerts } from '@/lib/store/live-alerts-store'
 import { useAdmissionStore } from '@/lib/store/admission-store'
 // SaaS-STAGE-2A — TENANT MODULE GATING (single choke point). The nav is
@@ -70,22 +76,27 @@ const moduleRegistry: Record<string, React.ComponentType<any>> = {
   settings: lazy(() => import('./modules/school-settings'), 'SchoolSettingsModule'),
 }
 
+// ARCH-RESET-2c — permission tags (EXACT server-matrix keys from
+// src/lib/security/permissions.ts). The principal holds every one of these
+// capabilities, so behavior is unchanged; the tags wire the foundation for
+// any future role that consumes this panel with a narrower matrix slice.
 const navGroups: NavGroup[] = [
   {
     label: 'Overview',
     items: [
+      // Dashboard/overview: role-gated already — no permission key.
       { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-4.5 w-4.5" /> },
     ],
   },
   {
     label: 'Academics',
     items: [
-      { key: 'admission', label: 'Admissions', icon: <UserPlus className="h-4.5 w-4.5" /> },
-      { key: 'teachers', label: 'Teachers', icon: <GraduationCap className="h-4.5 w-4.5" /> },
-      { key: 'students', label: 'Students & Classes', icon: <School className="h-4.5 w-4.5" /> },
-      { key: 'timetable', label: 'Timetable', icon: <Clock className="h-4.5 w-4.5" /> },
-      { key: 'attendance', label: 'Attendance', icon: <CalendarCheck className="h-4.5 w-4.5" /> },
-      { key: 'exams', label: 'Examinations', icon: <FileText className="h-4.5 w-4.5" /> },
+      { key: 'admission', label: 'Admissions', icon: <UserPlus className="h-4.5 w-4.5" />, permission: 'school.students.read' },
+      { key: 'teachers', label: 'Teachers', icon: <GraduationCap className="h-4.5 w-4.5" />, permission: 'school.staff.read' },
+      { key: 'students', label: 'Students & Classes', icon: <School className="h-4.5 w-4.5" />, permission: 'school.students.read' },
+      { key: 'timetable', label: 'Timetable', icon: <Clock className="h-4.5 w-4.5" />, permission: 'school.dashboard.read' },
+      { key: 'attendance', label: 'Attendance', icon: <CalendarCheck className="h-4.5 w-4.5" />, permission: 'school.students.read' },
+      { key: 'exams', label: 'Examinations', icon: <FileText className="h-4.5 w-4.5" />, permission: 'exams.read' },
       // { key: 'homework', label: 'Homework', icon: <BookOpen className="h-4.5 w-4.5" /> },        // Wave 1: deferred
       // { key: 'assignments', label: 'Assignments', icon: <ClipboardList className="h-4.5 w-4.5" /> }, // Wave 1: deferred
     ],
@@ -93,29 +104,29 @@ const navGroups: NavGroup[] = [
   {
     label: 'Finance',
     items: [
-      { key: 'fees', label: 'Fee Management', icon: <IndianRupee className="h-4.5 w-4.5" /> },
-      { key: 'salary', label: 'Salary & Payroll', icon: <Wallet className="h-4.5 w-4.5" /> },
-      { key: 'finance', label: 'Finance Dashboard', icon: <PieChart className="h-4.5 w-4.5" /> },
+      { key: 'fees', label: 'Fee Management', icon: <IndianRupee className="h-4.5 w-4.5" />, permission: 'school.finance.read' },
+      { key: 'salary', label: 'Salary & Payroll', icon: <Wallet className="h-4.5 w-4.5" />, permission: 'school.finance.read' },
+      { key: 'finance', label: 'Finance Dashboard', icon: <PieChart className="h-4.5 w-4.5" />, permission: 'school.finance.read' },
     ],
   },
   {
     label: 'Operations',
     items: [
-      { key: 'applications', label: 'Applications & Forms', icon: <ClipboardList className="h-4.5 w-4.5" /> },
-      { key: 'communication', label: 'Communication', icon: <Megaphone className="h-4.5 w-4.5" /> },
-      { key: 'messaging', label: 'Messages', icon: <MessageSquare className="h-4.5 w-4.5" /> },
-      { key: 'calendar', label: 'Calendar', icon: <CalendarDays className="h-4.5 w-4.5" /> },
-      { key: 'library', label: 'Library', icon: <BookMarked className="h-4.5 w-4.5" /> },
-      { key: 'transport', label: 'Transport', icon: <Bus className="h-4.5 w-4.5" /> },
-      { key: 'inventory', label: 'Inventory', icon: <Package className="h-4.5 w-4.5" /> },
-      { key: 'certificates', label: 'Certificates', icon: <Award className="h-4.5 w-4.5" /> },
-      { key: 'downloads', label: 'Downloads', icon: <Download className="h-4.5 w-4.5" /> },
+      { key: 'applications', label: 'Applications & Forms', icon: <ClipboardList className="h-4.5 w-4.5" />, permission: 'school.students.read' },
+      { key: 'communication', label: 'Communication', icon: <Megaphone className="h-4.5 w-4.5" />, permission: 'school.announcements.read' },
+      { key: 'messaging', label: 'Messages', icon: <MessageSquare className="h-4.5 w-4.5" />, permission: 'school.messages.send' },
+      { key: 'calendar', label: 'Calendar', icon: <CalendarDays className="h-4.5 w-4.5" />, permission: 'school.events.write' },
+      { key: 'library', label: 'Library', icon: <BookMarked className="h-4.5 w-4.5" />, permission: 'school.library.manage' },
+      { key: 'transport', label: 'Transport', icon: <Bus className="h-4.5 w-4.5" />, permission: 'school.transport.read' },
+      { key: 'inventory', label: 'Inventory', icon: <Package className="h-4.5 w-4.5" />, permission: 'school.masterdata.read' },
+      { key: 'certificates', label: 'Certificates', icon: <Award className="h-4.5 w-4.5" />, permission: 'school.students.read' },
+      { key: 'downloads', label: 'Downloads', icon: <Download className="h-4.5 w-4.5" />, permission: 'school.masterdata.read' },
     ],
   },
   {
     label: 'System',
     items: [
-      { key: 'settings', label: 'Settings', icon: <Settings className="h-4.5 w-4.5" /> },
+      { key: 'settings', label: 'Settings', icon: <Settings className="h-4.5 w-4.5" />, permission: 'school.masterdata.read' },
     ],
   },
 ]
@@ -146,6 +157,9 @@ function initialActiveModule(): string {
 export function PrincipalPanel() {
   const [active, setActive] = useState(initialActiveModule)
   const alertCount = useLiveAlerts((s) => s.alerts.length)
+  // ARCH-RESET-2c — the authenticated role drives the permission-aware
+  // nav filter (server session role from the auth store).
+  const authUser = useAuth((s) => s.user)
   const { isModuleEnabled } = useFeatureGate()
   const { isServerModuleEnabled } = useEffectiveModuleFlags()
   const pendingAdmissions = useAdmissionStore((s) =>
@@ -156,28 +170,36 @@ export function PrincipalPanel() {
 
   // Seed applications demo data once per session (idempotent).
 
-  const groups: NavGroup[] = useMemo(() => navGroups
-    // SaaS-STAGE-2A — drop nav items whose module is disabled for the
-    // ACTIVE school (e.g. Examinations OFF for a school, Transport OFF for
-    // another). Dashboard/Settings are always available.
-    // PHASE 7.5-D — the item must ALSO pass the SERVER module flag
-    // (fail-open while the flags load; hidden once the server says off).
-    .map((g) => ({
-      ...g,
-      items: g.items.filter((item) => {
-        const moduleKey = PRINCIPAL_NAV_MODULE_KEYS[item.key]
-        return !moduleKey || (isModuleEnabled(moduleKey) && isServerModuleEnabled(moduleKey))
-      }),
-    }))
-    .map((g) => {
-      if (g.label === 'Overview') {
-        return { ...g, items: g.items.map((item) => item.key === 'dashboard' ? { ...item, badge: alertCount > 0 ? alertCount : undefined } : item) }
-      }
-      if (g.label === 'Academics') {
-        return { ...g, items: g.items.map((item) => item.key === 'admission' ? { ...item, badge: pendingAdmissions > 0 ? pendingAdmissions : undefined } : item) }
-      }
-      return g
-    }), [alertCount, pendingAdmissions, isModuleEnabled, isServerModuleEnabled])
+  const groups: NavGroup[] = useMemo(() =>
+    // ARCH-RESET-2c — permission-aware filter (server-matrix keys above);
+    // the principal holds every tagged capability, so the visible nav is
+    // byte-identical — this only removes items if a role without the
+    // capability ever consumes this panel.
+    filterNavForRole(
+      navGroups
+        // SaaS-STAGE-2A — drop nav items whose module is disabled for the
+        // ACTIVE school (e.g. Examinations OFF for a school, Transport OFF for
+        // another). Dashboard/Settings are always available.
+        // PHASE 7.5-D — the item must ALSO pass the SERVER module flag
+        // (fail-open while the flags load; hidden once the server says off).
+        .map((g) => ({
+          ...g,
+          items: g.items.filter((item) => {
+            const moduleKey = PRINCIPAL_NAV_MODULE_KEYS[item.key]
+            return !moduleKey || (isModuleEnabled(moduleKey) && isServerModuleEnabled(moduleKey))
+          }),
+        }))
+        .map((g) => {
+          if (g.label === 'Overview') {
+            return { ...g, items: g.items.map((item) => item.key === 'dashboard' ? { ...item, badge: alertCount > 0 ? alertCount : undefined } : item) }
+          }
+          if (g.label === 'Academics') {
+            return { ...g, items: g.items.map((item) => item.key === 'admission' ? { ...item, badge: pendingAdmissions > 0 ? pendingAdmissions : undefined } : item) }
+          }
+          return g
+        }),
+      authUser?.role
+    ), [alertCount, pendingAdmissions, isModuleEnabled, isServerModuleEnabled, authUser?.role])
 
   // Remember the open module for this tab (see initialActiveModule) — a
   // lazy-chunk recovery reload then re-opens exactly where the principal

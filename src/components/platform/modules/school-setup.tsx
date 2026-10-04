@@ -76,11 +76,11 @@ function ProgressTrack({
   const bar =
     tone === 'required'
       ? 'bg-emerald-500'
-      : 'bg-zinc-500'
+      : 'bg-slate-400'
   return (
     <div className="flex items-center gap-3">
       <div
-        className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-800"
+        className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200"
         role="progressbar"
         aria-valuenow={pct}
         aria-valuemin={0}
@@ -89,7 +89,7 @@ function ProgressTrack({
       >
         <div className={`h-full rounded-full ${bar} transition-[width] duration-500`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-xs font-semibold tabular-nums text-zinc-300">
+      <span className="text-xs font-semibold tabular-nums text-slate-700">
         {done}/{total}
       </span>
     </div>
@@ -124,18 +124,18 @@ export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; s
   // render a fabricated "all done" state.
   if (loadError) {
     return (
-      <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-6">
+      <div className="rounded-xl border border-red-200 bg-red-50 p-6">
         <div className="flex items-center gap-2.5">
-          <ShieldAlert className="h-5 w-5 text-red-400" aria-hidden="true" />
-          <h2 className="font-display text-sm font-bold text-red-300">Setup status unavailable</h2>
+          <ShieldAlert className="h-5 w-5 text-red-600" aria-hidden="true" />
+          <h2 className="font-display text-sm font-bold text-red-700">Setup status unavailable</h2>
         </div>
-        <p className="mt-2 text-xs text-zinc-400">{loadError}</p>
+        <p className="mt-2 text-xs text-slate-500">{loadError}</p>
         <Button
           variant="outline"
           size="sm"
           onClick={() => void reload()}
           disabled={busy}
-          className="mt-4 h-9 border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+          className="mt-4 h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} aria-hidden="true" />
           Retry
@@ -170,11 +170,11 @@ export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; s
       aria-label="Guided school setup progress"
     >
       {/* Summary card */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/60">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 px-4 py-3.5 sm:px-5">
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5 sm:px-5">
           <div>
-            <h2 className="font-display text-sm font-bold text-zinc-100">School setup</h2>
-            <p className="mt-0.5 text-[11px] text-zinc-500">
+            <h2 className="font-display text-sm font-bold text-slate-900">School setup</h2>
+            <p className="mt-0.5 text-[11px] text-slate-500">
               Computed from the live database — a new school honestly shows zero progress.
             </p>
           </div>
@@ -183,7 +183,7 @@ export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; s
             size="sm"
             onClick={() => void reload()}
             disabled={busy}
-            className="h-9 border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 focus-ring"
+            className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
             aria-label="Refresh setup progress"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} aria-hidden="true" />
@@ -193,23 +193,23 @@ export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; s
         <div className="space-y-4 p-4 sm:px-5">
           <div>
             <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Required before usable
               </span>
               {summary.requiredComplete ? (
-                <span className="text-[11px] font-bold text-emerald-400">Complete</span>
+                <span className="text-[11px] font-bold text-emerald-700">Complete</span>
               ) : (
-                <span className="text-[11px] font-bold text-amber-400">Incomplete</span>
+                <span className="text-[11px] font-bold text-amber-600">Incomplete</span>
               )}
             </div>
             <ProgressTrack done={summary.requiredDone} total={summary.requiredTotal} tone="required" />
           </div>
           <div>
             <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Optional enhancements
               </span>
-              <span className="text-[11px] font-semibold text-zinc-500">
+              <span className="text-[11px] font-semibold text-slate-500">
                 {summary.optionalDone}/{summary.optionalTotal}
               </span>
             </div>
@@ -218,8 +218,8 @@ export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; s
           <div
             className={`rounded-lg border px-3.5 py-2.5 text-xs ${
               summary.usable
-                ? 'border-emerald-500/25 bg-emerald-500/5 text-emerald-300'
-                : 'border-amber-500/25 bg-amber-500/5 text-amber-300'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-amber-200 bg-amber-50 text-amber-700'
             }`}
             role="status"
           >
@@ -235,24 +235,24 @@ export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; s
       </div>
 
       {/* Section list */}
-      <ul className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
+      <ul className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         {sections.map((s, i) => (
           <li
             key={s.id}
             className={`flex items-center gap-3 px-4 py-3 sm:px-5 ${
-              i > 0 ? 'border-t border-zinc-800/60' : ''
+              i > 0 ? 'border-t border-slate-200' : ''
             } ${s.done ? '' : 'opacity-90'}`}
           >
             {s.done ? (
-              <CheckCircle2 className="h-4.5 w-4.5 shrink-0 text-emerald-400" aria-hidden="true" />
+              <CheckCircle2 className="h-4.5 w-4.5 shrink-0 text-emerald-600" aria-hidden="true" />
             ) : (
-              <CircleDashed className="h-4.5 w-4.5 shrink-0 text-zinc-600" aria-hidden="true" />
+              <CircleDashed className="h-4.5 w-4.5 shrink-0 text-slate-400" aria-hidden="true" />
             )}
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-zinc-200">
+                <span className="text-sm font-semibold text-slate-900">
                   {SECTION_ICONS[s.id] ? (
-                    <span className="mr-1.5 inline-flex align-[-2px] text-zinc-500" aria-hidden="true">
+                    <span className="mr-1.5 inline-flex align-[-2px] text-slate-500" aria-hidden="true">
                       {SECTION_ICONS[s.id]}
                     </span>
                   ) : null}
@@ -261,14 +261,14 @@ export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; s
                 <span
                   className={`rounded-full border px-1.5 py-px text-[9px] font-bold uppercase tracking-wider ${
                     s.required
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                      : 'border-zinc-700 bg-zinc-800/60 text-zinc-500'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-slate-200 bg-slate-100 text-slate-600'
                   }`}
                 >
                   {s.required ? 'Required' : 'Optional'}
                 </span>
               </div>
-              <p className="mt-0.5 truncate text-[11px] text-zinc-500 tabular-nums">{s.detail}</p>
+              <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">{s.detail}</p>
             </div>
           </li>
         ))}

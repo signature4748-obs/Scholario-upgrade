@@ -5,7 +5,8 @@ import { ChevronLeft, ChevronRight, X, Search, ChevronDown } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import { APP_VERSION } from '@/lib/app-version'
-import type { NavGroup } from './types'
+import { useAuth } from '@/lib/store/auth-store'
+import { roleStyles, type NavGroup } from './types'
 
 interface SidebarAsideProps {
   collapsed: boolean
@@ -18,9 +19,34 @@ interface SidebarAsideProps {
   activeKey: string
   onNavigate: (key: string) => void
   role: ShellRole
+  /** ARCH-RESET-2c — quiet school identity under the wordmark (server
+   *  session school name; neutral fallback handled by the shell). */
+  schoolName?: string
+  /** Compact role chip in the header (e.g. 'Principal' / 'Teacher'). */
+  roleLabel?: string
 }
 
 type ShellRole = 'principal' | 'teacher' | 'student'
+
+// Role identity for the bottom user block when no explicit label is passed.
+const ROLE_FALLBACK_LABEL: Record<ShellRole, string> = {
+  principal: 'Principal',
+  teacher: 'Teacher',
+  student: 'Student',
+}
+
+/** Compact initials for the user-block avatar (server-authenticated name). */
+function initialsOf(name?: string | null): string {
+  // Skip honorifics / parenthetical prefixes ("Dr.", "(Smt.)", "Mr.") —
+  // initials must read as a person, never as punctuation.
+  const parts = (name ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter((p) => /^[A-Za-z]/.test(p) && !p.endsWith('.') && !p.startsWith('('))
+  if (parts.length === 0) return '·'
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase()
+  return `${parts[0]![0]!}${parts[parts.length - 1]![0]!}`.toUpperCase()
+}
 
 export function SidebarAside({
   collapsed,
@@ -33,6 +59,8 @@ export function SidebarAside({
   activeKey,
   onNavigate,
   role,
+  schoolName,
+  roleLabel,
 }: SidebarAsideProps) {
   void cmdOpen
 
@@ -44,40 +72,61 @@ export function SidebarAside({
     if (mobileOpen) closeBtnRef.current?.focus()
   }, [mobileOpen])
 
+  // ARCH-RESET-2c — bottom user-block identity (server session user from
+  // the auth store). The header profile dropdown stays the full account
+  // menu; this block is the always-visible identity anchor.
+  const user = useAuth((s) => s.user)
+  const userName = user?.name?.trim() || 'Account'
+  const userInitials = initialsOf(user?.name)
+  const userRoleLabel = roleLabel ?? ROLE_FALLBACK_LABEL[role]
+
   return (
     <motion.aside
       id="app-sidebar"
       initial={false}
-      animate={{ width: collapsed ? 80 : 280 }}
+      animate={{ width: collapsed ? 72 : 260 }}
       transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
       className={cn(
-        'relative z-50 shrink-0 h-full bg-background/80 dark:bg-card/60 backdrop-blur-2xl border-r border-border/40 flex flex-col shadow-2xs select-none',
-        'max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:shadow-2xl max-lg:w-[280px]',
+        'relative z-50 shrink-0 h-full bg-white border-r border-slate-200 flex flex-col select-none',
+        'max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:shadow-xl max-lg:w-[280px]',
         mobileOpen ? 'max-lg:translate-x-0' : 'max-lg:-translate-x-full',
         'transition-transform duration-300 ease-out lg:transition-none'
       )}
     >
-      {/* Sidebar Header */}
-      <div className="p-4 flex items-center justify-between border-b border-border/40 h-16 shrink-0 bg-muted/10">
-        <div className="flex items-center gap-3 overflow-hidden">
-          <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center font-bold text-white shrink-0 text-sm shadow-xs ring-1 ring-emerald-500/20">
+      {/* Sidebar Header — wordmark, quiet school identity, role chip */}
+      <div className="h-16 shrink-0 border-b border-slate-200 flex items-center gap-2 px-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden">
+          <div
+            className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center font-bold text-white shrink-0 text-sm"
+            title={schoolName || 'SCHOLARIO'}
+          >
             S
           </div>
           {!collapsed && (
-            <div className="flex flex-col">
-              <span className="font-bold text-base tracking-tight text-foreground leading-none font-display">
+            <div className="flex min-w-0 flex-col overflow-hidden">
+              <span className="text-sm font-bold tracking-tight text-slate-900 leading-none">
                 SCHOLARIO
               </span>
-              <span className="text-[10px] text-muted-foreground font-medium mt-0.5 tracking-wider uppercase font-mono">
-                Enterprise ERP
+              <span className="mt-1 text-[11px] text-slate-500 truncate leading-none" title={schoolName}>
+                {schoolName || 'School'}
               </span>
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        {!collapsed && roleLabel && (
+          <span
+            className={cn(
+              'shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded border leading-none',
+              roleStyles[role].chip
+            )}
+          >
+            {roleLabel}
+          </span>
+        )}
+        <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={() => setCollapsed((c) => !c)}
-            className="hidden lg:flex p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all shrink-0 cursor-pointer focus-ring"
+            className="hidden lg:flex p-1.5 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0 cursor-pointer focus-ring"
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
@@ -87,40 +136,40 @@ export function SidebarAside({
             ref={closeBtnRef}
             onClick={() => setMobileOpen(false)}
             aria-label="Close navigation menu"
-            className="lg:hidden flex h-9 w-9 items-center justify-center p-1.5 border border-border/50 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer focus-ring"
+            className="lg:hidden flex h-9 w-9 items-center justify-center p-1.5 border border-slate-200 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer focus-ring"
           >
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </div>
 
-      {/* Global Search Trigger */}
+      {/* Global Search Trigger — neutral quiet affordance */}
       {!collapsed && (
-        <div className="p-3 shrink-0">
+        <div className="px-3 pt-3 shrink-0">
           <button
             onClick={() => { setCmdOpen(true); setMobileOpen(false) }}
-            className="w-full flex items-center justify-between gap-2 rounded-xl border border-border/40 bg-muted/30 hover:bg-muted/60 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-all cursor-pointer shadow-2xs group"
+            className="w-full flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 hover:bg-slate-100 px-2.5 py-2 text-xs text-slate-500 hover:text-slate-700 transition-colors cursor-pointer focus-ring"
             title="Global search (⌘K)"
           >
             <div className="flex items-center gap-2 truncate">
-              <Search className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 transition-transform group-hover:scale-110" />
-              <span className="truncate font-medium">Search…</span>
+              <Search className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+              <span className="truncate">Search…</span>
             </div>
-            <kbd className="shrink-0 rounded-md border border-border/60 bg-background/80 px-1.5 py-0.5 text-[9px] font-mono font-semibold text-muted-foreground shadow-2xs">⌘K</kbd>
+            <kbd className="shrink-0 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[9px] font-mono font-semibold text-slate-400">⌘K</kbd>
           </button>
         </div>
       )}
 
-      {/* Navigation Sections */}
-      <nav className="flex-1 px-3 py-2 overflow-y-auto no-scrollbar space-y-4">
+      {/* Navigation Sections — grouped, compact, restrained */}
+      <nav className="flex-1 px-2.5 py-2.5 overflow-y-auto no-scrollbar space-y-4" aria-label="Main navigation">
         {groups.map((group) => (
-          <div key={group.label} className="mb-3">
+          <div key={group.label} className="mb-1">
             {!collapsed && (
-              <h3 className="px-3 mb-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-widest font-mono">
+              <h3 className="px-2.5 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                 {group.label}
               </h3>
             )}
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {group.items.map((item) => {
                 const hasChildren = Boolean(item.children && item.children.length > 0)
                 const isParentActive =
@@ -129,7 +178,7 @@ export function SidebarAside({
                   (item.key === 'students' && (activeKey.startsWith('students') || activeKey.startsWith('classes')))
 
                 return (
-                  <div key={item.key} className="space-y-1">
+                  <div key={item.key} className="space-y-0.5">
                     <button
                       onClick={() => {
                         onNavigate(hasChildren ? (item.children?.[0]?.key ?? item.key) : item.key)
@@ -138,27 +187,27 @@ export function SidebarAside({
                       title={collapsed ? item.label : undefined}
                       aria-current={isParentActive ? 'page' : undefined}
                       className={cn(
-                        'flex items-center gap-3 w-full transition-all duration-200 cursor-pointer text-left focus-ring',
+                        'flex items-center gap-2.5 w-full h-8 rounded-md px-2.5 text-[13px] transition-colors cursor-pointer text-left focus-ring',
                         isParentActive
-                          ? 'bg-emerald-500/10 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold border-l-2 border-emerald-500 rounded-r-xl rounded-l-xs shadow-2xs px-3 py-2 text-xs'
-                          : 'px-3 py-2 text-muted-foreground hover:bg-muted/50 hover:text-foreground text-xs font-medium rounded-xl',
-                        collapsed && 'justify-center px-2'
+                          ? 'bg-primary/10 text-primary font-medium'
+                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+                        collapsed && 'justify-center px-0'
                       )}
                     >
-                      <span className={cn('shrink-0 transition-colors', isParentActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground/80')}>
+                      <span className={cn('shrink-0 transition-colors [&>svg]:h-4 [&>svg]:w-4', isParentActive ? 'text-primary' : 'text-slate-400')}>
                         {item.icon}
                       </span>
                       {!collapsed && <span className="truncate flex-1">{item.label}</span>}
                       {!collapsed && hasChildren && (
-                        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-200', isParentActive ? 'rotate-0 text-emerald-600 dark:text-emerald-400' : '-rotate-90 text-muted-foreground/60')} />
+                        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 transition-transform duration-200', isParentActive ? 'rotate-0 text-slate-500' : '-rotate-90 text-slate-400')} />
                       )}
                       {!collapsed && !hasChildren && item.badge != null && item.badge > 0 && (
                         <span
                           className={cn(
-                            'rounded-full px-2 py-0.5 text-[10px] font-bold',
+                            'rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums',
                             role === 'principal' && activeKey !== item.key && item.key === 'dashboard'
-                              ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 animate-pulse'
-                              : 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300'
+                              ? 'bg-rose-500/15 text-rose-700 animate-pulse'
+                              : 'bg-slate-100 text-slate-600'
                           )}
                         >
                           {item.badge}
@@ -173,7 +222,7 @@ export function SidebarAside({
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
                         transition={{ duration: 0.18, ease: 'easeOut' }}
-                        className="ml-4.5 pl-3.5 space-y-1 my-1.5 border-l border-emerald-500/20 dark:border-emerald-500/30"
+                        className="ml-4 pl-3 space-y-0.5 my-1 border-l border-slate-200"
                       >
                         {item.children?.map((child) => {
                           const isChildActive =
@@ -190,13 +239,13 @@ export function SidebarAside({
                               }}
                               aria-current={isChildActive ? 'page' : undefined}
                               className={cn(
-                                'flex items-center gap-2.5 w-full transition-all duration-150 cursor-pointer text-left py-1.5 px-2.5 rounded-lg text-xs font-medium relative focus-ring',
+                                'flex items-center gap-2.5 w-full h-7 rounded-md px-2.5 text-xs transition-colors cursor-pointer text-left focus-ring',
                                 isChildActive
-                                  ? 'bg-emerald-500/12 dark:bg-emerald-500/18 text-emerald-700 dark:text-emerald-300 font-semibold shadow-2xs before:absolute before:-left-[18px] before:top-1/2 before:-translate-y-1/2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-emerald-500'
-                                  : 'text-muted-foreground/80 hover:bg-muted/40 hover:text-foreground'
+                                  ? 'bg-primary/10 text-primary font-medium'
+                                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                               )}
                             >
-                              <span className={cn('shrink-0', isChildActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground/70')}>
+                              <span className={cn('shrink-0 transition-colors', isChildActive ? 'text-primary' : 'text-slate-400')}>
                                 {child.icon}
                               </span>
                               <span className="truncate">{child.label}</span>
@@ -213,18 +262,39 @@ export function SidebarAside({
         ))}
       </nav>
 
-      {/* Sidebar Footer */}
-      <div className="p-3 border-t border-border/40 bg-muted/10 shrink-0 flex items-center justify-between text-xs text-muted-foreground font-mono">
+      {/* User Profile Block — quiet identity anchor above the footer line
+          (desktop expanded: avatar initials + name + role; collapsed: avatar
+          with tooltip). The header profile dropdown remains the full account
+          menu — this block is an addition, not a move. */}
+      <div className={cn('shrink-0 border-t border-slate-200', collapsed ? 'flex justify-center py-2.5' : 'px-3 py-2.5')}>
+        <div
+          className={cn('flex items-center overflow-hidden', collapsed ? 'justify-center' : 'gap-2.5')}
+          title={collapsed ? `${userName} · ${userRoleLabel}` : undefined}
+        >
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary" aria-hidden="true">
+            {userInitials}
+          </span>
+          {!collapsed && (
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-semibold text-slate-900">{userName}</span>
+              <span className="block truncate text-[10px] text-slate-500">{userRoleLabel}</span>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Sidebar Footer — version + live status, quiet */}
+      <div className="px-3 py-2.5 border-t border-slate-200 shrink-0 flex items-center justify-between">
         {!collapsed ? (
           <>
-            <span className="text-[11px] font-medium text-muted-foreground">SCHOLARIO v{APP_VERSION}</span>
-            <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="System Online" aria-hidden="true" />
-              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-sans font-semibold">Live</span>
-            </div>
+            <span className="text-[11px] font-medium text-slate-500">SCHOLARIO v{APP_VERSION}</span>
+            <span className="flex items-center gap-1.5" title="System online">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-600 animate-pulse" aria-hidden="true" />
+              <span className="text-[10px] font-medium text-slate-500">Live</span>
+            </span>
           </>
         ) : (
-          <span className="w-2 h-2 rounded-full bg-emerald-500 mx-auto animate-pulse" title="System Online" aria-hidden="true" />
+          <span className="w-1.5 h-1.5 rounded-full bg-teal-600 mx-auto animate-pulse" title="System online" aria-hidden="true" />
         )}
       </div>
     </motion.aside>

@@ -28,6 +28,10 @@ import {
 import { useSchoolProfile } from '@/lib/school-profile'
 import { cn } from '@/lib/utils'
 import { formatINR } from '@/lib/format'
+import { APP_VERSION } from '@/lib/app-version'
+// ARCH-RESET-2c — role display labels + permission-aware nav foundation
+// (labels feed the sidebar identity chip / user block).
+import { ROLE_LABELS } from '@/lib/nav/role-nav'
 import { ThemeToggle } from '@/components/shared/theme-toggle'
 import { CommandPalette } from '@/components/shared/command-palette'
 import type { ShellProps } from './app-shell/types'
@@ -97,6 +101,10 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
   const [guardDismissed, setGuardDismissed] = useState(false)
   const unauthorizedStreakRef = useRef(0)
   const { user } = useAuth()
+  // ARCH-RESET-2c — school identity for the SIDEBAR header (same source as
+  // the footer line below: server session school → school-settings
+  // identity cascade → neutral fallback).
+  const shellSchoolName = useShellSchoolName() || 'School'
   void roleLabel
   // SS-1 — server identity (avatar / session context) for the shell + all
   // account surfaces. One fetch per mount; settings refreshes it after
@@ -263,15 +271,15 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
           <div
             className={cn(
               'relative overflow-hidden w-[min(21rem,calc(100vw-2rem))] flex items-start gap-3 rounded-xl border bg-card/95 backdrop-blur p-3 pl-4 shadow-premium-lg transition-opacity',
-              isPayment ? 'border-emerald-500/30' : isMessage ? 'border-sky-500/30' : isTimetable ? 'border-amber-500/40' : 'border-violet-500/30',
+              isPayment ? 'border-teal-500/30' : isMessage ? 'border-sky-500/30' : isTimetable ? 'border-amber-500/40' : 'border-violet-500/30',
               t ? 'opacity-100' : 'opacity-0'
             )}
           >
-            <span className={cn('absolute left-0 top-0 bottom-0 w-1', isPayment ? 'bg-emerald-500' : isMessage ? 'bg-sky-500' : isTimetable ? 'bg-amber-500' : 'bg-violet-500')} />
+            <span className={cn('absolute left-0 top-0 bottom-0 w-1', isPayment ? 'bg-teal-600' : isMessage ? 'bg-sky-500' : isTimetable ? 'bg-amber-500' : 'bg-violet-500')} />
             <span className={cn(
               'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
               isPayment
-                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                ? 'bg-teal-500/15 text-teal-700 dark:text-teal-400'
                 : isMessage
                   ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
                   : isTimetable
@@ -283,7 +291,7 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <p className="text-xs font-bold text-foreground truncate">{item.title}</p>
-                <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400 shrink-0">
+                <span className="flex items-center gap-1 rounded-full bg-teal-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-teal-700 dark:text-teal-400 shrink-0">
                   <Radio className="h-2 w-2 animate-pulse" aria-hidden="true" /> Live
                 </span>
               </div>
@@ -473,9 +481,8 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
         )}
       </AnimatePresence>
 
-      {/* Student Role gets its OWN rebuilt sidebar (premium green
-          identity, personal workspace structure); other roles keep the
-          shared one. */}
+      {/* Student Role gets its OWN rebuilt sidebar (personal workspace
+          structure); other roles keep the shared one. */}
       {role === 'student' ? (
         <StudentSidebar
           collapsed={collapsed}
@@ -500,6 +507,8 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
           activeKey={activeKey}
           onNavigate={onNavigate}
           role={role}
+          schoolName={shellSchoolName}
+          roleLabel={ROLE_LABELS[role] ?? role}
         />
       )}
 
@@ -511,19 +520,19 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
         className="flex-1 flex flex-col min-w-0 bg-background overflow-hidden"
       >
         {/* Header */}
-        <header className="h-16 bg-card border-b border-border flex items-center justify-between px-6 lg:px-8 shrink-0">
-          <div className="flex items-center gap-3">
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 sm:px-6 lg:px-8 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               ref={menuBtnRef}
               onClick={() => setMobileOpen(true)}
               aria-label="Open navigation menu"
               aria-expanded={mobileOpen}
               aria-controls="app-sidebar"
-              className="lg:hidden flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground shrink-0 hover:bg-muted focus-ring transition-colors"
+              className="lg:hidden flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 shrink-0 hover:bg-slate-100 focus-ring transition-colors"
             >
               <Menu className="h-5 w-5" aria-hidden="true" />
             </button>
-            <h1 className="text-base font-semibold text-foreground truncate">
+            <h1 className="text-base font-semibold text-slate-900 truncate">
               {activeItem?.label ?? 'Dashboard'}
             </h1>
           </div>
@@ -551,15 +560,15 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
                 className="relative flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground transition-colors cursor-pointer focus-ring"
               >
                 <Bell className="h-5 w-5" aria-hidden="true" />
-                {/* realtime stream indicator — emerald pulsing dot bottom-right */}
+                {/* realtime stream indicator — subtle teal pulsing dot bottom-right */}
                 {streamLive && (
                   <span
                     className="absolute bottom-0.5 right-0.5 flex h-2 w-2"
                     title="Live event stream connected"
                     aria-hidden="true"
                   >
-                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 ring-1 ring-card" />
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-60 animate-ping" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-600 ring-1 ring-white" />
                   </span>
                 )}
                 {totalBadgeCount > 0 && (
@@ -590,11 +599,11 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
               >
                 {/* realtime stream status — shown for every role when connected */}
                 {streamLive && (
-                  <div className="mx-1 mb-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2">
-                    <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                  <div className="mx-1 mb-2 rounded-lg border border-teal-500/25 bg-teal-500/5 px-2.5 py-2">
+                    <p className="text-[10px] font-bold text-teal-700 dark:text-teal-400 flex items-center gap-1.5">
                       <span className="relative flex h-2 w-2">
-                        <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                        <span className="absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-60 animate-ping" />
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-600" />
                       </span>
                       Live event stream connected
                     </p>
@@ -653,12 +662,10 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
             </div>
           )}
           {children}
-          {/* Sticky footer */}
-          <footer className="mt-auto pt-6 border-t border-border text-center text-[11px] text-muted-foreground font-medium tracking-wide">
+          {/* Sticky footer — quiet identity line (no invented status claims) */}
+          <footer className="mt-auto pt-4 border-t border-slate-200 text-center text-[11px] text-slate-400">
             <p>
-              &copy; {new Date().getFullYear()} SCHOLARIO-OS &middot; Enterprise School ERP &middot;
-              <span className="text-emerald-700 dark:text-emerald-400 ml-1"><FooterSchoolName /></span>
-              &middot; All systems operational
+              &copy; {new Date().getFullYear()} SCHOLARIO &middot; v{APP_VERSION} &middot; {shellSchoolName}
             </p>
           </footer>
         </div>
@@ -670,11 +677,13 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
 }
 
 /**
- * Footer school identity (PHASE 7.5): the signed-in school's REAL name —
- * server session school first, then the school-settings identity cascade
+ * School identity (PHASE 7.5): the signed-in school's REAL name — server
+ * session school first, then the school-settings identity cascade
  * (server slice → local slice → neutral). No mock/tenant-registry fallback.
+ * ARCH-RESET-2c — now a hook: the same truth feeds BOTH the sidebar header
+ * (schoolName prop) and the quiet footer line.
  */
-function FooterSchoolName() {
+function useShellSchoolName(): string {
   const sessionSchool = useCurrentUser((s) => s.me?.school?.name)
   const profile = useSchoolProfile()
   return sessionSchool?.trim() || profile.name

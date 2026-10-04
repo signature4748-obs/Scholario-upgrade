@@ -141,13 +141,13 @@ function expiresIn(from: string, to: string): { text: string; tone: 'live' | 'mu
 }
 
 const ROLE_TONE: Record<string, string> = {
-  PRINCIPAL: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
-  TEACHER: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
-  STUDENT: 'border-zinc-700/80 bg-zinc-800/60 text-zinc-300',
+  PRINCIPAL: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  TEACHER: 'border-amber-200 bg-amber-50 text-amber-700',
+  STUDENT: 'border-slate-200 bg-slate-100 text-slate-700',
 }
 
 function roleBadgeClass(role: string): string {
-  return ROLE_TONE[role.toUpperCase()] ?? 'border-zinc-700/80 bg-zinc-800/60 text-zinc-400'
+  return ROLE_TONE[role.toUpperCase()] ?? 'border-slate-200 bg-slate-100 text-slate-600'
 }
 
 export function SupportToolsModule() {
@@ -271,14 +271,14 @@ export function SupportToolsModule() {
       <div>
         <h1
           id="support-heading"
-          className="font-display text-xl sm:text-2xl font-bold text-zinc-100 flex items-center gap-2.5"
+          className="font-display text-xl sm:text-2xl font-bold text-slate-900 flex items-center gap-2.5"
         >
-          <span className="h-9 w-9 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-            <LifeBuoy className="h-4.5 w-4.5 text-amber-400" aria-hidden="true" />
+          <span className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center">
+            <LifeBuoy className="h-4.5 w-4.5 text-amber-600" aria-hidden="true" />
           </span>
           Support tools
         </h1>
-        <p className="mt-2 flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-200/90">
+        <p className="mt-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
           <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
           Support sessions are explicit, reason-required, time-boxed and READ-ONLY. No school
           session is minted — oversight views never impersonate a school user.
@@ -286,31 +286,31 @@ export function SupportToolsModule() {
       </div>
 
       {/* ============ Support-session registry ============ */}
-      <Card className="rounded-xl border-zinc-800 bg-zinc-900/60">
+      <Card className="rounded-xl border-slate-200 bg-white shadow-sm">
         <CardHeader>
-          <CardTitle className="text-zinc-100 text-base font-semibold flex items-center gap-2">
-            <Clock className="h-4 w-4 text-amber-400" aria-hidden="true" />
+          <CardTitle className="text-slate-900 text-base font-semibold flex items-center gap-2">
+            <Clock className="h-4 w-4 text-amber-600" aria-hidden="true" />
             Support-session registry
           </CardTitle>
-          <CardDescription className="text-zinc-500 text-xs">
+          <CardDescription className="text-slate-500 text-xs">
             Every oversight session opened from a school record — live, expired or revoked.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {supportError && (
-            <p role="alert" className="text-sm text-red-300">
+            <p role="alert" className="text-sm text-red-600">
               {supportError}
             </p>
           )}
           {supportLoading && (
             <div className="space-y-2" aria-hidden="true">
               {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-20 w-full rounded-lg bg-zinc-800/70" />
+                <Skeleton key={i} className="h-20 w-full rounded-lg bg-slate-200" />
               ))}
             </div>
           )}
           {!supportLoading && !supportError && supportSessions.length === 0 && (
-            <p className="py-6 text-center text-sm text-zinc-500">
+            <p className="py-6 text-center text-sm text-slate-500">
               No support sessions have been opened yet.
             </p>
           )}
@@ -323,14 +323,14 @@ export function SupportToolsModule() {
                   key={s.id}
                   className={`rounded-lg border p-4 space-y-2 ${
                     s.live
-                      ? 'border-zinc-700/80 bg-zinc-900'
-                      : 'border-zinc-800/60 bg-zinc-900/40 opacity-60'
+                      ? 'border-slate-300 bg-slate-50'
+                      : 'border-slate-200 bg-slate-50 opacity-60'
                   }`}
                   aria-label={`Support session for ${s.school?.name ?? 'unknown school'}`}
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     {s.live ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
                         <span className="relative flex h-2 w-2" aria-hidden="true">
                           <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />
                           <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
@@ -340,28 +340,28 @@ export function SupportToolsModule() {
                     ) : (
                       <Badge
                         variant="outline"
-                        className="border-zinc-700/80 bg-zinc-800/60 text-zinc-500"
+                        className="border-slate-200 bg-slate-100 text-slate-600"
                       >
                         {s.revokedAt ? 'revoked' : 'expired'}
                       </Badge>
                     )}
-                    <span className="text-sm font-semibold text-zinc-100">
+                    <span className="text-sm font-semibold text-slate-900">
                       {s.school?.name ?? 'Unknown school'}
                     </span>
-                    <span className="text-xs text-zinc-500">
+                    <span className="text-xs text-slate-500">
                       by {s.admin?.name ?? 'unknown admin'}
                     </span>
                     {s.live && window.tone === 'live' && (
-                      <span className="ml-auto text-xs tabular-nums text-emerald-300/80">
+                      <span className="ml-auto text-xs tabular-nums text-emerald-700">
                         {window.text}
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-zinc-300 leading-snug">
-                    <span className="text-zinc-500">Reason: </span>
+                  <p className="text-sm text-slate-700 leading-snug">
+                    <span className="text-slate-500">Reason: </span>
                     {s.reason}
                   </p>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-500 tabular-nums">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500 tabular-nums">
                     <span>{s.durationMinutes} min granted</span>
                     <span>opened {when(s.createdAt)}</span>
                     <span>expires {when(s.expiresAt)}</span>
@@ -373,14 +373,14 @@ export function SupportToolsModule() {
                       size="sm"
                       onClick={() => setRevokeSupportId(s.id)}
                       disabled={revoking}
-                      className="h-9 px-3.5 border-red-500/40 bg-transparent text-red-300 hover:bg-red-500/10 hover:text-red-200 focus-ring"
+                      className="h-9 px-3.5 border-red-200 bg-transparent text-red-600 hover:bg-red-50 hover:text-red-700 focus-ring"
                     >
                       <Ban className="h-3.5 w-3.5" aria-hidden="true" />
                       Revoke
                     </Button>
                   )}
                   {expiredNoRevoke && !s.revokedAt && (
-                    <p className="text-[11px] text-zinc-600">Read-only window has ended.</p>
+                    <p className="text-[11px] text-slate-400">Read-only window has ended.</p>
                   )}
                 </div>
               )
@@ -389,27 +389,27 @@ export function SupportToolsModule() {
       </Card>
 
       {/* ============ School-session browser ============ */}
-      <Card className="rounded-xl border-zinc-800 bg-zinc-900/60">
+      <Card className="rounded-xl border-slate-200 bg-white shadow-sm">
         <CardHeader className="gap-3">
-          <CardTitle className="text-zinc-100 text-base font-semibold flex items-center gap-2">
-            <MonitorSmartphone className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+          <CardTitle className="text-slate-900 text-base font-semibold flex items-center gap-2">
+            <MonitorSmartphone className="h-4 w-4 text-teal-600" aria-hidden="true" />
             School sessions
           </CardTitle>
-          <CardDescription className="text-zinc-500 text-xs">
+          <CardDescription className="text-slate-500 text-xs">
             Live school-user sessions. Revoking force-signs the user out on their next request.
           </CardDescription>
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <label htmlFor="school-filter" className="text-xs text-zinc-400 font-medium">
+            <label htmlFor="school-filter" className="text-xs text-slate-600 font-medium">
               School
             </label>
             <Select value={schoolFilter} onValueChange={setSchoolFilter}>
               <SelectTrigger
                 id="school-filter"
-                className="w-56 h-11 bg-zinc-950 border-zinc-800 text-zinc-100 focus-ring"
+                className="w-56 h-11 bg-white border-slate-200 text-slate-900 focus-ring"
               >
                 <SelectValue placeholder="All schools" />
               </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+              <SelectContent className="bg-white border-slate-200 text-slate-900">
                 <SelectItem value="all">All schools</SelectItem>
                 {schoolOptions.map((s) => (
                   <SelectItem key={s.id} value={s.id}>
@@ -419,7 +419,7 @@ export function SupportToolsModule() {
               </SelectContent>
             </Select>
             {schoolOptionsError && (
-              <p className="text-xs text-zinc-500" role="note">
+              <p className="text-xs text-slate-500" role="note">
                 <Info className="inline h-3 w-3 mr-1" aria-hidden="true" />
                 {schoolOptionsError} — showing the platform-wide list.
               </p>
@@ -428,20 +428,20 @@ export function SupportToolsModule() {
         </CardHeader>
         <CardContent>
           {schoolError && (
-            <p role="alert" className="text-sm text-red-300 mb-3">
+            <p role="alert" className="text-sm text-red-600 mb-3">
               {schoolError}
             </p>
           )}
           {schoolLoading && (
             <div className="space-y-2" aria-hidden="true">
               {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full rounded-lg bg-zinc-800/70" />
+                <Skeleton key={i} className="h-12 w-full rounded-lg bg-slate-200" />
               ))}
             </div>
           )}
 
           {!schoolLoading && !schoolError && schoolSessions.length === 0 && (
-            <p className="py-6 text-center text-sm text-zinc-500">
+            <p className="py-6 text-center text-sm text-slate-500">
               No live school sessions {schoolFilter === 'all' ? '' : 'for this school'}.
             </p>
           )}
@@ -449,27 +449,27 @@ export function SupportToolsModule() {
           {!schoolLoading && schoolSessions.length > 0 && (
             <>
               {/* Table (≥ sm) */}
-              <div className="hidden sm:block rounded-lg border border-zinc-800 overflow-hidden">
-                <Table className="text-zinc-300">
+              <div className="hidden sm:block rounded-lg border border-slate-200 overflow-hidden">
+                <Table className="text-slate-700">
                   <TableHeader>
-                    <TableRow className="border-zinc-800 hover:bg-transparent">
-                      <TableHead className="text-zinc-500 font-medium h-11">User</TableHead>
-                      <TableHead className="text-zinc-500 font-medium">Role</TableHead>
-                      <TableHead className="text-zinc-500 font-medium">School</TableHead>
-                      <TableHead className="text-zinc-500 font-medium">Device</TableHead>
-                      <TableHead className="text-zinc-500 font-medium">Signed in</TableHead>
-                      <TableHead className="text-zinc-500 font-medium">Expires</TableHead>
-                      <TableHead className="text-zinc-500 font-medium sr-only">Actions</TableHead>
+                    <TableRow className="border-slate-200 hover:bg-transparent">
+                      <TableHead className="text-slate-500 font-medium h-11">User</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Role</TableHead>
+                      <TableHead className="text-slate-500 font-medium">School</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Device</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Signed in</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Expires</TableHead>
+                      <TableHead className="text-slate-500 font-medium sr-only">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {schoolSessions.map((s) => (
-                      <TableRow key={s.id} className="border-zinc-800/80">
+                      <TableRow key={s.id} className="border-slate-200">
                         <TableCell className="max-w-[14rem]">
-                          <span className="block truncate font-medium text-zinc-200">
+                          <span className="block truncate font-medium text-slate-900">
                             {s.user.name ?? s.user.email}
                           </span>
-                          <span className="block truncate text-[11px] text-zinc-500">
+                          <span className="block truncate text-[11px] text-slate-500">
                             {s.user.email}
                           </span>
                         </TableCell>
@@ -478,16 +478,16 @@ export function SupportToolsModule() {
                             {s.user.role.toLowerCase()}
                           </Badge>
                         </TableCell>
-                        <TableCell className="max-w-[9rem] truncate text-zinc-400">
+                        <TableCell className="max-w-[9rem] truncate text-slate-600">
                           {s.schoolName ?? '—'}
                         </TableCell>
-                        <TableCell className="text-xs text-zinc-400">
+                        <TableCell className="text-xs text-slate-600">
                           {describeUserAgent(s.userAgent)}
                         </TableCell>
-                        <TableCell className="whitespace-nowrap text-xs tabular-nums text-zinc-500">
+                        <TableCell className="whitespace-nowrap text-xs tabular-nums text-slate-500">
                           {when(s.createdAt)}
                         </TableCell>
-                        <TableCell className="whitespace-nowrap text-xs tabular-nums text-zinc-500">
+                        <TableCell className="whitespace-nowrap text-xs tabular-nums text-slate-500">
                           {when(s.expiresAt)}
                         </TableCell>
                         <TableCell className="text-right">
@@ -497,7 +497,7 @@ export function SupportToolsModule() {
                             onClick={() => setRevokeSchoolTarget(s)}
                             disabled={revokingSchool}
                             aria-label={`Force-sign-out ${s.user.name ?? s.user.email}`}
-                            className="h-9 px-3.5 border-red-500/40 bg-transparent text-red-300 hover:bg-red-500/10 hover:text-red-200 focus-ring"
+                            className="h-9 px-3.5 border-red-200 bg-transparent text-red-600 hover:bg-red-50 hover:text-red-700 focus-ring"
                           >
                             <Ban className="h-3.5 w-3.5" aria-hidden="true" />
                             Revoke
@@ -514,28 +514,28 @@ export function SupportToolsModule() {
                 {schoolSessions.map((s) => (
                   <div
                     key={s.id}
-                    className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 space-y-2.5"
+                    className="rounded-lg border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-zinc-200 truncate">
+                        <p className="text-sm font-semibold text-slate-900 truncate">
                           {s.user.name ?? s.user.email}
                         </p>
-                        <p className="text-[11px] text-zinc-500 truncate">{s.user.email}</p>
+                        <p className="text-[11px] text-slate-500 truncate">{s.user.email}</p>
                       </div>
                       <Badge variant="outline" className={roleBadgeClass(s.user.role)}>
                         {s.user.role.toLowerCase()}
                       </Badge>
                     </div>
                     <dl className="grid grid-cols-[4.5rem_1fr] gap-x-3 gap-y-1 text-xs">
-                      <dt className="text-zinc-500">School</dt>
-                      <dd className="text-zinc-400 truncate">{s.schoolName ?? '—'}</dd>
-                      <dt className="text-zinc-500">Device</dt>
-                      <dd className="text-zinc-400">{describeUserAgent(s.userAgent)}</dd>
-                      <dt className="text-zinc-500">Signed in</dt>
-                      <dd className="text-zinc-500 tabular-nums">{when(s.createdAt)}</dd>
-                      <dt className="text-zinc-500">Expires</dt>
-                      <dd className="text-zinc-500 tabular-nums">{when(s.expiresAt)}</dd>
+                      <dt className="text-slate-500">School</dt>
+                      <dd className="text-slate-600 truncate">{s.schoolName ?? '—'}</dd>
+                      <dt className="text-slate-500">Device</dt>
+                      <dd className="text-slate-600">{describeUserAgent(s.userAgent)}</dd>
+                      <dt className="text-slate-500">Signed in</dt>
+                      <dd className="text-slate-500 tabular-nums">{when(s.createdAt)}</dd>
+                      <dt className="text-slate-500">Expires</dt>
+                      <dd className="text-slate-500 tabular-nums">{when(s.expiresAt)}</dd>
                     </dl>
                     <Button
                       variant="outline"
@@ -543,7 +543,7 @@ export function SupportToolsModule() {
                       onClick={() => setRevokeSchoolTarget(s)}
                       disabled={revokingSchool}
                       aria-label={`Force-sign-out ${s.user.name ?? s.user.email}`}
-                      className="w-full h-11 border-red-500/40 bg-transparent text-red-300 hover:bg-red-500/10 hover:text-red-200 focus-ring"
+                      className="w-full h-11 border-red-200 bg-transparent text-red-600 hover:bg-red-50 hover:text-red-700 focus-ring"
                     >
                       <Ban className="h-3.5 w-3.5" aria-hidden="true" />
                       Revoke session
@@ -561,12 +561,12 @@ export function SupportToolsModule() {
         open={Boolean(revokeSupportId)}
         onOpenChange={(v) => !v && setRevokeSupportId(null)}
       >
-        <AlertDialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+        <AlertDialogContent className="bg-white border-slate-200 text-slate-900">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-zinc-50">Revoke support session?</AlertDialogTitle>
-            <AlertDialogDescription className="text-zinc-400">
+            <AlertDialogTitle className="text-slate-900">Revoke support session?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-500">
               The oversight window for{' '}
-              <span className="text-zinc-200">
+              <span className="text-slate-700">
                 {supportRevokeTarget?.school?.name ?? 'this school'}
               </span>{' '}
               closes immediately and is audited.
@@ -575,7 +575,7 @@ export function SupportToolsModule() {
           <AlertDialogFooter>
             <AlertDialogCancel
               disabled={revoking}
-              className="border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 h-11"
+              className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 h-11"
             >
               Cancel
             </AlertDialogCancel>
@@ -598,12 +598,12 @@ export function SupportToolsModule() {
         open={Boolean(revokeSchoolTarget)}
         onOpenChange={(v) => !v && setRevokeSchoolTarget(null)}
       >
-        <AlertDialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
+        <AlertDialogContent className="bg-white border-slate-200 text-slate-900">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-zinc-50">
+            <AlertDialogTitle className="text-slate-900">
               Force-sign-out {revokeSchoolTarget?.user.name ?? revokeSchoolTarget?.user.email}?
             </AlertDialogTitle>
-            <AlertDialogDescription className="text-zinc-400">
+            <AlertDialogDescription className="text-slate-500">
               Their session is destroyed and they return to the school login page on their next
               request. The action is recorded on both the platform and school audit trails.
             </AlertDialogDescription>
@@ -611,7 +611,7 @@ export function SupportToolsModule() {
           <AlertDialogFooter>
             <AlertDialogCancel
               disabled={revokingSchool}
-              className="border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 h-11"
+              className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 h-11"
             >
               Cancel
             </AlertDialogCancel>

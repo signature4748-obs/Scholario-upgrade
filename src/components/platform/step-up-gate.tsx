@@ -97,13 +97,13 @@ export function useStepUpGate() {
 
   const node = (
     <Dialog open={open} onOpenChange={(v) => !v && settle(false)}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-md">
+      <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-zinc-50">
-            <ShieldCheck className="h-4 w-4 text-amber-400" aria-hidden="true" />
+          <DialogTitle className="flex items-center gap-2 text-slate-900">
+            <ShieldCheck className="h-4 w-4 text-amber-600" aria-hidden="true" />
             Step-up authentication required
           </DialogTitle>
-          <DialogDescription className="text-zinc-400">
+          <DialogDescription className="text-slate-500">
             This destructive action needs a recent multi-factor verification. Enter the current
             code from your authenticator app — the action will continue automatically.
           </DialogDescription>
@@ -120,10 +120,10 @@ export function useStepUpGate() {
           }}
           autoFocus
           aria-label="Authenticator code"
-          className="bg-zinc-950 border-zinc-800 text-zinc-100 text-lg tracking-[0.4em] text-center font-mono h-12"
+          className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 text-lg tracking-[0.4em] text-center font-mono h-12"
         />
         {error && (
-          <p role="alert" className="text-sm text-red-400">
+          <p role="alert" className="text-sm text-red-600">
             {error}
           </p>
         )}
@@ -131,11 +131,11 @@ export function useStepUpGate() {
           <Button
             variant="outline"
             onClick={() => settle(false)}
-            className="border-zinc-700 bg-transparent text-zinc-300 hover:bg-zinc-800"
+            className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100"
           >
             Cancel action
           </Button>
-          <Button onClick={() => void verify()} disabled={busy} className="bg-emerald-600 hover:bg-emerald-500 text-zinc-950">
+          <Button onClick={() => void verify()} disabled={busy} className="bg-teal-600 hover:bg-teal-700 text-white">
             {busy ? 'Verifying…' : 'Verify & continue'}
           </Button>
         </DialogFooter>

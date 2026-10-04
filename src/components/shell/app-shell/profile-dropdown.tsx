@@ -108,7 +108,7 @@ export function ProfileDropdown({
               <p className="font-bold text-xs text-foreground">{user?.name || 'Account'}</p>
               <p className="text-[11px] text-muted-foreground truncate">{user?.email || '—'}</p>
               <div className="flex items-center gap-1.5 mt-1.5">
-                <span className="inline-block text-[9px] font-extrabold px-2 py-0.5 rounded bg-primary/15 text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
+                <span className="inline-block text-[9px] font-extrabold px-2 py-0.5 rounded bg-primary/15 text-primary uppercase tracking-wider">
                   {role}
                 </span>
                 <span className="inline-flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground" title={activeTenant.name}>

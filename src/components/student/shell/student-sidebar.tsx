@@ -3,15 +3,15 @@
 /**
  * StudentSidebar — the Student Role's own navigation shell.
  *
- * Design language (Student visual identity — GREEN IS BACK, locked):
- *   · premium GREEN primary accent — the student's personal accent,
- *     used with discipline: identity marks, the active row, the search
- *     trigger. Never giant green surfaces or ERP-green capsules.
- *   · clean light surface with the app's glass border language
+ * Design language (ARCH-RESET-2c — restrained enterprise SaaS):
+ *   · solid white surface + slate hairline border (same visual language as
+ *     the principal/teacher sidebar — one product, one system)
+ *   · token-driven PRIMARY accent (identity marks, the active row, badges
+ *     in collapsed state) — never giant accent surfaces
  *   · compact brand header + personal identity block ("my workspace")
- *   · uppercase section labels · refined soft-tint active state with a
- *     subtle hairline rail indicator (token-driven → green in light AND
- *     dark mode with zero duplicated colour logic)
+ *   · uppercase section labels · soft-tint active state with a subtle
+ *     hairline rail indicator (token-driven → follows the app accent in
+ *     light AND dark mode with zero duplicated colour logic)
  *   · badges ONLY for real derived counts — never decorative numbers
  *   · collapsed state keeps icons, tooltips, active state and hierarchy
  *
@@ -85,8 +85,8 @@ export function StudentSidebar({
       animate={{ width: collapsed ? 76 : 280 }}
       transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
       className={cn(
-        'relative z-50 shrink-0 h-full bg-background/85 dark:bg-card/60 backdrop-blur-2xl border-r border-border/40 flex flex-col shadow-2xs select-none',
-        'max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:shadow-2xl max-lg:w-[290px]',
+        'relative z-50 shrink-0 h-full bg-white border-r border-slate-200 flex flex-col select-none',
+        'max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:shadow-xl max-lg:w-[290px]',
         mobileOpen ? 'max-lg:translate-x-0' : 'max-lg:-translate-x-full',
         'transition-transform duration-300 ease-out lg:transition-none'
       )}
@@ -94,20 +94,20 @@ export function StudentSidebar({
       {/* ── Brand header — compact student workspace mark ─────────────── */}
       <div
         className={cn(
-          'relative h-16 shrink-0 border-b border-border/40 bg-muted/[0.06]',
+          'relative h-16 shrink-0 border-b border-slate-200',
           collapsed ? 'flex flex-col items-center justify-center gap-2 px-2' : 'flex items-center justify-between px-4'
         )}
       >
         <div className={cn('flex items-center gap-2.5 overflow-hidden', collapsed && 'flex-col gap-0')}>
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 font-display text-sm font-bold text-white shadow-xs ring-1 ring-emerald-500/25">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary font-display text-sm font-bold text-primary-foreground">
             S
           </div>
           {!collapsed && (
             <div className="flex flex-col">
-              <span className="font-display text-base font-bold leading-none tracking-tight text-foreground">
+              <span className="font-display text-base font-bold leading-none tracking-tight text-slate-900">
                 SCHOLARIO
               </span>
-              <span className="mt-1 text-[10px] font-medium uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-400">
+              <span className="mt-1 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-500">
                 Student Workspace
               </span>
             </div>
@@ -116,8 +116,8 @@ export function StudentSidebar({
         <button
           onClick={() => setCollapsed((c) => !c)}
           className={cn(
-            'hidden lg:flex p-1.5 rounded-lg text-muted-foreground transition-all shrink-0 cursor-pointer',
-            'hover:text-foreground hover:bg-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+            'hidden lg:flex p-1.5 rounded-md text-slate-400 transition-all shrink-0 cursor-pointer',
+            'hover:text-slate-700 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
           )}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -127,7 +127,7 @@ export function StudentSidebar({
         <button
           ref={closeBtnRef}
           onClick={() => setMobileOpen(false)}
-          className="lg:hidden absolute right-3 top-3.5 flex h-9 w-9 items-center justify-center p-1.5 rounded-lg border border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer focus-ring"
+          className="lg:hidden absolute right-3 top-3.5 flex h-9 w-9 items-center justify-center p-1.5 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer focus-ring"
           aria-label="Close navigation menu"
         >
           <X className="h-4 w-4" aria-hidden="true" />
@@ -135,7 +135,7 @@ export function StudentSidebar({
       </div>
 
       {/* ── Personal identity block — "my space", opens my profile ────── */}
-      <div className={cn('shrink-0 border-b border-border/40', collapsed ? 'px-2 py-3' : 'px-3.5 py-4')}>
+      <div className={cn('shrink-0 border-b border-slate-200', collapsed ? 'px-2 py-3' : 'px-3.5 py-3.5')}>
         <button
           onClick={() => {
             onNavigate('profile')
@@ -144,14 +144,14 @@ export function StudentSidebar({
           title={collapsed ? identityTitle : 'Open my profile'}
           aria-label={identityTitle}
           className={cn(
-            'group flex w-full items-center rounded-xl text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            collapsed ? 'justify-center p-1.5' : 'gap-3 p-1.5 hover:bg-muted/50'
+            'group flex w-full items-center rounded-[10px] text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            collapsed ? 'justify-center p-1.5' : 'gap-3 p-1.5 hover:bg-slate-100'
           )}
         >
           <span className="relative shrink-0">
             <span
               className={cn(
-                'flex items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 font-display font-bold text-white',
+                'flex items-center justify-center overflow-hidden rounded-[10px] bg-primary/10 font-display font-bold text-primary',
                 collapsed ? 'h-9 w-9 text-xs' : 'h-10 w-10 text-sm'
               )}
             >
@@ -162,17 +162,17 @@ export function StudentSidebar({
               )}
             </span>
             <span
-              className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background bg-emerald-500"
+              className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-teal-600"
               title="Active student"
               aria-label="Active student"
             />
           </span>
           {!collapsed && (
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-semibold leading-tight text-foreground">
+              <span className="block truncate text-[13px] font-semibold leading-tight text-slate-900">
                 {displayName}
               </span>
-              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+              <span className="mt-0.5 block truncate text-[11px] text-slate-500">
                 {me?.student?.classLabel
                   ? `${me.student.classLabel}${me.student.rollNo ? ` · Roll ${me.student.rollNo}` : ''}`
                   : student
@@ -189,14 +189,14 @@ export function StudentSidebar({
         <div className="px-3.5 pt-3.5 shrink-0">
           <button
             onClick={() => { setCmdOpen(true); setMobileOpen(false) }}
-            className="w-full flex items-center justify-between gap-2 rounded-xl border border-border/50 bg-muted/25 hover:bg-muted/60 hover:border-border px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground transition-all cursor-pointer shadow-2xs group focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="w-full flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 hover:bg-slate-100 px-3 py-2.5 text-xs text-slate-500 hover:text-slate-700 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title="Global search (⌘K)"
           >
             <span className="flex items-center gap-2 truncate">
-              <Search className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400 transition-transform group-hover:scale-110" />
+              <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />
               <span className="truncate font-medium">Search…</span>
             </span>
-            <kbd className="shrink-0 rounded-md border border-border/60 bg-background px-1.5 py-0.5 text-[9px] font-mono font-semibold text-muted-foreground shadow-2xs">
+            <kbd className="shrink-0 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[9px] font-mono font-semibold text-slate-400">
               ⌘K
             </kbd>
           </button>
@@ -205,7 +205,7 @@ export function StudentSidebar({
         <div className="flex justify-center px-2 pt-3.5 shrink-0">
           <button
             onClick={() => { setCmdOpen(true); setMobileOpen(false) }}
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-border/50 bg-muted/25 text-emerald-600 dark:text-emerald-400 transition-all hover:bg-muted/60 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title="Global search (⌘K)"
             aria-label="Global search (⌘K)"
           >
@@ -222,11 +222,11 @@ export function StudentSidebar({
         {groups.map((group) => (
           <div key={group.label}>
             {!collapsed && (
-              <h3 className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">
+              <h3 className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                 {group.label}
               </h3>
             )}
-            {collapsed && <div className="mx-auto mb-2 mt-3 h-px w-8 bg-border/60" aria-hidden />}
+            {collapsed && <div className="mx-auto mb-2 mt-3 h-px w-8 bg-slate-200" aria-hidden />}
             <div className="space-y-1">
               {group.items.map((item) => {
                 const isActive = activeKey === item.key
@@ -252,8 +252,8 @@ export function StudentSidebar({
                       'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-3 px-3 py-2.5 text-xs',
                       isActive
-                        ? 'bg-primary/[0.09] font-semibold text-foreground'
-                        : 'font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                        ? 'bg-primary/[0.08] font-semibold text-primary'
+                        : 'font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                     )}
                   >
                     {/* Subtle accent indicator — a hairline rail on the active row */}
@@ -269,14 +269,14 @@ export function StudentSidebar({
                     <span
                       className={cn(
                         'flex shrink-0 items-center justify-center transition-colors',
-                        isActive ? 'text-primary' : 'text-muted-foreground group-hover/icon:text-foreground/70'
+                        isActive ? 'text-primary' : 'text-slate-400 group-hover/icon:text-slate-700'
                       )}
                     >
                       {item.icon}
                     </span>
                     {!collapsed && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
                     {!collapsed && item.badge != null && item.badge > 0 && (
-                      <span className="ml-auto shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-emerald-700 dark:text-emerald-300">
+                      <span className="ml-auto shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-slate-600">
                         {item.badge > 99 ? '99+' : item.badge}
                       </span>
                     )}
@@ -296,20 +296,20 @@ export function StudentSidebar({
       {/* ── Footer — quiet status line ───────────────────────────────── */}
       <div
         className={cn(
-          'shrink-0 border-t border-border/40 bg-muted/[0.06] text-muted-foreground',
+          'shrink-0 border-t border-slate-200 text-slate-500',
           collapsed ? 'flex justify-center py-3' : 'flex items-center justify-between px-5 py-3'
         )}
       >
         {!collapsed ? (
           <>
-            <span className="text-[10px] font-medium text-muted-foreground">SCHOLARIO v{APP_VERSION}</span>
+            <span className="text-[10px] font-medium text-slate-500">SCHOLARIO v{APP_VERSION}</span>
             <span className="flex items-center gap-1.5" title="System online">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-              <span className="text-[10px] font-sans font-semibold text-emerald-700 dark:text-emerald-400">Live</span>
+              <span className="h-1.5 w-1.5 rounded-full bg-teal-600" aria-hidden />
+              <span className="text-[10px] font-sans font-medium text-slate-500">Live</span>
             </span>
           </>
         ) : (
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title="System online" aria-hidden />
+          <span className="h-1.5 w-1.5 rounded-full bg-teal-600" title="System online" aria-hidden />
         )}
       </div>
     </motion.aside>

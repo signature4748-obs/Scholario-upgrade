@@ -6,6 +6,12 @@ import { lazyModule } from '@/components/shared/lazy-module'
 import { useTeachersStore } from '@/lib/store/teachers-store'
 import { useTeacherHubStore } from '@/lib/store/teacher-hub-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
+import { useAuth } from '@/lib/store/auth-store'
+// ARCH-RESET-2c — permission-aware navigation: nav-registry items carry
+// server-matrix permission keys; the authenticated role (server session)
+// filters them before the groups reach the shell. TEACHER holds every
+// tagged capability — identical visible nav, foundation wired.
+import { filterNavForRole } from '@/lib/nav/role-nav'
 import { useTeacherRole } from './teacher-panel/use-teacher-role'
 import {
   buildTeacherNavGroups,
@@ -114,6 +120,9 @@ export function TeacherPanel() {
   // driven banner below belongs to this teacher alone; an unmatched
   // session shows none of them instead of another teacher's data).
   const me = useCurrentUser((st) => st.me)
+  // ARCH-RESET-2c — the authenticated role drives the permission-aware
+  // nav filter (server session role from the auth store).
+  const authUser = useAuth((s) => s.user)
   const currentTeacher = me?.email
     ? teachers.find((t) => (t.email ?? '').toLowerCase() === me.email.toLowerCase()) ?? null
     : null
@@ -182,7 +191,13 @@ export function TeacherPanel() {
   // Check pending position assignments for approval workflow
   const pendingAssignments = getPendingAssignments(currentTeacher ?? undefined, isRelieved)
 
-  const navGroups = buildTeacherNavGroups({ isRelieved, classTeacherOf, hubUnread })
+  // ARCH-RESET-2c — permission-aware filter over the registry output
+  // (self-service / role-gated items carry no permission key and always
+  // pass; the filter only removes items a role genuinely lacks).
+  const navGroups = filterNavForRole(
+    buildTeacherNavGroups({ isRelieved, classTeacherOf, hubUnread }),
+    authUser?.role,
+  )
 
   const {
     dialogs,

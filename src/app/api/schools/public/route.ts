@@ -106,6 +106,16 @@ export async function GET(req: NextRequest) {
 
     const content = mergeWebsiteContent(school.websiteContent)
 
+    // ARCHITECTURE RESET — honest hero fallback: an unconfigured school's
+    // hero title is the SCHOOL NAME (never invented copy). The client uses
+    // `resolvedVia` to decide school-website vs SCHOLARIO directory landing
+    // (a bare deployment-domain visit must not silently show a demo school
+    // site — the landing lists the tenant directory instead).
+    if (!content.hero.title?.trim()) {
+      content.hero.title = school.shortName?.trim() || school.name
+      content.hero.titleAccent = ''
+    }
+
     return NextResponse.json(
       {
         success: true,
@@ -113,6 +123,7 @@ export async function GET(req: NextRequest) {
           id: school.id,
           name: school.name,
           slug: school.slug,
+          resolvedVia: resolved.via,
           code: school.code,
           address: school.address,
           city: school.city,

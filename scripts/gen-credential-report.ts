@@ -182,6 +182,29 @@ async function main() {
   }
   lines.push('')
 
+  // ── Green Valley Public School (clean tenant) — launch access accounts ──
+  // FINAL-GATE: the acceptance clean tenant carries bootstrap accounts with
+  // the tenant-fixture password family (prisma/seed-clean.ts). ZERO business
+  // data by design — the login handoff lists ONLY the account identities.
+  const cleanSchool = await db.school.findUnique({ where: { slug: 'green-valley' } })
+  if (cleanSchool) {
+    const cleanUsers = await db.user.findMany({
+      where: { status: 'ACTIVE', schoolId: cleanSchool.id },
+      orderBy: { email: 'asc' },
+      select: { email: true, name: true, role: true },
+    })
+    lines.push('## Green Valley Public School (clean tenant — zero business data by design)')
+    lines.push('')
+    lines.push('| Name | Email | Role | Password |')
+    lines.push('| --- | --- | --- | --- |')
+    for (const u of cleanUsers) {
+      lines.push(`| ${u.name ?? ''} | ${u.email} | ${u.role} | \`${SEED_TENANT_FIXTURE_PASSWORD}\` |`)
+    }
+    lines.push('')
+    lines.push(`Entry URL: \`/?slug=green-valley\` → Login Portal. ${cleanUsers.length} bootstrap accounts, no Teacher/Student directory rows (honest empty state).`)
+    lines.push('')
+  }
+
   mkdirSync(path.dirname(outPath), { recursive: true })
   writeFileSync(outPath, lines.join('\n') + '\n', { mode: 0o600 })
   chmodSync(outPath, 0o600)
