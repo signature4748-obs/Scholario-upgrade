@@ -51,10 +51,52 @@ No DNS credentials exist in this environment, so the domain verification itself
 is the single remaining external step; everything else (key wiring, transport,
 audit, idempotency, tenant branding) is deployed and verified.
 
+## Webhooks (delivery lifecycle — bounce/complaint/failure state sync)
+
+`POST /api/webhooks/resend` is the provider→us half of the email system. The
+outbox (`EmailDelivery`) records what the API said at send time (`SENT` /
+`FAILED`); the webhook records what the provider learned afterwards and
+synchronizes terminal failure states:
+
+| Resend event | Effect |
+| --- | --- |
+| `email.bounced` | row → `BOUNCED`, `lastError` carries the bounce code/detail |
+| `email.complained` | row → `COMPLAINED` (feedback loop) |
+| `email.failed` | row → `FAILED`, `lastError` carries the provider reason |
+| `email.delivered` / `.sent` / `.delivery_delayed` / others | `WebhookEvent` audit row only — the send-side row is never rewritten |
+
+Security and reliability contract (same shape as the payment webhook):
+
+- **Svix signature verification** — `svix-id` / `svix-timestamp` /
+  `svix-signature` (v1 HMAC-SHA256 over `id.timestamp.body`, base64,
+  multi-token headers honored), timing-safe compare, keyed by the
+  `RESEND_WEBHOOK_SECRET` env (server-only).
+- **Fail-closed** — no secret ⇒ every request is 401 and the route is inert;
+  sending is unaffected.
+- **Replay protection** — a `svix-timestamp` older than 5 minutes is rejected.
+- **Idempotency** — `svix-id` is unique in `WebhookEvent`; redeliveries are
+  acknowledged (200) and counted, never re-processed.
+- **Honest matching** — rows are matched by `providerMessageId` (the id
+  Resend returned at send time), never by recipient; an event without a
+  usable id is recorded with an honest error, never guessed.
+- Every event is recorded in `WebhookEvent` (`gatewayName: 'resend'`) with
+  its (clipped) raw payload — the delivery evidence trail.
+
+Owner action to activate (one-time, needs the Resend dashboard): create the
+webhook endpoint at `https://<production-domain>/api/webhooks/resend` with the
+bounce / complaint / delivery events enabled, copy the endpoint's signing
+secret into the Vercel production env as `RESEND_WEBHOOK_SECRET`. Until then
+the route stays fail-closed and the outbox simply lacks provider-side
+delivery evidence.
+
 ## Verification evidence (this phase)
 
 - Email-infrastructure suite: 10/10 (retries bounded, dedupe idempotency,
   template escaping, server-only guard, transport selection).
+- Resend-webhook suite: 11/11 (fail-closed boundary, Svix signature +
+  replay window, bounce/complaint/failure state sync, delivered =
+  evidence-only, duplicate redelivery, unknown event types, multi-token
+  headers).
 - End-to-end app-path send: a real admission enquiry submitted on production
   produced a `SENT` `EmailDelivery` row (see the release report) and the
   message is visible in the Resend account's email log (delivered).
