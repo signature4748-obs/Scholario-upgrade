@@ -40,9 +40,16 @@ import { NextRequest, NextResponse } from 'next/server'
   */
 
 // Public /api/platform endpoints (no platform credential required).
+// ACCOUNT-RECOVERY additions: the anonymous forgot/reset surface + the
+// Google OAuth round-trip (status probe, consent redirect, callback).
 const PLATFORM_API_PUBLIC = new Set<string>([
   '/api/platform/auth/login',
   '/api/platform/auth/demo-code',
+  '/api/platform/auth/forgot-password',
+  '/api/platform/auth/reset-password',
+  '/api/platform/auth/google/status',
+  '/api/platform/auth/google/start',
+  '/api/platform/auth/google/callback',
   '/api/platform/announcements/public',
 ])
 // Support-session endpoints: authenticated by the SUPPORT token space.
@@ -104,9 +111,13 @@ export function middleware(req: NextRequest) {
   }
 
   // ── Platform page boundary (production first-party only) ───────────
+  // ACCOUNT-RECOVERY: /platform/forgot-password + /platform/reset-password
+  // are public recovery pages (same exemption shape as /platform/login).
   if (
     isPlatformPage &&
     !pathname.startsWith('/platform/login') &&
+    !pathname.startsWith('/platform/forgot-password') &&
+    !pathname.startsWith('/platform/reset-password') &&
     process.env.NODE_ENV === 'production'
   ) {
     const hasPlatform =

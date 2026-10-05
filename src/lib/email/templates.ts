@@ -87,6 +87,22 @@ const salaryPaymentPropsSchema = z.object({
     .regex(/^\d{1,12}(\.\d{1,2})?$/, 'amount must be a plain decimal string like 12345.00'),
 })
 
+// ACCOUNT-RECOVERY — PlatformAdmin password reset. The resetUrl carries
+// the raw single-use token; it is ONLY interpolated into the HTML (the
+// dev-log transport logs subject/template, never the body) and the
+// EmailDelivery row stores recipient+template only — never the token.
+const platformPasswordResetPropsSchema = z.object({
+  adminName: z.string().trim().min(1).max(200),
+  resetUrl: z
+    .string()
+    .trim()
+    .min(16)
+    .max(2048)
+    .regex(/^https?:\/\//, 'resetUrl must be an absolute http(s) URL'),
+  expiresInMinutes: z.number().int().min(1).max(1440),
+  requestIp: z.string().trim().max(60).optional().default(''),
+})
+
 // ─── shared branded wrapper ─────────────────────────────────────────────
 
 const PAGE_BG = '#f4f4f5' // neutral outer margin (monochrome gray)
@@ -231,6 +247,47 @@ function renderSalaryPayment(
   }
 }
 
+// ─── 'platform-password-reset' ──────────────────────────────────────────
+
+function renderPlatformPasswordReset(
+  props: z.infer<typeof platformPasswordResetPropsSchema>,
+  branding: EmailBranding,
+): RenderedEmail {
+  const adminName = escapeHtml(props.adminName)
+  // The reset link: ONLY the href is the full URL; the display text is a
+  // neutral label (long hex tokens make ugly, wrap-breaking link text).
+  const resetHref = escapeHtml(props.resetUrl)
+  const minutes = escapeHtml(String(props.expiresInMinutes))
+  const requestIp = escapeHtml(props.requestIp)
+
+  const body = [
+    heading('Reset your Scholario platform password'),
+    paragraph(`Dear <strong>${adminName}</strong>,`),
+    paragraph(
+      'A password reset was requested for your Scholario platform administrator account. Use the button below to choose a new password.',
+    ),
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px 0;"><tr><td style="background:${sanitizeColor(branding.primaryColor)};border-radius:8px;">` +
+      `<a href="${resetHref}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Reset your password</a>` +
+      `</td></tr></table>`,
+    paragraph(
+      `This link expires in <strong>${minutes} minutes</strong> and can be used only once. If you did not request a password reset, you can safely ignore this email — your current password keeps working.`,
+    ),
+    requestIp
+      ? paragraph(`Request originated from IP address <strong>${requestIp}</strong>.`)
+      : '',
+    paragraph(
+      'For your security: after the reset, every active platform session for this account is signed out automatically.',
+    ),
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  return {
+    subject: 'Reset your Scholario platform password',
+    html: brandedWrapper(branding, body),
+  }
+}
+
 // ─── dispatcher ─────────────────────────────────────────────────────────
 
 /**
@@ -271,6 +328,17 @@ export function renderTemplate(
         )
       }
       return renderSalaryPayment(parsed.data, branding)
+    }
+    case 'platform-password-reset': {
+      const parsed = platformPasswordResetPropsSchema.safeParse(props)
+      if (!parsed.success) {
+        throw new Error(
+          `invalid props for template 'platform-password-reset': ${parsed.error.issues
+            .map((i) => `${i.path.join('.') || 'props'}: ${i.message}`)
+            .join('; ')}`,
+        )
+      }
+      return renderPlatformPasswordReset(parsed.data, branding)
     }
     default: {
       // Exhaustiveness guard — TemplateId is a closed union, so this

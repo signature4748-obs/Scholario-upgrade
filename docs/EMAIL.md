@@ -33,6 +33,7 @@
 | Admission enquiry accepted | `admission-enquiry-received` | `POST /api/admissions/public` (best-effort; the public response never depends on email) |
 | Salary payment recorded | `salary-payment-recorded` | `POST /api/salary/payments` (receipt to the teacher) |
 | Salary payment voided | `salary-payment-voided` | `POST /api/salary/payments/[id]/void` |
+| Platform password reset requested | `platform-password-reset` | `POST /api/platform/auth/forgot-password` + admin-assisted `/api/platform/admins/[id]/reset-password` + recovery-confirm execution (single-use link; anti-enumeration generic response; see `docs/PLATFORM_ACCOUNT_RECOVERY.md`) |
 
 ## Custom sending domain (status + runbook)
 
