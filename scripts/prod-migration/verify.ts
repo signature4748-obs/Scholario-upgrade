@@ -25,6 +25,13 @@
  *                               migrations; user counts unchanged.
  *   F. production health     — GET /health/ready answers 200 with
  *                               database:ok (the deployment stayed healthy).
+ *   G. account recovery      — 20261005060000 created EXACTLY the expected
+ *                               objects (PlatformAdmin.google{Sub,Email,
+ *                               LinkedAt}, PlatformPasswordReset with UNIQUE
+ *                               tokenHash + FK, PlatformRecoveryTicket),
+ *                               and admin state never regressed (the
+ *                               additive-only contract: counts only, values
+ *                               never read).
  *
  * Usage:
  *   SUPABASE_ACCESS_TOKEN=… SUPABASE_PROJECT_REF=… \
@@ -33,18 +40,25 @@
  */
 import { readFileSync } from 'node:fs'
 import {
+  ACCOUNT_RECOVERY_INDEXES,
+  ACCOUNT_RECOVERY_TABLES,
+  adminState,
+  AdminState,
   allIndexNames,
   exitWithProblems,
   gitSha,
+  indexDefinitions,
+  mgmtQuery,
   migrationHistoryGate,
+  productionHealth,
   requireEnv,
   SCHOOLID_INDEXES,
   Snapshot,
+  tableColumns,
   tableCounts,
   TRGM_INDEXES,
   userCredentialColumns,
   userState,
-  productionHealth,
 } from './lib'
 
 function argValue(flag: string): string | undefined {
@@ -188,6 +202,113 @@ async function main(): Promise<void> {
     problems.push(`production health probe failed (HTTP ${health.status}): ${health.body}`)
   }
   console.log(`  F. production health: ${health.ok ? 'ready, database ok ✓' : 'FAILED ✖ ' + health.body}`)
+
+  // G. Account-recovery schema — 20261005060000 must have created EXACTLY
+  //    the expected objects: PlatformAdmin.google{Sub,Email,LinkedAt} +
+  //    PlatformPasswordReset + PlatformRecoveryTicket with the exact
+  //    column shapes, indexes, UNIQUE constraints and the FK; the
+  //    migration is additive-only so existing admin passwords are
+  //    untouched (admin-state counts below — values never read).
+  const adminCols = await tableColumns('PlatformAdmin', ['googleSub', 'googleEmail', 'googleLinkedAt'])
+  const colShape = (name: string, type: string, nullable: boolean) => {
+    const c = adminCols.find((x) => x.column_name === name)
+    if (!c) return `${name} MISSING`
+    if (!c.data_type.startsWith(type)) return `${name} wrong type ${c.data_type}`
+    if ((c.is_nullable === 'YES') !== nullable) return `${name} nullability ${c.is_nullable}`
+    return null
+  }
+  for (const p of [
+    colShape('googleSub', 'text', true),
+    colShape('googleEmail', 'text', true),
+    colShape('googleLinkedAt', 'timestamp', true),
+  ]) {
+    if (p) problems.push(`PlatformAdmin.${p}`)
+  }
+
+  // Both new tables must exist as base tables (section E counted them);
+  // their exact column shapes are asserted below.
+  for (const t of ACCOUNT_RECOVERY_TABLES) {
+    if (!(t in afterCounts)) problems.push(`account-recovery table ${t} MISSING`)
+  }
+
+  const expectTableShape = async (
+    table: string,
+    expected: ReadonlyArray<[string, string, boolean]>,
+  ) => {
+    const cols = await tableColumns(table)
+    const byName = new Map(cols.map((c) => [c.column_name, c]))
+    const extra = cols.map((c) => c.column_name).filter((n) => !expected.some(([e]) => e === n))
+    if (extra.length) problems.push(`${table}: unexpected columns ${extra.join(', ')}`)
+    for (const [name, type, nullable] of expected) {
+      const c = byName.get(name)
+      if (!c) {
+        problems.push(`${table}.${name} MISSING`)
+        continue
+      }
+      if (!c.data_type.startsWith(type)) problems.push(`${table}.${name} wrong type ${c.data_type}`)
+      if ((c.is_nullable === 'YES') !== nullable) {
+        problems.push(`${table}.${name} nullability ${c.is_nullable} (expected ${nullable ? 'YES' : 'NO'})`)
+      }
+    }
+  }
+  await expectTableShape('PlatformPasswordReset', [
+    ['id', 'text', false],
+    ['adminId', 'text', false],
+    ['tokenHash', 'text', false],
+    ['usedAt', 'timestamp', true],
+    ['expiresAt', 'timestamp', false],
+    ['createdAt', 'timestamp', false],
+    ['requestIp', 'text', true],
+    ['userAgent', 'text', true],
+  ])
+  await expectTableShape('PlatformRecoveryTicket', [
+    ['id', 'text', false],
+    ['action', 'text', false],
+    ['targetAdminId', 'text', false],
+    ['initiatedBy', 'text', false],
+    ['confirmedBy', 'text', true],
+    ['confirmedAt', 'timestamp', true],
+    ['executedAt', 'timestamp', true],
+    ['expiresAt', 'timestamp', false],
+    ['metadata', 'text', true],
+    ['reason', 'text', true],
+    ['createdAt', 'timestamp', false],
+  ])
+
+  // Indexes (presence asserted in C) + UNIQUE-ness + FK + PKs.
+  const defs = await indexDefinitions(['PlatformAdmin', 'PlatformPasswordReset', 'PlatformRecoveryTicket'])
+  for (const name of ['PlatformAdmin_googleSub_key', 'PlatformPasswordReset_tokenHash_key']) {
+    const def = defs.get(name)
+    if (!def) problems.push(`unique index ${name} MISSING`)
+    else if (!/\bUNIQUE\b/i.test(def)) problems.push(`index ${name} exists but is NOT UNIQUE: ${def.slice(0, 120)}`)
+  }
+  for (const name of ACCOUNT_RECOVERY_INDEXES) {
+    if (!defs.has(name)) problems.push(`account-recovery index ${name} MISSING`)
+  }
+  for (const name of ['PlatformPasswordReset_pkey', 'PlatformRecoveryTicket_pkey']) {
+    if (!defs.has(name)) problems.push(`primary key index ${name} MISSING`)
+  }
+  const fk = (await mgmtQuery(
+    `SELECT count(*)::int AS n FROM pg_constraint WHERE contype = 'f' AND conname = 'PlatformPasswordReset_adminId_fkey'`,
+  )) as Array<{ n: number }>
+  if (Number(fk[0]?.n ?? 0) !== 1) {
+    problems.push('foreign key PlatformPasswordReset_adminId_fkey → PlatformAdmin.id MISSING')
+  }
+
+  // Admin-state stability (additive-only proof — counts only, never values).
+  const admins = await adminState()
+  const beforeAdmins: AdminState | undefined = snapshot.adminState
+  if (beforeAdmins) {
+    if (admins.withPassword < beforeAdmins.withPassword) {
+      problems.push(`admins with a password DECREASED ${beforeAdmins.withPassword} → ${admins.withPassword} (additive-only contract violated)`)
+    }
+    if (admins.total < beforeAdmins.total) {
+      problems.push(`PlatformAdmin row count DECREASED ${beforeAdmins.total} → ${admins.total}`)
+    }
+  }
+  console.log(
+    `  G. account recovery : PlatformAdmin.google{Sub,Email,LinkedAt} ✓ · PlatformPasswordReset (8 cols, UNIQUE tokenHash, FK) ✓ · PlatformRecoveryTicket (11 cols) ✓ · 6 indexes + 2 PKs ✓ · admin state: total ${admins.total}, with-password ${admins.withPassword} (never decreased; values never read)`,
+  )
 
   if (problems.length) exitWithProblems('verify', problems)
   console.log('\n[prod-migration:verify] ✓ ALL VERIFICATIONS GREEN')

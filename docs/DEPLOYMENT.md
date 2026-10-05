@@ -33,11 +33,16 @@ development ──► (PR / push) ──► main ──► production DB migrati
 - `development` is the working branch. Feature branches merge into development;
   development merges into main after QA.
 - **The production database migration runs BEFORE the application deployment
-  that depends on it** — dispatch the Production DB Migration workflow (or run
-  the `scripts/prod-migration/` stages) on the exact release commit and wait
-  for green BEFORE pushing main. See `docs/PRODUCTION_DB_MIGRATION.md` — the
-  authoritative, repeatable pipeline (pre-flight gates → transactional apply
-  with true Prisma checksums → A–F verification).
+  that depends on it** — the single authoritative pipeline is the **Release**
+  workflow (`.github/release.yml.parked`; runbook `docs/RELEASE.md`):
+  tests → config pre-flight → production DB migration (pre-flight gates →
+  transactional apply with true Prisma checksums → A–G verification) →
+  release gate → Vercel deployment → SHA-provenance + health verification.
+  Until the workflow is enabled + the Vercel deploy-hook switch is made, run
+  the same chain by dispatch on the exact release commit (or the
+  `scripts/prod-migration/` + `scripts/prod-release/` stages by hand) and
+  wait for green BEFORE pushing main. See `docs/PRODUCTION_DB_MIGRATION.md`
+  for the migration stages in depth.
 - Production deployments always correspond to a Git commit SHA — no manual
   source edits on Vercel, no local-only builds.
 - Preview deployments run for every branch push (Vercel preview env).

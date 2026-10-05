@@ -31,6 +31,8 @@
  *       [--expect 20261004150000_credential_neutralization,…] [--dry-run]
  */
 import {
+  ADDITIVE_ONLY_MIGRATIONS,
+  assertAdditiveOnly,
   buildMigrationTransaction,
   evaluateExpectations,
   exitWithProblems,
@@ -136,6 +138,11 @@ async function main(): Promise<void> {
   }
   const appliedNow: string[] = []
   for (const migration of gate.pending) {
+    // ADDITIVE-ONLY account-safety gate: refuse BEFORE any transaction is
+    // built or executed if the registered migration contains data statements.
+    if (ADDITIVE_ONLY_MIGRATIONS.has(migration.name)) {
+      assertAdditiveOnly(migration) // throws → no write, run RED
+    }
     const tx = buildMigrationTransaction(migration)
     console.log(`\n  [apply] ${migration.name}`)
     console.log(`    sha256 : ${migration.checksum}`)

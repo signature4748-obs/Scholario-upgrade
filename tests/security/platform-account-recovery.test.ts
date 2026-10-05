@@ -24,6 +24,23 @@ import { db } from '../helpers/db'
  *   17. Anti-enumeration (generic responses)           [H-3]
  *   18. Root recovery dual-control (two-person rule)   [H-14]
  *
+ * SAFETY-ACCEPTANCE (release §7 matrix — RELEASE-PIPELINE-1 / IMPL-4):
+ *   · final-method invariant: an unlink that would strip an admin's
+ *     LAST usable sign-in method is refused at every layer — lib,
+ *     self route, assisted route, dual-control recovery — plus the
+ *     schema-level proof that PlatformAdmin.passwordHash is NOT NULL
+ *     (a NULL insert is rejected by the DB itself)      [S-1..S-5]
+ *   · cross-admin linking: an already-owned Google identity cannot
+ *     be linked to a second admin (both rows unchanged)  [S-6]
+ *   · suspended admin: forgot-password answers the identical generic
+ *     envelope and issues NOTHING                         [S-7]
+ *   · step-up: every sensitive account-recovery mutation declares
+ *     stepUp: true; the TOTP env switch re-arms the gate
+ *     (PLATFORM_TOTP_ENABLED unset = the documented stood-down
+ *     posture)                                            [S-8]
+ *   · password reset never removes the Google link (methods
+ *     only grow)                                          [S-9]
+ *
  * STYLE: the repo convention — PART U (pure unit over exported libs)
  * + PART L (lib-level DB operations) + PART H (live HTTP against the
  * dev server with real platform sessions; direct-minted session rows
@@ -43,7 +60,13 @@ import {
   sign as cryptoSign,
 } from 'crypto'
 import { hashPassword, verifyPassword } from '@/lib/auth'
-import { hashToken } from '@/lib/platform/auth'
+import {
+  hashToken,
+  hasLiveStepUp,
+  STEP_UP_WINDOW_MS,
+  type PlatformSessionAuth,
+} from '@/lib/platform/auth'
+import { isPlatformTotpEnabled } from '@/lib/platform/mfa-config'
 import {
   issuePasswordReset,
   consumePasswordReset,
@@ -95,6 +118,17 @@ let root2Id = ''
 let root3Id = ''
 const mintedSessionIds: string[] = []
 let root3GoogleWas: string | null = null
+
+// Release-acceptance (§7) fixtures: every test creates its own admins
+// (never a corpus root); ids + emails are swept by the file-level
+// afterAll — deleting an admin cascades its sessions and password-reset
+// rows, while PlatformRecoveryTicket rows (no FK) are deleted per test.
+const safetyAdminIds: string[] = []
+const safetyFixtureEmails: string[] = []
+// Dedicated IP for the safety block's PUBLIC forgot/reset-password
+// probes: the per-IP buckets (5/h) are already spent on RUN_IP by the
+// H-part probes, and this IP is fresh per run (idempotent re-runs).
+const SAFETY_IP = `10.249.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 
 /** Mint a live PlatformAdminSession for an admin (test fixture —
  *  bypasses ONLY the login limiter, exactly like the Phase-6 suite). */
@@ -1042,6 +1076,355 @@ describe('ACCOUNT-RECOVERY H · password login regression (platform plane intact
   })
 })
 
+// ══ PART SAFETY · release acceptance (§7 matrix + final-method invariant) ═
+// IMPL-4 / RELEASE-PIPELINE-1. Every test is SELF-CONTAINED: fixtures are
+// created inline, mutated rows are restored in finally, and nothing from
+// the corpus roots (root/root2/root3/probe) is ever left mutated. MFA is
+// stood down (PLATFORM_TOTP_ENABLED unset — the documented posture), so
+// the step-up gate is dormant at runtime while staying DECLARED on every
+// sensitive route (S-8 proves both halves).
+
+describe('ACCOUNT-RECOVERY SAFETY · release acceptance (§7 matrix + final-method invariant)', () => {
+  /** Fresh self-contained admin fixture (real scrypt password; the id
+   *  and email are registered for the file-level afterAll sweep). */
+  async function safetyAdmin(
+    tag: string,
+    opts: { googleSub?: string; googleEmail?: string; isRoot?: boolean } = {},
+  ): Promise<{ id: string; email: string; passwordHash: string }> {
+    const email = `${tag}-${MARKER}@test.scholario`
+    const passwordHash = hashPassword(`S4fety!${tag}.${MARKER}pw`)
+    const admin = await db.platformAdmin.create({
+      data: {
+        email,
+        passwordHash,
+        name: `Safety ${tag} ${MARKER}`,
+        isRoot: opts.isRoot ?? false,
+        totpSecret: generateTotpSecret(),
+        status: 'ACTIVE',
+        ...(opts.googleSub
+          ? { googleSub: opts.googleSub, googleEmail: opts.googleEmail ?? null, googleLinkedAt: new Date() }
+          : {}),
+      },
+    })
+    safetyAdminIds.push(admin.id)
+    safetyFixtureEmails.push(email)
+    return { id: admin.id, email, passwordHash }
+  }
+
+  test('INVARIANT (schema): PlatformAdmin.passwordHash is required — a NULL insert is rejected at the DB level', async () => {
+    // (a) The declaration itself: `passwordHash String` — NOT `String?`.
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const root = join(import.meta.dir, '..', '..')
+    const schema = readFileSync(join(root, 'prisma', 'schema.prisma'), 'utf8')
+    const model = schema.match(/model PlatformAdmin \{[\s\S]*?\n\}/)?.[0] ?? ''
+    expect(model).toContain('model PlatformAdmin {')
+    expect(model).toMatch(/^\s*passwordHash\s+String\s*$/m) // required
+    expect(model).not.toMatch(/passwordHash\s+String\s*\?/) // never optional
+
+    // (b) Live proof: the database itself refuses a NULL passwordHash —
+    // the schema-level floor under the final-method invariant.
+    const id = `cnull${MARKER}${randomBytes(6).toString('hex')}`
+    let threw = ''
+    try {
+      await db.$executeRawUnsafe(
+        'INSERT INTO "PlatformAdmin" ("id","email","passwordHash","name","totpSecret","status","isRoot","isDemo") VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        id,
+        `nullpw-${MARKER}@test.scholario`,
+        null, // the violation under test
+        `Null Hash Probe ${MARKER}`,
+        generateTotpSecret(),
+        'ACTIVE',
+        false,
+        false,
+      )
+    } catch (e) {
+      threw = String(e)
+    }
+    expect(threw).not.toBe('')
+    // PG not-null violation: code 23502 (Prisma surfaces the failing row
+    // for raw queries; some versions also carry "not-null constraint").
+    expect(threw).toMatch(/23502|null value in column|not-null/i)
+    expect(await db.platformAdmin.findUnique({ where: { id } })).toBeNull()
+  })
+
+  test('INVARIANT (lib): unlink refused when the Google identity is the final usable authentication method; allowed again once a password exists', async () => {
+    const inv = await safetyAdmin('invariant', {
+      googleSub: `inv-sub-${MARKER}`,
+      googleEmail: `invariant.${MARKER}@gmail.com`,
+    })
+    // Corrupt-row / schema-regression stand-in: blank password → the
+    // Google identity IS the last usable credential.
+    await db.platformAdmin.update({ where: { id: inv.id }, data: { passwordHash: '' } })
+    try {
+      const refused = await unlinkGoogleIdentity(inv.id, { ip: RUN_IP })
+      expect(refused).toEqual({ ok: false, wasLinked: true, failure: 'LAST_CREDENTIAL' })
+      // wasLinked: true — the identity IS linked, which is exactly why
+      // it must be kept.
+      const kept = await db.platformAdmin.findUnique({ where: { id: inv.id } })
+      expect(kept!.googleSub).toBe(`inv-sub-${MARKER}`)
+    } finally {
+      await db.platformAdmin.update({ where: { id: inv.id }, data: { passwordHash: inv.passwordHash } })
+    }
+    // A usable password exists again → the unlink is allowed.
+    const allowed = await unlinkGoogleIdentity(inv.id, { ip: RUN_IP })
+    expect(allowed).toEqual({ ok: true, wasLinked: true })
+    expect((await db.platformAdmin.findUnique({ where: { id: inv.id } }))!.googleSub).toBeNull()
+  })
+
+  test('INVARIANT (self unlink route): 409 refusal, identity kept, when it is the last sign-in method', async () => {
+    const self = await safetyAdmin('selfunlink', {
+      googleSub: `self-sub-${MARKER}`,
+      googleEmail: `selfunlink.${MARKER}@gmail.com`,
+    })
+    const token = await mintSession(self.id)
+    await db.platformAdmin.update({ where: { id: self.id }, data: { passwordHash: '' } })
+    try {
+      const res = await fetch(`${BASE}/api/platform/auth/google/unlink`, {
+        method: 'POST',
+        headers: { 'x-platform-token': token, 'x-forwarded-for': RUN_IP },
+      })
+      const body = (await res.json()) as { ok: boolean; error: string; code: string }
+      expect(res.status).toBe(409)
+      expect(body.error).toContain('last usable sign-in method')
+      // The identity is kept…
+      const row = await db.platformAdmin.findUnique({ where: { id: self.id } })
+      expect(row!.googleSub).toBe(`self-sub-${MARKER}`)
+      // …and a REFUSAL is not an unlink: the session must stay valid
+      // (only a successful unlink forces fresh authentication).
+      const me = await fetch(`${BASE}/api/platform/auth/me`, { headers: { 'x-platform-token': token } })
+      expect(me.status).toBe(200)
+    } finally {
+      await db.platformAdmin.update({ where: { id: self.id }, data: { passwordHash: self.passwordHash } })
+    }
+  })
+
+  test('INVARIANT (assisted unlink route): 409 refusal for a non-root target whose Google identity is their last method', async () => {
+    const target = await safetyAdmin('assisted', {
+      googleSub: `assist-sub-${MARKER}`,
+      googleEmail: `assist.${MARKER}@gmail.com`,
+    })
+    await db.platformAdmin.update({ where: { id: target.id }, data: { passwordHash: '' } })
+    try {
+      const rootToken = await mintSession(rootId)
+      const res = await fetch(`${BASE}/api/platform/admins/${target.id}/google-unlink`, {
+        method: 'POST',
+        headers: { 'x-platform-token': rootToken, 'x-forwarded-for': RUN_IP },
+      })
+      const body = (await res.json()) as { ok: boolean; error: string }
+      // The non-root DIRECT path must hit the guard, not the ticket flow.
+      expect(res.status).toBe(409)
+      expect(body.error).toContain('last usable')
+      const row = await db.platformAdmin.findUnique({ where: { id: target.id } })
+      expect(row!.googleSub).toBe(`assist-sub-${MARKER}`)
+    } finally {
+      await db.platformAdmin.update({ where: { id: target.id }, data: { passwordHash: target.passwordHash } })
+    }
+  })
+
+  test('INVARIANT (dual-control recovery): the two-person GOOGLE_UNLINK refuses to strip a root’s last sign-in method — ticket stays unexecuted', async () => {
+    const target = await safetyAdmin('dualctrl', {
+      googleSub: `dual-sub-${MARKER}`,
+      googleEmail: `dualctrl.${MARKER}@gmail.com`,
+    })
+    // Promoted to root → the assisted unlink becomes dual-control.
+    await db.platformAdmin.update({ where: { id: target.id }, data: { isRoot: true, passwordHash: '' } })
+    let ticketId = ''
+    try {
+      const rootToken = await mintSession(rootId)
+      const init = await fetch(`${BASE}/api/platform/admins/${target.id}/google-unlink`, {
+        method: 'POST',
+        headers: { 'x-platform-token': rootToken, 'x-forwarded-for': RUN_IP },
+      })
+      const initBody = (await init.json()) as { ok: boolean; data?: { dualControl: boolean; ticketId: string } }
+      expect(init.status).toBe(200)
+      expect(initBody.data!.dualControl).toBe(true)
+      ticketId = initBody.data!.ticketId
+
+      const ticket = await db.platformRecoveryTicket.findUnique({ where: { id: ticketId } })
+      expect(ticket).not.toBeNull()
+      expect(ticket!.action).toBe('GOOGLE_UNLINK')
+      expect(ticket!.targetAdminId).toBe(target.id)
+      expect(ticket!.executedAt).toBeNull()
+
+      // The SECOND person (a distinct root) tries to confirm — refused.
+      const root2Token = await mintSession(root2Id)
+      const confirm = await fetch(`${BASE}/api/platform/admins/recovery/${ticketId}/confirm`, {
+        method: 'POST',
+        headers: { 'x-platform-token': root2Token, 'x-forwarded-for': RUN_IP },
+      })
+      const confirmBody = (await confirm.json()) as { ok: boolean; error: string }
+      expect(confirm.status).toBe(409)
+      expect(confirmBody.error).toContain('last usable')
+
+      // Fail-closed: the ticket stays UNEXECUTED, the identity stays.
+      const after = await db.platformRecoveryTicket.findUnique({ where: { id: ticketId } })
+      expect(after!.executedAt).toBeNull()
+      expect(after!.confirmedBy).toBeNull()
+      const row = await db.platformAdmin.findUnique({ where: { id: target.id } })
+      expect(row!.googleSub).toBe(`dual-sub-${MARKER}`)
+    } finally {
+      // PlatformRecoveryTicket rows carry NO FK — delete manually; the
+      // fixture admin itself is swept by afterAll (restored + demoted
+      // here so even a failed run leaves no half-promoted row).
+      if (ticketId) await db.platformRecoveryTicket.deleteMany({ where: { id: ticketId } })
+      await db.platformAdmin.update({
+        where: { id: target.id },
+        data: { passwordHash: target.passwordHash, isRoot: false },
+      })
+    }
+  })
+
+  test('CROSS-ADMIN linking: a second admin linking an already-owned Google identity is refused, both accounts unchanged', async () => {
+    const SUB = `xadmin-sub-${MARKER}`
+    const owner = await safetyAdmin('xowner')
+    const second = await safetyAdmin('xsecond')
+    expect(await linkGoogleIdentity(owner.id, SUB, `xowner.${MARKER}@gmail.com`)).toEqual({ ok: true })
+    const steal = await linkGoogleIdentity(second.id, SUB, `xsecond.${MARKER}@gmail.com`)
+    expect(steal).toEqual({ ok: false, failure: 'ALREADY_LINKED_OTHER' })
+    // Ownership unchanged on BOTH sides.
+    expect((await db.platformAdmin.findUnique({ where: { id: owner.id } }))!.googleSub).toBe(SUB)
+    expect((await db.platformAdmin.findUnique({ where: { id: second.id } }))!.googleSub).toBeNull()
+  })
+
+  test('SUSPENDED admin: forgot-password answers the identical generic envelope and issues NOTHING', async () => {
+    const susp = await safetyAdmin('suspended')
+    const UNKNOWN = `suspended-unknown-${MARKER}@nowhere.example`
+    await db.platformAdmin.update({ where: { id: susp.id }, data: { status: 'SUSPENDED' } })
+    try {
+      const suspended = await fetch(`${BASE}/api/platform/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': SAFETY_IP },
+        body: JSON.stringify({ email: susp.email }),
+      })
+      const unknown = await fetch(`${BASE}/api/platform/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': SAFETY_IP },
+        body: JSON.stringify({ email: UNKNOWN }),
+      })
+      // Suspension is not an enumeration oracle either: byte-identical
+      // envelope (status + body text) as an unknown address.
+      expect(suspended.status).toBe(200)
+      expect(unknown.status).toBe(suspended.status)
+      expect(await suspended.text()).toBe(await unknown.text())
+      // And NOTHING was issued for the suspended account.
+      expect(await db.platformPasswordReset.count({ where: { adminId: susp.id } })).toBe(0)
+      expect(
+        await db.emailDelivery.count({ where: { recipient: susp.email, createdAt: { gte: SUITE_START } } }),
+      ).toBe(0)
+    } finally {
+      await db.platformAdmin.update({ where: { id: susp.id }, data: { status: 'ACTIVE' } })
+    }
+  })
+
+  test('STEP-UP requirement: every sensitive account-recovery mutation declares stepUp (and the TOTP switch re-arms the gate)', async () => {
+    // (a) Structural: each sensitive route declares `stepUp: true` —
+    // with MFA stood down the gate is dormant (authz consults
+    // isPlatformTotpEnabled), but the declaration re-arms it the
+    // moment the flag flips back on. No route may silently drop it.
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const root = join(import.meta.dir, '..', '..')
+    const ROUTES = [
+      'src/app/api/platform/auth/google/link/start/route.ts',
+      'src/app/api/platform/auth/google/unlink/route.ts',
+      'src/app/api/platform/admins/[id]/reset-password/route.ts',
+      'src/app/api/platform/admins/[id]/google-unlink/route.ts',
+      'src/app/api/platform/admins/[id]/suspend/route.ts',
+      'src/app/api/platform/admins/recovery/[ticketId]/confirm/route.ts',
+    ]
+    const missing = ROUTES.filter((r) => !readFileSync(join(root, r), 'utf8').includes('stepUp: true'))
+    expect(missing).toEqual([])
+
+    // (b) Functional: the single switch (env + restart = posture move).
+    const saved = process.env.PLATFORM_TOTP_ENABLED
+    delete process.env.PLATFORM_TOTP_ENABLED
+    expect(isPlatformTotpEnabled()).toBe(false) // documented stood-down posture
+    process.env.PLATFORM_TOTP_ENABLED = '1'
+    expect(isPlatformTotpEnabled()).toBe(true) // armed
+    delete process.env.PLATFORM_TOTP_ENABLED
+    expect(isPlatformTotpEnabled()).toBe(false) // re-arms only via env+restart
+    if (saved !== undefined) process.env.PLATFORM_TOTP_ENABLED = saved
+
+    // (c) The gate's clock (the exported step-up helper): a session with
+    // stepUpAt null is NOT live, a fresh stepUpAt IS live, one older
+    // than the window is not.
+    const base = {
+      id: 'sess-stepup-probe',
+      adminId: 'admin-stepup-probe',
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      revokedAt: null,
+      userAgent: null,
+      ipAddress: null,
+    }
+    const never: PlatformSessionAuth = { ...base, stepUpAt: null }
+    expect(hasLiveStepUp(never)).toBe(false)
+    const fresh: PlatformSessionAuth = { ...base, stepUpAt: new Date() }
+    expect(hasLiveStepUp(fresh)).toBe(true)
+    const stale: PlatformSessionAuth = {
+      ...base,
+      stepUpAt: new Date(Date.now() - STEP_UP_WINDOW_MS - 1000),
+    }
+    expect(hasLiveStepUp(stale)).toBe(false)
+  })
+
+  test('PASSWORD RESET never removes the Google link (methods only grow)', async () => {
+    const SUB = `resetkeep-sub-${MARKER}`
+    const admin = await safetyAdmin('resetkeep', {
+      googleSub: SUB,
+      googleEmail: `resetkeep.${MARKER}@gmail.com`,
+    })
+    const before = await db.platformAdmin.findUnique({ where: { id: admin.id } })
+    const linkedAtBefore = before!.googleLinkedAt
+    const NEW_PASSWORD = `R3setk33p!${MARKER}pw`
+    // A live session that must die with the reset (H-8 pairing).
+    const liveSession = await mintSession(admin.id)
+
+    // The emailed flow really fires for this (google-linked) account —
+    // fresh email + fresh IP: the per-account/per-IP buckets stay clean.
+    const forgot = await fetch(`${BASE}/api/platform/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': SAFETY_IP },
+      body: JSON.stringify({ email: admin.email }),
+    })
+    expect(forgot.status).toBe(200)
+    const delivery = await db.emailDelivery.findFirst({
+      where: { recipient: admin.email, template: 'platform-password-reset', createdAt: { gte: SUITE_START } },
+    })
+    expect(delivery).not.toBeNull()
+
+    // RAW token exactly the H-8 way: issued in-process by the same lib
+    // the route calls (the raw token exists only in caller memory).
+    const issued = await issuePasswordReset(admin.id)
+    const res = await fetch(`${BASE}/api/platform/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': SAFETY_IP },
+      body: JSON.stringify({ token: issued.token, newPassword: NEW_PASSWORD }),
+    })
+    const body = (await res.json()) as { ok: boolean }
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+
+    const row = await db.platformAdmin.findUnique({ where: { id: admin.id } })
+    // The password changed (hash form, string-compared)…
+    expect(row!.passwordHash).not.toBe(admin.passwordHash)
+    expect(verifyPassword(NEW_PASSWORD, row!.passwordHash)).toBe(true)
+    // …and the Google link survived the reset untouched: recovery only
+    // ADDS a usable method, never removes one.
+    expect(row!.googleSub).toBe(SUB)
+    expect(row!.googleEmail).toBe(`resetkeep.${MARKER}@gmail.com`)
+    expect(row!.googleLinkedAt).toEqual(linkedAtBefore)
+    // Session revocation still applies on the google-linked account.
+    const live = await db.platformAdminSession.findMany({
+      where: { adminId: admin.id, revokedAt: null, expiresAt: { gt: new Date() } },
+    })
+    expect(live).toEqual([])
+    const after = await fetch(`${BASE}/api/platform/auth/me`, { headers: { 'x-platform-token': liveSession } })
+    expect(after.status).toBe(401)
+  })
+})
+
 // ── lifecycle ────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
@@ -1076,8 +1459,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // ── Corpus restoration (bit-consistent, the documented convention) ──
-  // 1. Probe admins cascade-remove their sessions/permissions/reset rows.
-  await db.platformAdmin.deleteMany({ where: { id: { in: [probeId, probe2Id] } } })
+  // 1. Probe + safety-fixture admins cascade-remove their sessions/
+  //    permissions/reset rows (safety fixtures are self-restored per
+  //    test via try/finally; this sweep is the failure-path backstop).
+  await db.platformAdmin.deleteMany({
+    where: { id: { in: [probeId, probe2Id, ...safetyAdminIds] } },
+  })
   // 2. Minted sessions for corpus admins.
   if (mintedSessionIds.length > 0) {
     await db.platformAdminSession.deleteMany({ where: { id: { in: mintedSessionIds } } })
@@ -1097,14 +1484,21 @@ afterAll(async () => {
     where: { id: root3Id },
     data: { googleSub: root3GoogleWas, googleEmail: root3GoogleWas ? 'restored' : null, googleLinkedAt: null },
   })
-  // 5. Recovery tickets from the suite.
+  // 5. Recovery tickets from the suite (no FK — explicit delete; the
+  //    §7 dual-control test deletes its own ticket, this is the backstop).
   await db.platformRecoveryTicket.deleteMany({
-    where: { targetAdminId: { in: [probeId, probe2Id, root2Id, root3Id] }, createdAt: { gte: SUITE_START } },
+    where: {
+      targetAdminId: { in: [probeId, probe2Id, root2Id, root3Id, ...safetyAdminIds] },
+      createdAt: { gte: SUITE_START },
+    },
   })
-  // 6. Probe emails for probe identities (probe rows deleted, but the
+  // 6. Probe + safety-fixture emails (probe rows deleted, but the
   //    EmailDelivery rows carry no FK).
   await db.emailDelivery.deleteMany({
-    where: { recipient: { in: [PROBE_EMAIL, PROBE2_EMAIL] }, template: 'platform-password-reset' },
+    where: {
+      recipient: { in: [PROBE_EMAIL, PROBE2_EMAIL, ...safetyFixtureEmails] },
+      template: 'platform-password-reset',
+    },
   })
   // 7. Audit rows from the suite's actions (the new action vocabulary,
   //    bounded to this suite's window — nothing else runs concurrently).

@@ -67,6 +67,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       // ── Non-root target → direct ─────────────────────────────────────
       const result = await unlinkGoogleIdentity(target.id, { ip, byAdminId: ctx.admin.id })
+      // FINAL-METHOD INVARIANT: never strip the target's last usable
+      // credential (the guard refuses before any write; fail-closed).
+      if (result.failure === 'LAST_CREDENTIAL') {
+        throw new AppError('CONFLICT', {
+          publicMessage: 'Google cannot be unlinked from this admin: it is their last usable sign-in method. Reset their password by email first, then unlink.',
+          internalDetail: 'admin google-unlink refused: LAST_CREDENTIAL (final usable authentication method)',
+        })
+      }
       if (!result.ok) {
         throw new AppError('CONFLICT', {
           publicMessage: 'No Google identity is linked to this account.',

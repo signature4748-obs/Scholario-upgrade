@@ -117,17 +117,21 @@ jobs:
         run: bunx prisma migrate deploy
 
       # 8. Gate 3b — drift: the migrated DB must equal the datamodel, with
-      #    ONE sanctioned exception: migration 00000000000002 plants pg_trgm
-      #    GIN indexes via raw SQL that are intentionally absent from the
-      #    datamodel (they are DB-level search accelerators, not Prisma
-      #    schema objects). Verified output shape (prisma 6.11, validated
-      #    against the fully-migrated integration DB):
+      #    TWO sanctioned exceptions (raw-SQL index families that are
+      #    intentionally absent from the datamodel):
+      #      · *_trgm GIN search indexes  (migration 00000000000002, 24)
+      #      · <T>_schoolId_idx tenant-scan indexes
+      #                                  (migration 20261004154000, 11 tables)
+      #    Verified output shape (prisma 6.11, validated against the
+      #    fully-migrated integration DB):
       #        -- DropIndex
       #        DROP INDEX "User_name_trgm";
-      #    so the gate allows exactly `DROP INDEX "…_trgm";` statements plus
-      #    their `-- DropIndex` comment headers and blank lines — anything
-      #    else (an ALTER, a CREATE, a non-trgm DROP) is drift → fail.
-      - name: Migrations — schema drift gate (trgm-aware)
+      #    so the gate allows exactly the sanctioned `DROP INDEX "…"` lines
+      #    plus their `-- DropIndex` comment headers and blank lines —
+      #    anything else (an ALTER, a CREATE, any other DROP) is drift →
+      #    fail. The family COUNTS are asserted too: a new divergence must
+      #    be added here deliberately, never slip through silently.
+      - name: Migrations — schema drift gate (raw-SQL-index aware)
         id: drift-gate
         shell: bash
         run: |
@@ -136,23 +140,30 @@ jobs:
             --to-schema-datamodel prisma/schema.prisma \
             --script > /tmp/drift.sql
 
-          # Drop the sanctioned trgm index statements, their comment
+          SANCTIONED_SCHOOLID='(Assignment|Driver|ExamPaper|HomeworkAuditLog|HomeworkSubmission|HomeworkSurvey|ParentGrievance|QuestionBank|Route|SchoolEvent|Vehicle)_schoolId_idx'
+          # Drop the sanctioned raw-SQL index statements, their comment
           # headers, and blank separators; whatever SURVIVES is drift.
           # (trailing `|| true`: in the CLEAN case the final grep selects
           # zero lines and exits 1 — GitHub's default `bash -e` would
           # otherwise abort the step on the happy path.)
           UNEXPECTED="$(grep -vE '^DROP INDEX "[^"]*_trgm";$' /tmp/drift.sql \
+            | grep -vE "^DROP INDEX \"${SANCTIONED_SCHOOLID}\";\$" \
             | grep -vE '^-- DropIndex$' \
             | grep -vE '^[[:space:]]*$' || true)"
 
           if [ -n "$UNEXPECTED" ]; then
-            echo "::error::Schema drift — the migrated database does not match prisma/schema.prisma (beyond the sanctioned _trgm raw-SQL indexes):"
+            echo "::error::Schema drift — the migrated database does not match prisma/schema.prisma (beyond the sanctioned raw-SQL index families):"
             echo "$UNEXPECTED"
             exit 1
           fi
-          echo "Drift gate clean: only the sanctioned _trgm index drops (raw SQL from migration 00000000000002) differ."
+
           TRGM_COUNT="$(grep -cE '^DROP INDEX "[^"]*_trgm";$' /tmp/drift.sql || true)"
-          echo "sanctioned _trgm drops: ${TRGM_COUNT}"
+          SCHOOLID_COUNT="$(grep -cE '^DROP INDEX "[A-Za-z]+_schoolId_idx";$' /tmp/drift.sql || true)"
+          if [ "${TRGM_COUNT}" != "24" ] || [ "${SCHOOLID_COUNT}" != "11" ]; then
+            echo "::error::Raw-SQL index family counts changed (trgm ${TRGM_COUNT}, expected 24; schoolId ${SCHOOLID_COUNT}, expected 11) — a new intentional divergence must be added to this gate deliberately."
+            exit 1
+          fi
+          echo "Drift gate clean: only the 24 _trgm + 11 _schoolId_idx sanctioned raw-SQL index drops differ."
 
       # 9. Gate 4 — the canonical production build (standalone server).
       #    No DB connection is needed; memory headroom for next build.
@@ -186,6 +197,14 @@ jobs:
           bun prisma/seed-tenant-isolation.ts
           bun prisma/seed-website-cms.ts
           bun prisma/seed-salary.ts
+          # seed-platform RE-RUN (required, not cosmetic): the first pass
+          # migrates the legacy SUPER_ADMIN User to PlatformAdmin BEFORE
+          # seed-tenant-isolation plants tenant.superadmin@hawkings.test —
+          # the ROOT3 corpus identity the account-recovery acceptance suite
+          # (tests/security/platform-account-recovery.test.ts, part of
+          # `bun run test`) requires in beforeAll. Without this re-run the
+          # suite fails 0-pass on a freshly seeded CI corpus.
+          bun prisma/seed-platform.ts
 
       # 11. Live server for the HTTP suites: bun run dev on :3000, wait up
       #     to 300s for /health/ready (60 × 5s), then prove it one last time

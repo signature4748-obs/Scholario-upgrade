@@ -1,0 +1,531 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Scholario — RELEASE (the single authoritative production release pipeline)
+#
+# THE ORDERING CONTRACT (docs/RELEASE.md is the runbook):
+#
+#     PR ──► tests (ci.yml, pull_request) ──► merge to main
+#         ──► RELEASE (this workflow, on the exact release commit)
+#               1. ci                — the full test matrix, job-local PG only
+#               2. config-preflight  — Vercel env CONFIGURED / MISSING report
+#               3. migration         — PRODUCTION DB FIRST (preflight → apply
+#                                      → verify A–G), fail-closed
+#               4. release-gate      — every stage green, else the deployment
+#                                      job is SKIPPED and production stays at
+#                                      its previously deployed known-good commit
+#               5. deploy            — Vercel production deploy hook (AFTER
+#                                      the database has the schema the app
+#                                      needs: APPLICATION SECOND)
+#               6. verify-deployment — release-SHA provenance + /health/ready
+#
+# DATABASE FIRST, APPLICATION SECOND — never the other way around. A failed,
+# skipped, cancelled or otherwise non-green migration can never reach the
+# deploy job: `needs:` + the explicit gate make the ordering a property of the
+# system, not a step in a runbook.
+#
+# TWO MODES:
+#   · workflow_dispatch (default, works TODAY) — dispatch on the exact
+#     release commit. Everything up to the gate runs; with
+#     deploy_after_gate=false the operator promotes manually after a green
+#     gate (push main → Vercel git integration deploys), then re-runs the
+#     verify stage from any checkout of the release commit.
+#   · push to main (TARGET mode) — un-comment the `push:` trigger below ONLY
+#     together with the one-time Vercel switch (deploy-hook-only, §Enablement
+#     in docs/RELEASE.md). With Vercel auto-deploy disabled for main, a main
+#     push physically cannot deploy the application before the migration is
+#     applied and verified.
+#
+# SECRETS (GitHub ENVIRONMENT "production" — never in the repo, never printed;
+# jobs that touch production declare `environment: production`):
+#   SUPABASE_ACCESS_TOKEN   Management API token — the only DB credential the
+#                           migration needs (executes as the schema-owning
+#                           `postgres` role; already provisioned).
+#   SUPABASE_PROJECT_REF    kbyknezedewvgrnqervj (already provisioned).
+#   VERCEL_TOKEN            read-only-capable token for the env listing
+#                           (config-preflight) and deployment SHA checks
+#                           (verify-deployment). Never sent anywhere else.
+#   VERCEL_PROJECT_ID       scholario-production (id or name).
+#   VERCEL_ORG_ID           team scope (optional — omit for user scope).
+#   VERCEL_DEPLOY_HOOK_URL  the production Deploy Hook URL (deploy job only).
+#   PRODUCTION_URL          optional override (default
+#                           https://scholario-production.vercel.app).
+#
+# WHY PARKED: identical constraint as ci.yml.parked /
+# production-db-migration.yml.parked — GitHub accepts commits that create or
+# modify .github/workflows/* only from credentials with the `workflow` scope
+# (or via the web UI); the repo's push tokens carry `repo` scope only.
+# ENABLE IN 60 SECONDS: create .github/workflows/release.yml with this exact
+# content via the GitHub web UI, or push it with a workflow-scoped PAT. See
+# §Enablement in docs/RELEASE.md for the required ORDER of owner steps
+# (secrets → Vercel deploy-hook switch → enable → un-comment push trigger).
+#
+# MIGRATION SAFETY (enforced by scripts/prod-migration/*, not by convention):
+#   correct project (SUPABASE_PROJECT_REF) · pending-only in exact timestamp
+#   order · history gate (applied must be a repo prefix; unknown/failed/
+#   out-of-order rows STOP) · additive-only gate for registered migrations ·
+#   per-migration single transaction with the TRUE Prisma checksum · no
+#   reset, no seeds, no SQL editor, no credentials ever printed · any
+#   failure = red run = the deploy job never starts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_pending:
+        description: 'Comma-separated migration names that must be exactly the pending set (empty = any)'
+        required: false
+        default: ''
+      migration_dry_run:
+        description: 'Rehearse only: pre-flight gates run, NO migration is applied, deployment never triggers'
+        type: boolean
+        default: false
+      deploy_after_gate:
+        description: 'After the gate opens, fire the deploy hook + verify (ONLY valid when this SHA is already origin/main HEAD)'
+        type: boolean
+        default: false
+      strict_google:
+        description: 'Missing GOOGLE_* production env also fails the config gate (otherwise warn-only)'
+        type: boolean
+        default: false
+
+  # ── TARGET MODE ────────────────────────────────────────────────────────────
+  # Un-comment ONLY AFTER the Vercel one-time switch (Settings → Git: skip
+  # auto-deploy for production; Deploy Hook created and stored as the
+  # VERCEL_DEPLOY_HOOK_URL secret). Enabling this trigger before that switch
+  # would let Vercel race this gate. While parked, this comment block is inert.
+  #
+  # push:
+  #   branches: [main]
+
+# One production release at a time — NEVER cancelled mid-flight (a cancelled
+# migration/apply is indistinguishable from an unknown state, and the whole
+# point of this pipeline is that unknown = stopped).
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+# Hard ceiling for the whole chain (CI matrix ~20 min + migration ~2 min +
+# Vercel build + health poll ~15 min, with headroom for runner queues).
+timeout-minutes: 90
+
+# Least privilege: the pipeline only ever reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  # ── 1. CI — the full test matrix on the EXACT release commit ──────────────
+  # (identical gates to ci.yml.parked; job-local postgres is the only database
+  # CI ever sees — no Supabase, no production env, no secrets at all.)
+  ci:
+    name: CI — typecheck · lint · migrations · build · tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres?connection_limit=6&pool_timeout=60"
+      DATABASE_ENV: test
+      REALTIME_MODE: disabled
+      RATE_LIMIT_DB_SYNC: "on"
+
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      - name: Typecheck (tsc --noEmit)
+        run: bun run typecheck
+
+      - name: Lint (error-level gate)
+        run: bun run lint
+
+      # The full migration chain must apply cleanly to a fresh database —
+      # including the account-recovery migration this release ships.
+      - name: Migrations — deploy full chain to fresh CI postgres
+        run: bunx prisma migrate deploy
+
+      - name: Migrations — schema drift gate (raw-SQL-index aware)
+        shell: bash
+        run: |
+          bunx prisma migrate diff \
+            --from-schema-datasource prisma/schema.prisma \
+            --to-schema-datamodel prisma/schema.prisma \
+            --script > /tmp/drift.sql
+
+          # Two sanctioned raw-SQL index families are intentionally absent
+          # from the datamodel (DB-level accelerators, not Prisma objects):
+          #   · *_trgm            — pg_trgm GIN search indexes
+          #                            (migration 00000000000002, 24 of them)
+          #   · <T>_schoolId_idx  — tenant-scan indexes
+          #                            (migration 20261004154000, exactly these
+          #                            11 tables)
+          # Anything else in the diff is drift → fail. The exact counts are
+          # asserted too: a NEW divergence (or a missing index) changes them
+          # and re-closes the gate — updates must be conscious.
+          SANCTIONED_SCHOOLID='(Assignment|Driver|ExamPaper|HomeworkAuditLog|HomeworkSubmission|HomeworkSurvey|ParentGrievance|QuestionBank|Route|SchoolEvent|Vehicle)_schoolId_idx'
+          UNEXPECTED="$(grep -vE '^DROP INDEX "[^"]*_trgm";$' /tmp/drift.sql \
+            | grep -vE "^DROP INDEX \"${SANCTIONED_SCHOOLID}\";\$" \
+            | grep -vE '^-- DropIndex$' \
+            | grep -vE '^[[:space:]]*$' || true)"
+
+          if [ -n "$UNEXPECTED" ]; then
+            echo "::error::Schema drift — the migrated database does not match prisma/schema.prisma (beyond the sanctioned raw-SQL index families):"
+            echo "$UNEXPECTED"
+            exit 1
+          fi
+
+          TRGM_COUNT="$(grep -cE '^DROP INDEX "[^"]*_trgm";$' /tmp/drift.sql || true)"
+          SCHOOLID_COUNT="$(grep -cE '^DROP INDEX "[A-Za-z]+_schoolId_idx";$' /tmp/drift.sql || true)"
+          if [ "${TRGM_COUNT}" != "24" ] || [ "${SCHOOLID_COUNT}" != "11" ]; then
+            echo "::error::Raw-SQL index family counts changed (trgm ${TRGM_COUNT}, expected 24; schoolId ${SCHOOLID_COUNT}, expected 11) — a new intentional divergence must be added to this gate deliberately."
+            exit 1
+          fi
+          echo "Drift gate clean: only the 24 _trgm + 11 _schoolId_idx sanctioned raw-SQL index drops differ."
+
+      - name: Production build (standalone)
+        run: bun run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+
+      - name: Seeds — canonical corpus (idempotent, guarded)
+        run: |
+          bun prisma/seed.ts
+          bun prisma/seed-platform.ts
+          bun prisma/seed-learning.ts
+          bun prisma/seed-teacher-academics.ts
+          bun prisma/seed-roster-150.ts
+          bun prisma/seed-student-dashboard.ts
+          bun prisma/seed-teacher-hub.ts
+          bun prisma/seed-tenant-isolation.ts
+          bun prisma/seed-website-cms.ts
+          bun prisma/seed-salary.ts
+          # seed-platform re-run: seed-tenant-isolation plants the legacy
+          # SUPER_ADMIN user AFTER the first pass — the ROOT3 corpus identity
+          # the account-recovery acceptance suite requires.
+          bun prisma/seed-platform.ts
+
+      - name: Start dev server and wait for readiness
+        run: |
+          nohup bun run dev > dev.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000/health/ready && break || sleep 5
+          done
+          curl -sf http://localhost:3000/health/ready
+
+      - name: Test suite (unit · integration · API · regression · security)
+        run: bun run test
+
+      - name: E2E journeys (live server)
+        run: bun run test:e2e
+
+      - name: Dev server log tail (on failure)
+        if: failure()
+        run: tail -n 200 dev.log || true
+
+  # ── 2. CONFIG PRE-FLIGHT — Vercel production env: CONFIGURED / MISSING ────
+  # Read-only; names + target metadata only (the script never requests
+  # decrypted values). Fails closed on CORE / RECOVERY gaps, warns on GOOGLE
+  # (optional capability, degrades honestly off) unless strict_google.
+  config-preflight:
+    name: Config pre-flight (Vercel env CONFIGURED/MISSING)
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # Zero-dependency script (node builtins only) — no install needed.
+      - name: Config pre-flight
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+        run: bun scripts/prod-release/config-preflight.ts ${{ inputs.strict_google && '--strict' || '' }}
+
+  # ── 3. PRODUCTION DB MIGRATION — DATABASE FIRST ────────────────────────────
+  migration-preflight:
+    name: Migration · pre-flight (read-only gates + before-state snapshot)
+    needs: [ci, config-preflight]
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      snapshot-artifact: ${{ steps.snapshot.outputs.artifact }}
+
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Report the exact commit being released
+        run: |
+          echo "release commit: ${GITHUB_SHA}"
+          git log -1 --format='%H %s'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # Zero-dependency scripts (node builtins only) — no install needed.
+      - name: Pre-flight
+        id: snapshot
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          EXPECTED_PENDING: ${{ inputs.expected_pending }}
+        run: |
+          bun scripts/prod-migration/preflight.ts \
+            --out "$RUNNER_TEMP/prod-migration-snapshot.json" \
+            ${EXPECTED_PENDING:+--expect "$EXPECTED_PENDING"}
+
+      - name: Upload before-state snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-migration-snapshot
+          path: ${{ runner.temp }}/prod-migration-snapshot.json
+          retention-days: 30
+
+  migration-apply:
+    name: Migration · apply (transactional, true checksums)
+    needs: migration-preflight
+    if: ${{ inputs.migration_dry_run != true }}
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Apply pending migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          EXPECTED_PENDING: ${{ inputs.expected_pending }}
+        run: |
+          bun scripts/prod-migration/apply.ts \
+            ${EXPECTED_PENDING:+--expect "$EXPECTED_PENDING"}
+          # A failed migration exits non-zero → this job is RED → the gate
+          # closes → the deployment never starts.
+
+  migration-verify:
+    name: Migration · post-apply verification (A–G)
+    needs: migration-apply
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Download before-state snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-migration-snapshot
+          path: ${{ runner.temp }}
+
+      - name: Verify production database
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          bun scripts/prod-migration/verify.ts \
+            --snapshot "$RUNNER_TEMP/prod-migration-snapshot.json"
+
+  # ── 4. RELEASE GATE — APPLICATION SECOND, AND ONLY IF EVERYTHING IS GREEN ──
+  # Fail closed: migration failed / skipped / cancelled / unknown state, DB
+  # unreachable (preflight failed), history inconsistent (history gate), tests
+  # red or config missing — every one of these leaves a non-success result
+  # below → the gate CLOSES, the deploy job is skipped, and production stays
+  # at its previously deployed, known-good commit.
+  release-gate:
+    name: Release gate (DATABASE FIRST, APPLICATION SECOND)
+    needs: [ci, config-preflight, migration-preflight, migration-apply, migration-verify]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      deployable: ${{ steps.gate.outputs.deployable }}
+
+    steps:
+      - name: Evaluate the gate
+        id: gate
+        shell: bash
+        env:
+          CI_RESULT: ${{ needs.ci.result }}
+          CFG_RESULT: ${{ needs.config-preflight.result }}
+          PRE_RESULT: ${{ needs.migration-preflight.result }}
+          APP_RESULT: ${{ needs.migration-apply.result }}
+          VER_RESULT: ${{ needs.migration-verify.result }}
+          DRY_RUN: ${{ inputs.migration_dry_run }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          echo "ci                  : ${CI_RESULT}"
+          echo "config pre-flight   : ${CFG_RESULT}"
+          echo "migration pre-flight: ${PRE_RESULT}"
+          echo "migration apply     : ${APP_RESULT}"
+          echo "migration verify    : ${VER_RESULT}"
+          echo "release commit      : ${RELEASE_SHA}"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "deployable=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Release gate — CLOSED (dry run)"
+              echo "Rehearsal only: no migration was applied and no deployment will trigger."
+              echo "ci ${CI_RESULT} · config ${CFG_RESULT} · migration pre-flight ${PRE_RESULT} · apply SKIPPED (dry run) · verify SKIPPED (dry run)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          OPEN=true
+          for r in "$CI_RESULT" "$CFG_RESULT" "$PRE_RESULT" "$APP_RESULT" "$VER_RESULT"; do
+            if [ "$r" != "success" ]; then OPEN=false; fi
+          done
+
+          if [ "$OPEN" = "true" ]; then
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Release gate — OPEN"
+              echo "release commit: \`${RELEASE_SHA}\`"
+              echo "tests green · config green · production database migrated and verified (A–G)."
+              echo "APPLICATION DEPLOYMENT MAY PROCEED (database schema already in place)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "deployable=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Release gate — CLOSED"
+              echo "release commit (NOT deployed): \`${RELEASE_SHA}\`"
+              echo "ci ${CI_RESULT} · config ${CFG_RESULT} · migration pre-flight ${PRE_RESULT} · apply ${APP_RESULT} · verify ${VER_RESULT}"
+              echo "Production stays at its previously deployed, known-good commit."
+              echo "Any result above that is not \`success\` (failure / skipped / cancelled) = STOP."
+            } >> "$GITHUB_STEP_SUMMARY"
+            # A blocked release is a RED run — visible, never silent.
+            exit 1
+          fi
+
+  # ── 5. DEPLOY THE APPLICATION (only after the gate opened) ─────────────────
+  deploy:
+    name: Deploy application (Vercel production)
+    needs: release-gate
+    if: >-
+      needs.release-gate.outputs.deployable == 'true' &&
+      (github.event_name == 'push' || inputs.deploy_after_gate == true)
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+
+      # Deploy hooks build origin/main HEAD — assert the release commit IS
+      # main HEAD so the deployed SHA can never silently drift from the
+      # verified one (push mode: trivially true; dispatch mode: the operator
+      # must have already pushed the release commit to main).
+      - name: Assert the release commit is origin/main HEAD
+        shell: bash
+        run: |
+          MAIN_SHA="$(git ls-remote origin refs/heads/main | cut -f1)"
+          echo "release commit : ${GITHUB_SHA}"
+          echo "origin/main    : ${MAIN_SHA:-<no main ref>}"
+          if [ "${MAIN_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "::error::Refusing to deploy: the deploy hook builds origin/main HEAD, but the release commit differs. Push the release commit to main first, then re-run (push mode fires this workflow automatically)."
+            exit 1
+          fi
+
+      # The hook URL is a secret: it is never echoed, never logged — it only
+      # travels inside this curl invocation. Response bodies are clipped.
+      - name: Trigger the Vercel production deploy hook
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        shell: bash
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "::error::Secret VERCEL_DEPLOY_HOOK_URL is not provisioned in the 'production' GitHub environment (Vercel → Settings → Git → Deploy Hook)."
+            exit 1
+          fi
+          HTTP_CODE="$(curl -sS -o /tmp/hook-response.json -w '%{http_code}' \
+            -X POST "$VERCEL_DEPLOY_HOOK_URL" --max-time 30 || echo 000)"
+          echo "deploy hook responded HTTP ${HTTP_CODE}"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Vercel deploy hook rejected the trigger:"
+            head -c 200 /tmp/hook-response.json || true
+            exit 1
+          fi
+          echo "Vercel production build started for ${GITHUB_SHA} (the database schema it needs is already migrated + verified)."
+
+  # ── 6. POST-DEPLOYMENT VERIFICATION (fail closed = STOP, never a shrug) ────
+  verify-deployment:
+    name: Verify deployment (SHA provenance + production health)
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Verify the release is live and healthy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+        run: |
+          ARGS=(--sha "${GITHUB_SHA}" --timeout-seconds 900)
+          if [ -n "$PRODUCTION_URL" ]; then ARGS+=(--url "$PRODUCTION_URL"); fi
+          bun scripts/prod-release/verify-deployment.ts "${ARGS[@]}"
+          # Proves (a) the latest READY production deployment was built from
+          # exactly ${GITHUB_SHA} (UNKNOWN provenance = STOP) and (b)
+          # /health/ready answers 200 with "database":"ok".
+
+      - name: Release summary
+        if: always()
+        run: |
+          {
+            echo "## Production release — ${{ job.status }}"
+            echo "release commit: \`${GITHUB_SHA}\`"
+            echo "order enforced: ci ${{ needs.ci.result }} · config ${{ needs.config-preflight.result }} · migration pre-flight ${{ needs.migration-preflight.result }} · apply ${{ needs.migration-apply.result }} · verify ${{ needs.migration-verify.result }} · gate ${{ needs.release-gate.result }} · deploy ${{ needs.deploy.result }} · final verification ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

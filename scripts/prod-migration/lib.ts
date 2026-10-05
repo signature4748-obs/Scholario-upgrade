@@ -68,11 +68,23 @@ export interface UserState {
   schoolPlaneInvariantViolations: number | null
 }
 
+export interface AdminState {
+  total: number
+  active: number
+  suspended: number
+  /** null while the googleSub column does not exist yet (pre-migration). */
+  googleLinked: number | null
+  /** Admins with a non-empty passwordHash — counts only, values never read. */
+  withPassword: number
+}
+
 export interface Snapshot {
   capturedAt: string
   gitSha: string | null
   tableCounts: Record<string, number>
   userState: UserState
+  /** PlatformAdmin credential-plane state (ACCOUNT-RECOVERY era; counts only). */
+  adminState?: AdminState
   appliedMigrations: Array<{ name: string; checksum: string | null; finished: boolean }>
 }
 
@@ -285,14 +297,35 @@ export async function allIndexNames(): Promise<Set<string>> {
   return new Set(rows.map((r) => r.indexname))
 }
 
+/** Columns of a public table (shape metadata only — never values). */
+export async function tableColumns(
+  table: string,
+  names?: readonly string[],
+): Promise<Array<{ column_name: string; data_type: string; is_nullable: string }>> {
+  const filter = names?.length
+    ? `AND column_name IN (${names.map((n) => sqlLiteral(n)).join(', ')})`
+    : ''
+  const rows = (await mgmtQuery(
+    `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${sqlLiteral(table)} ${filter} ORDER BY ordinal_position`,
+  )) as Array<{ column_name: string; data_type: string; is_nullable: string }>
+  return rows
+}
+
+/** indexname → indexdef for the given tables (UNIQUE-ness assertion surface). */
+export async function indexDefinitions(
+  tables: readonly string[],
+): Promise<Map<string, string>> {
+  const rows = (await mgmtQuery(
+    `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename IN (${tables.map((t) => sqlLiteral(t)).join(', ')})`,
+  )) as Array<{ indexname: string; indexdef: string }>
+  return new Map(rows.map((r) => [r.indexname, r.indexdef]))
+}
+
 /** The credential-neutralization columns on "User". */
 export async function userCredentialColumns(): Promise<
   Array<{ column_name: string; data_type: string; is_nullable: string }>
 > {
-  const rows = (await mgmtQuery(
-    `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'User' AND column_name IN ('mustChangePassword','passwordChangedAt')`,
-  )) as Array<{ column_name: string; data_type: string; is_nullable: string }>
-  return rows
+  return tableColumns('User', ['mustChangePassword', 'passwordChangedAt'])
 }
 
 /** User/credential state (flag fields only when the columns exist). */
@@ -338,6 +371,35 @@ export async function userState(columnsPresent: boolean): Promise<UserState> {
     state.schoolPlaneInvariantViolations = Number(violations[0]?.n ?? 0)
   }
   return state
+}
+
+/** PlatformAdmin credential-plane state — counts only (hash VALUES are
+ *  never read, printed or compared; this is the "passwords were never
+ *  altered" verification surface). */
+export async function adminState(): Promise<AdminState> {
+  const hasGoogle = (await mgmtQuery(
+    `SELECT count(*)::int AS n FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'PlatformAdmin' AND column_name = 'googleSub'`,
+  )) as Array<{ n: number }>
+  const googleExpr = Number(hasGoogle[0]?.n ?? 0) > 0 ? `"googleSub" IS NOT NULL` : 'FALSE'
+  const rows = (await mgmtQuery(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE status = 'ACTIVE')::int AS active,
+            count(*) FILTER (WHERE status = 'SUSPENDED')::int AS suspended,
+            count(*) FILTER (WHERE ${googleExpr})::int AS google_linked,
+            count(*) FILTER (WHERE "passwordHash" IS NOT NULL AND "passwordHash" <> '')::int AS with_password
+     FROM "PlatformAdmin"`,
+  )) as Array<{ total: number; active: number; suspended: number; google_linked: number; with_password: number }>
+  const r = rows[0]
+  // googleLinked is null while the googleSub column does not exist yet —
+  // the snapshot honestly records "column not present (pre-migration)".
+  const googleLinked = Number(hasGoogle[0]?.n ?? 0) > 0 ? Number(r?.google_linked ?? 0) : null
+  return {
+    total: Number(r?.total ?? 0),
+    active: Number(r?.active ?? 0),
+    suspended: Number(r?.suspended ?? 0),
+    googleLinked,
+    withPassword: Number(r?.with_password ?? 0),
+  }
 }
 
 /** Production readiness probe (no credentials involved). */
@@ -439,6 +501,22 @@ export const SAAS_HARDENING_TABLES: readonly string[] = [
   'SchoolPaymentGateway',
 ]
 
+// ─── ACCOUNT-RECOVERY (20261005060000) — the exact object set ──────────────
+// Single source: prisma/migrations/20261005060000_platform_account_recovery/migration.sql
+
+export const ACCOUNT_RECOVERY_MIGRATION = '20261005060000_platform_account_recovery'
+
+export const ACCOUNT_RECOVERY_INDEXES: readonly string[] = [
+  'PlatformAdmin_googleSub_key',
+  'PlatformPasswordReset_tokenHash_key',
+  'PlatformPasswordReset_adminId_idx',
+  'PlatformPasswordReset_expiresAt_idx',
+  'PlatformRecoveryTicket_targetAdminId_idx',
+  'PlatformRecoveryTicket_expiresAt_idx',
+]
+
+export const ACCOUNT_RECOVERY_TABLES: readonly string[] = ['PlatformPasswordReset', 'PlatformRecoveryTicket']
+
 /**
  * Object expectations per migration: while the migration is PENDING the
  * objects must NOT exist (protects against schema drift / half-applied
@@ -448,6 +526,8 @@ export interface MigrationExpectation {
   columns?: readonly string[]
   indexes?: readonly string[]
   tables?: readonly string[]
+  /** table-scoped column expectations (ACCOUNT-RECOVERY era). */
+  tableColumns?: Readonly<Record<string, readonly string[]>>
 }
 
 export const MIGRATION_EXPECTATIONS: Record<string, MigrationExpectation> = {
@@ -456,6 +536,11 @@ export const MIGRATION_EXPECTATIONS: Record<string, MigrationExpectation> = {
   },
   '20261004153000_restore_trgm_search_indexes': { indexes: TRGM_INDEXES },
   '20261004154000_schoolid_indexes_tenant_tables': { indexes: SCHOOLID_INDEXES },
+  [ACCOUNT_RECOVERY_MIGRATION]: {
+    tableColumns: { PlatformAdmin: ['googleSub', 'googleEmail', 'googleLinkedAt'] },
+    indexes: ACCOUNT_RECOVERY_INDEXES,
+    tables: ACCOUNT_RECOVERY_TABLES,
+  },
 }
 
 export interface ExpectationResult {
@@ -475,6 +560,21 @@ export async function evaluateExpectations(gate: HistoryGate): Promise<Expectati
   ])
   const columnNames = new Set(columns.map((c) => c.column_name))
   const tableNames = new Set(Object.keys(tables))
+  // Table-scoped column expectations: collect the distinct tables across ALL
+  // mapped expectations and probe each ONCE (an absent column is simply not
+  // returned by information_schema — that IS the absence signal).
+  const scopedTables = new Set<string>()
+  for (const migration of gate.repo) {
+    for (const table of Object.keys(MIGRATION_EXPECTATIONS[migration.name]?.tableColumns ?? {})) {
+      scopedTables.add(table)
+    }
+  }
+  const scopedColumnNames = new Map<string, Set<string>>()
+  await Promise.all(
+    [...scopedTables].map(async (table) => {
+      scopedColumnNames.set(table, new Set((await tableColumns(table)).map((c) => c.column_name)))
+    }),
+  )
   const pendingViolations: string[] = []
   const appliedViolations: string[] = []
   for (const migration of gate.repo) {
@@ -496,8 +596,50 @@ export async function evaluateExpectations(gate: HistoryGate): Promise<Expectati
     bucket('column', expectation.columns ?? [], (n) => columnNames.has(n))
     bucket('index', expectation.indexes ?? [], (n) => indexes.has(n))
     bucket('table', expectation.tables ?? [], (n) => tableNames.has(n))
+    for (const [table, cols] of Object.entries(expectation.tableColumns ?? {})) {
+      const present = scopedColumnNames.get(table) ?? new Set<string>()
+      for (const column of cols) {
+        const exists = present.has(column)
+        if (isPending && exists) {
+          target.push(`${migration.name}: column ${table}.${column} already exists while migration is PENDING (schema drift — STOP)`)
+        }
+        if (!isPending && !exists) {
+          target.push(`${migration.name}: column ${table}.${column} missing although migration is APPLIED`)
+        }
+      }
+    }
   }
   return { pendingViolations, appliedViolations }
+}
+
+/** Migrations that must be pure additive DDL — no data statement ever runs.
+ *  Guards the account-safety rule: existing PlatformAdmin rows (including
+ *  password hashes) are never altered during deployment. */
+export const ADDITIVE_ONLY_MIGRATIONS: ReadonlySet<string> = new Set([ACCOUNT_RECOVERY_MIGRATION])
+
+/** Assert a registered ADDITIVE-ONLY migration contains only allowed
+ *  statement shapes (comments stripped first). Throws with the offending
+ *  statement otherwise. */
+export function assertAdditiveOnly(migration: RepoMigration): void {
+  const stripped = migration.sql
+    .split('\n')
+    .map((l) => l.replace(/--.*$/, ''))
+    .join('\n')
+  const statements = stripped
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const allowed = [
+    /^ALTER\s+TABLE\s+"?[\w$]+"?\s+ADD\s+(COLUMN|CONSTRAINT)\b/i,
+    /^CREATE\s+(UNIQUE\s+)?INDEX\s+/i,
+    /^CREATE\s+TABLE\s+/i,
+  ]
+  for (const s of statements) {
+    if (allowed.some((re) => re.test(s))) continue
+    throw new Error(
+      `[prod-migration] ${migration.name} is registered ADDITIVE-ONLY but contains a non-additive statement: ${s.slice(0, 100)}…`,
+    )
+  }
 }
 
 /** Parse a comma-separated CLI value. */

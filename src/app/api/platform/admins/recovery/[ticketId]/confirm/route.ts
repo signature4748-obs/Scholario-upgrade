@@ -129,7 +129,16 @@ export async function POST(
 
       if (ticket.action === 'GOOGLE_UNLINK') {
         const unlinked = await unlinkGoogleIdentity(target.id, { ip, byAdminId: ctx.admin.id })
-        const revoked = await revokeAllPlatformSessions(target.id)
+        // FINAL-METHOD INVARIANT, fail-closed: if the Google identity is
+        // the target's LAST usable authentication method, the unlink is
+        // refused — the ticket is NOT executed (refuse → audited 409).
+        if (!unlinked.ok && unlinked.failure === 'LAST_CREDENTIAL') {
+          refuse(
+            'target\u2019s Google identity is their final usable authentication method — reset their password first',
+            'This admin\u2019s Google identity cannot be unlinked: it is their last usable sign-in method. Execute a password reset first, then re-initiate the unlink.',
+          )
+        }
+        const revoked = unlinked.wasLinked ? await revokeAllPlatformSessions(target.id) : 0
         await db.platformRecoveryTicket.update({
           where: { id: ticket.id },
           data: {

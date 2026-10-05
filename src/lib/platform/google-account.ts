@@ -92,6 +92,7 @@ export async function googleLogin(
 }
 
 export type GoogleLinkFailure = 'ALREADY_LINKED_SELF' | 'ALREADY_LINKED_OTHER'
+export type GoogleUnlinkFailure = 'LAST_CREDENTIAL'
 
 /**
  * Explicitly link a VERIFIED Google identity to an EXISTING admin
@@ -138,13 +139,51 @@ export async function linkGoogleIdentity(
   return { ok: true }
 }
 
-/** Unlink the Google identity from an admin (step-up gated by the route). */
+/**
+ * Unlink the Google identity from an admin (step-up gated by the route).
+ *
+ * FINAL-METHOD INVARIANT (ACCOUNT SAFETY): an admin must never lose
+ * their LAST usable authentication method. passwordHash is NOT NULL by
+ * schema, so an unlink normally leaves the password intact — but the
+ * invariant is enforced at RUNTIME too (defense in depth against
+ * schema regressions, corrupted rows, or future schema changes): if
+ * the admin's password is absent/blank, the Google identity IS the
+ * last usable credential and the unlink is REFUSED (failure
+ * 'LAST_CREDENTIAL'; wasLinked stays true — the identity IS linked,
+ * which is exactly why it must be kept). Recovery paths remain: a
+ * fellow admins.manage holder can reset the password by email first.
+ *
+ * Return contract:
+ *   · nothing linked            → { ok: false, wasLinked: false }
+ *   · refused (last credential) → { ok: false, wasLinked: true, failure: 'LAST_CREDENTIAL' }
+ *   · unlinked                  → { ok: true,  wasLinked: true }
+ */
 export async function unlinkGoogleIdentity(
   adminId: string,
   meta: { ip?: string | null; requestId?: string | null; byAdminId?: string | null } = {},
-): Promise<{ ok: boolean; wasLinked: boolean }> {
+): Promise<{ ok: boolean; wasLinked: boolean; failure?: GoogleUnlinkFailure }> {
   const admin = await db.platformAdmin.findUnique({ where: { id: adminId } })
   if (!admin?.googleSub) return { ok: false, wasLinked: false }
+  // ── FINAL-METHOD INVARIANT ─────────────────────────────────
+  // An admin must never lose their last usable authentication method.
+  // passwordHash is NOT NULL by schema, but this is enforced at runtime
+  // too (defense in depth against schema regressions/corrupt rows): if
+  // the password is absent/blank, the Google identity is the LAST usable
+  // credential and unlinking it is REFUSED (recovery flows remain: a
+  // fellow admins.manage holder can reset the password by email first).
+  if (!admin.passwordHash || admin.passwordHash.trim() === '') {
+    await platformAuditEvent({
+      adminId: meta.byAdminId ?? adminId,
+      action: 'platform.recovery.refused',
+      targetType: 'ADMIN',
+      targetId: admin.id,
+      ip: meta.ip,
+      requestId: meta.requestId,
+      reason: 'google unlink refused: the Google identity is the admin\u2019s final usable authentication method (no usable password)',
+      metadata: { unlinkRefused: 'LAST_CREDENTIAL' },
+    }).catch(() => {})
+    return { ok: false, wasLinked: true, failure: 'LAST_CREDENTIAL' }
+  }
   await db.platformAdmin.update({
     where: { id: adminId },
     data: { googleSub: null, googleEmail: null, googleLinkedAt: null },

@@ -155,13 +155,16 @@ development ──► tests ──► staging/preview (Vercel preview env)
 
 Today the last two steps are sequenced **manually** (dispatch the workflow
 on the release commit → verify green → push main → Vercel deploys). The
-fully automated variant (proposed, owner opt-in):
+fully automated variant — now BUILT and parked, owner opt-in
+(`.github/release.yml.parked`; runbook `docs/RELEASE.md`):
 
+- the **Release** workflow chains the full test matrix → config pre-flight
+  → this migration pipeline → an explicit **release gate** → the Vercel
+  deploy hook → deployment verification, on the exact release commit;
 - switch the Vercel project's production deploys to **Deploy Hook only**
-  (Settings → Git: disable auto-deploy for production);
-- enable `on: push: branches: [main]` on the workflow and add a final gate
-  job that, after verification, triggers the Vercel Deploy Hook via
-  `VERCEL_DEPLOY_HOOK_URL` (a secret).
+  (Settings → Git: disable auto-deploy for production) and store the hook
+  URL as the `VERCEL_DEPLOY_HOOK_URL` secret;
+- enable the workflow and un-comment `on: push: branches: [main]`.
 
 Then a main push can physically never deploy the application before the
 database migration has been applied and verified — the ordering becomes a

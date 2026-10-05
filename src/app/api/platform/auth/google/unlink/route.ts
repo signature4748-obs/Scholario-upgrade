@@ -17,6 +17,11 @@ export const runtime = 'nodejs'
  * the admin's live sessions (forces a fresh authentication with the
  * surviving credential — an unlink should never leave silently
  * borrowed sessions alive).
+ *
+ * FINAL-METHOD INVARIANT: if the Google identity is the admin's LAST
+ * usable sign-in method (no usable password — runtime defense in
+ * depth), the unlink is refused with 409 (LAST_CREDENTIAL): set a
+ * password first, then unlink.
  */
 export async function POST(req: NextRequest) {
   const requestId = newRequestId()
@@ -35,6 +40,14 @@ export async function POST(req: NextRequest) {
         requestId,
         byAdminId: ctx.admin.id,
       })
+      // FINAL-METHOD INVARIANT: never strip the account's last usable
+      // credential — the unlink is refused before any write happens.
+      if (result.failure === 'LAST_CREDENTIAL') {
+        throw new AppError('CONFLICT', {
+          publicMessage: 'Google cannot be unlinked: it is the last usable sign-in method for this account. Set a password first (or use the password-reset email), then unlink.',
+          internalDetail: 'google unlink refused: LAST_CREDENTIAL (final usable authentication method)',
+        })
+      }
       if (!result.ok) {
         throw new AppError('CONFLICT', {
           publicMessage: 'No Google identity is linked to this account.',

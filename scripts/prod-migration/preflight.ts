@@ -20,6 +20,9 @@
 import { writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
+  ADDITIVE_ONLY_MIGRATIONS,
+  adminState,
+  assertAdditiveOnly,
   evaluateExpectations,
   exitWithProblems,
   gitSha,
@@ -94,15 +97,29 @@ async function main(): Promise<void> {
     `  object expectations   : ${expectations.pendingViolations.length + expectations.appliedViolations.length === 0 ? 'clean ✓' : 'VIOLATIONS ✖'}`,
   )
 
+  // Gate 3b — additive-only migrations: no data statement may run (the
+  // account-safety contract: existing rows are never altered).
+  for (const m of gate.pending) {
+    if (!ADDITIVE_ONLY_MIGRATIONS.has(m.name)) continue
+    try {
+      assertAdditiveOnly(m)
+      console.log(`  additive-only       : ${m.name} — pure DDL ✓ (no data statements)`)
+    } catch (err) {
+      problems.push((err as Error).message)
+    }
+  }
+
   if (problems.length) exitWithProblems('preflight', problems)
 
   // Snapshot — the before-state verify.ts compares against.
   const columns = await userCredentialColumns()
+  const admins = await adminState()
   const snapshot: Snapshot = {
     capturedAt: new Date().toISOString(),
     gitSha: sha,
     tableCounts: await tableCounts(),
     userState: await userState(columns.length > 0),
+    adminState: admins,
     appliedMigrations: gate.applied.map((m) => ({
       name: m.migration_name,
       checksum: m.checksum,
@@ -114,6 +131,7 @@ async function main(): Promise<void> {
   console.log(`\n  snapshot written      : ${outPath}`)
   console.log(`    · public tables counted : ${Object.keys(snapshot.tableCounts).length}`)
   console.log(`    · users total            : ${snapshot.userState.total} (school-plane ${snapshot.userState.schoolPlane}, principals ${snapshot.userState.principals})`)
+  console.log(`    · platform admins         : ${admins.total} total, ${admins.googleLinked ?? 'n/a (pre-migration)'} google-linked, ${admins.withPassword} with password (counts only)`)
   console.log(`    · credential columns     : ${columns.length ? 'present' : 'absent (expected pre-migration)'}`)
   console.log(`    · seed execution         : NEVER (pipeline runs migrations only)`)
   console.log('\n[prod-migration:preflight] ✓ PRE-FLIGHT GREEN — safe to apply')
