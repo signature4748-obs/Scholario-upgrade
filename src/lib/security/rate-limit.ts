@@ -130,6 +130,16 @@ export const RATE_LIMITS = {
   platformMutation: { name: 'platform-mutation', limit: 60, windowMs: 60_000 },
   /** Platform announcements public read (school login page, per-IP). */
   platformAnnouncementPublic: { name: 'platform-announcement-public', limit: 30, windowMs: 60_000 },
+  // ACCOUNT-RECOVERY — anonymous public endpoints of the platform
+  // forgot-password / reset-password / Google-OAuth surface.
+  /** Forgot-password requests per-IP (anonymous; anti-enumeration surface). */
+  platformForgotPassword: { name: 'platform-forgot-password', limit: 5, windowMs: 60 * 60_000 },
+  /** Forgot-password requests per submitted account key (mail-bombing brake). */
+  platformForgotPasswordAccount: { name: 'platform-forgot-password-account', limit: 3, windowMs: 60 * 60_000 },
+  /** Reset-password consume attempts per-IP (token guessing brake). */
+  platformResetPassword: { name: 'platform-reset-password', limit: 10, windowMs: 60 * 60_000 },
+  /** Google OAuth login round-trips per-IP (same posture as platform login). */
+  platformGoogleLogin: { name: 'platform-google-login', limit: 10, windowMs: 15 * 60_000 },
   // PHASE 8B — canonical payroll mutations (structure writes, payment
   // records, voids — per-user; the principal's whole salary workflow).
   salary: { name: 'salary', limit: 30, windowMs: 60 * 60_000 },

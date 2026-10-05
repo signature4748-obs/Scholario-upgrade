@@ -12,6 +12,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Settings2, Save, RotateCcw, Info } from 'lucide-react'
 import { platformApi, usePlatformSession, type PlatformApiError } from '../platform-client'
+import { SettingsAccountCard } from './settings-account'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -175,6 +176,9 @@ export function SettingsModule() {
 
       {!loading && data && draft && (
         <>
+          {/* ACCOUNT-RECOVERY — the signed-in admin's own credentials */}
+          <SettingsAccountCard />
+
           {/* Platform section */}
           <Card className="rounded-xl border-slate-200 bg-white shadow-sm">
             <CardHeader>

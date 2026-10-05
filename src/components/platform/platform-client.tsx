@@ -26,7 +26,15 @@ import {
 installPlatformBearerInterceptor()
 
 export interface PlatformMe {
-  admin: { id: string; email: string; name: string; isRoot: boolean }
+  admin: {
+    id: string
+    email: string
+    name: string
+    isRoot: boolean
+    /** ACCOUNT-RECOVERY — Google sign-in link state (null/absent = not linked). */
+    googleLinked?: boolean
+    googleEmail?: string | null
+  }
   permissions: string[]
   /** Current platform MFA posture (Part 1 reset: false while TOTP is stood down). */
   mfaEnabled?: boolean

@@ -2472,6 +2472,17 @@ model PlatformAdmin {
   /// Dev-preview flag: the seeded demo admins may use the demo-code
   /// endpoint. Production admins are never isDemo → the endpoint is inert.
   isDemo       Boolean  @default(false)
+  /// ACCOUNT-RECOVERY — Google OIDC `sub` (subject) of the Google identity
+  /// EXPLICITLY linked to this admin. Null = Google sign-in not available.
+  /// UNIQUE platform-wide: one Google identity may ever resolve to exactly
+  /// ONE PlatformAdmin (no duplicate accounts). Login ALWAYS resolves by
+  /// this id — NEVER by email match (email is display/audit only).
+  googleSub      String?  @unique
+  /// Verified Google email at LINK time (minimum stored identity data for
+  /// linking; Google can change the account's email — the stable key is
+  /// googleSub, so sign-in never breaks on an email change).
+  googleEmail    String?
+  googleLinkedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -2480,8 +2491,66 @@ model PlatformAdmin {
   supportSessions SupportSession[]
   /// SaaS-HARDENING — offline platform payments this admin recorded.
   paymentRecordings PlatformPayment[] @relation("PlatformPaymentRecorder")
+  /// ACCOUNT-RECOVERY — forgot-password tokens (hashed, single-use).
+  passwordResets PlatformPasswordReset[]
 
   @@index([status])
+}
+
+/// ACCOUNT-RECOVERY — PlatformAdmin forgot-password tokens.
+/// A raw 32-byte crypto-random token travels ONLY in the emailed reset
+/// link; at rest we keep sha256(token) (a DB leak yields nothing usable).
+/// Single-use (usedAt), short-lived (30 min), single outstanding token
+/// per admin (a new request supersedes the previous one). Consumed rows
+/// are retained as the audit history of the flow.
+model PlatformPasswordReset {
+  id        String    @id @default(cuid())
+  adminId   String
+  admin     PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  /// sha256(token) hex — never the raw token.
+  tokenHash String    @unique
+  /// Set on consumption (single-use). Null = still pending (until expiry).
+  usedAt    DateTime?
+  /// Hard expiry (30 minutes from issuance). Expired rows are rejected.
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  /// Request context for the audit viewer (never the raw token).
+  requestIp  String?
+  userAgent  String?
+
+  @@index([adminId])
+  @@index([expiresAt])
+}
+
+/// ACCOUNT-RECOVERY — dual-control (two-person rule) tickets for
+/// credential-recovery actions against ROOT admins (the emergency owner
+/// recovery path). A single admins.manage holder INITIATES; a SECOND,
+/// distinct admins.manage holder CONFIRMS within the window; only then
+/// does the effect execute. No FKs (security trail rows must outlive
+/// admin deletion, matching the PlatformAuditLog convention).
+model PlatformRecoveryTicket {
+  id            String    @id @default(cuid())
+  /// 'PASSWORD_RESET' | 'GOOGLE_UNLINK'
+  action        String
+  /// PlatformAdmin.id the action targets (a ROOT admin).
+  targetAdminId String
+  /// Initiating admin (admins.manage + step-up, ≠ target).
+  initiatedBy   String
+  /// Confirming admin — must differ from BOTH initiator and target.
+  confirmedBy   String?
+  confirmedAt   DateTime?
+  /// When the effect actually ran (after confirmation).
+  executedAt    DateTime?
+  /// Ticket validity window (15 minutes from creation).
+  expiresAt     DateTime
+  /// JSON metadata (counts, revokedSessions…) — never secrets.
+  metadata      String?
+  /// Optional operator reason (sanitized on write).
+  reason        String?
+  createdAt     DateTime  @default(now())
+
+  @@index([targetAdminId])
+  @@index([expiresAt])
 }
 
 /// Platform session — a SEPARATE credential space from the school Session

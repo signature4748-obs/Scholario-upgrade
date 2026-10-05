@@ -21,6 +21,11 @@
  *   platform.announcement.published | deleted
  *   platform.settings.updated
  *   platform.admin.created | permission_changed | suspended | reactivated
+ *   ACCOUNT-RECOVERY:
+ *   platform.password_reset.requested | .failed | .completed
+ *   platform.admin.password_reset_initiated
+ *   platform.admin.google_linked | .google_unlinked | .google_link_failed
+ *   platform.recovery.initiated | .refused | .executed
  */
 
 import { db } from '@/lib/db'

@@ -19,6 +19,8 @@ import {
   KeyRound,
   Copy,
   ShieldAlert,
+  ShieldCheck,
+  Unlink,
   Check,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from '../platform-client'
@@ -65,9 +67,23 @@ interface AdminRow {
   status: 'ACTIVE' | 'SUSPENDED'
   isRoot: boolean
   isDemo: boolean
+  /** ACCOUNT-RECOVERY — Google identity link state (recovery actions). */
+  googleLinked: boolean
+  googleEmail: string | null
   createdAt: string
   grants: string[]
   permissionCatalog: string[]
+}
+
+/** ACCOUNT-RECOVERY — pending dual-control tickets (root targets). */
+interface RecoveryTicketRow {
+  id: string
+  action: 'PASSWORD_RESET' | 'GOOGLE_UNLINK'
+  createdAt: string
+  expiresAt: string
+  reason: string | null
+  target: { id: string; email: string | null; name: string | null }
+  initiatedBy: { id: string; email: string | null; name: string | null }
 }
 
 interface EnrollmentPayload {
@@ -142,6 +158,9 @@ export function AdminsModule() {
   const [suspendTarget, setSuspendTarget] = useState<AdminRow | null>(null)
   const [suspending, setSuspending] = useState(false)
 
+  // ACCOUNT-RECOVERY — pending dual-control tickets (root recovery).
+  const [recoveryTickets, setRecoveryTickets] = useState<RecoveryTicketRow[]>([])
+
   const canManage = can('admins.manage')
   const isSelf = (a: AdminRow) => Boolean(me && me.admin.id === a.id)
 
@@ -164,9 +183,22 @@ export function AdminsModule() {
     }
   }, [])
 
+  const loadRecovery = useCallback(async () => {
+    if (!can('admins.manage')) return
+    try {
+      const body = await platformApi<{ tickets: RecoveryTicketRow[] }>(
+        '/api/platform/admins/recovery',
+      )
+      setRecoveryTickets(body.tickets)
+    } catch {
+      // Non-fatal — the queue renders empty on error.
+    }
+  }, [can])
+
   useEffect(() => {
     void load()
-  }, [load])
+    void loadRecovery()
+  }, [load, loadRecovery])
 
   // ---- permission toggle (step-up gated) ----
   const togglePermission = async (admin: AdminRow, key: string, granted: boolean) => {
@@ -275,6 +307,114 @@ export function AdminsModule() {
     } catch (e) {
       const err = e as PlatformApiError
       toast.error(err.error || 'Failed to reactivate the admin')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // ---- ACCOUNT-RECOVERY: admin-assisted credential recovery ----
+  // Email a single-use password reset link to the target admin (the
+  // acting admin never sees a password). ROOT targets create a
+  // dual-control ticket that a SECOND admins.manage holder must confirm.
+  const resetPassword = async (admin: AdminRow) => {
+    if (
+      !window.confirm(
+        admin.isRoot
+          ? `Initiate a password reset for ROOT admin ${admin.name}? A second authorized administrator must confirm the ticket before the reset email is sent.`
+          : `Send a single-use password reset link to ${admin.email}? Their active sessions will be signed out when they set the new password.`,
+      )
+    ) {
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await gate(() =>
+        platformApi<{ dualControl: boolean; message?: string; ticketId?: string }>(
+          `/api/platform/admins/${admin.id}/reset-password`,
+          { method: 'POST' },
+        ),
+      )
+      if (result === undefined) return
+      if (result.dualControl) {
+        toast.info(
+          `Dual-control ticket created — a second authorized administrator must confirm it (15-minute window).`,
+        )
+      } else {
+        toast.success(`Reset link sent to ${admin.email}`)
+      }
+      await load()
+      await loadRecovery()
+    } catch (e) {
+      const err = e as PlatformApiError
+      toast.error(err.error || 'Failed to send the reset link')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Emergency Google-identity removal for a locked-out admin (root
+  // targets: dual-control ticket, same as password reset).
+  const adminUnlinkGoogle = async (admin: AdminRow) => {
+    if (
+      !window.confirm(
+        admin.isRoot
+          ? `Unlink the Google identity from ROOT admin ${admin.name}? A second authorized administrator must confirm the ticket.`
+          : `Unlink the Google identity from ${admin.name}? Their sessions will be revoked.`,
+      )
+    ) {
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await gate(() =>
+        platformApi<{ dualControl: boolean; message?: string; ticketId?: string }>(
+          `/api/platform/admins/${admin.id}/google-unlink`,
+          { method: 'POST' },
+        ),
+      )
+      if (result === undefined) return
+      if (result.dualControl) {
+        toast.info('Dual-control ticket created — a second administrator must confirm it.')
+      } else {
+        toast.success(`Google identity unlinked from ${admin.name}`)
+      }
+      await load()
+      await loadRecovery()
+    } catch (e) {
+      const err = e as PlatformApiError
+      toast.error(err.error || 'Failed to unlink the Google identity')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // ---- ACCOUNT-RECOVERY: dual-control ticket confirmation (the second
+  // person). The server refuses when the confirmer is the initiator or
+  // the target — the button is hidden for those roles here as UX.
+  const confirmRecovery = async (ticket: RecoveryTicketRow) => {
+    if (
+      !window.confirm(
+        `Confirm the ${ticket.action === 'PASSWORD_RESET' ? 'password reset' : 'Google unlink'} for ${ticket.target.name ?? ticket.target.id}? This executes the recovery action immediately.`,
+      )
+    ) {
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await gate(() =>
+        platformApi<{ message?: string }>(
+          `/api/platform/admins/recovery/${ticket.id}/confirm`,
+          { method: 'POST' },
+        ),
+      )
+      if (result === undefined) return
+      toast.success(result.message ?? 'Recovery ticket executed')
+      await load()
+      await loadRecovery()
+    } catch (e) {
+      const err = e as PlatformApiError
+      toast.error(err.error || 'Failed to confirm the recovery ticket')
+      await loadRecovery()
     } finally {
       setBusy(false)
     }
@@ -389,6 +529,71 @@ export function AdminsModule() {
         </Card>
       )}
 
+      {/* ACCOUNT-RECOVERY — pending dual-control tickets (root recovery).
+          The SECOND-person queue: tickets another authorized admin
+          initiated against a root account, awaiting a distinct
+          confirmation. Hidden entirely when empty. */}
+      {!loading && canManage && recoveryTickets.length > 0 && (
+        <Card className="rounded-xl border-amber-200 bg-amber-50/60 shadow-sm">
+          <CardContent className="p-4 sm:p-5 space-y-3">
+            <div className="flex items-start gap-2.5">
+              <ShieldAlert className="h-4.5 w-4.5 text-amber-600 shrink-0 mt-0.5" aria-hidden="true" />
+              <div>
+                <p className="text-sm font-semibold text-slate-900">
+                  Root recovery — awaiting a second administrator
+                </p>
+                <p className="text-xs text-slate-500">
+                  Dual-control tickets expire 15 minutes after initiation. A ticket cannot be
+                  confirmed by its initiator or by the account it targets.
+                </p>
+              </div>
+            </div>
+            <ul className="space-y-2">
+              {recoveryTickets.map((t) => {
+                const selfInitiated = Boolean(me && me.admin.id === t.initiatedBy.id)
+                const selfTarget = Boolean(me && me.admin.id === t.target.id)
+                const locked = selfInitiated || selfTarget
+                return (
+                  <li
+                    key={t.id}
+                    className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-3"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="text-sm text-slate-900">
+                        <span className="font-semibold">
+                          {t.action === 'PASSWORD_RESET' ? 'Password reset' : 'Google unlink'}
+                        </span>{' '}
+                        for <span className="font-semibold">{t.target.name ?? t.target.id}</span>
+                        <span className="text-slate-400"> · root account</span>
+                      </p>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        Initiated by {t.initiatedBy.name ?? t.initiatedBy.email ?? t.initiatedBy.id} ·
+                        expires {new Date(t.expiresAt).toLocaleTimeString()}
+                      </p>
+                      {locked && (
+                        <p className="text-[11px] text-amber-700">
+                          {selfInitiated
+                            ? 'You initiated this ticket — another administrator must confirm it.'
+                            : 'This ticket targets your account — another administrator must confirm it.'}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      onClick={() => void confirmRecovery(t)}
+                      disabled={busy || locked}
+                      className="h-10 px-4 bg-amber-600 hover:bg-amber-700 text-white font-semibold focus-ring shrink-0"
+                    >
+                      <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                      Confirm &amp; execute
+                    </Button>
+                  </li>
+                )
+              })}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Skeletons */}
       {loading && (
         <div className="space-y-2" aria-hidden="true">
@@ -495,32 +700,61 @@ export function AdminsModule() {
                           className="text-right"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {a.status === 'ACTIVE' ? (
+                          <div className="inline-flex items-center gap-1.5">
+                            {/* ACCOUNT-RECOVERY — credential recovery actions */}
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => setSuspendTarget(a)}
-                              disabled={isSelf(a) || busy}
-                              aria-label={`Suspend ${a.name}`}
-                              title={isSelf(a) ? 'You cannot suspend your own account' : undefined}
-                              className="h-9 px-3.5 border-red-200 bg-transparent text-red-600 hover:bg-red-50 hover:text-red-700 focus-ring"
+                              onClick={() => void resetPassword(a)}
+                              disabled={busy || a.status !== 'ACTIVE'}
+                              aria-label={`Send password reset link to ${a.name}`}
+                              title="Email a single-use password reset link (root targets need a second admin's confirmation)"
+                              className="h-9 px-3 border-slate-200 bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-ring"
                             >
-                              <Ban className="h-3.5 w-3.5" aria-hidden="true" />
-                              Suspend
+                              <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                              Reset
                             </Button>
-                          ) : (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => void reactivate(a)}
-                              disabled={busy}
-                              aria-label={`Reactivate ${a.name}`}
-                              className="h-9 px-3.5 border-emerald-200 bg-transparent text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 focus-ring"
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                              Reactivate
-                            </Button>
-                          )}
+                            {a.googleLinked && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void adminUnlinkGoogle(a)}
+                                disabled={busy}
+                                aria-label={`Unlink Google identity from ${a.name}`}
+                                title="Remove the linked Google identity (root targets need a second admin's confirmation)"
+                                className="h-9 px-3 border-slate-200 bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-ring"
+                              >
+                                <Unlink className="h-3.5 w-3.5" aria-hidden="true" />
+                                Unlink
+                              </Button>
+                            )}
+                            {a.status === 'ACTIVE' ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setSuspendTarget(a)}
+                                disabled={isSelf(a) || busy}
+                                aria-label={`Suspend ${a.name}`}
+                                title={isSelf(a) ? 'You cannot suspend your own account' : undefined}
+                                className="h-9 px-3.5 border-red-200 bg-transparent text-red-600 hover:bg-red-50 hover:text-red-700 focus-ring"
+                              >
+                                <Ban className="h-3.5 w-3.5" aria-hidden="true" />
+                                Suspend
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void reactivate(a)}
+                                disabled={busy}
+                                aria-label={`Reactivate ${a.name}`}
+                                className="h-9 px-3.5 border-emerald-200 bg-transparent text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 focus-ring"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                                Reactivate
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                       {open && (
@@ -606,6 +840,33 @@ export function AdminsModule() {
                     {open ? 'Hide capabilities' : 'Capabilities'}
                   </Button>
                   {open && <PermissionList admin={a} />}
+                  {/* ACCOUNT-RECOVERY — mobile recovery actions */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void resetPassword(a)}
+                      disabled={busy || a.status !== 'ACTIVE'}
+                      className="h-11 border-slate-200 bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-ring"
+                    >
+                      <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                      Reset password
+                    </Button>
+                    {a.googleLinked ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void adminUnlinkGoogle(a)}
+                        disabled={busy}
+                        className="h-11 border-slate-200 bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-ring"
+                      >
+                        <Unlink className="h-3.5 w-3.5" aria-hidden="true" />
+                        Unlink Google
+                      </Button>
+                    ) : (
+                      <div />
+                    )}
+                  </div>
                   {a.status === 'ACTIVE' ? (
                     <Button
                       variant="outline"

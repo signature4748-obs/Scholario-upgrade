@@ -31,6 +31,9 @@ export async function GET() {
         status: a.status,
         isRoot: a.isRoot,
         isDemo: a.isDemo,
+        // ACCOUNT-RECOVERY — Google link state for the recovery actions.
+        googleLinked: a.googleSub !== null,
+        googleEmail: a.googleEmail ?? null,
         createdAt: a.createdAt.toISOString(),
         lastLoginAt: null,
         grants: a.isRoot

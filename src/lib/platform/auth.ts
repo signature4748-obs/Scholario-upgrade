@@ -59,6 +59,9 @@ export interface PlatformAdminAuth {
   isRoot: boolean
   isDemo: boolean
   totpSecret: string
+  /** ACCOUNT-RECOVERY — linked Google identity (null = none). */
+  googleSub: string | null
+  googleEmail: string | null
 }
 
 export interface PlatformSessionAuth {

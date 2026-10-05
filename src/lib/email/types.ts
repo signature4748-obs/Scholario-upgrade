@@ -17,7 +17,10 @@
  * anything outside this union is rejected loudly by the pipeline
  * (FAILED EmailDelivery row, never a crash).
  */
-export type TemplateId = 'admission-enquiry-received' | 'salary-payment-recorded'
+export type TemplateId =
+  | 'admission-enquiry-received'
+  | 'salary-payment-recorded'
+  | 'platform-password-reset'
 
 /** Props for 'admission-enquiry-received' (public form confirmation). */
 export interface AdmissionEnquiryEmailProps {
@@ -40,8 +43,23 @@ export interface SalaryPaymentEmailProps {
   amount: string
 }
 
+/** Props for 'platform-password-reset' (PlatformAdmin account recovery). */
+export interface PlatformPasswordResetEmailProps {
+  /** Admin display name (from the PlatformAdmin row). */
+  adminName: string
+  /** The full reset link INCLUDING the raw single-use token. */
+  resetUrl: string
+  /** Minutes until the link expires (display only). */
+  expiresInMinutes: number
+  /** Requester IP for the security notice footer (display only). */
+  requestIp?: string
+}
+
 /** Per-template prop payload (validated at RENDER time, not by types). */
-export type EmailTemplateProps = AdmissionEnquiryEmailProps | SalaryPaymentEmailProps
+export type EmailTemplateProps =
+  | AdmissionEnquiryEmailProps
+  | SalaryPaymentEmailProps
+  | PlatformPasswordResetEmailProps
 
 /**
  * Tenant branding resolved server-side from the School row (minimal

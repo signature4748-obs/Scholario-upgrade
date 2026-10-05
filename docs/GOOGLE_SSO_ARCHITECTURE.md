@@ -1,11 +1,18 @@
 # Google SSO Architecture (Identity Provider Integration)
 
-> **STATUS: ARCHITECTED — NOT IMPLEMENTED.**
-> No Google authentication code exists in this repository today. This
-> document defines the target architecture so the capability can be built
-> without re-architecting tenancy, authorization, or the platform boundary.
-> The product must never present a "connected" state for an integration
-> that is not implemented (the onboarding wizard's Google SSO step shows
+> **STATUS: ARCHITECTED (school-side) — NOT IMPLEMENTED for tenants.**
+> **Platform-admin Google sign-in IS implemented** (ACCOUNT-RECOVERY,
+> `docs/PLATFORM_ACCOUNT_RECOVERY.md`): an OPTIONAL, explicitly-linked
+> Google identity for `PlatformAdmin` accounts with full OIDC
+> verification — strictly identity, never authorization, never
+> auto-creation. Principle 4 below is superseded ONLY for that
+> platform-admin surface; school-side SSO remains as designed here.
+> No Google authentication code exists in this repository for SCHOOL
+> sign-in today. This document defines the target architecture for the
+> school surface so the capability can be built without re-architecting
+> tenancy, authorization, or the platform boundary. The product must
+> never present a "connected" state for an integration that is not
+> implemented (the onboarding wizard's Google SSO step shows
 > **Not connected** and is not selectable; the provisioning API refuses
 > `authMethod: GOOGLE_SSO` with a typed error).
 

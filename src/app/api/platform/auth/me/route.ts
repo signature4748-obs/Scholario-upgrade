@@ -31,6 +31,11 @@ export async function GET() {
         email: ctx.admin.email,
         name: ctx.admin.name,
         isRoot: ctx.admin.isRoot,
+        // ACCOUNT-RECOVERY — Google sign-in state for the settings
+        // surface (email shown so the admin can verify WHICH Google
+        // identity is linked; sub is never exposed).
+        googleLinked: ctx.admin.googleSub !== null,
+        googleEmail: ctx.admin.googleEmail ?? null,
       },
       permissions: [...ctx.permissions],
       // Current MFA posture — see lib/platform/mfa-config.ts.
