@@ -15,7 +15,7 @@
 | 1 | Database | ✅ PG 17.11 · 111 business tables + `_prisma_migrations` · 14/14 migrations applied, repo-identical · Prisma sole authority |
 | 2 | Authentication | ✅ Supabase Auth intentionally unused · `auth.users` = 0 rows · findings: signup not disabled, `site_url` stale (§9) |
 | 3 | RLS | ✅ 112/112 tables RLS-enabled, zero policies — deny-by-default is correct for this architecture (proof chain §3) |
-| 4 | Grants | ⚠️ anon/authenticated hold full default table grants — unused attack surface · least-privilege migration **prepared, not executed** (§4) |
+| 4 | Grants | ⚠️ anon/authenticated hold full default table grants — unused attack surface · least-privilege migration **created + locally tested, awaiting owner approval** (§4) |
 | 5 | Storage | ✅ public-media public (intentional, gated serving) · school-media private, server-authorized only · tenant isolation verified (§5) |
 | 6 | Realtime | ✅ Broadcast only · empty `supabase_realtime` publication is correct — no Postgres Changes anywhere (§6) |
 | 7 | Performance | ✅ 69 FK findings classified: 0 high-value today, 3 medium (future), rest covered/low — **no indexes added** (§7) |
@@ -87,7 +87,7 @@ Dependency proof chain (why no policies are needed and none were created):
 policies** (policies would only widen the anon surface). The complementary
 hardening is revoking the unused table grants — §4.
 
-## 4. Grants — prepared least-privilege migration (NOT executed)
+## 4. Grants — least-privilege migration (created, awaiting owner approval)
 
 Live state: `anon` and `authenticated` hold **full privileges**
 (SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER) on all 111 public
@@ -99,16 +99,23 @@ Because the application never uses PostgREST for data (§3), these
 anon/authenticated grants are pure attack surface: they are the thing that
 would turn an accidental RLS disable into live data access.
 
-**Prepared**: `docs/hardening/least-privilege-grants.sql` — revokes
-anon/authenticated table+sequence privileges on `public` and fixes default
-privileges for future tables; keeps every service_role grant; touches
-storage/auth/realtime schemas not at all. Idempotent, with rollback and a
-promotion procedure (local → prod-migration workflow → verify).
+**Created (2026-10-06)**: Prisma migration
+`20261006123000_least_privilege_grants` — revokes anon/authenticated
+table+sequence privileges on `public` and hardens default privileges for
+future tables; keeps every service_role grant; touches
+storage/auth/realtime schemas not at all. Idempotent, role-guarded for
+plain PostgreSQL, with exact rollback and verification SQL
+(`docs/hardening/least-privilege-grants.sql`, policy:
+`docs/hardening/DATABASE_GRANTS.md`).
 
-Not executed: the audit mandate is zero-change; execution is the owner's
-call. Safety of the migration is proven by the §3 dependency chain plus the
-existing test contract (`tests/security/pg-rls.test.ts` treats `401/403` and
-`[]` as equally closed, so revocation keeps the suite green).
+Locally proven: full migration replay in a Supabase-simulated database
+(roles + default ACL) → anon/authenticated receive **42501** on every
+business table, service_role grants intact, Prisma CRUD green, tenant
+guards firing, future tables stay closed. Not executed on production:
+execution is the owner's call (DATABASE_GRANTS.md §13 gate). Safety is
+proven by the §3 dependency chain plus the existing test contract
+(`tests/security/pg-rls.test.ts` treats `401/403` and `[]` as equally
+closed, so revocation keeps the suite green).
 
 ## 5. Storage
 
