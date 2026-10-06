@@ -1,8 +1,12 @@
 # Database Grants Policy — Least-Privilege for the Data API Surface
 
 **Status (2026-10-06):** migration `20261006123000_least_privilege_grants` is
-created, locally tested, and **awaives owner approval for production
-execution**. Nothing has been applied to production yet.
+**APPLIED TO PRODUCTION and fully verified** (owner-approved run, §16).
+Applied at 2026-10-06T14:23:33Z via the prod-migration pipeline; every
+verification in §14/§16 is green. anon/authenticated now hold **zero**
+public-business-table privileges; service_role/postgres unchanged; RLS
+unchanged (112/112 enabled, 0 policies); default ACL closed for future
+postgres-created tables.
 
 The application's access model, proven by repo audit + live probes:
 
@@ -224,13 +228,23 @@ expect `GET /rest/v1/<table>` with the anon key to return `[]` again.
 
 ## 13. Production deployment gate (owner approval required)
 
-**PRODUCTION GRANT CHANGE**
+**EXECUTED 2026-10-06.** The gate was honored end-to-end:
+
+- Current/target/impact/rollback were presented as below (and as the
+  migration header) BEFORE execution.
+- The owner explicitly approved applying this migration to production
+  (recorded in §16).
+- Execution went through the standard prod-migration pipeline
+  (`scripts/prod-migration` — preflight snapshot → transactional apply →
+  verify), never SQL by hand.
+
+For the historical gate record:
 
 - Current: anon/authenticated → full public-table privileges (dormant
   under RLS).
 - Target: anon/authenticated → no public-table privileges.
-- Impact: direct Supabase Data API access to business tables will be
-  denied (42501/403). Application path Vercel → Prisma → PostgreSQL is
+- Impact: direct Supabase Data API access to business tables is
+  denied (42501/401-403). Application path Vercel → Prisma → PostgreSQL is
   unchanged. Expected application impact: **none** (repo + live evidence,
   §3/§4).
 - Rollback: §12.
@@ -238,18 +252,32 @@ expect `GET /rest/v1/<table>` with the anon key to return `[]` again.
   (`scripts/prod-migration` pipeline — apply, verify, then the §14
   checklist). Do NOT run SQL by hand if the pipeline is available.
 
-## 14. Post-deploy verification checklist
+## 14. Post-deploy verification checklist — RESULTS (2026-10-06 run)
 
-1. `SELECT count(*) … anon/authenticated grants` → **0** (query in §10 style).
-2. service_role still has 8 privileges on 112 tables.
-3. RLS census still 112/112, 0 policies.
-4. `pg-rls.test.ts` (Supabase integration env) green; anon REST probe → 403.
-5. `/health/ready` → 200 `database:ok` on both Vercel planes.
-6. Platform login + school login (green-valley, hawkings) + cross-plane 404.
-7. Storage upload/sign/serving smoke (school-media private, public-media).
-8. Realtime broadcast smoke (publish + subscribe round-trip).
-9. Re-run the Supabase Security Advisor (expect the same findings as the
-   audit: rls_enabled_no_policy ×112 intentional; no new findings).
+1. `SELECT count(*) … anon/authenticated grants` → **0** ✓ (live re-run:
+   0 objects, 0 privilege pairs; was 108 objects / 864 pairs per role).
+2. service_role still has 8 privileges on 112 tables ✓ (896 pairs —
+   unchanged).
+3. RLS census still 112/112, 0 policies ✓.
+4. `pg-rls.test.ts` (Supabase integration env) green; anon REST probe →
+   401/403 ✓ (live probes below — the suite's "equally closed" contract
+   accepts the new 401 bodies; the suite was not re-executed against
+   production in this run — its probe-role design forbids that — the live
+   REST/SQL probes are the production evidence).
+5. `/health/ready` → 200 `database:ok` on both Vercel planes ✓ (re-probed
+   after the migration).
+6. Platform login + school login (green-valley, hawkings-prithvipur) +
+   cross-plane 404s ✓.
+7. Storage smoke ✓ — service-role list 200; sign+fetch of a real
+   school-media object (HTTP 200 application/pdf); anon direct fetch
+   denied; public-media no-key fetch HTTP 200 image/png.
+8. Realtime broadcast smoke ✓ — websocket subscribe + REST publish
+   (service-role) → frame delivered to subscriber; `phx_reply` shows
+   `postgres_changes: []`.
+9. Supabase Security Advisor re-run ✓ — 112 × `rls_enabled_no_policy`
+   (INFO, intentional) + 1 × `extension_in_public` (WARN, pre-existing
+   deferred pg_trgm) — identical to the audit baseline, **no new
+   findings**, no grant-related findings.
 
 ## 15. Residual risks
 
@@ -266,3 +294,53 @@ expect `GET /rest/v1/<table>` with the anon key to return `[]` again.
 - If Supabase re-applies default grants during a platform upgrade, the
   §10 verification query catches it; re-run the migration statements
   (idempotent) to re-close.
+
+## 16. Production application record (2026-10-06)
+
+| field | value |
+|---|---|
+| migration | `20261006123000_least_privilege_grants` (sha256 `01e6e09e17efff53…`) |
+| approval | owner-approved in writing before execution (gate §13 honored) |
+| applied at | 2026-10-06T14:23:33Z (UTC) |
+| channel | `scripts/prod-migration` apply (Supabase Management API, role postgres, single transaction + `_prisma_migrations` row with true Prisma checksum) |
+| checkout / deployed SHA | `c8b0521` — identical on both Vercel planes (platform + school) |
+| duration | 4.2 s, one transaction (REVOKEs + default ACL + history row) |
+
+**Before → after (live inventory, read-only SQL):**
+
+| measure | before | after |
+|---|---|---|
+| public objects with anon/authenticated grants | 108 | **0** |
+| anon privilege pairs | 864 (108 × 8) | **0** |
+| authenticated privilege pairs | 864 | **0** |
+| service_role privilege pairs | 896 (112 × 8) | 896 (unchanged) |
+| postgres default ACL (public, tables `r` / sequences `S`) | grants anon+authenticated+service_role | grants **service_role only** |
+| default ACL `f` (functions) and all `supabase_admin` entries | full | unchanged (deliberate, §6/§7) |
+| RLS census | 112/112 enabled, 0 policies | 112/112 enabled, 0 policies (unchanged) |
+
+**Negative access (the intended hardened behavior — 42501 is success):**
+
+- `SET ROLE anon; SELECT … "School"` → ERROR 42501 permission denied for
+  table School ✓
+- `SET ROLE anon; INSERT INTO "School"` → 42501 ✓
+- `SET ROLE authenticated; SELECT … "Student"` → 42501 ✓
+- `SET ROLE authenticated; INSERT INTO "Student"` → 42501 ✓
+- `GET /rest/v1/School` with anon key → HTTP 401,
+  `{"code":"42501","message":"permission denied for table School"}` ✓
+  (before: `200 []` — RLS silent deny)
+- future-table probe (transactional, rolled back): a table created as
+  postgres receives **no** anon/authenticated grants, keeps service_role ✓
+
+**Application access (unchanged, verified on production):**
+
+- pipeline verify stage A–G green (row counts, credentials, indexes,
+  account-recovery objects, health)
+- Prisma (role postgres) live CRUD: SELECT (both tenants resolve;
+  User=185, Student=82), INSERT + UPDATE + DELETE of a probe
+  `GrowthEvent` row — net-zero (count back to baseline), tenant-guard
+  trigger rejected a cross-tenant INSERT ✓
+- both Vercel planes `/health/ready` → 200 `database:ok` post-migration
+  (this endpoint runs a real Prisma query — production Prisma path proof)
+
+**Rollback:** §12, unchanged and still valid (the §12 SQL was never needed
+in this run).
