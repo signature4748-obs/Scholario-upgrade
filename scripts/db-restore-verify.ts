@@ -254,6 +254,25 @@ async function main(): Promise<void> {
     let statements = 0
     try {
       await query('BEGIN')
+      // 2026-10-06 (DR drill finding): tenant-guard triggers assert
+      // cross-table invariants (child.schoolId = parent.schoolId) that the
+      // FK graph does NOT encode — e.g. StudyMaterial.subjectId is guarded
+      // but has no FK edge to Subject, so the FK-parents-first order can
+      // still load a child before its guard's referent exists, and the
+      // load aborts mid-transaction. USER triggers are therefore disabled
+      // for the load ONLY (FK internal triggers stay live — existence is
+      // still enforced), re-enabled BEFORE COMMIT; a failed load rolls the
+      // whole thing (rows + disables) back via ROLLBACK. Post-load, the
+      // guard invariants are re-verified by the drill audit (cross-tenant
+      // counts + insert-rejection probe — docs/DISASTER_RECOVERY.md).
+      const { rows: guardTables } = await query(
+        `SELECT table_name FROM information_schema.tables
+          WHERE table_schema = $1 AND table_type = 'BASE TABLE'`,
+        [target],
+      )
+      for (const r of guardTables) {
+        await query(`ALTER TABLE "${target}"."${String(r.table_name)}" DISABLE TRIGGER USER`)
+      }
       for (const table of loadOrder) {
         const cols = columnsByTable.get(table) as ColumnMeta[]
         const rows = rowsByTable.get(table) as Record<string, unknown>[]
@@ -277,6 +296,11 @@ async function main(): Promise<void> {
           statements++
         }
       }
+      // Re-enable every user trigger BEFORE COMMIT — the committed state
+      // always ends with tenant/bound guards armed.
+      for (const r of guardTables) {
+        await query(`ALTER TABLE "${target}"."${String(r.table_name)}" ENABLE TRIGGER USER`)
+      }
       await query('COMMIT')
     } catch (e: unknown) {
       // ROLLBACK first so the ORIGINAL error (not the aborted-transaction
@@ -299,6 +323,11 @@ async function main(): Promise<void> {
     let totalRestored = 0
     const verifyOrder = [...scratchTables].sort()
     for (const table of verifyOrder) {
+      // _prisma_migrations is a repo artifact (prisma migrate deploy owns
+      // it); the backup deliberately never contains it, and in --into
+      // public mode it legitimately holds the applied-migration rows —
+      // counting it against the backup is a false comparison, skip it.
+      if (table === '_prisma_migrations') continue
       const backupCount = (rowsByTable.get(table) ?? []).length
       const { rows } = await query(`SELECT count(*)::int AS c FROM "${target}"."${table}"`)
       const restored = Number(rows[0]['c'])
