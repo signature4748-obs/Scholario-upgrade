@@ -14,10 +14,17 @@
  *     · /platform/* and /api/platform/* do not exist there.
  *
  *   unified (SCHOLARIO_PLANE unset or 'unified')
- *     · BOTH planes served from one deployment — the legacy
- *       scholario-production behavior, byte-compatible. Every existing
- *       deployment that does not set the variable keeps working exactly
- *       as before (fail-open to the current production topology).
+ *     · BOTH planes served from one deployment — the DEPRECATED legacy
+ *       scholario-production behavior. In production this requires the
+ *       explicit opt-in SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1 (set only
+ *       on the legacy project until it is decommissioned). Local
+ *       development defaults to unified with no opt-in needed.
+ *
+ * FAIL-CLOSED: an invalid SCHOLARIO_PLANE value never silently falls
+ * back to unified. In production the module refuses to load (builds
+ * and requests fail loudly); in development the error surfaces at
+ * startup. A typo'd plane value must never quietly expose both
+ * surfaces from one deployment.
  *
  * The value is set PER VERCEL PROJECT as an environment variable (same
  * repo, same build, different plane). Middleware enforces the boundary
@@ -35,14 +42,44 @@
 
 export type Plane = 'platform' | 'school' | 'unified'
 
+/**
+ * Legacy opt-in: the deprecated unified scholario-production deployment
+ * sets SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1 so it can keep serving both
+ * planes from one project until it is decommissioned. Nobody else may
+ * run unified in production.
+ */
+function legacyUnifiedAllowed(): boolean {
+  return process.env.SCHOLARIO_ALLOW_UNIFIED_PRODUCTION === '1'
+}
+
+function invalidPlaneError(raw: string, production: boolean): Error {
+  const expected = production
+    ? '"platform" or "school" ("unified" only on the deprecated legacy project via SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1)'
+    : '"platform", "school" or "unified"'
+  return new Error(
+    `Invalid SCHOLARIO_PLANE configuration: got ${JSON.stringify(raw)}, expected ${expected}. ` +
+      (production
+        ? 'Refusing to serve — production plane configuration must be explicit (fail closed).'
+        : 'Set a valid plane before starting the app.'),
+  )
+}
+
 function readPlane(): Plane {
   const raw = process.env.SCHOLARIO_PLANE
-  if (typeof raw !== 'string') return 'unified'
-  const v = raw.trim().toLowerCase()
-  if (v === 'platform' || v === 'school' || v === 'unified') return v
-  // Unrecognized value → 'unified' (fail-open to the legacy topology:
-  // a typo'd plane value must never silently delete half the product).
-  return 'unified'
+  const production = process.env.NODE_ENV === 'production'
+  const v = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+
+  if (v === 'platform' || v === 'school') return v
+
+  const isUnified = v === '' || v === 'unified'
+  if (isUnified && (!production || legacyUnifiedAllowed())) {
+    // '' = unset: the local-development default and legacy deployments.
+    return 'unified'
+  }
+
+  // Unset/'unified' in production without the legacy opt-in, or any
+  // unrecognized value: FAIL CLOSED — never guess a plane.
+  throw invalidPlaneError(typeof raw === 'string' ? raw : 'unset', production)
 }
 
 /** The deployment plane (memoized per process). */

@@ -12,8 +12,17 @@
  *       · SCHOLARIO_PLANE=school → /platform/* and /api/platform/* DO
  *         NOT EXIST (404) — except the public announcements broadcast
  *         (read-only, anonymous, cross-plane by design).
- *       · unified (default) → nothing is plane-blocked (the legacy
- *         production topology keeps working byte-compatibly).
+ *       · unified (local-dev default) → nothing is plane-blocked.
+ *
+ *  A2. PLANE CONFIG FAILS CLOSED (src/lib/plane.ts, real module load
+ *     via the child-process probe):
+ *       · an INVALID value (typo/garbage) refuses to load the
+ *         middleware — no silent unified fallback, dev or prod.
+ *       · unset / 'unified' in PRODUCTION without the legacy opt-in
+ *         (SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1) refuses to load.
+ *       · the deprecated legacy project's opt-in keeps unified alive
+ *         in production (byte-compatible legacy behavior).
+ *       · local development keeps working with the variable unset.
  *
  *  B. CANONICAL SCHOOL DOORS (live HTTP against the dev server):
  *       · /s/<real-slug>/login → 200 (the school's login door exists)
@@ -48,13 +57,27 @@ interface ProbeVerdict {
   status: number
   blocked: boolean
   contentType: string
+  error?: string
 }
 
-function probe(plane: string, path: string, method = 'GET'): Promise<ProbeVerdict> {
+function probe(
+  plane: string,
+  path: string,
+  method = 'GET',
+  nodeEnv = 'test',
+  allowUnified = '',
+): Promise<ProbeVerdict> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       'bun',
-      ['tests/helpers/plane-middleware-probe.ts', plane, path, method],
+      [
+        'tests/helpers/plane-middleware-probe.ts',
+        plane,
+        path,
+        method,
+        nodeEnv,
+        allowUnified,
+      ],
       { cwd: ROOT },
     )
     let out = ''
@@ -145,15 +168,59 @@ describe('plane gate — SCHOLARIO_PLANE=school (school ERP deployment)', () => 
   })
 })
 
-describe('plane gate — unified default (legacy topology preserved)', () => {
-  test('nothing is plane-blocked when SCHOLARIO_PLANE is unset/invalid', async () => {
+describe('plane gate — unified default (local development topology)', () => {
+  test('nothing is plane-blocked when SCHOLARIO_PLANE is unset (local dev default)', async () => {
+    expect((await probe('UNSET', '/login')).blocked).toBe(false)
+    expect((await probe('UNSET', '/platform/login')).blocked).toBe(false)
+    expect((await probe('UNSET', '/s/green-valley/login')).blocked).toBe(false)
+    expect((await probe('UNSET', '/api/auth/login', 'POST')).blocked).toBe(false)
+    expect((await probe('UNSET', '/api/platform/schools')).blocked).toBe(false)
     expect((await probe('unified', '/login')).blocked).toBe(false)
-    expect((await probe('unified', '/platform/login')).blocked).toBe(false)
-    expect((await probe('unified', '/s/green-valley/login')).blocked).toBe(false)
-    expect((await probe('unified', '/api/auth/login', 'POST')).blocked).toBe(false)
     expect((await probe('unified', '/api/platform/schools')).blocked).toBe(false)
-    // Unrecognized value → unified (fail-open to the current topology).
-    expect((await probe('typoed-value', '/login')).blocked).toBe(false)
+  })
+})
+
+describe('plane config hardening — misconfiguration fails closed', () => {
+  test('a typoed plane value refuses to serve anything (no silent unified fallback)', async () => {
+    const v = await probe('scholl', '/login')
+    expect(v.blocked).toBe(true)
+    expect(v.status).toBe(500)
+    expect(v.error).toContain('SCHOLARIO_PLANE')
+    expect(v.error).toContain('scholl')
+  })
+
+  test('production without a plane value fails closed', async () => {
+    const v = await probe('UNSET', '/login', 'GET', 'production')
+    expect(v.blocked).toBe(true)
+    expect(v.status).toBe(500)
+    expect(v.error).toContain('SCHOLARIO_PLANE')
+  })
+
+  test("explicit 'unified' in production fails closed without the legacy opt-in", async () => {
+    const v = await probe('unified', '/login', 'GET', 'production')
+    expect(v.blocked).toBe(true)
+    expect(v.status).toBe(500)
+    expect(v.error).toContain('fail closed')
+  })
+
+  test('the legacy opt-in keeps the deprecated unified project alive in production', async () => {
+    const v = await probe('unified', '/login', 'GET', 'production', '1')
+    expect(v.blocked).toBe(false)
+    expect((await probe('unified', '/platform/login', 'GET', 'production', '1')).blocked).toBe(false)
+    expect((await probe('unified', '/api/platform/schools', 'GET', 'production', '1')).blocked).toBe(false)
+    expect((await probe('UNSET', '/login', 'GET', 'production', '1')).blocked).toBe(false)
+  })
+
+  test('the plane gate still applies in production mode (platform 404s school doors)', async () => {
+    const v = await probe('platform', '/login', 'GET', 'production')
+    expect(v.status).toBe(404)
+    expect((await probe('school', '/platform/login', 'GET', 'production')).status).toBe(404)
+  })
+
+  test('a typoed value fails closed in production too, even with the legacy opt-in', async () => {
+    const v = await probe('platfrm', '/login', 'GET', 'production', '1')
+    expect(v.status).toBe(500)
+    expect(v.error).toContain('SCHOLARIO_PLANE')
   })
 })
 

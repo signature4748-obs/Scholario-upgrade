@@ -19,7 +19,10 @@ import {
   * The SAME repository builds TWO Vercel projects:
   *   scholario-platform (SCHOLARIO_PLANE=platform) — control plane only
   *   scholario-app      (SCHOLARIO_PLANE=school)    — school ERP only
-  *   unset / 'unified'                            — legacy: both planes
+  *   'unified' (legacy project only, opt-in)         — both planes
+  *
+  * An invalid or missing plane value fails CLOSED in production
+  * (src/lib/plane.ts refuses to load — no silent unified fallback).
   *
   * PLANE GATE = ROUTE EXISTENCE, not authorization:
   *   · school plane  → /platform/* and /api/platform/* (except the
