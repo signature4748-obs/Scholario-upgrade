@@ -1,5 +1,10 @@
 # Backup & Recovery — Scholario-OS (Phase 8A, mission §30)
 
+> Status (2026-10-06): the authoritative recovery RUNBOOK is now
+> `docs/DISASTER_RECOVERY.md` (RPO/RTO, failure scenarios, procedures,
+> drills). This document stays as the tool-level reference and historical
+> evidence for the JSONL backup/restore path.
+
 Owner: SRE (Task 8A-OPS). Status: **backup + TESTED restore delivered and run against the live integration DB** (Supabase PG 17.11, Supavisor session pooler). `package.json` is frozen for another wave — the commands below are plain `bun` invocations, not npm scripts.
 
 ## What exists (and what does NOT)
