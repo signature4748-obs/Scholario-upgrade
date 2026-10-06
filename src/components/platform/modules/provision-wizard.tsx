@@ -24,12 +24,18 @@
 //                                 working days)
 //   · STEP 6  Review → CREATE SCHOOL
 //
+// The SUCCESS panel is the school-access truth surface (PHASE 10):
+// the new tenant's canonical LOGIN URL (from SCHOOL_APP_BASE_URL —
+// never guessed, copy resolves relative URLs against the current
+// origin), the founding principal, and the one-time bootstrap
+// credential with the forced-change warning.
+//
 // One application · one database · many tenants: everything here is
 // DATA — no new deployment, repo, or code change per school. The
 // school needs no developer.
 // ============================================================
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Building2,
@@ -44,6 +50,8 @@ import {
   ClipboardCheck,
   Copy,
   ExternalLink,
+  Info,
+  LogIn,
 } from 'lucide-react'
 import { platformApi, type PlatformApiError } from '../platform-client'
 import { Button } from '@/components/ui/button'
@@ -200,7 +208,13 @@ interface ProvisionResult {
     plan: string
   }
   principal: { id: string; email: string; name: string | null }
+  // TWO-PROJECT TOPOLOGY — the canonical doors (may be RELATIVE when
+  // SCHOOL_APP_BASE_URL is unset; the unified deployment serves both
+  // planes). Copies resolve relative URLs against the current origin.
+  loginUrl: string
+  publicUrl: string
   tempPassword?: string
+  mustChangePassword: boolean
   domain: {
     customDomain: { hostname: string; status: string } | null
     tempDomain: string
@@ -242,6 +256,74 @@ function StepDots({ step }: { step: number }) {
         )
       })}
     </ol>
+  )
+}
+
+// ── Inline-feedback copy button (PHASE 10 — school access truth) ──────────
+
+/** Resolve a possibly-relative plane URL to an absolute one (click-time only — window exists). */
+function absoluteUrl(url: string): string {
+  return url.startsWith('/') ? `${window.location.origin}${url}` : url
+}
+
+/**
+ * Copy button with inline "Copied" feedback (icon swaps to Check and
+ * the label changes for ~1.5s). `absolute` resolves a leading '/'
+ * against the current origin so the operator hands out a working
+ * link; the amber tone matches the one-time-credential warning block.
+ */
+function CopyInlineButton({
+  value,
+  absolute,
+  label,
+  tone = 'default',
+}: {
+  value: string
+  absolute?: boolean
+  label: string
+  tone?: 'default' | 'amber'
+}) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+    },
+    [],
+  )
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={() => {
+        const payload = absolute ? absoluteUrl(value) : value
+        void navigator.clipboard?.writeText(payload).then(
+          () => {
+            setCopied(true)
+            if (timer.current) clearTimeout(timer.current)
+            timer.current = setTimeout(() => setCopied(false), 1500)
+          },
+          () => {
+            /* clipboard unavailable — no success feedback (honest failure) */
+          },
+        )
+      }}
+      className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition-colors focus-ring ${
+        tone === 'amber'
+          ? 'border-amber-300 bg-white text-amber-800 hover:bg-amber-100'
+          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+      }`}
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+      ) : (
+        <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+      )}
+      {copied ? 'Copied' : 'Copy'}
+    </button>
   )
 }
 
@@ -422,10 +504,6 @@ export function ProvisionWizard({
     }
   }
 
-  const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text).then(() => toast.success('Copied'))
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto custom-scrollbar bg-white border-slate-200 text-slate-900 sm:max-w-2xl">
@@ -448,12 +526,23 @@ export function ProvisionWizard({
 
             <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
               <div className="flex justify-between gap-4">
-                <span className="text-slate-500">Slug</span>
+                <span className="text-slate-500">Tenant slug</span>
                 <span className="font-mono text-slate-900">{result.school.slug}</span>
               </div>
               <div className="flex justify-between gap-4">
-                <span className="text-slate-500">Founding principal</span>
-                <span className="text-slate-900">{result.principal.email}</span>
+                <span className="text-slate-500">School code</span>
+                <span className="font-mono text-slate-900">{result.school.code}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="shrink-0 text-slate-500">Founding principal</span>
+                <span className="min-w-0 text-right">
+                  <span className="block truncate font-semibold text-slate-900">
+                    {result.principal.name ?? '—'}
+                  </span>
+                  <span className="block truncate font-mono text-xs text-slate-600" title={result.principal.email}>
+                    {result.principal.email}
+                  </span>
+                </span>
               </div>
               <div className="flex justify-between gap-4">
                 <span className="text-slate-500">Bootstrap</span>
@@ -479,29 +568,82 @@ export function ProvisionWizard({
               </div>
             </div>
 
+            {/* School login URL — the canonical door (PHASE 10). Copied
+                links resolve relative URLs against the current origin so
+                the operator always hands out a working address. */}
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                School login URL
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                The door the principal, staff, students and parents sign in through — copy it exactly;
+                never guess a school address.
+              </p>
+              <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <code
+                  className="min-w-0 flex-1 truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono text-sm text-slate-900"
+                  title={result.loginUrl}
+                >
+                  {result.loginUrl}
+                </code>
+                <div className="flex shrink-0 items-center gap-2">
+                  <CopyInlineButton value={result.loginUrl} absolute label="Copy school login URL" />
+                  <a
+                    href={result.loginUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                    Open School
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {/* One-time credential (server-generated only) or the honest
+                forced-change note when the operator supplied the password. */}
             {result.tempPassword ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
                 <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-700">
-                  One-time temporary password
+                  One-time credential
                 </p>
                 <p className="mt-1 text-xs text-amber-800">
-                  Shown only once — hand it to the principal, who changes it at first sign-in.
+                  Shown only once — the principal must replace it at first sign-in (enforced).
                 </p>
                 <div className="mt-2 flex items-center gap-2">
-                  <code className="flex-1 rounded-lg border border-amber-200 bg-white px-3 py-2 font-mono text-sm text-slate-900">
+                  <code className="min-w-0 flex-1 truncate rounded-lg border border-amber-200 bg-white px-3 py-2 font-mono text-sm text-slate-900">
                     {result.tempPassword}
                   </code>
-                  <Button
-                    variant="outline"
-                    onClick={() => copy(result.tempPassword as string)}
-                    className="h-10 border-amber-300 bg-white text-amber-800 hover:bg-amber-100 focus-ring"
-                  >
-                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-                    Copy
-                  </Button>
+                  <CopyInlineButton
+                    value={result.tempPassword}
+                    label="Copy one-time credential"
+                    tone="amber"
+                  />
                 </div>
               </div>
+            ) : result.mustChangePassword ? (
+              <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+                <p>
+                  <span className="font-semibold text-slate-700">Forced first-password change is armed.</span>{' '}
+                  The password you supplied is a bootstrap value — the principal must set their own at
+                  first sign-in (server-enforced).
+                </p>
+              </div>
             ) : null}
+
+            {/* Data-driven next-step hint from the provision response. */}
+            {result.nextStep === 'activate' && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+                <p>
+                  <span className="font-semibold text-slate-700">Next step:</span> the school is PENDING —
+                  activate it from its record to enable sign-in.
+                </p>
+              </div>
+            )}
 
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
               <Button

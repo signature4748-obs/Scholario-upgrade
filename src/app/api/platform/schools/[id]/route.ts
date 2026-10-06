@@ -7,12 +7,15 @@ import { platformAuditEvent } from '@/lib/platform/audit'
 import { parseJsonBody, strictBody, safeText } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { parseFlags } from '@/lib/platform/module-flags'
+import { schoolLoginUrl, schoolPublicUrl } from '@/lib/plane'
 
 export const runtime = 'nodejs'
 
 /**
  * GET /api/platform/schools/[id] — full school dossier for the control
- * plane: profile, counts, recent school activity, active sessions.
+ * plane: profile, counts, recent school activity, active sessions,
+ * the founding principal's access state, and the tenant's canonical
+ * doors (login URL / public URL — the two-project topology surface).
  *
  * The school id in the URL is re-verified against the real School table
  * (fail-safe 404) — a platform admin sees real data only.
@@ -34,6 +37,31 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         internalDetail: 'platform school detail: no such school',
       })
     }
+
+    // ACCESS/INFRASTRUCTURE (Phase 10 — the platform UI exposes the
+    // truth): the founding principal (earliest PRINCIPAL row) with the
+    // credential/last-login state an operator actually needs, plus the
+    // tenant-domain rows for the domain-status surface.
+    const [principal, tenantDomains] = await Promise.all([
+      db.user.findFirst({
+        where: { schoolId: school.id, role: 'PRINCIPAL' },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          status: true,
+          mustChangePassword: true,
+          passwordChangedAt: true,
+          lastLoginAt: true,
+        },
+      }),
+      db.tenantDomain.findMany({
+        where: { schoolId: school.id },
+        orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+        select: { hostname: true, status: true, isPrimary: true },
+      }),
+    ])
 
     const [recentActivity, activeSchoolSessions, activeSupportSessions] = await Promise.all([
       db.activityLog.findMany({
@@ -74,6 +102,34 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       counts: school._count,
       activeSchoolSessions,
       activeSupportSessions,
+      // TWO-PROJECT TOPOLOGY — canonical doors + the Access card truth:
+      // URLs computed from SCHOOL_APP_BASE_URL (never guessed), the
+      // principal's credential state (mustChangePassword = bootstrap
+      // credential not yet replaced; lastLoginAt = has actually signed
+      // in), and the tenant-domain rows (custom-domain status).
+      access: {
+        loginUrl: schoolLoginUrl(school.slug),
+        publicUrl: schoolPublicUrl(school.slug),
+        principal: principal
+          ? {
+              id: principal.id,
+              email: principal.email,
+              name: principal.name,
+              status: principal.status,
+              credentialState: principal.mustChangePassword
+                ? 'BOOTSTRAP_PENDING'
+                : principal.passwordChangedAt
+                  ? 'OWNED'
+                  : 'UNKNOWN',
+              lastLoginAt: principal.lastLoginAt?.toISOString() ?? null,
+            }
+          : null,
+      },
+      domains: tenantDomains.map((d) => ({
+        hostname: d.hostname,
+        status: d.status,
+        isPrimary: d.isPrimary,
+      })),
       recentActivity: recentActivity.map((a) => ({
         id: a.id,
         action: a.action,

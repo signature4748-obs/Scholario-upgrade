@@ -9,6 +9,7 @@ import { platformAuditEvent } from '@/lib/platform/audit'
 import { parseQuery, parseJsonBody, strictBody, emailSchema, safeText } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { hostnameRejectionReason, normalizeHostname } from '@/lib/tenant/hostname'
+import { schoolLoginUrl, schoolPublicUrl } from '@/lib/plane'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -82,6 +83,12 @@ export async function GET(req: NextRequest) {
         featureFlags: s.featureFlags,
         createdAt: s.createdAt.toISOString(),
         counts: s._count,
+        // TWO-PROJECT TOPOLOGY — the canonical cross-plane doors this
+        // row's tenant is reached through (SCHOOL_APP_BASE_URL on the
+        // platform project; relative fallback on the unified legacy
+        // deployment). Admins must never GUESS a school's URL.
+        loginUrl: schoolLoginUrl(s.slug),
+        publicUrl: schoolPublicUrl(s.slug),
       })),
     }
   })
@@ -479,6 +486,12 @@ export async function POST(req: NextRequest) {
           plan: school.plan,
         },
         principal: { id: principal.id, email: principal.email, name: principal.name },
+        // TWO-PROJECT TOPOLOGY — the school's canonical doors, computed
+        // from SCHOOL_APP_BASE_URL (the platform never guesses URLs):
+        //   loginUrl  → the /s/<slug>/login sign-in door
+        //   publicUrl → the /s/<slug> public website
+        loginUrl: schoolLoginUrl(school.slug),
+        publicUrl: schoolPublicUrl(school.slug),
         // The created tenant-domain ecosystem (Part 5): the custom-domain
         // record (PENDING — real DNS verification happens later from the
         // school record's Domains tab) + the derived temporary platform

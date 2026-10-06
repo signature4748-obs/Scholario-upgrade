@@ -8,9 +8,16 @@
 // reactivate + typed-confirmation cascade delete) and the
 // "Access School" support-session launcher. Every destructive call
 // is wrapped in useStepUpGate; the server re-authorizes anyway.
+//
+// PHASE 10 (two-project topology) — the Overview tab leads with an
+// ACCESS card: the tenant's canonical doors (login URL / public URL
+// from SCHOOL_APP_BASE_URL — never guessed, copy resolves relative
+// URLs against the current origin), the founding principal's
+// credential/last-sign-in truth, and the tenant-domain status
+// summary (the Domains tab stays the management surface).
 // ============================================================
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
@@ -37,6 +44,10 @@ import {
   Palette,
   ShieldAlert,
   Info,
+  Copy,
+  Check,
+  LogIn,
+  User,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from '../platform-client'
 import { useStepUpGate } from '../step-up-gate'
@@ -108,6 +119,23 @@ interface SchoolDetailData {
   counts: { users: number; students: number; teachers: number; classes: number; exams: number; fees: number }
   activeSchoolSessions: number
   activeSupportSessions: number
+  // TWO-PROJECT TOPOLOGY (PHASE 10) — the access truth: canonical
+  // doors (may be RELATIVE when SCHOOL_APP_BASE_URL is unset — the
+  // unified deployment serves both planes), the founding principal's
+  // credential state, and the tenant-domain status summary.
+  access: {
+    loginUrl: string
+    publicUrl: string
+    principal: {
+      id: string
+      email: string
+      name: string | null
+      status: string
+      credentialState: 'BOOTSTRAP_PENDING' | 'OWNED' | 'UNKNOWN'
+      lastLoginAt: string | null
+    } | null
+  }
+  domains: Array<{ hostname: string; status: string; isPrimary: boolean }>
   recentActivity: Array<{ id: string; action: string; detail: string | null; at: string }>
 }
 
@@ -153,6 +181,242 @@ function StatusBadge({ status }: { status: string }) {
     <Badge variant="outline" className={`normal-case ${STATUS_STYLES[status] ?? STATUS_STYLES['TRIAL']}`}>
       {status}
     </Badge>
+  )
+}
+
+// ── Access card (PHASE 10 — two-project topology truth) ───────────────────
+
+/** Resolve a possibly-relative plane URL to an absolute one (click-time only — window exists). */
+function absoluteUrl(url: string): string {
+  return url.startsWith('/') ? `${window.location.origin}${url}` : url
+}
+
+/** Copy icon button with inline "Copied" feedback (icon swaps to Check for ~1.5s). */
+function CopyIconButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+    },
+    [],
+  )
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation()
+        void navigator.clipboard.writeText(absoluteUrl(value)).then(
+          () => {
+            setCopied(true)
+            if (timer.current) clearTimeout(timer.current)
+            timer.current = setTimeout(() => setCopied(false), 1500)
+          },
+          () => {
+            /* clipboard unavailable — no success feedback (honest failure) */
+          },
+        )
+      }}
+      className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+    >
+      {copied ? (
+        <Check className="h-4 w-4 text-emerald-600" aria-hidden="true" />
+      ) : (
+        <Copy className="h-4 w-4" aria-hidden="true" />
+      )}
+    </button>
+  )
+}
+
+/** One canonical door row: mono URL (truncating) + copy + open-in-new-tab. */
+function AccessUrlRow({
+  icon,
+  label,
+  url,
+  openLabel,
+}: {
+  icon: React.ReactNode
+  label: string
+  url: string
+  openLabel: string
+}) {
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <span className="text-slate-400" aria-hidden="true">
+          {icon}
+        </span>
+        {label}
+      </p>
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <code
+          className="min-w-0 flex-1 truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-xs text-slate-700"
+          title={url}
+        >
+          {url}
+        </code>
+        <CopyIconButton value={url} label={`Copy ${label.toLowerCase()}`} />
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
+        >
+          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+          {openLabel}
+        </a>
+      </div>
+    </div>
+  )
+}
+
+const CREDENTIAL_META: Record<string, { label: string; className: string }> = {
+  BOOTSTRAP_PENDING: {
+    label: 'First password change pending',
+    className: 'border-amber-200 bg-amber-50 text-amber-700',
+  },
+  OWNED: {
+    label: 'Owns password',
+    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  },
+  UNKNOWN: {
+    label: 'Credential state unknown',
+    className: 'border-slate-200 bg-slate-100 text-slate-600',
+  },
+}
+
+/** The founding principal's access truth: identity, status, credential state, last sign-in. */
+function PrincipalAccessBlock({
+  principal,
+}: {
+  principal: SchoolDetailData['access']['principal']
+}) {
+  if (!principal) {
+    return (
+      <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm text-amber-800 lg:col-span-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <p>
+          <span className="font-semibold">No principal account.</span> This school has no PRINCIPAL user —
+          provisioning or support tooling must create the founding account before anyone can administer the
+          tenant.
+        </p>
+      </div>
+    )
+  }
+
+  const cred = CREDENTIAL_META[principal.credentialState] ?? CREDENTIAL_META.UNKNOWN
+  return (
+    <div className="min-w-0 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3.5 lg:col-span-2">
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <span className="text-slate-400" aria-hidden="true">
+          <User className="h-3.5 w-3.5" />
+        </span>
+        Founding principal
+      </p>
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <p className="text-sm font-semibold text-slate-900">{principal.name ?? '—'}</p>
+        <p className="min-w-0 truncate font-mono text-xs text-slate-600" title={principal.email}>
+          {principal.email}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <StatusBadge status={principal.status} />
+          <Badge variant="outline" className={`normal-case ${cred.className}`}>
+            {cred.label}
+          </Badge>
+        </div>
+        <p className="text-[11px] text-slate-500" title={principal.lastLoginAt ?? undefined}>
+          {principal.lastLoginAt ? `Last sign-in ${timeAgo(principal.lastLoginAt)}` : 'Never signed in'}
+        </p>
+      </div>
+      {principal.credentialState === 'BOOTSTRAP_PENDING' && (
+        <p className="text-[11px] leading-snug text-amber-700">
+          The bootstrap password is still active — the principal must set their own password at first
+          sign-in (server-enforced).
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** The Access card: canonical doors + principal credential truth + domain status summary. */
+function AccessCard({ access, domains }: { access: SchoolDetailData['access']; domains: SchoolDetailData['domains'] }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+        <h2 className="font-display text-sm font-bold text-slate-900">Access</h2>
+        <p className="mt-0.5 text-xs text-slate-500">
+          The canonical doors this tenant is reached through — copied links always resolve to an absolute
+          address.
+        </p>
+      </div>
+      <div className="grid gap-4 p-4 sm:px-5 lg:grid-cols-2 lg:gap-x-6">
+        <AccessUrlRow
+          icon={<LogIn className="h-3.5 w-3.5" />}
+          label="School login URL"
+          url={access.loginUrl}
+          openLabel="Open School"
+        />
+        <AccessUrlRow
+          icon={<Globe className="h-3.5 w-3.5" />}
+          label="Public URL"
+          url={access.publicUrl}
+          openLabel="Open website"
+        />
+        <PrincipalAccessBlock principal={access.principal} />
+      </div>
+      {/* Tenant-domain status summary — the Domains tab remains the
+          management surface (verify / add / remove); this is the
+          at-a-glance truth from the school dossier. */}
+      <div className="border-t border-slate-200 px-4 py-3.5 sm:px-5">
+        <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          <span className="text-slate-400" aria-hidden="true">
+            <Globe className="h-3.5 w-3.5" />
+          </span>
+          Custom domains
+        </p>
+        {domains.length > 0 ? (
+          <ul className="mt-2 flex flex-wrap gap-1.5">
+            {domains.map((d) => (
+              <li
+                key={d.hostname}
+                className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5"
+              >
+                <span className="min-w-0 truncate font-mono text-xs text-slate-700" title={d.hostname}>
+                  {d.hostname}
+                </span>
+                {d.isPrimary && (
+                  <Badge variant="outline" className="border-teal-200 bg-teal-50 text-teal-700 normal-case">
+                    primary
+                  </Badge>
+                )}
+                <Badge
+                  variant="outline"
+                  className={`normal-case ${
+                    d.status === 'VERIFIED'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : d.status === 'PENDING'
+                        ? 'border-amber-200 bg-amber-50 text-amber-700'
+                        : 'border-slate-200 bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {d.status}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1.5 text-xs text-slate-500">
+            No custom domains mapped — the doors above are this tenant&apos;s addresses.
+          </p>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -972,6 +1236,11 @@ export function SchoolDetailModule() {
 
         {/* ── Overview tab ─────────────────────────────────────────────── */}
         <TabsContent value="overview" className="space-y-4">
+          {/* Access (PHASE 10) — canonical doors + principal credential
+              truth + domain status; leads the dossier so an admin never
+              guesses how a tenant is reached. */}
+          <AccessCard access={data.access} domains={data.domains} />
+
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
               <h2 className="font-display text-sm font-bold text-slate-900">School profile</h2>

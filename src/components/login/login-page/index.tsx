@@ -90,7 +90,7 @@ function loginBrandStyle(primaryColor: string | null): CSSProperties {
   } as React.CSSProperties
 }
 
-function useLoginSchoolBranding(): LoginBranding {
+function useLoginSchoolBranding(tenantSlug?: string): LoginBranding {
   const [branding, setBranding] = useState<LoginBranding>(NEUTRAL_BRANDING)
   useEffect(() => {
     let alive = true
@@ -98,8 +98,11 @@ function useLoginSchoolBranding(): LoginBranding {
     // per-tenant links / explicit school deep-links): the login must
     // brand itself as the school whose site the visitor came from.
     // Production domains carry no slug; the Host header resolves there.
+    // A server-resolved /s/<slug>/login route passes its canonical slug
+    // via the tenantSlug prop — same server-resolution authority
+    // (/api/schools/public), zero client-side guessing.
     const params = new URLSearchParams(window.location.search)
-    const slug = params.get('slug') ?? params.get('tenant')
+    const slug = tenantSlug ?? params.get('slug') ?? params.get('tenant')
     const url = slug
       ? `/api/schools/public?slug=${encodeURIComponent(slug)}`
       : '/api/schools/public'
@@ -143,12 +146,19 @@ function useLoginSchoolBranding(): LoginBranding {
     return () => {
       alive = false
     }
-  }, [])
+  }, [tenantSlug])
   return branding
 }
 
-export function LoginPage({ onBackToWebsite }: { onBackToWebsite?: () => void }) {
-  const school = useLoginSchoolBranding()
+export function LoginPage({
+  onBackToWebsite,
+  tenantSlug,
+}: {
+  onBackToWebsite?: () => void
+  /** Canonical server-resolved tenant slug (the /s/<slug>/login door). */
+  tenantSlug?: string
+}) {
+  const school = useLoginSchoolBranding(tenantSlug)
   const { startAuth, endAuth, login } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

@@ -7,6 +7,12 @@
 // every tenant with live counts, plus the PENDING provisioning
 // dialog (POST /api/platform/schools). Desktop renders a table,
 // small screens render cards — same data, no horizontal overflow.
+//
+// PHASE 10 (two-project topology): every row carries the tenant's
+// CANONICAL doors (loginUrl/publicUrl from SCHOOL_APP_BASE_URL —
+// never guessed). The table surfaces the login URL with copy
+// controls; copies always resolve relative URLs against the
+// current origin so the operator hands out a working link.
 // ============================================================
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
@@ -24,6 +30,8 @@ import {
   School as SchoolIcon,
   MapPin,
   CalendarDays,
+  Copy,
+  Check,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from '../platform-client'
 import { ProvisionWizard } from './provision-wizard'
@@ -63,6 +71,11 @@ interface SchoolRow {
   featureFlags: string
   createdAt: string
   counts: { users: number; students: number; teachers: number; classes: number }
+  // TWO-PROJECT TOPOLOGY — canonical doors (may be RELATIVE when
+  // SCHOOL_APP_BASE_URL is unset; the unified deployment serves both
+  // planes, so /s/<slug>/login on its own origin is correct).
+  loginUrl: string
+  publicUrl: string
 }
 
 interface SchoolsData {
@@ -105,6 +118,80 @@ function StatusBadge({ status }: { status: string }) {
     <Badge variant="outline" className={`normal-case ${STATUS_STYLES[status] ?? STATUS_STYLES['TRIAL']}`}>
       {status}
     </Badge>
+  )
+}
+
+// ── Access copy controls (PHASE 10 — school access truth) ────────────────
+
+/** Resolve a possibly-relative plane URL to an absolute one (click-time only — window exists). */
+function absoluteUrl(url: string): string {
+  return url.startsWith('/') ? `${window.location.origin}${url}` : url
+}
+
+/**
+ * Copy button with inline "Copied" feedback (icon swaps to Check for
+ * ~1.5s; the text variant swaps its label). 44×44 touch target, quiet
+ * slate styling, and stopPropagation on click + keydown so the
+ * surrounding row/card navigation never fires from inside it.
+ */
+function CopyControl({
+  value,
+  absolute,
+  label,
+  text,
+}: {
+  value: string
+  /** Resolve a leading '/' against window.location.origin before copying. */
+  absolute?: boolean
+  label: string
+  /** Optional visible text label (mobile cards); swaps to "Copied" on success. */
+  text?: string
+}) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+    },
+    [],
+  )
+
+  const onCopy = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    const payload = absolute ? absoluteUrl(value) : value
+    void navigator.clipboard.writeText(payload).then(
+      () => {
+        setCopied(true)
+        if (timer.current) clearTimeout(timer.current)
+        timer.current = setTimeout(() => setCopied(false), 1500)
+      },
+      () => {
+        /* clipboard unavailable — no success feedback (honest failure) */
+      },
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      onKeyDown={(e) => e.stopPropagation()}
+      aria-label={label}
+      title={label}
+      className={
+        text
+          ? 'inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40'
+          : 'inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40'
+      }
+    >
+      {copied ? (
+        <Check className="h-4 w-4 text-emerald-600" aria-hidden="true" />
+      ) : (
+        <Copy className="h-4 w-4" aria-hidden="true" />
+      )}
+      {text ? <span>{copied ? 'Copied' : text}</span> : null}
+    </button>
   )
 }
 
@@ -310,12 +397,13 @@ export function SchoolsModule() {
                     <TableHead className="text-slate-500 font-semibold h-11">School</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Status</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Plan</TableHead>
+                    <TableHead className="text-slate-500 font-semibold">Login URL</TableHead>
                     <TableHead className="text-slate-500 font-semibold text-right">Users</TableHead>
                     <TableHead className="text-slate-500 font-semibold text-right">Students</TableHead>
                     <TableHead className="text-slate-500 font-semibold text-right">Teachers</TableHead>
                     <TableHead className="text-slate-500 font-semibold">City</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Created</TableHead>
-                    <TableHead className="w-12" aria-label="Open school" />
+                    <TableHead className="w-24" aria-label="Row actions" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -347,6 +435,21 @@ export function SchoolsModule() {
                           {s.plan}
                         </Badge>
                       </TableCell>
+                      <TableCell className="max-w-[13rem] py-3">
+                        <div className="flex min-w-0 items-center gap-1">
+                          <p
+                            className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500"
+                            title={s.loginUrl}
+                          >
+                            {s.loginUrl}
+                          </p>
+                          <CopyControl
+                            value={s.loginUrl}
+                            absolute
+                            label={`Copy ${s.name} login URL`}
+                          />
+                        </div>
+                      </TableCell>
                       <TableCell className="text-right text-slate-700 tabular-nums">
                         {num.format(s.counts.users)}
                       </TableCell>
@@ -361,7 +464,10 @@ export function SchoolsModule() {
                         {timeAgo(s.createdAt)}
                       </TableCell>
                       <TableCell className="py-3">
-                        <ChevronRight className="h-4 w-4 text-slate-400" aria-hidden="true" />
+                        <div className="flex items-center justify-end gap-1">
+                          <CopyControl value={s.code} label={`Copy ${s.name} school code`} />
+                          <ChevronRight className="h-4 w-4 text-slate-400" aria-hidden="true" />
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -372,12 +478,22 @@ export function SchoolsModule() {
             {/* Mobile cards (<sm) */}
             <div className="sm:hidden divide-y divide-slate-200" aria-label="Schools">
               {data?.schools.map((s) => (
-                <motion.button
+                // The card is a div[role=button] (NOT a <button>) so the
+                // copy controls inside remain valid interactive elements;
+                // they stopPropagation to keep card = open detail only.
+                <motion.div
                   key={s.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => openSchool(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      openSchool(s.id)
+                    }
+                  }}
                   whileTap={{ scale: 0.985 }}
-                  className="w-full min-h-[44px] text-left p-4 hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-100"
+                  className="w-full min-h-[44px] cursor-pointer text-left p-4 hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-100"
                   aria-label={`Open ${s.name}`}
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -415,7 +531,18 @@ export function SchoolsModule() {
                       {timeAgo(s.createdAt)}
                     </span>
                   </div>
-                </motion.button>
+                  {/* Access actions — copy the canonical login URL (absolute)
+                      and the school code; never triggers card navigation. */}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <CopyControl
+                      value={s.loginUrl}
+                      absolute
+                      label={`Copy ${s.name} login URL`}
+                      text="Login URL"
+                    />
+                    <CopyControl value={s.code} label={`Copy ${s.name} school code`} text="Code" />
+                  </div>
+                </motion.div>
               ))}
             </div>
 
