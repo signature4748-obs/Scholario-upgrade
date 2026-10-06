@@ -1,79 +1,91 @@
--- LEAST-PRIVILEGE GRANTS — PREPARED, NOT EXECUTED (audit 2026-10-06)
+-- LEAST-PRIVILEGE GRANTS — reference companion (audit 2026-10-06)
 --
--- Status: DRAFT. Nothing in this file has been applied to production.
--- It lives in docs/ (NOT prisma/migrations/) on purpose: dropping it into
--- prisma/migrations/ makes the next `prisma migrate deploy` run it.
+-- Status: MIGRATION CREATED, AWAITING OWNER APPROVAL FOR PRODUCTION.
+-- The canonical forward SQL lives in the Prisma migration (the only
+-- migration authority):
 --
--- Why it is safe to apply (dependency audit, 2026-10-06):
---   · No @supabase/supabase-js anywhere in the repo; no PostgREST data
---     access from application code (verified by grep + live probes).
---   · All business DB access is server-side Prisma over DATABASE_URL
---     (role: postgres / pooler tenant). Unaffected by anon grants.
---   · The anon key reaches browsers ONLY as the Realtime websocket key
---     (broadcast channels; Realtime never reads public tables for it).
---   · Storage: server-side service-role wrapper (+ signed URLs);
---     public-bucket serving goes through the storage service's internal
---     admin path, not the anon role.
---   · tests/security/pg-rls.test.ts accepts `[]` OR 401/403 for the anon
---     REST surface ("equally closed") — it keeps passing after revocation.
---   · service_role keeps every grant (storage wrapper + realtime REST
---     publish + PostgREST probes in the test suite use it).
+--   prisma/migrations/20261006123000_least_privilege_grants/migration.sql
 --
--- What it does:
---   1. Revoke ALL table + sequence privileges on schema `public` from
---      `anon` and `authenticated` (111 business tables + _prisma_migrations).
---      RLS (enabled everywhere, zero policies) already denies every row;
---      this removes the table-level grants that would become live data
---      access if RLS were ever accidentally disabled on any table.
---   2. Fixes DEFAULT PRIVILEGES so future tables in `public` no longer
---      auto-grant anon/authenticated (Supabase's default ACL).
+-- This file is the dashboard/rollback/verification reference. Policy,
+-- rationale, and procedures: docs/hardening/DATABASE_GRANTS.md.
 --
--- What it deliberately does NOT touch:
---   · storage / auth / realtime / extensions schema grants (platform
---     managed; their RLS posture is deny-by-default already).
---   · EXECUTE on public functions (trigger guards + pg_trgm support
---     functions; PUBLIC default, no direct call surface — optional
---      phase 2, see notes at the bottom).
---   · Anything the service_role holds.
+-- Correction vs. the earlier draft (audit 2026-10-06):
+--   · ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin was REMOVED —
+--     postgres is not a member of supabase_admin, so that statement
+--     fails with permission denied on Supabase, and platform default
+--     privileges are out of scope by policy anyway.
+--   · The blanket "REVOKE ALL ON ALL TABLES" was replaced by the
+--     per-object loop in the migration (same effect, notices, portable).
 --
--- Promotion procedure (owner decision required):
---   1. Review this file.
---   2. mkdir prisma/migrations/<timestamp>_least_privilege_grants
---   3. Copy this SQL into migration.sql (keep the header comment trimmed).
---   4. Local/staging run first (docs/RELEASE.md pipeline).
---   5. Production: existing prod-migration workflow (scripts/prod-release).
---   6. Verify: anon REST probe → 401/403 (tests/security/pg-rls.test.ts
---      stays green); app health `database:ok` on both planes.
---   7. Rollback: re-grant (Supabase baseline) —
---        GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;
---        GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
---        ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
---          GRANT ALL ON TABLES TO anon, authenticated;
---        ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
---          GRANT ALL ON TABLES TO anon, authenticated;
+-- Applying by hand (only if the prod-migration pipeline is unavailable):
+--   1. Review docs/hardening/DATABASE_GRANTS.md §13 (the gate).
+--   2. Get explicit owner approval for the production grant change.
+--   3. Prefer: bun scripts/prod-migration/apply.ts … (records the
+--      migration in _prisma_migrations). Hand-run the migration.sql
+--      body only if you accept NOT having it recorded.
+--   4. Verify with the queries below.
 --
 -- Idempotent: safe to re-run.
 
--- 1. Current tables + sequences
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+-- ── FORWARD (verbatim from the migration — see the file) ─────────────────
+-- DO block 1: per-object REVOKE loop over public tables/views
+-- DO block 2: REVOKE ALL ON ALL SEQUENCES IN SCHEMA public
+-- DO block 3: ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+--             REVOKE ALL ON TABLES/SEQUENCES FROM anon, authenticated
+-- NOTIFY pgrst, 'reload schema'
 
--- 2. Future tables/sequences (Supabase creates these defaults per role)
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  REVOKE ALL ON TABLES FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  REVOKE ALL ON SEQUENCES FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
-  REVOKE ALL ON TABLES FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
-  REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+-- ── ROLLBACK (exact inverse — restores the Supabase baseline) ────────────
+DO $$
+BEGIN
+  IF to_regrole('anon') IS NOT NULL AND to_regrole('authenticated') IS NOT NULL THEN
+    GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;
+    GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
+    ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+      GRANT ALL ON TABLES TO anon, authenticated;
+    ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+      GRANT ALL ON SEQUENCES TO anon, authenticated;
+    NOTIFY pgrst, 'reload schema';
+  END IF;
+END $$;
 
--- ── Optional phase 2 (NOT part of this migration) ──────────────────────
--- Function EXECUTE is granted to PUBLIC by PostgreSQL default. The public
--- schema holds only pg_trgm support functions and trigger guards, none of
--- which offer a meaningful direct-call surface. If defense-in-depth is
--- wanted later:
---   REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
---   ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
--- (Keep owner + service_role EXECUTE intact. Nothing in the app calls
---  public-schema functions directly.)
+-- ── VERIFICATION ─────────────────────────────────────────────────────────
+-- 1. Zero anon/authenticated grants remain on public objects (expect 0):
+SELECT count(*) AS residual
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace, LATERAL aclexplode(c.relacl) x
+JOIN pg_roles r ON r.oid = x.grantee
+WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','S')
+  AND r.rolname IN ('anon','authenticated');
+
+-- 2. service_role still holds SELECT on every table (expect 112):
+SELECT count(*) AS svc_tables
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace, LATERAL aclexplode(c.relacl) x
+JOIN pg_roles r ON r.oid = x.grantee
+WHERE n.nspname = 'public' AND c.relkind = 'r'
+  AND r.rolname = 'service_role' AND x.privilege_type = 'SELECT';
+
+-- 3. RLS census unchanged (expect rls_on = total = 112):
+SELECT count(*) AS total, count(*) FILTER (WHERE c.relrowsecurity) AS rls_on
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relispartition = false;
+
+-- 4. Default privileges: postgres/public, tables + sequences
+--    (expect NO anon/authenticated, service_role present; functions unchanged):
+SELECT d.defaclobjtype AS objtype, d.defaclacl::text AS acl
+FROM pg_default_acl d
+JOIN pg_namespace n ON n.oid = d.defaclnamespace
+WHERE n.nspname = 'public' AND pg_get_userbyid(d.defaclrole) = 'postgres'
+ORDER BY 1;
+
+-- 5. Negative probe as the client roles (expect 42501 permission denied,
+--    NOT an empty set):
+SET ROLE anon;
+SELECT count(*) FROM "Student";   -- 42501: permission denied for table Student
+RESET ROLE;
+
+-- 6. Future table stays closed (end-to-end default-ACL proof):
+CREATE TABLE public.__probe(id int);
+SELECT has_table_privilege('anon', 'public.__probe', 'SELECT');          -- false
+SELECT has_table_privilege('service_role', 'public.__probe', 'SELECT');  -- true
+DROP TABLE public.__probe;
