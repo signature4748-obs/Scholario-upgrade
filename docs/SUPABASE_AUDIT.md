@@ -20,7 +20,7 @@
 | 6 | Realtime | ✅ Broadcast only · empty `supabase_realtime` publication is correct — no Postgres Changes anywhere (§6) |
 | 7 | Performance | ✅ 69 FK findings classified: 0 high-value today, 3 medium (future), rest covered/low — **no indexes added** (§7) |
 | 8 | Security advisor | 112 × `rls_enabled_no_policy` = intentional architecture · 1 × `extension_in_public` (pg_trgm) = real, minor, deferred (§8) |
-| 9 | DB security | ⚠️ SSL enforcement OFF — but TLS verified live: PG `ssl=on`, TLS 1.3 negotiated at the pooler, production Prisma already TLS via Supavisor session mode :5432 · enablement ready (classification B, brief DB reboot) · network restrictions **NOT RECOMMENDED** (Vercel dynamic egress) · service-role server-only, verified (§9, `docs/hardening/SSL_NETWORK_AUDIT.md`) |
+| 9 | DB security | ✅ SSL enforcement **ENABLED 2026-10-06** (activation window 15:05–17:12 UTC; verified: plaintext rejected ESSLREQUIRED on pooler 5432/6543, TLS 1.3 OK, Prisma green — `docs/hardening/SSL_NETWORK_AUDIT.md` §11) · network restrictions **NOT ENABLED / NOT RECOMMENDED** (Vercel dynamic egress) · service-role server-only, verified (§9) |
 | 10 | Backups | 🔴 walg enabled but **no backups exist**, PITR off — biggest operational risk (§10) |
 | 11 | Testing | ✅ existing suites already encode the architecture; no new tests justified (no change) (§11) |
 | 12 | Migration discipline | ✅ one authority (Prisma); prepared migration staged in docs/, promotion steps documented (§12) |
@@ -220,23 +220,23 @@ tables have 0 rows.
 
 ## 9. Database security
 
-- **SSL enforcement: OFF** — verified 2026-10-06, behaviorally: plaintext
-  clients are still accepted on the Supavisor ports today (the exact behavior
-  the enforcement toggle removes; `ssl-enforcement.database = false` at
-  original audit time). The verified live TLS posture:
-  PostgreSQL **`ssl = on`** (min TLSv1.2, server accepts TLSv1.3); **TLS 1.3
-  successfully negotiated** with the Supavisor pooler
-  (`TLS_AES_256_GCM_SHA384`, chain `Supabase Root 2021 CA`, on both 5432 and
-  6543); the production `DATABASE_URL` uses the **Supavisor session-mode
-  pooler on port 5432** (IPv4 AWS ELB); Prisma's **default connection
-  attempts TLS** (prefer — SSLRequest sent first), so production application
-  traffic is already encrypted client↔pooler; an explicit `sslmode=require`
-  was also **tested successfully** against the same endpoint (Prisma) and in
-  the `uselibpqcompat=true` form (node-pg). **Enabling SSL enforcement causes
-  a brief database reboot** (seconds at ~67 MB; plan for minutes). Full
-  compatibility matrix, toggle and rollback runbook:
-  `docs/hardening/SSL_NETWORK_AUDIT.md` — Phase 8 no-change gate, classification
-  **B**, awaiting explicit owner approval. **Nothing was changed by that audit.**
+- **SSL enforcement: ENABLED since 2026-10-06** (owner-approved; first
+  confirmed ON at 2026-10-06T17:12:53Z — activation window 15:05–17:12 UTC,
+  exact toggle time owner-side; full record: `docs/hardening/SSL_NETWORK_AUDIT.md`
+  §11). Post-enforcement verification (all read-only): plaintext clients
+  are **rejected** on the Supavisor ports (`ESSLREQUIRED: SSL connection is
+  required for user: postgres` — both 5432 and 6543); TLS 1.3 successfully
+  negotiated (`TLS_AES_256_GCM_SHA384`); PostgreSQL `ssl=on` (min TLSv1.2,
+  server 17.11); the production `DATABASE_URL` (Supavisor session-mode
+  pooler, port 5432, IPv4 AWS ELB) keeps working — Prisma's default
+  connection attempts TLS (SSLRequest first), and `sslmode=require` was
+  tested successfully as well; `pg_stat_ssl` through the pooler now shows
+  `ssl=true, TLSv1.3` (the Supavisor→PG hop is TLS post-activation). Both
+  production planes `/health/ready` 200 `database:ok`; login doors 200;
+  authenticated API smoke (wrong-credentials login POST) → clean 401;
+  cross-plane isolation 404s intact. The DR logical-dump DSN must now use
+  `?uselibpqcompat=true&sslmode=require` (bare/no-sslmode DSNs are rejected
+  — verified live).
 - **Network restrictions: none (audit-time `dbAllowedCidrs 0.0.0.0/0 + ::/0`,
   applied) — and NOT RECOMMENDED** for the current architecture. Verified:
   **Vercel default function egress IPs are dynamic** (Vercel Knowledge Base:
@@ -350,11 +350,9 @@ form — nothing diverged.
 2. **DONE (2026-10-06)** — least-privilege grants applied to production &
    verified (§4, `docs/hardening/DATABASE_GRANTS.md` §16).
 3. Supabase Auth hygiene (§2): `disable_signup: true`; fix `site_url`.
-4. **SSL enforcement — ready with owner action (classification B)**: gate,
-   toggle and rollback runbook at `docs/hardening/SSL_NETWORK_AUDIT.md` §8;
-   expect a brief DB reboot; optionally pin `sslmode=require` on the Vercel
-   `DATABASE_URL`s first (Prisma already negotiates TLS by default).
-   **Network restrictions: NOT RECOMMENDED** for the current Vercel
+4. **DONE (2026-10-06)** — SSL enforcement **ENABLED** (owner-approved;
+   verified: plaintext rejected, TLS 1.3 OK, both planes healthy — SSL audit
+   §11). **Network restrictions: NOT RECOMMENDED** for the current Vercel
    architecture (dynamic egress — §9 / SSL audit §6); keep OFF unless a
    static-egress architecture is deliberately adopted.
 5. Move `pg_trgm` out of `public` (§8) — only if a quiet window allows a
@@ -380,3 +378,8 @@ form — nothing diverged.
   and 4 closed/updated. Full record: `docs/hardening/SSL_NETWORK_AUDIT.md`
   (Phase 8 gate open — awaiting owner approval). No production setting was
   changed by either pass.
+- SSL enforcement ACTIVATION (2026-10-06, 15:05–17:12 UTC window —
+  owner-approved, toggle performed owner-side; this sandbox made no change):
+  enforcement verified ON (plaintext rejected ESSLREQUIRED on 5432/6543;
+  TLS 1.3 + Prisma + both planes + login + isolation all green — SSL audit
+  §11). Documentation update only.

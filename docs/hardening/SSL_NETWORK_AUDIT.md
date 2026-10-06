@@ -17,6 +17,11 @@
 > **Classification: B — READY FOR SSL ENABLEMENT WITH OWNER ACTION.**
 > Network restrictions: **NOT RECOMMENDED** under the current Vercel
 > architecture (see §6).
+>
+> **UPDATE 2026-10-06T17:12Z — RESOLVED: SSL enforcement is now ENABLED**
+> (owner-approved; activation record in §11). Classification is now
+> **A — SSL enforcement ENABLED, production verified**; network restrictions
+> remain OFF (not recommended).
 
 ---
 
@@ -435,8 +440,13 @@ nothing else needs undoing. Plaintext acceptance returns immediately after.
 **Network restrictions:** **NOT RECOMMENDED** (unsafe — Vercel dynamic
 egress; §6).
 
-**Nothing above was executed. Awaiting explicit owner approval before any
-production change.**
+**Nothing above was executed by the audit itself. Awaiting explicit owner
+approval before any production change.**
+
+**RESOLUTION (2026-10-06, later the same day):** owner approval was granted;
+the toggle was found ENABLED at execution time (first confirmed
+2026-10-06T17:12:53Z — activation record §11, all checks green). Network
+restrictions remain OFF per the §6 recommendation.
 
 ---
 
@@ -514,3 +524,73 @@ production change.**
   `vercel.com/changelog/static-ips-are-now-available-for-more-secure-connectivity`,
   `vercel.com/changelog/route-build-traffic-through-static-ips`.
 - No credentials, tokens, or passwords are recorded in this document.
+
+---
+
+## 11. Activation record — SSL enforcement ENABLED (2026-10-06)
+
+> Owner approval was granted ("Enable Supabase Postgres SSL enforcement for
+> production"). At execution time the toggle was found **already ON** — it
+> was flipped outside this session (this sandbox holds no Management API
+> token and performed zero changes; Owner/Admin dashboard access is the only
+> other holder). The observed state equals the approved target state, so this
+> session proceeded directly to verification and documentation.
+
+**Activation window (bounded by live behavioral probes):**
+
+- Last confirmed **OFF**: 2026-10-06 ~15:05 UTC (§4.2 — plaintext accepted on
+  pooler 5432 and 6543)
+- First confirmed **ON**: **2026-10-06T17:12:53Z** (execution probe —
+  plaintext REJECTED on both pooler ports with
+  `ESSLREQUIRED: SSL connection is required for user: postgres`). The exact
+  toggle time is not observable from this vantage (no Management API token;
+  `currentConfig` unreadable) — recorded honestly as the bounded window
+  15:05–17:12 UTC.
+
+**Post-enforcement verification (all read-only, 2026-10-06T17:12–17:14Z):**
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | Plaintext (ssl:false) pooler :5432 | **REJECTED — ESSLREQUIRED** ✓ enforcement effective |
+| 2 | Plaintext (ssl:false) pooler :6543 | **REJECTED — ESSLREQUIRED** ✓ |
+| 3 | TLS (`uselibpqcompat=true&sslmode=require`) pooler :5432 | connect + query OK |
+| 4 | TLS (`uselibpqcompat=true&sslmode=require`) pooler :6543 | connect + query OK |
+| 5 | Prisma **production-parity** (no sslmode — the exact Vercel `DATABASE_URL` form) | connect OK 1387 ms · `SELECT 1` OK · `pg_stat_ssl` = **ssl=true, TLSv1.3, TLS_AES_256_GCM_SHA384** |
+| 6 | Prisma `sslmode=require` (optional pin form) | connect OK · `SELECT 1` OK |
+| 7 | PostgreSQL settings via pooler | `ssl=on`, min TLSv1.2, server 17.11 |
+| 8 | Supavisor/DB connectivity (A/B) | checks 3–7 above |
+| 9 | `scholario-platform` `/health/ready` | **200** `database:ok` (224 ms) |
+| 10 | `scholario-app` `/health/ready` | **200** `database:ok` (212 ms) |
+| 11 | Green Valley door `/s/green-valley/login` | **200** |
+| 12 | Hawkings door `/s/hawkings-prithvipur/login` | **200** |
+| 13 | Authenticated API smoke: `POST /api/auth/login` (wrong credentials) | clean **401** `{"ok":false,"error":"Invalid email or password","code":"AUTH_REQUIRED"}` — exercises the full Prisma User lookup + scrypt verify + audit-write path; no 5xx |
+| 14 | Cross-plane isolation | `/s/green-valley/login` on platform → **404**; `/platform/login` on app → **404** |
+| 15 | Direct endpoint `db.<ref>.supabase.co:5432` | not resolvable at this time (NXDOMAIN, A and AAAA, via authoritative DNS) — platform-side observation; unused by production, which runs the IPv4 Supavisor path (checks 3–7) |
+
+**Notes:**
+
+- `pg_stat_ssl` through the pooler now reports `ssl=true` (TLSv1.3) for the
+  probe backend — at audit time the visible Supavisor→Postgres hop showed
+  `ssl=false` (§4.5). Post-activation, the pooler's server-side connection
+  is TLS as well. The client-facing behavior is what the toggle governs:
+  plaintext is now refused at the front door.
+- The DR logical-dump DSN requirement is now **operative**: node-pg dump/ops
+  connections MUST use `?uselibpqcompat=true&sslmode=require` (a bare or
+  no-sslmode DSN is now rejected — verified live, check 1). Recorded in
+  `docs/DISASTER_RECOVERY.md` §5 layer 2.
+- No external incident was observed around the toggle: all checks healthy in
+  the 17:12–17:14Z window; any reboot blips were absorbed by `withDbRetry`
+  as predicted in §5.
+- Prisma production connections continue to work unchanged — confirmed three
+  ways: sandbox Prisma probe with the exact production DSN form (check 5),
+  both planes' `/health/ready` Prisma probes (checks 9–10), and the
+  production login API round-trip (check 13).
+- Nothing else changed: no `DATABASE_URL`, no Vercel env, no Prisma schema,
+  no application code, no credentials, no RLS/grants, no network restrictions
+  (still OFF — not recommended, §6).
+
+**Final classification:**
+
+- **SSL enforcement: ENABLED**
+- **Network restrictions: NOT ENABLED** (remains not recommended — §6)
+- **Production health: VERIFIED**
