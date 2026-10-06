@@ -94,3 +94,6 @@ db/pg/
 
 # local audit workspace (verification scripts — never committed)
 .audit-work/
+
+# internal agent worklog — never part of the product repo
+worklog.md
