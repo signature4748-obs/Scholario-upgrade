@@ -20,7 +20,7 @@ domains).
 | Database + Storage + Realtime | Supabase | project `kbyknezedewvgrnqervj` (ap-south-1, PostgreSQL 17, Supavisor pooling) | **ONE production database**, 14 migrations, RLS deny-all |
 | Control-plane deployment | Vercel | `scholario-platform` (`prj_gIO4DmWcBkHMhwkVpmzqqHNWU0MW`) | `SCHOLARIO_PLANE=platform` |
 | School-plane deployment | Vercel | `scholario-app` (`prj_oiKZtuC7UgOSsShQ63MWxS5nWu53`) | `SCHOLARIO_PLANE=school` |
-| Legacy unified deployment | Vercel | `scholario-production` (`prj_cJFN4oYHZEM50ooGKUMiQmG3e6qM`, live at `https://scholario-production.vercel.app`) | no plane var → unified; retained until decommissioned |
+| Legacy unified deployment | Vercel | `scholario-production` (`prj_cJFN4oYHZEM50ooGKUMiQmG3e6qM`, live at `https://scholario-production.vercel.app`) | `SCHOLARIO_PLANE=unified` + legacy opt-in; **DEPRECATED** — retained until decommissioned (`docs/VERCEL_PROJECTS.md` §7) |
 | Transactional email | Resend | REST send + signed delivery webhook | server-side only (`docs/EMAIL.md`) |
 | Supabase Auth | — | — | **used for NOTHING** (see §4) |
 
@@ -39,10 +39,10 @@ infrastructure change.
           ┌─────────────────────────┼─────────────────────────────┐
           ▼                         ▼                             ▼
  ┌─────────────────────┐  ┌─────────────────────┐   ┌────────────────────────────┐
- │ VERCEL              │  │ VERCEL              │   │ VERCEL (legacy, unified)   │
+ │ VERCEL              │  │ VERCEL              │   │ VERCEL (legacy, DEPRECATED)│
  │ scholario-platform  │  │ scholario-app       │   │ scholario-production       │
  │ prj_gIO4DmWc…       │  │ prj_oiKZtuC7…       │   │ prj_cJFN4oYHZE…            │
- │ PLANE=platform      │  │ PLANE=school        │   │ PLANE unset → both planes  │
+ │ PLANE=platform      │  │ PLANE=school        │   │ PLANE=unified (+opt-in)    │
  │                     │  │                     │   │ (retained → decommission)  │
  │ PLATFORM PLANE:     │  │ SCHOOL PLANE:       │   │ everything (byte-compat)   │
  │  /platform/*        │  │  /s/<slug>/login    │   │                            │
@@ -53,7 +53,7 @@ infrastructure change.
           │                          │                           │
           │ SCHOOL_APP_BASE_URL ─────┘                           │
           │ (console builds absolute school                       │
-          │  login URLs: https://scholario-app.vercel.app)       │
+          │  login URLs: https://scholario-app-virid.vercel.app) │
           ▼                          ▼                           ▼
  ┌────────────────────────────────────────────────────────────────────────────┐
  │ SUPABASE — ONE project (kbyknezedewvgrnqervj, ap-south-1)                  │
@@ -75,9 +75,12 @@ infrastructure change.
 The two plane projects deploy **the same commit of the same repository**;
 `SCHOLARIO_PLANE` is a per-project environment variable that decides which
 half of the route surface exists (route existence, **not** authorization —
-`src/middleware.ts` + `src/lib/plane.ts`). An unset or unrecognized value
-fails open to `unified` (the legacy both-planes behavior), so a typo can
-never silently delete half the product.
+`src/middleware.ts` + `src/lib/plane.ts`). An unset, empty, or unrecognized
+value **fails closed** in production: the app refuses to load rather than
+guess a plane. `unified` survives in production only on the deprecated
+legacy project, which sets the explicit opt-in
+`SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1`. Local development defaults to
+unified when the variable is unset.
 
 ## 3. The 18 questions (answered directly)
 
@@ -87,7 +90,7 @@ never silently delete half the product.
 | 2 | Where is authorization enforced? | Three layers. (a) Middleware edge gate: plane route existence + platform-API credential presence (`src/middleware.ts`). (b) `withUser` (school APIs): live session, role, `mustChangePassword`, tenant binding via `User.schoolId`, subscription entitlement (`src/lib/api.ts`). (c) `withPlatform` (control-plane APIs): live session, ACTIVE admin, permission set, step-up MFA (`src/lib/platform/authz.ts`). Postgres RLS is the backstop. |
 | 3 | Where is school identity stored? | The `School` row (id, slug, code, domain, status, plan, settings). Every member's tenant membership is `User.schoolId` — one column, server-side, immutable per user. |
 | 4 | Where is tenant identity derived? | Authenticated requests: from the **server-side session** (`withUser` → `User.schoolId`). Public/anonymous requests: `src/lib/tenant/resolution.ts` — Host header → VERIFIED `TenantDomain` → legacy `School.domain` → `?slug=`/`?tenant=` → null. Public resolution selects **branding/content only**, never authorization (`docs/TENANT_ROUTING.md`). |
-| 5 | Which Vercel project serves what? | `scholario-platform` → `/platform/*` console + `/api/platform/*` + shared infra. `scholario-app` → `/s/<slug>/login` doors, `/login`, school ERP APIs + shared infra. `scholario-production` → both planes (legacy, retained). Full table: `docs/VERCEL_PROJECTS.md`. |
+| 5 | Which Vercel project serves what? | `scholario-platform` → `/platform/*` console + `/api/platform/*` + shared infra. `scholario-app` → `/s/<slug>/login` doors, `/login`, school ERP APIs + shared infra. `scholario-production` → both planes (DEPRECATED legacy, retained during decommission window). Full table: `docs/VERCEL_PROJECTS.md`. |
 | 6 | How is a school's login URL discovered? | The control plane computes it: `schoolLoginUrl(slug)` = `SCHOOL_APP_BASE_URL` + `/s/<slug>/login` (cross-plane) or `/s/<slug>/login` (unified fallback). It is returned by `POST /api/platform/schools` and surfaced in the schools list — admins never guess. |
 | 7 | What is the new-school creation flow? | `POST /api/platform/schools` (permission `schools.provision`) — one atomic transaction creates School (PENDING) + `SchoolSubscription` (ACTIVE) + founding PRINCIPAL + optional PENDING `TenantDomain` + optional academic bootstrap. Separate audited `activate` step. Full detail: `docs/SCHOOL_FACTORY.md`. |
 | 8 | How is the principal created? | Inside the same provisioning transaction: `User` row with `role=PRINCIPAL`, `status=ACTIVE`, `mustChangePassword=true`, scrypt-hashed password (supplied or crypto-random 12-char temp). |
@@ -157,7 +160,7 @@ inherit the same `SCHOLARIO_PLANE` value (`docs/VERCEL_PROJECTS.md`).
 
 | To… | Do this |
 | --- | --- |
-| Find a school's login URL | Platform console → Schools row (the list returns `loginUrl` per school), or compute `https://scholario-app.vercel.app/s/<slug>/login`. |
+| Find a school's login URL | Platform console → Schools row (the list returns `loginUrl` per school), or compute `https://scholario-app-virid.vercel.app/s/<slug>/login`. |
 | Provision a school | Platform console → Add School wizard (6 steps) → activate from the school record. See `docs/SCHOOL_FACTORY.md`. |
 | Attach a custom domain | Follow `docs/CUSTOM_DOMAINS.md` (TenantDomain + TXT proof + Vercel domain attach). |
 | Check production health | `GET /health/live`, `GET /health/ready` (checks DB) on any plane deployment. |

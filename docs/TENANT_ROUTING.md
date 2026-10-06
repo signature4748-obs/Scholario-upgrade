@@ -132,8 +132,8 @@ leak. Consecutive A/B/A host requests never mix tenant payloads
 
 | To… | Do this |
 | --- | --- |
-| Preview a school's website before DNS | `https://scholario-app.vercel.app/?tenant=<slug>` (or `/s/<slug>`, which 307s there). |
-| Find the school's login door | `https://scholario-app.vercel.app/s/<slug>/login` — or copy `loginUrl` from the platform console. |
+| Preview a school's website before DNS | `https://scholario-app-virid.vercel.app/?tenant=<slug>` (or `/s/<slug>`, which 307s there). |
+| Find the school's login door | `https://scholario-app-virid.vercel.app/s/<slug>/login` — or copy `loginUrl` from the platform console. |
 | Diagnose a domain that "doesn't work" | Check `TenantDomain.status` first: `PENDING` never routes. Then the TXT record, then the Vercel attachment. |
 | Prove a hostile Host can't hijack a tenant | Host normalization + VERIFIED-only + global uniqueness mean it can only fail to resolve — see `tests/security/tenant-domains.test.ts`. |
 | Prove a forged `?tenant=` can't switch a session | `tests/security/plane-architecture.test.ts` — "forged tenant parameters never switch an authenticated session" (live HTTP, real session). |
