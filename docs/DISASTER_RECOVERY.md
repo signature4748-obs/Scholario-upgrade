@@ -67,7 +67,7 @@ Live state (2026-10-06, Management API `GET /v1/projects/{ref}/database/backups`
 Layers:
 
 1. **Supabase platform backups (pending owner action)** — daily base backups on Pro, PITR as add-on (§6). This is the only layer that survives a full project disaster.
-2. **Application-level logical dump** — `scripts/db-backup.ts` → `backups/scholario-<ts>.jsonl.gz` (every public table, byte-exact dates, NUMERIC strings, FK-parents-first). Run on demand; ~40 s over the pooler. Archives contain password/session hashes — treat as secrets. **Off-box copy is a manual owner step** (the sandbox copy is ephemeral).
+2. **Application-level logical dump** — `scripts/db-backup.ts` → `backups/scholario-<ts>.jsonl.gz` (every public table, byte-exact dates, NUMERIC strings, FK-parents-first). Run on demand; ~40 s over the pooler. Archives contain password/session hashes — treat as secrets. **Off-box copy is a manual owner step** (the sandbox copy is ephemeral). **TLS note (SSL audit 2026-10-06, `docs/hardening/SSL_NETWORK_AUDIT.md` §4.4):** once database SSL enforcement is enabled, the production dump DSN must carry `?uselibpqcompat=true&sslmode=require` (node-pg ≥8.23 maps a bare `sslmode=require` to verify-full, which fails on Supabase's private CA; the compat form was verified live against the pooler). The script code needs no change — only the DSN in the isolated run directory.
 3. **Pre-migration snapshot** — mandatory before any production migration: run layer 2 + `scripts/prod-migration/preflight.ts` row-count snapshot (docs/RELEASE.md already enforces this in the pipeline).
 
 Known gap (fixed today): the logical restore path aborted on tenant-guard triggers whose cross-table predicates are not FK edges (`StudyMaterial.subjectId` has a guard but no FK → load order could load the child before the referent). `scripts/db-restore-verify.ts` now disables USER triggers inside the load transaction (FK internal triggers stay live) and re-arms them before COMMIT; the drill audit re-verifies the invariants afterwards. Storage objects are NOT covered by any database backup — bucket files must be re-synced/re-uploaded separately after a full disaster (§18).
@@ -131,7 +131,7 @@ Only the **project owner** may: enable paid features (§6), rotate production cr
 
 Target: a FRESH database — either the §11 new Supabase project, or a local/CI cluster.
 
-1. (Logical path only) Apply schema: `DATABASE_URL=<recovery-url> bunx prisma migrate deploy` → expect 14/14.
+1. (Logical path only) Apply schema: `DATABASE_URL=<recovery-url> bunx prisma migrate deploy` → expect 15/15 (includes `20261006123000_least_privilege_grants`).
 2. (Logical path only) Load + verify: `bun scripts/db-restore-verify.ts <archive>.jsonl.gz --into public` → expect every table OK, TOTAL OK, 3-way money parity OK, exit 0. (PITR path: skip 1–2 — the restore already carries schema+data.)
 3. Run the §16/§17 verification SQL (RLS census, guard triggers enabled, guard predicates = 0 violations, cross-tenant INSERT probe blocked, parity sums, critical counts vs the §17 baseline).
 4. App-level connect test, isolated: `DATABASE_URL=<recovery-url> SCHOLARIO_PLANE=school bun run dev` locally → login with a known account → roster + fees dashboard render. Never expose the recovered data publicly.
@@ -147,7 +147,7 @@ Target: a FRESH database — either the §11 new Supabase project, or a local/CI
 
 ## 14. Prisma migration verification
 
-On the recovery target: `SELECT migration_name, finished_at FROM _prisma_migrations ORDER BY finished_at;` → must be **14 rows, all finished**, names byte-identical to the `prisma/migrations/` directories (`0_init` … `20261005060000_platform_account_recovery`) — verified today on both production (live probe) and the drill restore. Drift = the recovery is stale → stop. Never run `prisma migrate reset`/`db push` against production.
+On the recovery target: `SELECT migration_name, finished_at FROM _prisma_migrations ORDER BY finished_at;` → must be **15 rows, all finished**, names byte-identical to the `prisma/migrations/` directories (`0_init` … `20261006123000_least_privilege_grants`) — production re-verified live 2026-10-06 (15/15, latest applied 14:23:33Z, re-probed 14:50–15:05 UTC by the SSL audit, `docs/hardening/SSL_NETWORK_AUDIT.md` §2). Drift = the recovery is stale → stop. Never run `prisma migrate reset`/`db push` against production.
 
 ## 15. Application health verification
 
@@ -208,7 +208,7 @@ Logical-path drill (executed and PASSED 2026-10-06 11:01 UTC — re-run verbatim
 # 1. dump production (read-only; from a dir whose .env points at the prod pooler)
 cd /tmp/dr-prod && bun /home/z/my-project/scripts/db-backup.ts
 # 2. fresh isolated database + schema
-DATABASE_URL='postgresql://…recovery…' bunx prisma migrate deploy   # 14/14
+DATABASE_URL='postgresql://…recovery…' bunx prisma migrate deploy   # 15/15
 # 3. restore + verify (counts, money parity, exit code)
 bun scripts/db-restore-verify.ts <archive>.jsonl.gz --into public
 # 4. audit: RLS/trigger census, FK orphan scan (196 constraints → 0), guard
@@ -230,7 +230,7 @@ After every SEV-1/SEV-2 and every drill that finds a gap: append a dated entry h
 1. **Enable Pro + PITR (§6)** — the only open SEV-1 risk left; every day without it is unbounded RPO.
 2. Copy backup archives OFF the box whenever one is taken (§5.2) until platform backups exist.
 3. Resend key + webhook registration (carried over — email delivery still unverified).
-4. Optional hardening from the 2026-10-06 audit: least-privilege grants, `disable_signup`, SSL enforcement, `site_url` (docs/SUPABASE_AUDIT.md).
+4. Hardening follow-ups (2026-10-06 audit): least-privilege grants **DONE** (applied & verified); `disable_signup` + `site_url` still open (docs/SUPABASE_AUDIT.md); SSL enforcement classified **B — ready with owner action**, gate + toggle/rollback runbook at `docs/hardening/SSL_NETWORK_AUDIT.md` §8 (expect a brief DB reboot; then use the §5 layer-2 TLS DSN form for dumps); network restrictions **NOT RECOMMENDED** for the current Vercel architecture (dynamic egress).
 
 ## Changes made by this hardening pass
 
@@ -238,3 +238,5 @@ After every SEV-1/SEV-2 and every drill that finds a gap: append a dated entry h
 - `scripts/db-restore-verify.ts` — drill-driven fix: tenant-guard triggers transactionally disabled for the load and re-armed before COMMIT; `_prisma_migrations` excluded from the backup-vs-restored count comparison (repo artifact, owned by `prisma migrate deploy`).
 - `docs/BACKUP_RECOVERY.md` — pointer added; content unchanged.
 - Zero changes to application code, Prisma schema, policies, buckets, plans or billing. Production was only ever read (backup dump + probes).
+
+SSL & network audit closure (2026-10-06, later the same day — docs-only): added the §5 layer-2 TLS DSN note for the logical dump; migration expectations updated 14→15 (grants migration applied same day); owner actions repointed to the SSL-enforcement gate (`docs/hardening/SSL_NETWORK_AUDIT.md`). No operational, code, schema or configuration change.

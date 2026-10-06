@@ -12,7 +12,7 @@
 
 | # | Item | Verdict |
 | --- | --- | --- |
-| 1 | Database | ✅ PG 17.11 · 111 business tables + `_prisma_migrations` · 14/14 migrations applied, repo-identical · Prisma sole authority |
+| 1 | Database | ✅ PG 17.11 · 111 business tables + `_prisma_migrations` · 15/15 migrations applied (incl. §4 least-privilege grants, 2026-10-06T14:23:33Z), repo-identical · Prisma sole authority |
 | 2 | Authentication | ✅ Supabase Auth intentionally unused · `auth.users` = 0 rows · findings: signup not disabled, `site_url` stale (§9) |
 | 3 | RLS | ✅ 112/112 tables RLS-enabled, zero policies — deny-by-default is correct for this architecture (proof chain §3) |
 | 4 | Grants | ✅ **least-privilege migration applied to production + verified 2026-10-06T14:23:33Z** — anon/authenticated hold zero business-table privileges, service_role/postgres unchanged, default ACL closed for future tables (§4, `docs/hardening/DATABASE_GRANTS.md` §16) |
@@ -20,7 +20,7 @@
 | 6 | Realtime | ✅ Broadcast only · empty `supabase_realtime` publication is correct — no Postgres Changes anywhere (§6) |
 | 7 | Performance | ✅ 69 FK findings classified: 0 high-value today, 3 medium (future), rest covered/low — **no indexes added** (§7) |
 | 8 | Security advisor | 112 × `rls_enabled_no_policy` = intentional architecture · 1 × `extension_in_public` (pg_trgm) = real, minor, deferred (§8) |
-| 9 | DB security | ⚠️ SSL not enforced · DB open 0.0.0.0/0 · service-role server-only, verified (§9) |
+| 9 | DB security | ⚠️ SSL enforcement OFF — but TLS verified live: PG `ssl=on`, TLS 1.3 negotiated at the pooler, production Prisma already TLS via Supavisor session mode :5432 · enablement ready (classification B, brief DB reboot) · network restrictions **NOT RECOMMENDED** (Vercel dynamic egress) · service-role server-only, verified (§9, `docs/hardening/SSL_NETWORK_AUDIT.md`) |
 | 10 | Backups | 🔴 walg enabled but **no backups exist**, PITR off — biggest operational risk (§10) |
 | 11 | Testing | ✅ existing suites already encode the architecture; no new tests justified (no change) (§11) |
 | 12 | Migration discipline | ✅ one authority (Prisma); prepared migration staged in docs/, promotion steps documented (§12) |
@@ -34,8 +34,11 @@ Verified live (superuser SQL via Management API):
 
 - **PostgreSQL 17.11** (x86_64, gcc 15.2.0).
 - `public` holds **112 base tables**: 111 business tables + `_prisma_migrations`. No views.
-- `_prisma_migrations`: **14 rows, all finished** — names byte-identical to the 14
-  directories in `prisma/migrations/` (`0_init` … `20261005060000_platform_account_recovery`).
+- `_prisma_migrations`: **15 rows, all finished** — names byte-identical to the
+  15 directories in `prisma/migrations/` (`0_init` …
+  `20261006123000_least_privilege_grants`; 14 at original audit time, 15 after
+  the §4 grants migration — re-verified live 2026-10-06 by the SSL audit,
+  `docs/hardening/SSL_NETWORK_AUDIT.md` §2).
 - **No second migration authority**: `supabase_migrations` schema does not exist
   (no Supabase CLI workflow ever touched this project); no drizzle/knex/flyway
   artifacts in the repo; `prisma/migrations` matches the applied state exactly.
@@ -217,13 +220,38 @@ tables have 0 rows.
 
 ## 9. Database security
 
-- **SSL enforcement: OFF** (`ssl-enforcement.database = false`). The app itself
-  always connects with TLS, but the database does not refuse plaintext
-  clients. Enable when the plan allows (Pro feature) — owner action.
-- **Network restrictions: none** (`dbAllowedCidrs 0.0.0.0/0 + ::/0`, applied).
-  Vercel functions have dynamic egress; restricting to Vercel ranges is
-  fragile. Acceptable today *because* the password is strong and rotated;
-  document if you want belt-and-braces later.
+- **SSL enforcement: OFF** — verified 2026-10-06, behaviorally: plaintext
+  clients are still accepted on the Supavisor ports today (the exact behavior
+  the enforcement toggle removes; `ssl-enforcement.database = false` at
+  original audit time). The verified live TLS posture:
+  PostgreSQL **`ssl = on`** (min TLSv1.2, server accepts TLSv1.3); **TLS 1.3
+  successfully negotiated** with the Supavisor pooler
+  (`TLS_AES_256_GCM_SHA384`, chain `Supabase Root 2021 CA`, on both 5432 and
+  6543); the production `DATABASE_URL` uses the **Supavisor session-mode
+  pooler on port 5432** (IPv4 AWS ELB); Prisma's **default connection
+  attempts TLS** (prefer — SSLRequest sent first), so production application
+  traffic is already encrypted client↔pooler; an explicit `sslmode=require`
+  was also **tested successfully** against the same endpoint (Prisma) and in
+  the `uselibpqcompat=true` form (node-pg). **Enabling SSL enforcement causes
+  a brief database reboot** (seconds at ~67 MB; plan for minutes). Full
+  compatibility matrix, toggle and rollback runbook:
+  `docs/hardening/SSL_NETWORK_AUDIT.md` — Phase 8 no-change gate, classification
+  **B**, awaiting explicit owner approval. **Nothing was changed by that audit.**
+- **Network restrictions: none (audit-time `dbAllowedCidrs 0.0.0.0/0 + ::/0`,
+  applied) — and NOT RECOMMENDED** for the current architecture. Verified:
+  **Vercel default function egress IPs are dynamic** (Vercel Knowledge Base:
+  outbound requests from builds and Functions can leave from any address in
+  the pool, which changes between requests) → **network IP allowlisting is
+  not recommended for the current Vercel architecture** — an allowlist would
+  either block production intermittently or degenerate to `0.0.0.0/0`.
+  Also verified: the direct database endpoint (`db.<ref>.supabase.co:5432`)
+  is **IPv6-only from the current environment** (no IPv4 record);
+  **production application traffic uses the IPv4 Supavisor path** instead.
+  Protection today = strong rotated password (SCRAM) + TLS already
+  negotiated by every production client + least-privilege grants (§4) +
+  deny-by-default RLS (§3). Static-egress alternatives (Vercel Static IPs /
+  Secure Compute / Supabase PrivateLink) are documented in the SSL audit §6
+  for a possible future decision only — nothing was introduced.
 - **Exposed schema**: `public` (standard PostgREST surface) — with anon
   grants still present this is a wide-but-empty hallway (RLS denies all
   rows); the §4 migration closes the hallway itself.
@@ -312,18 +340,23 @@ form — nothing diverged.
 | TWO active Vercel projects | ✅ `scholario-platform` + `scholario-app` (legacy project still parked for decommission) |
 | ONE Supabase project | ✅ `kbyknezedewvgrnqervj` (DB + Storage + Broadcast Realtime) |
 | Custom server-side auth | ✅ unchanged; `auth.users` empty; no Supabase Auth anywhere |
-| PostgreSQL + Prisma | ✅ 14/14 migrations, single authority |
+| PostgreSQL + Prisma | ✅ 15/15 migrations, single authority |
 | Storage | ✅ Supabase Storage, two-bucket model intact |
 | Realtime | ✅ Broadcast only; empty publication is correct |
 
 ## Remaining owner actions
 
 1. **Backups** (§10): plan upgrade → daily backups + PITR. Highest priority.
-2. **Execute or reject** `docs/hardening/least-privilege-grants.sql` (§4) —
-   safety proven; promotion steps in the file.
+2. **DONE (2026-10-06)** — least-privilege grants applied to production &
+   verified (§4, `docs/hardening/DATABASE_GRANTS.md` §16).
 3. Supabase Auth hygiene (§2): `disable_signup: true`; fix `site_url`.
-4. SSL enforcement + optional network restrictions (§9) — both are Pro-gated
-   dashboard toggles.
+4. **SSL enforcement — ready with owner action (classification B)**: gate,
+   toggle and rollback runbook at `docs/hardening/SSL_NETWORK_AUDIT.md` §8;
+   expect a brief DB reboot; optionally pin `sslmode=require` on the Vercel
+   `DATABASE_URL`s first (Prisma already negotiates TLS by default).
+   **Network restrictions: NOT RECOMMENDED** for the current Vercel
+   architecture (dynamic egress — §9 / SSL audit §6); keep OFF unless a
+   static-egress architecture is deliberately adopted.
 5. Move `pg_trgm` out of `public` (§8) — only if a quiet window allows a
    coordinated extension migration.
 6. Medium-value indexes (§7) — only when the corresponding features show
@@ -341,3 +374,9 @@ form — nothing diverged.
 - Operations: `DATABASE_URL` corrected on both Vercel projects (the owner's
   rotation had left both planes 503) + two same-SHA production redeploys.
   Zero code/schema change; root cause + timeline in §13.
+- SSL & network follow-up (2026-10-06, later the same day — audit closure,
+  docs-only): §9 updated with the verified live SSL/network evidence;
+  migration counts updated 14→15 (grants migration applied); owner actions 2
+  and 4 closed/updated. Full record: `docs/hardening/SSL_NETWORK_AUDIT.md`
+  (Phase 8 gate open — awaiting owner approval). No production setting was
+  changed by either pass.
