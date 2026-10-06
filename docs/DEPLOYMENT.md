@@ -8,14 +8,17 @@
 
 | Layer | Provider | Resource |
 | --- | --- | --- |
-| Application | Vercel | project `scholario-production` (Next.js, App Router) |
+| Application | Vercel | **two production projects**: `scholario-platform` (control plane) + `scholario-app` (school plane) — same repo, same build, split by `SCHOLARIO_PLANE`. Legacy `scholario-production` (unified) is **deprecated** — `docs/VERCEL_PROJECTS.md` §7 |
 | Database | Supabase | project `scholario-production` (ap-south-1, PostgreSQL 17, Supavisor pooling) |
 | Realtime | Supabase Realtime | broadcast channels (capability names, HMAC-signed) |
 | Storage | Supabase Storage | tenant-scoped buckets, signed URLs |
 | Email | Resend | transactional sends (server-side only) |
 | Source of truth | GitHub | `signature4748-obs/Scholario-upgrade` (main = production) |
 
-There is exactly **one Vercel project, one Supabase project, one repository**.
+There is **one repository, one Supabase project, and two production Vercel
+projects** — the two planes build from the same code and share the same
+database. The deprecated legacy project (`scholario-production`) still
+auto-deploys `main` during its decommission window (rollback path only).
 Schools are tenants (rows), never deployments. Adding a school is a data
 operation performed by the platform administrator through the control plane —
 no infrastructure changes.
@@ -52,13 +55,17 @@ development ──► (PR / push) ──► main ──► production DB migrati
 | Variable | Class | Notes |
 | --- | --- | --- |
 | `DATABASE_URL` | server-only | Supavisor **session-mode** pooler (port 5432), `connection_limit=2`, user `postgres.<ref>`. Migrations and runtime both run through the pooler — the IPv6-only direct endpoint is not used. |
-| `DATABASE_ENV` | server-only | environment marker (`production` / `preview` / `development`); gates seed guards and prod locks. |
+| `DATABASE_ENV` | server-only | environment marker (`development` / `test` / `staging` / `production`); set to `production` on both plane projects — gates seed guards and prod locks. |
 | `SUPABASE_URL` | server-only | project origin; also used to derive the **CSP `connect-src`** realtime origin (see `src/lib/security/headers.ts`). |
 | `SUPABASE_ANON_KEY` | publishable | handed to authenticated browsers by `/api/realtime/config` (subscription transport). Never grants data access — the database is deny-all (see TENANT docs). |
 | `SUPABASE_SERVICE_ROLE_KEY` | server-only | used ONLY by server-side realtime REST publish. Never exposed to the client; `SUPABASE_*` never use the `NEXT_PUBLIC_` prefix. |
 | `FILE_SIGNING_SECRET` | server-only | signed media access URLs. |
 | `REALTIME_CHANNEL_SECRET` | server-only | HMAC key signing capability channel names (unguessability = authorization). |
 | `RESEND_API_KEY` | server-only | Resend REST transport for transactional email (server-side only, no `NEXT_PUBLIC_`). |
+
+Plane wiring (`SCHOLARIO_PLANE`, `SCHOLARIO_ALLOW_UNIFIED_PRODUCTION`,
+`SCHOOL_APP_BASE_URL`) and the full per-project matrix live in
+`docs/VERCEL_PROJECTS.md` §2.
 
 Rules enforced by tests:
 - No secret is ever `NEXT_PUBLIC_*` (headers/seed-guard/secrets-scan suites).
@@ -98,4 +105,4 @@ scheme of the same origin) because the realtime bridge connects to
 | Rotation (DB password) | Supabase dashboard/API → update `DATABASE_URL` on Vercel → redeploy → verify `/health/ready` |
 | Rotation (Resend key) | Resend dashboard → update `RESEND_API_KEY` on Vercel → redeploy → send probe |
 | Backup | logical backup procedure in `docs/BACKUP_RECOVERY.md` |
-| CI | `.github/workflows/ci.yml` (see `docs/CI.md` for the workflow-scope note) |
+| CI | `.github/ci.yml.parked` — workflows parked pending the GitHub token scope upgrade (see `docs/CI.md` + `docs/RELEASE.md`) |
