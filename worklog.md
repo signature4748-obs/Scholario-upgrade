@@ -5736,3 +5736,16 @@ Stage Summary:
 - TWO-PROJECT TOPOLOGY LIVE: scholario-platform.vercel.app (control plane) + scholario-app-virid.vercel.app (school ERP) + scholario-production (legacy unified, RETAINED, auto-deploys main) — one repo, one Supabase, one DB, one Vercel account. Plane gates verified in production (each plane's foreign surface 404s). Canonical school doors live on the school plane. Old production untouched and still READY at 0d54b06 (0d54b06 == latest main → all three deployments now aligned).
 - RESEND: webhook creation NOT possible with available keys (Vercel-stored key is send-only-restricted; IM key invalid) → owner action documented. Domain verification (scholario.<TLD>) owner action stands.
 - Migration/verification order respected: no DB changes in this release (0 new migrations — app-layer only), so no gate migration step was required; deploys happened after the full test matrix.
+
+---
+Task ID: PLANES-1-FINAL
+Agent: main (Z.ai Code orchestrator)
+Task: Docs commit + three-project final alignment.
+
+Work Log:
+- Docs committed f670b87 "docs: two-project architecture, school factory, tenant routing, auth decision" (6 docs; development + main both fast-forwarded).
+- All THREE production deployments built f670b87 READY: scholario-production (unified legacy), scholario-app-virid.vercel.app (school plane), scholario-platform.vercel.app (platform plane). Health ready / database ok on all three; app-version 2.14.0 on all three. Legacy production verified behavior-identical (all doors + branding + boundary still correct in unified mode).
+- Final state: GitHub origin/main = origin/development = f670b8791eb9b0ff90d7b7ec4d1a9905a1548266.
+
+Stage Summary:
+- Mission complete for all autonomous-executable items. Owner actions outstanding: Resend webhook creation + domain verification (send-only key), Google OAuth creds (optional), workflow un-parking, Supabase backup verification, decommission of legacy project after stability window.
