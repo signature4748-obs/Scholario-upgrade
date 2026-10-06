@@ -102,3 +102,48 @@ delivery evidence.
   message is visible in the Resend account's email log (delivered).
 - Real delivery probe: direct Resend REST send to the account owner address
   recorded in Resend's `GET /emails` log with delivery status.
+
+## Provider independence & the two-project topology
+
+The email pipeline is **domain-independent** — nothing in the code knows or
+hard-codes the sending domain. What exists per send: an `EmailDelivery`
+audit row (`PENDING → SENT/FAILED`, attempts, provider message id) with
+`dedupeKey` idempotency, bounded-retry transport, and the Svix-signature-
+verified webhook at `POST /api/webhooks/resend`. When the `scholario.<TLD>`
+domain is purchased, the switch is **configuration only**:
+
+1. Resend dashboard → Domains → Add the domain → add the returned
+   DKIM/SPF DNS records (the existing "Custom sending domain" runbook
+   above — same steps).
+2. Set `EMAIL_FROM` on Vercel to `Scholario <no-reply@scholario.<TLD>>` and
+   redeploy.
+
+No code changes, no template changes, no pipeline changes.
+
+**Webhook endpoint per plane.** The webhook lives at
+`/api/webhooks/resend` and is **served on every plane** — it is shared
+infrastructure, like `/api` and `/api/app-version` (see
+`isSharedApiRoute` in `src/lib/plane.ts`): the platform deployment
+(`scholario-platform`), the school deployment (`scholario-app`), and the
+legacy unified deployment (`scholario-production`) all expose the same
+route, verified by the same `RESEND_WEBHOOK_SECRET`. Resend's dashboard
+webhook URL points at whichever origin is the canonical production domain;
+because all three deployments share one database, a bounce event delivered
+to any plane's endpoint synchronizes the same `EmailDelivery` row. See
+`docs/VERCEL_PROJECTS.md` for the deployment map.
+
+**Honest state (sender limitation).** Resend is currently limited to the
+shared `onboarding@resend.dev` testing sender: with no verified custom
+domain on the account, Resend only delivers that sender to the account
+owner's own address (the "Custom sending domain" section above documents
+this and the fix). Real end-user delivery is pending the one external
+domain-verification action, not code.
+
+**SMTP-for-Supabase-Auth: not needed.** Supabase Auth is not used —
+authentication is the application's custom scrypt/session model
+(`docs/AUTH_ARCHITECTURE.md`), so the "configure SMTP in Supabase for auth
+mail" step that a GoTrue adoption would require does not exist and is not
+planned. The architecture keeps the option open: the send pipeline is
+provider-independent (a transport behind `sendEmail`), so an SMTP
+transport could be added without touching call sites if that decision is
+ever revisited.
