@@ -41,6 +41,7 @@ import { describe, test, expect, beforeAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { CANONICAL_SCHOOL_ROLES } from '@/lib/security/permissions'
 import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 import { resetLoginBuckets } from '../helpers/login-buckets'
 
@@ -199,6 +200,22 @@ beforeAll(async () => {
 
 async function login(email: string): Promise<string> {
   if (tokens[email]) return tokens[email]
+  // PHASE 1 (role-architecture audit) — the canonical school model is
+  // EXACTLY PRINCIPAL|TEACHER|STUDENT: the login endpoint refuses every
+  // other school role by design (parents reach information through the
+  // student account). Persona rows with legacy roles (PARENT, …) are
+  // therefore probed with the DIRECT session fixture below — the login
+  // refusal itself stays asserted for SUPER_ADMIN on the real path
+  // (§5 of this suite); the forged legacy-role session lets the
+  // authorization gates prove these identities get NOTHING.
+  // (SUPER_ADMIN is a platform identity — never a fixture fallback.)
+  const persona = await db.user.findUnique({ where: { email }, select: { role: true } })
+  if (persona && persona.role !== 'SUPER_ADMIN' && !CANONICAL_SCHOOL_ROLES.includes(persona.role)) {
+    console.warn(`[tenant-isolation] ${email} (role ${persona.role}) is non-canonical; using direct session fixture`)
+    const token = await directSession(email)
+    tokens[email] = token
+    return token
+  }
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

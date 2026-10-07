@@ -21,6 +21,7 @@ import { describe, test, expect, afterAll, beforeAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { CANONICAL_SCHOOL_ROLES } from '@/lib/security/permissions'
 import { DEMO_PRINCIPAL_EMAIL, DEMO_PRINCIPAL_PASSWORD, TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
@@ -36,6 +37,16 @@ const tokens: Record<string, string> = {}
 
 async function login(email: string, password: string): Promise<string> {
   if (tokens[email]) return tokens[email]
+  // PHASE 1 (role-architecture audit) — non-canonical school roles
+  // (PARENT, …) are refused by the login endpoint BY DESIGN (canonical
+  // model: PRINCIPAL|TEACHER|STUDENT — parents use the student account).
+  // Probe them with the direct session fixture so the assertions below
+  // verify the authorization gates refuse these identities.
+  const persona = await db.user.findUnique({ where: { email }, select: { role: true } })
+  if (persona && persona.role !== 'SUPER_ADMIN' && !CANONICAL_SCHOOL_ROLES.includes(persona.role)) {
+    console.warn(`[domain-smoke] ${email} (role ${persona.role}) is non-canonical; using direct session fixture`)
+    return (tokens[email] = await directSession(email))
+  }
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
@@ -305,15 +316,17 @@ describe('student permissions (fixture student)', () => {
 })
 
 // ══════════════════════════════════════════════════════════════════════
-// 8. PARENT access (school-wide reference data)
+// 8. PARENT access — canonical model: parent is NOT an authorization role
 // ══════════════════════════════════════════════════════════════════════
 
 describe('parent permissions (fixture parent)', () => {
-  test('GET /api/events as parent → 200 {ok:true} (school-wide calendar)', async () => {
+  // PHASE 1 (role-architecture audit) — the canonical school model is
+  // EXACTLY PRINCIPAL|TEACHER|STUDENT. The login endpoint refuses the
+  // PARENT role by design (parents reach information through the
+  // student's account), so this persona authenticates only through the
+  // direct session fixture — and EVERY school API must then refuse it.
+  test('GET /api/events as parent → 403 (parent is not a canonical school role)', async () => {
     const res = await as('tenant.parent.a@hawkings.test', '/api/events')
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok: boolean; data: unknown[] }
-    expect(body.ok).toBe(true)
-    expect(Array.isArray(body.data)).toBe(true)
+    expect(res.status).toBe(403)
   }, T)
 })

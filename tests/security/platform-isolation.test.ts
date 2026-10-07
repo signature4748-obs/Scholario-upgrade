@@ -251,7 +251,13 @@ beforeAll(async () => {
   principalA = await schoolLogin('tenant.principal.a@hawkings.test')
   teacherA = await schoolLogin('tenant.teacher.a@hawkings.test')
   studentA = await schoolLogin('tenant.student.a@hawkings.test')
-  parentA = await schoolLogin('tenant.parent.a@hawkings.test')
+  // PHASE 1 (role-architecture audit) — PARENT is outside the canonical
+  // school model (PRINCIPAL|TEACHER|STUDENT): the login endpoint REFUSES
+  // that role by design, so the parent persona is probed with a DIRECT
+  // session fixture (auth fixture only — never an authorization bypass;
+  // every platform-plane probe below still expects this token to get
+  // nothing, and every school-plane gate refuses the role).
+  parentA = await directSchoolSession('tenant.parent.a@hawkings.test')
   principalB = await schoolLogin('principal.b@greenvalley.test')
 
   // Platform sessions (full MFA).
