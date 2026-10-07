@@ -1,6 +1,7 @@
 'use client'
 
 import { create } from 'zustand'
+import { toast } from 'sonner'
 import { persist } from 'zustand/middleware'
 import type { StudentPosition, StudentsState, StudentStatus } from './types'
 import { POSITION_DEFS, filterActivePositions } from '@/lib/student-positions'
@@ -143,9 +144,29 @@ export const useStudentsStore = create<StudentsState>()(
   // DEMO-TIER seeder (PIH-4c/R8) — applies the STU-xxx universe above ONLY
   // for the sanctioned demo tenant (see module tail + demo-tenant.ts).
   ensureDemoSeed: () => ensureStudentsDemoSeed(),
-  archiveStudent: (id, reason, by) => {
+  archiveStudent: async (id, reason, by) => {
     const s = get().students.find((x) => x.id === id)
     if (!s) return
+    // SERVER-FIRST: the archive must commit to the canonical User row —
+    // a client-only mutation vanished on the next roster sync (fake
+    // persistence). The local mirror updates only after the server
+    // acknowledges.
+    try {
+      const r = await fetch(`/api/students/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'archive', reason }),
+      })
+      if (!r.ok) {
+        const j = (await r.json().catch(() => null)) as { error?: string } | null
+        throw new Error(j?.error ?? `Server rejected the archive (${r.status})`)
+      }
+    } catch (e) {
+      toast.error('Student archive failed', {
+        description: e instanceof Error ? e.message : 'The student was NOT archived — nothing was saved.',
+      })
+      return
+    }
     const now = new Date().toISOString()
     // Spec §3 — an archived student can not hold live class responsibilities:
     // end every active position (history preserved) so the Leadership tab
@@ -162,15 +183,55 @@ export const useStudentsStore = create<StudentsState>()(
       studentPositions: nextPositions,
     }))
   },
-  restoreStudent: (id, by) => {
+  restoreStudent: async (id, by) => {
+    try {
+      const r = await fetch(`/api/students/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'restore' }),
+      })
+      if (!r.ok) {
+        const j = (await r.json().catch(() => null)) as { error?: string } | null
+        throw new Error(j?.error ?? `Server rejected the restore (${r.status})`)
+      }
+    } catch (e) {
+      toast.error('Student restore failed', {
+        description: e instanceof Error ? e.message : 'The student was NOT restored — nothing was saved.',
+      })
+      return
+    }
     set((state) => ({
-      students: state.students.map((x) => x.id === id ? { ...x, status: 'Active' as StudentStatus, archiveReason: undefined, archiveDate: undefined, timeline: [{ id: `tl-${Date.now()}`, type: 'restore' as const, title: 'Student Restored', description: 'Restored to active status', date: new Date().toISOString(), by }, ...x.timeline] } : x),
+      students: state.students.map((x) => x.id === id ? { ...x, status: 'Active' as StudentStatus, archiveReason: undefined, archiveDate: undefined, timeline: [{ id: `tl-${Date.now()}`, type: 'restore' as const, title: 'Student Restored', description: 'Restored to active status (server-acknowledged)', date: new Date().toISOString(), by }, ...x.timeline] } : x),
     }))
   },
-  transferStudent: (id, type, toClass, reason, by) => {
+  transferStudent: async (id, type, toClass, reason, by) => {
     const s = get().students.find((x) => x.id === id)
     if (!s) return
     const nc = get().classes.find((c) => c.name === toClass)
+    // SERVER-FIRST: the transfer commits to the canonical Student.classId
+    // (the class FK is re-validated in-tenant server-side). The local
+    // mirror updates only after the server acknowledges.
+    if (nc) {
+      const dbClassId = nc.sections[0]?.id ?? ''
+      if (dbClassId) {
+        try {
+          const r = await fetch(`/api/students/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'transfer', classId: dbClassId, reason }),
+          })
+          if (!r.ok) {
+            const j = (await r.json().catch(() => null)) as { error?: string } | null
+            throw new Error(j?.error ?? `Server rejected the transfer (${r.status})`)
+          }
+        } catch (e) {
+          toast.error('Student transfer failed', {
+            description: e instanceof Error ? e.message : 'The student was NOT transferred — nothing was saved.',
+          })
+          return
+        }
+      }
+    }
     const fc = `${s.className}-${s.section}`
     const tc = nc ? nc.name : toClass
     const now = new Date().toISOString()

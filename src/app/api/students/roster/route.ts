@@ -30,6 +30,8 @@ interface RosterStudent {
   userId: string
   name: string
   email: string
+  /** User.status — ACTIVE or INACTIVE (archived). */
+  status: string
   rollNo: string | null
   admissionNo: string | null
   classId: string | null // section-level DB Class id
@@ -144,14 +146,18 @@ export async function GET() {
       const visibleClassIds = new Set(classRows.map((c) => c.id))
 
       // ── Students ────────────────────────────────────────────────────
+      // Staff (P/M) see the FULL roster including archived students (the
+      // directory filters Active client-side; the Archived tab reads the
+      // same sync). The STUDENT projection stays ACTIVE-only — a student
+      // sees active classmates, never archived records.
       const studentRows = await db.student.findMany({
         where: {
           schoolId,
           ...(visibleClassIds.size ? { classId: { in: [...visibleClassIds] } } : {}),
-          user: { status: 'ACTIVE' },
+          ...(isStudent ? { user: { status: 'ACTIVE' } } : {}),
         },
         include: {
-          user: { select: { id: true, name: true, email: true, createdAt: true } },
+          user: { select: { id: true, name: true, email: true, createdAt: true, status: true } },
           route: { select: { name: true } },
         },
         orderBy: [{ rollNo: 'asc' }],
@@ -315,6 +321,7 @@ export async function GET() {
           userId: s.user.id,
           name: s.user.name ?? '',
           email: isStudent && !isSelf ? '' : s.user.email,
+          status: s.user.status,
           rollNo: s.rollNo,
           admissionNo: s.admissionNo,
           classId: s.classId,

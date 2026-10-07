@@ -30,7 +30,7 @@
  *     students that no longer exist are pruned (no invisible authority).
  */
 
-import type { ClassRecord, StudentRecord, Gender, FeeStatus } from './types'
+import type { ClassRecord, StudentRecord, StudentStatus, Gender, FeeStatus } from './types'
 import type { SubjectDef } from '@/lib/mock/academic'
 import { streamKeyFromDbValue } from '@/lib/mock/academic'
 import { useStudentsStore } from './store'
@@ -223,7 +223,9 @@ export function mapRosterToRecords(payload: RosterPayload): {
       rollNo: s.rollNo ?? '',
       name: s.name,
       avatar: initials(s.name),
-      gender: (s.gender === 'MALE' ? 'Male' : 'Female') as Gender,
+      // case-insensitive: the canonical DB enum is 'MALE'/'FEMALE' but
+      // legacy rows carry lowercase variants.
+      gender: (`${s.gender ?? ''}`.toUpperCase() === 'MALE' ? 'Male' : 'Female') as Gender,
       classId: groupKey ?? '',
       className: group?.label ?? sectionClass?.name ?? '',
       section: sectionClass?.section ?? 'A',
@@ -242,7 +244,9 @@ export function mapRosterToRecords(payload: RosterPayload): {
       address: s.address ?? '',
       admissionDate: s.createdAt.slice(0, 10),
       previousSchool: '—',
-      status: 'Active' as const,
+      // REAL lifecycle status from the canonical User row (the PATCH
+      // /api/students/[id] archive/restore mutations) — never a constant.
+      status: (s.status === 'INACTIVE' ? 'Archived' : 'Active') as StudentStatus,
       attendance: s.attendance.pct ?? 0,
       feeStatus,
       feePaid: s.fees.totalPaid,

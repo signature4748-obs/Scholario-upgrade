@@ -285,3 +285,78 @@ export async function GET(
     { roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }
+
+/**
+ * PATCH /api/students/[id] — the SERVER-backed student lifecycle mutations
+ * (Principal/Management only; school-scoped):
+ *
+ *   { action: 'archive', reason? }  → User.status INACTIVE  (+ audit row)
+ *   { action: 'restore' }           → User.status ACTIVE    (+ audit row)
+ *   { action: 'transfer', classId, reason? } → Student.classId
+ *        (class FK re-validated in-tenant; audit row)
+ *
+ * The client previously mutated only its localStorage store — a fake
+ * persistence theatre that vanished on the next roster sync. Every
+ * mutation now commits to the canonical DB first; the client mirrors the
+ * acknowledged state.
+ */
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  return withUser(
+    async (user) => {
+      const schoolId = schoolScoped(user)
+      const { id } = await params
+      const body = (await req.json().catch(() => null)) as
+        | { action?: string; reason?: string; classId?: string }
+        | null
+      const action = body?.action?.trim()
+      const reason = typeof body?.reason === 'string' ? body.reason.trim().slice(0, 300) : ''
+
+      const student = await db.student.findFirst({
+        where: { id, schoolId },
+        select: { id: true, userId: true, classId: true, user: { select: { name: true, status: true } } },
+      })
+      if (!student) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Student not found', internalDetail: 'students/[id] PATCH: student missing or foreign tenant' })
+
+      if (action === 'archive' || action === 'restore') {
+        const nextStatus = action === 'archive' ? 'INACTIVE' : 'ACTIVE'
+        if (student.user.status !== nextStatus) {
+          await db.user.update({ where: { id: student.userId }, data: { status: nextStatus } })
+          await db.activityLog.create({
+            data: {
+              schoolId,
+              userId: user.id,
+              action: action === 'archive' ? 'STUDENT_ARCHIVED' : 'STUDENT_RESTORED',
+              detail: `${student.user.name ?? 'Student'} ${action === 'archive' ? 'archived' : 'restored to active'}${reason && action === 'archive' ? ` — ${reason}` : ''}`,
+            },
+          })
+        }
+        return { ok: true, id: student.id, status: nextStatus, action }
+      }
+
+      if (action === 'transfer') {
+        const classId = body?.classId?.trim()
+        if (!classId) throw new AppError('INVALID_INPUT', { publicMessage: 'classId is required for a transfer' })
+        const cls = await db.class.findFirst({ where: { id: classId, schoolId }, select: { id: true, name: true, section: true } })
+        if (!cls) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Class not found', internalDetail: 'students/[id] PATCH transfer: class missing or foreign tenant' })
+        if (student.classId !== cls.id) {
+          await db.student.update({ where: { id: student.id }, data: { classId: cls.id } })
+          await db.activityLog.create({
+            data: {
+              schoolId,
+              userId: user.id,
+              action: 'STUDENT_TRANSFERRED',
+              detail: `${student.user.name ?? 'Student'} transferred to ${cls.name}${cls.section ? ` (${cls.section})` : ''}${reason ? ` — ${reason}` : ''}`,
+            },
+          })
+        }
+        return { ok: true, id: student.id, classId: cls.id, action }
+      }
+
+      throw new AppError('INVALID_INPUT', { publicMessage: 'action must be archive, restore or transfer' })
+    },
+    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+  )
+}
