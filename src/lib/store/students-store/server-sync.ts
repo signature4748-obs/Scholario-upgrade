@@ -44,6 +44,8 @@ interface RosterStudentDto {
   userId: string
   name: string
   email: string
+  /** User.status — ACTIVE or INACTIVE (archived). */
+  status: string
   rollNo: string | null
   admissionNo: string | null
   classId: string | null

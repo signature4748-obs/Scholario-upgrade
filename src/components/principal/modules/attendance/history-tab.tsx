@@ -544,7 +544,7 @@ function HistoryDetailDialog({
             <DetailStat label="Late" value={displayRecord.late} color="text-amber-600 dark:text-amber-400" />
             <DetailStat label="Absent" value={displayRecord.absent} color="text-rose-600 dark:text-rose-400" />
             <DetailStat label="Leave" value={displayRecord.leave} color="text-sky-600 dark:text-sky-400" />
-            <DetailStat label="Class Teacher" value={classSections.find((c) => c.id === displayRecord.classId)?.teacher ?? '—'} color="text-foreground" />
+            <DetailStat label="Attendance Rate" value={`${displayRecord.rate}%`} color="text-foreground" />
           </div>
         </div>
 

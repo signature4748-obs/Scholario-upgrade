@@ -49,12 +49,14 @@ export async function GET(req: NextRequest) {
           select: { id: true, name: true, section: true },
         })
         const classById = new Map(classes.map((c) => [c.id, c]))
-        const groups = new Map<string, { classId: string; date: Date; total: number; present: number; absent: number; late: number; leave: number }>()
+        interface DayGroup { classId: string; date: Date; total: number; present: number; absent: number; late: number; leave: number }
+        const groups = new Map<string, DayGroup>()
         for (const r of detail) {
-          const key = `${r.classId}|${r.date.toISOString().slice(0, 10)}`
-          let g = groups.get(key)
+          const classId = r.classId ?? ''
+          const key = `${classId}|${r.date.toISOString().slice(0, 10)}`
+          let g: DayGroup | undefined = groups.get(key)
           if (!g) {
-            g = { classId: r.classId, date: r.date, total: 0, present: 0, absent: 0, late: 0, leave: 0 }
+            g = { classId, date: r.date, total: 0, present: 0, absent: 0, late: 0, leave: 0 }
             groups.set(key, g)
           }
           g.total += 1
