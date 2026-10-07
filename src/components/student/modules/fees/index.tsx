@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { computeAccount, findStructureForStudent } from '@/lib/store/fee-store'
-import { useFeeStore } from '@/lib/store/fee-store'
+import { useFeeStore, type FeeTransaction } from '@/lib/store/fee-store'
 import { useMyStudentRecord } from '@/lib/store/students-store'
 import { useFeatureGate } from '@/lib/tenant/store'
 // STRUCT-REV — mid-session fee-structure acknowledgement (student side).
@@ -44,6 +44,38 @@ export function FeesModule() {
   const concessions = useFeeStore((s) => s.concessions)
   const optionalHeadApplicability = useFeeStore((s) => s.optionalHeadApplicability)
   const receiptSettings = useFeeStore((s) => s.receiptSettings)
+
+  // STUDENT-QA S5-7 — server receipt history: the canonical FeeTransaction
+  // rows for THIS student (school + student scoped, session-resolved).
+  // The client store's `transactions` holds only live payment mirrors made
+  // in THIS browser; historical receipts collected by the office (or paid
+  // from another device) live exclusively in the DB. Without this fetch
+  // the receipts section rendered "No payments recorded yet this session"
+  // on a fresh browser even with real SUCCESS receipts in the ledger.
+  // Display-only: computeAccount keeps consuming the raw store list so the
+  // paid/standing derivation (roster feePaid + live mirrors) is unchanged.
+  const [serverPayments, setServerPayments] = useState<FeeTransaction[]>([])
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/student/payments', { cache: 'no-store', credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled) return
+        const list = j && typeof j === 'object' && 'data' in j && j.data && Array.isArray(j.data.payments) ? j.data.payments : null
+        setServerPayments(list ?? [])
+      })
+      .catch(() => { if (!cancelled) setServerPayments([]) })
+    return () => { cancelled = true }
+  }, [])
+
+  // Receipt list for display — server rows first (canonical history),
+  // then any live mirror rows not already present (id-deduped, newest first).
+  const receiptTxns = useMemo(() => {
+    const byId = new Map<string, FeeTransaction>()
+    for (const t of serverPayments) byId.set(t.id, t)
+    for (const t of transactions) if (!byId.has(t.id)) byId.set(t.id, t)
+    return [...byId.values()].sort((a, b) => (a.recordedAt ?? a.date) < (b.recordedAt ?? b.date) ? 1 : -1)
+  }, [serverPayments, transactions])
 
   const acct = useMemo(
     () => (student
@@ -98,7 +130,7 @@ export function FeesModule() {
     )
   }
 
-  const latestTxn = acct.transactions.find((t) => t.status === 'Success')
+  const latestTxn = receiptTxns.find((t) => t.status === 'Success')
   const balanceForPayment = Math.max(0, acct.totalDue)
 
   return (
@@ -124,7 +156,7 @@ export function FeesModule() {
 
       <FeeStructure acct={acct} />
 
-      <Statement acct={acct} transactions={transactions} receiptSettings={receiptSettings} />
+      <Statement acct={acct} transactions={receiptTxns} receiptSettings={receiptSettings} />
 
       {canPayOnline && balanceForPayment > 0 && (
         <PaymentDialog
