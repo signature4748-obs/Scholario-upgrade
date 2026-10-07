@@ -33,8 +33,11 @@ export function OverviewTab({ store, onNavigateToClasses: _onNavigateToClasses }
   )
   const totalSections = useMemo(() => classes.reduce((a, c) => a + c.sections.length, 0), [classes])
 
-  const boys = Math.round(totalStudents * 0.52)
-  const girls = totalStudents - boys
+  // REAL gender split — counts the roster's actual gender field (the
+  // old card multiplied the total by a hardcoded 0.52 — a fabricated
+  // demographic on real tenants).
+  const boys = activeStudents.filter((s) => s.gender === 'Male').length
+  const girls = activeStudents.filter((s) => s.gender === 'Female').length
   // PHASE 8A (QA 8A-QA/A2) — honest insights: the old card carried a
   // hardcoded "94.2% average attendance" + fabricated historical trend
   // that rendered even on an empty roster. Derive what we can from the
@@ -68,25 +71,61 @@ export function OverviewTab({ store, onNavigateToClasses: _onNavigateToClasses }
     }).filter((d) => d.value > 0)
   }, [classes, activeStudents])
 
-  const ageGroups = [
-    { label: 'Pre-Primary (3-5 yrs)', count: Math.round(totalStudents * 0.12), pct: 12 },
-    { label: 'Primary (6-10 yrs)', count: Math.round(totalStudents * 0.35), pct: 35 },
-    { label: 'Middle (11-13 yrs)', count: Math.round(totalStudents * 0.28), pct: 28 },
-    { label: 'Secondary (14-16 yrs)', count: Math.round(totalStudents * 0.25), pct: 25 },
-  ]
+  // REAL age groups — from the roster's actual dates of birth (the old
+  // card derived counts from fixed percentages of the total).
+  const ageOf = (dob: string): number | null => {
+    if (!dob) return null
+    const d = new Date(dob)
+    if (Number.isNaN(d.getTime())) return null
+    const diff = Date.now() - d.getTime()
+    return Math.floor(diff / (365.25 * 24 * 3600 * 1000))
+  }
+  const ageGroups = useMemo(() => {
+    const bands: { label: string; min: number; max: number }[] = [
+      { label: 'Pre-Primary (3-5 yrs)', min: 3, max: 5 },
+      { label: 'Primary (6-10 yrs)', min: 6, max: 10 },
+      { label: 'Middle (11-13 yrs)', min: 11, max: 13 },
+      { label: 'Secondary (14-16 yrs)', min: 14, max: 16 },
+    ]
+    return bands.map((b) => {
+      const count = activeStudents.filter((s) => {
+        const age = ageOf(s.dob)
+        return age !== null && age >= b.min && age <= b.max
+      }).length
+      return { label: b.label, count, pct: totalStudents > 0 ? Math.round((count / totalStudents) * 100) : 0 }
+    })
+  }, [activeStudents, totalStudents])
 
-  const growthTrend = [
-    { term: 'Term 1 2024', count: Math.max(0, totalStudents - 45) },
-    { term: 'Term 2 2024', count: Math.max(0, totalStudents - 22) },
-    { term: 'Term 3 2024', count: Math.max(0, totalStudents - 8) },
-    { term: 'AY 2025 Current', count: totalStudents },
-  ]
+  // REAL admission trend — the roster's actual admission records grouped
+  // by month (the old series invented "Term 1 2024" history that never
+  // existed; the store's admissionDate is the canonical user-creation
+  // date from the roster sync).
+  const growthTrend = useMemo(() => {
+    const monthKey = (d: string): string => d.slice(0, 7)
+    const byMonth = new Map<string, number>()
+    for (const s of activeStudents) {
+      if (!s.admissionDate) continue
+      const k = monthKey(s.admissionDate)
+      byMonth.set(k, (byMonth.get(k) ?? 0) + 1)
+    }
+    const months: string[] = []
+    const now = new Date()
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+    }
+    return months.map((m) => ({
+      term: new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1)
+        .toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }),
+      count: byMonth.get(m) ?? 0,
+    }))
+  }, [activeStudents])
 
   return (
     <div className="space-y-5">
       {/* Institution-Wide High Level KPIs — premium summary cards */}
       <SummaryCardGrid columns={6}>
-        <SummaryCard label="Total Enrolled" value={totalStudents} sub="+2.4% vs last term" tone="emerald" icon={<Users className="h-4 w-4" />} delay={0} />
+        <SummaryCard label="Total Enrolled" value={totalStudents} sub={hasRoster ? `${classes.length} classes · live roster` : 'no students yet'} tone="emerald" icon={<Users className="h-4 w-4" />} delay={0} />
         <SummaryCard label="Active Students" value={activeStudents.length} sub={`${Math.round((activeStudents.length / (totalStudents || 1)) * 100)}% active`} tone="cyan" icon={<GraduationCap className="h-4 w-4" />} delay={0.04} />
         <SummaryCard label="Inactive / Leave" value={inactiveStudents.length} sub="requires follow-up" tone="rose" icon={<UserX className="h-4 w-4" />} delay={0.08} />
         <SummaryCard label="Total Capacity" value={totalCapacity} sub={`${occupancyPct}% utilized`} tone="violet" icon={<School className="h-4 w-4" />} delay={0.12} />
