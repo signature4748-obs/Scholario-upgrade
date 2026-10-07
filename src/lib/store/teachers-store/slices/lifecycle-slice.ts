@@ -11,7 +11,9 @@ export const createLifecycleSlice: StateCreator<
     set((state) => ({ teachers: [newTeacher, ...state.teachers] }))
     get().logAudit({
       category: 'Teacher Created',
-      actorName: 'Dr. Ananya Iyer',
+      // TQA-14 — neutral attribution: the canonical audit row (real
+      // session actor) is written server-side by POST /api/teachers.
+      actorName: 'Principal',
       actorRole: 'Principal',
       targetTeacherId: newTeacher.id,
       targetTeacherName: newTeacher.name,
@@ -51,7 +53,10 @@ export const createLifecycleSlice: StateCreator<
 
     get().logAudit({
       category: 'Position Action',
-      actorName: 'Dr. Ananya Iyer',
+      // TQA-14 — neutral attribution: the canonical audit row (real
+      // session actor + capability release facts) is written server-side
+      // by PATCH /api/teachers/:id terminate.
+      actorName: 'Principal',
       actorRole: 'Principal',
       targetTeacherId: teacher.id,
       targetTeacherName: teacher.name,

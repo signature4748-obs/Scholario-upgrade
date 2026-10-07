@@ -236,11 +236,18 @@ export function TeachersModule() {
           </Button>
 
           <AddTeacherWizard
-            onSuccess={(newTeacher) => {
+            onSuccess={(newTeacher, server) => {
               s.addTeacher(newTeacher)
               s.setActiveTab('directory')
+              // TQA-14 — the record is server-persisted; the one-time
+              // credential (when the server generated one) is surfaced
+              // ONCE here, exactly like the account-provisioning contract.
               toast.success(`Teacher ${newTeacher.name} Registered!`, {
-                description: `Employee ID: ${newTeacher.employeeId} · Credentials & Appointment Letter ready.`,
+                description: server?.serverCreated
+                  ? server.tempPassword
+                    ? `Account: ${server.email ?? newTeacher.email} · One-time password: ${server.tempPassword} (shown once — the teacher must change it at first sign-in)`
+                    : `Account: ${server.email ?? newTeacher.email} · Employee ID: ${newTeacher.employeeId}`
+                  : `Employee ID: ${newTeacher.employeeId}`,
               })
             }}
             onCancel={() => s.setActiveTab('directory')}

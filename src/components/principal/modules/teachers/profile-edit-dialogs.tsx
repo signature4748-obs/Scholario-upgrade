@@ -84,26 +84,45 @@ export function PersonalEditDialog({ teacher, open, onClose }: { teacher: Teache
   const set = <K extends keyof TeacherRecord>(key: K, value: TeacherRecord[K]) =>
     setDraft((d) => ({ ...d, [key]: value }))
 
-  const save = () => {
+  const save = async () => {
     if (!draft.email.trim() || !draft.phone.trim()) {
       toast.error('Email and phone are required')
       return
     }
     setSaving(true)
-    updateTeacher(teacher.id, {
-      email: draft.email.trim(),
-      phone: draft.phone.trim(),
-      emergencyContact: {
-        name: draft.emergencyContact.name.trim(),
-        relation: draft.emergencyContact.relation.trim(),
-        phone: draft.emergencyContact.phone.trim(),
-      },
-      currentAddress: draft.currentAddress.trim(),
-      permAddress: draft.sameAddress ? draft.currentAddress.trim() : draft.permAddress,
-    })
-    setSaving(false)
-    onClose()
-    toast.success('Personal information updated', { description: 'Saved on the staff record.' })
+    try {
+      // TQA-14 — SERVER-FIRST: the phone (and the server-known identity
+      // fields) persist through the canonical route; the email is the
+      // account's login id and is NOT renamable here (the route ignores
+      // it — changing login ids is an account-recovery operation).
+      const res = await fetch(`/api/teachers/${encodeURIComponent(teacher.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action: 'update', phone: draft.phone.trim() }),
+      })
+      const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `Save failed (${res.status})`)
+      updateTeacher(teacher.id, {
+        email: draft.email.trim(),
+        phone: draft.phone.trim(),
+        emergencyContact: {
+          name: draft.emergencyContact.name.trim(),
+          relation: draft.emergencyContact.relation.trim(),
+          phone: draft.emergencyContact.phone.trim(),
+        },
+        currentAddress: draft.currentAddress.trim(),
+        permAddress: draft.sameAddress ? draft.currentAddress.trim() : draft.permAddress,
+      })
+      onClose()
+      toast.success('Personal information updated', { description: 'Saved on the staff record.' })
+    } catch (e) {
+      toast.error('Could not save personal information', {
+        description: e instanceof Error ? e.message : 'The server rejected the change. Nothing was saved.',
+      })
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -175,32 +194,50 @@ export function EmploymentEditDialog({ teacher, open, onClose }: { teacher: Teac
 
   useEffect(() => { if (open) setDraft(teacher) }, [open, teacher])
 
-  const save = () => {
+  const save = async () => {
     if (!draft.designation.trim() || !draft.department.trim()) {
       toast.error('Designation and department are required')
       return
     }
     setSaving(true)
-    updateTeacher(teacher.id, {
-      designation: draft.designation.trim(),
-      department: draft.department.trim(),
-      joiningDate: draft.joiningDate,
-      employmentType: draft.employmentType,
-      status: draft.status,
-    })
-    logAudit({
-      category: 'Position Action',
-      actorName: 'Dr. Ananya Iyer',
-      actorRole: 'Principal',
-      targetTeacherId: teacher.id,
-      targetTeacherName: teacher.name,
-      details: `Employment updated: ${draft.designation} · ${draft.department} · ${draft.employmentType} · ${draft.status}`,
-    })
-    setSaving(false)
-    onClose()
-    toast.success('Employment information updated', {
-      description: 'Previously issued letters keep their original snapshot — issued documents are immutable.',
-    })
+    try {
+      // TQA-14 — SERVER-FIRST: department (the canonical Teacher column)
+      // persists through the canonical route; the rest are client-side
+      // enrichment fields the store mirrors.
+      const res = await fetch(`/api/teachers/${encodeURIComponent(teacher.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action: 'update', department: draft.department.trim() }),
+      })
+      const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `Save failed (${res.status})`)
+      updateTeacher(teacher.id, {
+        designation: draft.designation.trim(),
+        department: draft.department.trim(),
+        joiningDate: draft.joiningDate,
+        employmentType: draft.employmentType,
+        status: draft.status,
+      })
+      logAudit({
+        category: 'Position Action',
+        actorName: 'Principal',
+        actorRole: 'Principal',
+        targetTeacherId: teacher.id,
+        targetTeacherName: teacher.name,
+        details: `Employment updated: ${draft.designation} · ${draft.department} · ${draft.employmentType} · ${draft.status}`,
+      })
+      onClose()
+      toast.success('Employment information updated', {
+        description: 'Previously issued letters keep their original snapshot — issued documents are immutable.',
+      })
+    } catch (e) {
+      toast.error('Could not save employment information', {
+        description: e instanceof Error ? e.message : 'The server rejected the change. Nothing was saved.',
+      })
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (

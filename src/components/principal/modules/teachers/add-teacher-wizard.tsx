@@ -26,7 +26,9 @@ import { NavigationControls } from '../admission/components/NavigationControls'
 import { cn } from '@/lib/utils'
 
 interface Props {
-  onSuccess: (teacher: TeacherRecord) => void
+  /** TQA-14 — the second arg carries the SERVER-created facts (the
+   * one-time credential the account-provisioning layer generated). */
+  onSuccess: (teacher: TeacherRecord, server?: { serverCreated?: boolean; tempPassword?: string; email?: string }) => void
   onCancel?: () => void
 }
 
@@ -119,8 +121,90 @@ export function AddTeacherWizard({ onSuccess, onCancel }: Props) {
   const handleNext = () => {
     if (currentVisibleIndex < TEACHER_STEPS.length - 1) setStep(TEACHER_STEPS[currentVisibleIndex + 1].id)
   }
-  const handleSubmit = () => {
-    onSuccess(buildNewTeacherRecord(form))
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+
+  /**
+   * TQA-14 — server-first creation: POST /api/teachers creates the User +
+   * Teacher rows transactionally (canonical ids, real credentials — a
+   * server-generated one-time password when none was supplied), then the
+   * class-teacher appointment goes through its OWN canonical endpoint
+   * (PATCH /api/classes/[id]/class-teacher). The record handed to
+   * onSuccess is built from the SERVER response — the client never
+   * fabricates teacher identity data.
+   */
+  const handleSubmit = async () => {
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      const res = await fetch('/api/teachers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          name: form.name.trim(),
+          email: form.email.trim().toLowerCase(),
+          phone: form.phone.trim() || undefined,
+          employeeId: undefined, // server mints EMP-<ts> when omitted
+          department:
+            form.inchargePosition !== 'None' && form.inchargePosition
+              ? form.inchargePosition
+              : 'Academic',
+          qualification: [form.degree, form.specialization].filter(Boolean).join(', ').trim() || undefined,
+          subjects: form.selectedSubjects.length ? form.selectedSubjects.join(', ') : undefined,
+          password: undefined, // server-generated one-time credential
+        }),
+      })
+      const json = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; data?: { tempPassword?: string; userId?: string; user?: { email?: string } } & Record<string, unknown> }
+        | null
+      if (!res.ok || !json?.ok || !json.data) {
+        throw new Error(json?.error || `Registration failed (${res.status})`)
+      }
+
+      // Canonical class-teacher appointment when the wizard selected a
+      // class (the ONLY server-recognized way this link is ever made).
+      if (form.classTeacherRole && form.classTeacherRole !== 'None') {
+        try {
+          const clsRes = await fetch('/api/classes', { credentials: 'same-origin', cache: 'no-store' })
+          const clsJson = (await clsRes.json().catch(() => null)) as
+            | { ok?: boolean; data?: { id: string; name: string; section: string | null }[] }
+            | null
+          const target = clsJson?.data?.find(
+            (c) => `${c.name}${c.section ? `-${c.section}` : ''}` === form.classTeacherRole || c.name === form.classTeacherRole,
+          )
+          if (target && json.data.userId) {
+            const appt = await fetch(`/api/classes/${target.id}/class-teacher`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify({ teacherUserId: json.data.userId }),
+            })
+            if (!appt.ok) {
+              // The appointment is separately recoverable (Students &
+              // Classes → class card) — the teacher record itself is safe.
+              setSubmitError(
+                'Teacher registered, but the class-teacher appointment could not be saved. Set it from Students & Classes → Classes.',
+              )
+            }
+          }
+        } catch {
+          setSubmitError(
+            'Teacher registered, but the class-teacher appointment could not be saved. Set it from Students & Classes → Classes.',
+          )
+        }
+      }
+
+      onSuccess(buildNewTeacherRecord(form), {
+        serverCreated: true,
+        tempPassword: json.data.tempPassword,
+        email: form.email.trim().toLowerCase(),
+      })
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Registration failed')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const stepProps = { form, setF }
@@ -165,6 +249,13 @@ export function AddTeacherWizard({ onSuccess, onCancel }: Props) {
       </AnimatePresence>
 
       {/* Navigation Controls — same as Admissions */}
+      {/* TQA-14 — server-first creation: honest in-flight + failure
+          states instead of a silent client-only "success". */}
+      {submitError && (
+        <div role="alert" className="mx-auto max-w-2xl rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2.5 text-xs text-destructive">
+          {submitError}
+        </div>
+      )}
       <NavigationControls
         visibleSteps={TEACHER_STEPS}
         step={step}
@@ -172,7 +263,8 @@ export function AddTeacherWizard({ onSuccess, onCancel }: Props) {
         onBack={handleBack}
         onNext={handleNext}
         onSubmit={handleSubmit}
-        submitLabel="Create Teacher"
+        submitLabel={submitting ? 'Creating…' : 'Create Teacher'}
+        submitDisabled={submitting}
         submitIcon={UserPlus}
       />
 

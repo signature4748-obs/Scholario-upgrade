@@ -77,20 +77,46 @@ export function useTeachersActions(s: TeachersState) {
     s.setTerminationModalOpen(true)
   }
 
-  const handleConfirmTermination = () => {
-    if (!s.selectedTeacher) return
+  const handleConfirmTermination = async () => {
+    const target = s.selectedTeacher
+    if (!target) return
     if (s.confirmTerminateText.trim().toUpperCase() !== 'TERMINATE') {
       toast.error('Type "TERMINATE" to confirm action', {
         description: 'Safety check: Enter the exact confirmation string.',
       })
       return
     }
-    s.terminateTeacher(s.selectedTeacher.id, s.terminationReason, s.lockLoginOnTerminate)
-    s.setTerminationModalOpen(false)
-    s.setSheetOpen(false)
-    toast.success(`Staff Relieved: ${s.selectedTeacher.name}`, {
-      description: `Record archived with full history preserved. Login locked: ${s.lockLoginOnTerminate}. Viewable under Archived / Relieved filter.`,
-    })
+    // TQA-14 — SERVER-FIRST relief: the canonical route releases the
+    // class-teacher appointment, deactivates subject assignments and (when
+    // chosen) suspends the login — atomically, with a real-actor audit
+    // row. The store update below is only the local mirror of the server
+    // truth; a failed request leaves the record untouched.
+    try {
+      const res = await fetch(`/api/teachers/${encodeURIComponent(target.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          action: 'terminate',
+          reason: s.terminationReason,
+          lockLogin: s.lockLoginOnTerminate,
+        }),
+      })
+      const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || `Relief failed (${res.status})`)
+      }
+      s.terminateTeacher(target.id, s.terminationReason, s.lockLoginOnTerminate)
+      s.setTerminationModalOpen(false)
+      s.setSheetOpen(false)
+      toast.success(`Staff Relieved: ${target.name}`, {
+        description: `Record archived with full history preserved. Login locked: ${s.lockLoginOnTerminate}. Viewable under Archived / Relieved filter.`,
+      })
+    } catch (e) {
+      toast.error('Relief could not be recorded', {
+        description: e instanceof Error ? e.message : 'The server rejected the relief request. Nothing was changed.',
+      })
+    }
   }
 
   const handleConfirmAssignPosition = ({ effectiveDate, assignedBy }: { effectiveDate: string; assignedBy: string }) => {

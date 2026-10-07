@@ -18,6 +18,7 @@ export function NavigationControls({
   onSubmit,
   submitLabel = 'Submit Application',
   submitIcon: SubmitIcon = Sparkles,
+  submitDisabled = false,
 }: {
   visibleSteps: WizardStep[]
   step: number
@@ -27,6 +28,8 @@ export function NavigationControls({
   onSubmit: () => void
   submitLabel?: string
   submitIcon?: React.ComponentType<{ className?: string }>
+  /** TQA-14 — in-flight server creation disables the submit button. */
+  submitDisabled?: boolean
 }) {
   return (
     <GlassCard className="p-3 sm:p-4">
@@ -54,6 +57,7 @@ export function NavigationControls({
         ) : (
           <Button
             onClick={onSubmit}
+            disabled={submitDisabled}
             className="bg-primary hover:bg-primary/90 text-primary-foreground min-w-[150px] font-medium shadow-md shadow-primary/20"
           >
             <SubmitIcon className="h-4 w-4" /> {submitLabel}
