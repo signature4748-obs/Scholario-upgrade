@@ -19,6 +19,74 @@ export async function GET(req: NextRequest) {
       const { searchParams } = new URL(req.url)
       const classId = searchParams.get('classId')
       const date = searchParams.get('date')
+      const month = searchParams.get('month')
+
+      // Month rollup mode: GET /api/attendance?month=YYYY-MM[&classId=]
+      // → one row per (class, calendar day) with the real status counts —
+      // the principal Attendance History tab's data source (no fabricated
+      // corpora; months without records return an honest empty list).
+      if (month) {
+        const m = /^(\d{4})-(\d{2})$/.exec(month.trim())
+        if (!m) throw new AppError('INVALID_INPUT', { publicMessage: 'month must be YYYY-MM' })
+        const year = Number(m[1])
+        const mon = Number(m[2])
+        if (mon < 1 || mon > 12) throw new AppError('INVALID_INPUT', { publicMessage: 'month must be YYYY-MM' })
+        const start = new Date(Date.UTC(year, mon - 1, 1))
+        const end = new Date(Date.UTC(year, mon, 1))
+        const monthWhere: Record<string, unknown> = {
+          schoolId,
+          date: { gte: start, lt: end },
+        }
+        if (classId) monthWhere.classId = classId
+        // Status breakdown per (class, day): statuses are stored as
+        // PRESENT/ABSENT/LATE/LEAVE — count them per group.
+        const detail = await db.attendance.findMany({
+          where: monthWhere as never,
+          select: { classId: true, date: true, status: true },
+        })
+        const classes = await db.class.findMany({
+          where: { schoolId },
+          select: { id: true, name: true, section: true },
+        })
+        const classById = new Map(classes.map((c) => [c.id, c]))
+        const groups = new Map<string, { classId: string; date: Date; total: number; present: number; absent: number; late: number; leave: number }>()
+        for (const r of detail) {
+          const key = `${r.classId}|${r.date.toISOString().slice(0, 10)}`
+          let g = groups.get(key)
+          if (!g) {
+            g = { classId: r.classId, date: r.date, total: 0, present: 0, absent: 0, late: 0, leave: 0 }
+            groups.set(key, g)
+          }
+          g.total += 1
+          const st = (r.status ?? '').toUpperCase()
+          if (st === 'PRESENT') g.present += 1
+          else if (st === 'ABSENT') g.absent += 1
+          else if (st === 'LATE') g.late += 1
+          else if (st === 'LEAVE') g.leave += 1
+        }
+        const records = [...groups.values()]
+          .map((g) => {
+            const cls = classById.get(g.classId)
+            const attended = g.present + g.late
+            const rate = g.total > 0 ? Math.round((attended / g.total) * 1000) / 10 : 0
+            return {
+              date: g.date.toISOString().slice(0, 10),
+              classId: g.classId,
+              className: cls ? `${cls.name}` : 'Class',
+              section: cls?.section ?? '',
+              total: g.total,
+              present: g.present,
+              late: g.late,
+              absent: g.absent,
+              leave: g.leave,
+              rate,
+              status: rate >= 95 ? 'Excellent' : rate >= 90 ? 'Good' : 'Needs Attention',
+            }
+          })
+          .sort((a, b) => (a.date === b.date ? a.className.localeCompare(b.className) : a.date.localeCompare(b.date)))
+        return { month: month.trim(), records }
+      }
+
       const where: Record<string, unknown> = { schoolId }
       if (classId) where.classId = classId
       if (date) where.date = new Date(date)

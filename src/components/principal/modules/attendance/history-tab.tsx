@@ -15,7 +15,7 @@
  * Brief PART 45: Reports respect school calendar (no holiday counted as absent).
  */
 
-import { useMemo, useState, useEffect } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion, useReducedMotion, AnimatePresence } from 'framer-motion'
 import { Search, ArrowLeft, Eye, FileText, Users, CheckCircle2, Loader2, ChevronDown } from 'lucide-react'
 import { PageTransition } from '@/components/shared/ui'
@@ -27,17 +27,35 @@ import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
-import {
-  attendanceHistory,
-  classSections,
-  getHistoryForDateClass,
-  type AttendanceHistoryRecord,
-} from '@/lib/mock/attendance'
-import { useIsDemoTenant } from '@/lib/store/demo-tenant'
+
+/**
+ * REAL attendance history record — the shape returned by
+ * GET /api/attendance?month=YYYY-MM (per-class-per-day rollups of the
+ * canonical Attendance table). Replaces the former demo mock corpus:
+ * the History tab now shows the school's REAL recorded attendance, and
+ * months without records render the honest empty state.
+ */
+interface AttendanceHistoryRecord {
+  date: string
+  classId: string
+  className: string
+  total: number
+  present: number
+  absent: number
+  late: number
+  leave: number
+  rate: number
+  status: 'Excellent' | 'Good' | 'Needs Attention'
+}
+
+interface ClassOption {
+  id: string
+  name: string
+}
+
 import { formatNumber } from '@/lib/format'
 import { toast } from 'sonner'
 import { ATTENDANCE_PALETTE } from './attendance-charts'
-import { generateStudentMonthlyPDF, generateStaffMonthlyPDF } from './monthly-report-pdf'
 
 const STATUS_VARIANT: Record<AttendanceHistoryRecord['status'], {
   cls: string; dot: string
@@ -47,11 +65,14 @@ const STATUS_VARIANT: Record<AttendanceHistoryRecord['status'], {
   'Needs Attention': { cls: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/20', dot: 'bg-rose-500' },
 }
 
-/** Build the month picker options (last 12 months from Dec 2025). */
+/** Build the month picker options — the last 12 months from TODAY
+ *  (dynamic, not a frozen range: the canonical Attendance data lives in
+ *  the current academic year and must stay reachable). */
 function buildMonthOptions(): { value: string; label: string; year: number; month: number }[] {
   const options: { value: string; label: string; year: number; month: number }[] = []
-  const baseYear = 2025
-  const baseMonth = 12  // December 2025
+  const now = new Date()
+  const baseYear = now.getFullYear()
+  const baseMonth = now.getMonth() + 1
   for (let i = 0; i < 12; i++) {
     let y = baseYear
     let m = baseMonth - i
@@ -77,24 +98,19 @@ interface AttendanceHistoryTabProps {
 
 type ExportKind = 'student' | 'staff' | null
 
-// FINAL-GATE (EG-9F/R7) — stable empty fallbacks so the demo-conditional
-// corpora keep referential identity across renders.
-const NO_SECTIONS: typeof classSections = []
-const NO_HISTORY: typeof attendanceHistory = []
+const DEFAULT_MONTH = MONTH_OPTIONS[0]?.value ?? ''
 
 export function AttendanceHistoryTab({ initialDate, initialClassId }: AttendanceHistoryTabProps) {
   const reduce = useReducedMotion()
 
-  // FINAL-GATE (EG-9F/R7) — the classSections + attendanceHistory corpora
-  // are deterministic DEMO fabrications (rosters, rates, teacher names).
-  // They render ONLY for the demo tenant; a real production tenant sees
-  // the tab's honest empty state ("No attendance records found…") and its
-  // class filter stays on All Classes until real class data exists.
-  const isDemo = useIsDemoTenant()
-  const sections = isDemo ? classSections : NO_SECTIONS
-  const historyRecords = isDemo ? attendanceHistory : NO_HISTORY
+  // REAL data: month rollups from the canonical Attendance table (the
+  // server re-derives scope from the session — never client input).
+  const [records, setRecords] = useState<AttendanceHistoryRecord[]>([])
+  const [classes, setClasses] = useState<ClassOption[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   // Brief PART 31: single month selector (replaces arbitrary date range).
-  const [selectedMonth, setSelectedMonth] = useState<string>('2025-12')
+  const [selectedMonth, setSelectedMonth] = useState<string>(DEFAULT_MONTH)
   const [classFilter, setClassFilter] = useState<string>(initialClassId ?? 'all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [search, setSearch] = useState('')
@@ -103,12 +119,49 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
   const [exporting, setExporting] = useState<ExportKind>(null)
   const [exported, setExported] = useState<{ kind: ExportKind; label: string } | null>(null)
 
+  // Real class list for the filter (once per mount).
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/classes', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j?.ok || !Array.isArray(j.data)) return
+        setClasses(j.data.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name })))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  // Fetch the month's real records whenever the month or class filter
+  // changes (the class filter is applied server-side for efficiency).
+  const loadMonth = useCallback(async (month: string, cls: string) => {
+    setLoading(true)
+    setLoadError(false)
+    try {
+      const url = cls && cls !== 'all'
+        ? `/api/attendance?month=${encodeURIComponent(month)}&classId=${encodeURIComponent(cls)}`
+        : `/api/attendance?month=${encodeURIComponent(month)}`
+      const r = await fetch(url, { cache: 'no-store' })
+      if (!r.ok) throw new Error('failed')
+      const j = await r.json()
+      setRecords(Array.isArray(j?.data?.records) ? j.data.records : [])
+    } catch {
+      setRecords([])
+      setLoadError(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (selectedMonth) void loadMonth(selectedMonth, 'all')
+  }, [selectedMonth, loadMonth])
+
   // Apply incoming initial props (e.g. from heatmap CTA — pre-fill month).
   useEffect(() => {
     if (initialDate) {
-      // Brief PART 8: pre-fill the month from the date string
-      const month = initialDate.substring(0, 7)  // "2025-12"
-      setSelectedMonth(month)
+      const month = initialDate.substring(0, 7)  // "YYYY-MM"
+      if (MONTH_OPTIONS.some((o) => o.value === month)) setSelectedMonth(month)
     }
     if (initialClassId) {
       setClassFilter(initialClassId)
@@ -118,10 +171,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
   // Brief PART 32: filter records for the selected month (VIEW filter —
   // separate from the monthly EXPORT, which is always the full month).
   const filtered = useMemo(() => {
-    const [_year, _month] = selectedMonth.split('-').map(Number)
-    return historyRecords.filter((r) => {
-      const rMonth = r.date.substring(0, 7)  // "2025-12"
-      if (rMonth !== selectedMonth) return false
+    return records.filter((r) => {
       if (classFilter !== 'all' && r.classId !== classFilter) return false
       if (statusFilter !== 'all' && r.status !== statusFilter) return false
       if (search) {
@@ -130,7 +180,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
       }
       return true
     })
-  }, [selectedMonth, classFilter, statusFilter, search, historyRecords])
+  }, [records, classFilter, statusFilter, search])
 
   // Brief PART 30: Get the selected month label for export naming.
   const selectedMonthLabel = useMemo(() => {
@@ -138,67 +188,60 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
     return opt ? opt.label : selectedMonth
   }, [selectedMonth])
 
-  // Brief PART 43-44: Export Student Attendance → REAL PDF (Brief PART 14-20).
-  // Brief PART 11 + 36: accepts a classId ('all' or specific) for class-wise export.
-  // FINAL-GATE (EG-9F/R7) — the monthly PDFs derive from the same demo
-  // corpus; a real tenant gets an honest "nothing to export yet" notice
-  // instead of a fabricated report.
+  // Brief PART 43-44: Export Student Attendance — an honest CSV of the
+  // REAL month records currently in view (the previous PDF export
+  // derived from a fabricated demo corpus; a real export must carry real
+  // numbers). Brief PART 11 + 36: accepts 'all' or a specific classId.
   const handleExportStudent = (classId: string = 'all') => {
     if (exporting) return
-    if (!isDemo) {
-      toast.info('No attendance records to export yet', {
-        description: 'Monthly reports appear once class attendance records are synced.',
+    const rows = classId === 'all' ? filtered : filtered.filter((r) => r.classId === classId)
+    if (rows.length === 0) {
+      toast.info('No attendance records to export', {
+        description: `No recorded attendance for ${selectedMonthLabel}.`,
       })
       return
     }
     setExporting('student')
     setExported(null)
     try {
-      const { filename } = generateStudentMonthlyPDF(selectedMonth, classId)
+      const header = 'Date,Class,Total,Present,Absent,Late,Leave,Rate %,Status'
+      const csv = [header, ...rows.map((r) =>
+        [r.date, `"${r.className}"`, r.total, r.present, r.absent, r.late, r.leave, r.rate, `"${r.status}"`].join(','),
+      )].join('\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const cls = classes.find((c) => c.id === classId)
+      a.download = `attendance-${selectedMonth}${cls ? `-${cls.name}` : ''}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
       setExporting(null)
-      const cls = sections.find((c) => c.id === classId)
       const label = cls
-        ? `${selectedMonthLabel} — ${cls.name} Attendance Report`
-        : `${selectedMonthLabel} — Class Attendance Report`
+        ? `${selectedMonthLabel} — ${cls.name} Attendance (CSV)`
+        : `${selectedMonthLabel} — Class Attendance (CSV)`
       setExported({ kind: 'student', label })
-      toast.success('Class Attendance Report generated', {
-        description: `${filename} · ${label}`,
+      toast.success('Class attendance exported', {
+        description: label,
       })
     } catch (err) {
       setExporting(null)
-      toast.error('Unable to generate report', {
+      toast.error('Unable to export records', {
         description: 'Please try again.',
       })
     }
   }
 
-  // Brief PART 43-44: Export Staff Attendance → REAL PDF (Brief PART 14-20).
-  // Brief PART 29: completely separate from student report.
-  // FINAL-GATE (EG-9F/R7) — same demo-only gate as the student export.
+  // Brief PART 43-44: Export Staff Attendance — staff attendance tracking
+  // is not configured in this deployment (the Staff tab says the same);
+  // an honest notice instead of a fabricated staff report.
   const handleExportStaff = () => {
     if (exporting) return
-    if (!isDemo) {
-      toast.info('No attendance records to export yet', {
-        description: 'Monthly reports appear once staff attendance records are synced.',
-      })
-      return
-    }
-    setExporting('staff')
-    setExported(null)
-    try {
-      const { filename } = generateStaffMonthlyPDF(selectedMonth)
-      setExporting(null)
-      const label = `${selectedMonthLabel} — Teachers & Employees Attendance Report`
-      setExported({ kind: 'staff', label })
-      toast.success('Staff Attendance Report generated', {
-        description: `${filename} · ${label}`,
-      })
-    } catch (err) {
-      setExporting(null)
-      toast.error('Unable to generate report', {
-        description: 'Please try again.',
-      })
-    }
+    toast.info('Staff attendance is not configured', {
+      description: 'Staff attendance tracking is not part of this deployment — there are no staff records to export.',
+    })
   }
 
   // Brief PART 30: Find selected month option object
@@ -225,7 +268,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Classes</SelectItem>
-            {sections.map((c) => (
+            {classes.map((c) => (
               <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
             ))}
           </SelectContent>
@@ -282,7 +325,7 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
             <DropdownMenuItem onClick={() => handleExportStudent('all')} className="text-xs gap-2">
               <FileText className="h-3.5 w-3.5" /> All Classes
             </DropdownMenuItem>
-            {sections.map((c) => (
+            {classes.map((c) => (
               <DropdownMenuItem key={c.id} onClick={() => handleExportStudent(c.id)} className="text-xs gap-2">
                 <FileText className="h-3.5 w-3.5" /> {c.name}
               </DropdownMenuItem>
@@ -397,7 +440,22 @@ export function AttendanceHistoryTab({ initialDate, initialClassId }: Attendance
                 </motion.tr>
               ))}
             </AnimatePresence>
-            {filtered.length === 0 && (
+            {loading && (
+              <TableRow>
+                <TableCell colSpan={10} className="text-center text-xs text-muted-foreground py-8">
+                  <Loader2 className="h-4 w-4 animate-spin inline mr-2" />
+                  Loading attendance records…
+                </TableCell>
+              </TableRow>
+            )}
+            {!loading && loadError && (
+              <TableRow>
+                <TableCell colSpan={10} className="text-center text-xs text-muted-foreground py-8">
+                  Could not load attendance records — please retry.
+                </TableCell>
+              </TableRow>
+            )}
+            {!loading && !loadError && filtered.length === 0 && (
               <TableRow>
                 <TableCell colSpan={10} className="text-center text-xs text-muted-foreground py-8">
                   No attendance records found for {selectedMonthLabel}.
@@ -446,11 +504,7 @@ function HistoryDetailDialog({
   record: AttendanceHistoryRecord | null
   onClose: () => void
 }) {
-  const displayRecord = useMemo(() => {
-    if (!record) return null
-    if (record.classId !== 'all') return record
-    return getHistoryForDateClass(record.date, 'all')
-  }, [record])
+  const displayRecord = useMemo(() => record, [record])
 
   if (!displayRecord) return null
 
