@@ -252,15 +252,17 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
               color="text-amber-600 dark:text-amber-400"
               bg="bg-amber-500/10 text-amber-600 dark:text-amber-400"
             />
-          ) : s.academics.rankInClass > 0 ? (
-            <SnapshotStat
-              label="Class Rank"
-              value={`#${s.academics.rankInClass}`}
-              icon={<TrendingUp className="h-4 w-4" />}
-              color="text-amber-600 dark:text-amber-400"
-              bg="bg-amber-500/10 text-amber-600 dark:text-amber-400"
-            />
           ) : (
+            // STUDENT-QA S5-3 — the roster-fallback rankInClass is REMOVED:
+            // in the student roster scope classmates' academics are hidden
+            // by design (privacy projection), so the client-side
+            // rankInClass recompute ranks this student trivially #1 of 1 —
+            // a fabricated-looking class rank (verified live: profile said
+            // "#1" while the honest server rank on the Dashboard academic
+            // snapshot was "#2 of 5"). Standings are not published to the
+            // student scope (results store: honestly empty) → render the
+            // truthful "—" and let the Dashboard card carry the honest
+            // server-computed rank.
             <SnapshotStat
               label="Class Rank"
               value="—"
