@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
+import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { auditEvent } from '@/lib/security/audit'
 
@@ -372,26 +372,37 @@ export async function POST(req: NextRequest) {
           if ((csa.teacherUserId ?? null) === teacherUserId) {
             return { ok: true, alreadyApplied: true, classId, subjectId, teacherUserId }
           }
-          await db.classSubjectAssignment.update({
-            where: { id: csa.id },
-            data: { teacherUserId },
-          })
-          // Keep the timetable display in step: the class's cells for this
-          // subject follow the appointment (the schedule stays coherent
-          // with the canonical configuration).
-          await db.timetable.updateMany({
-            where: { schoolId, classId, subjectId },
-            data: { teacherUserId, ...(teacherLabel ? { teacherName: teacherLabel } : {}) },
-          })
-          await db.activityLog.create({
-            data: {
-              schoolId,
-              userId: user.id,
-              action: 'ACADEMIC_CONFIG_UPDATED',
-              detail: teacherUserId
-                ? `${teacherLabel} appointed subject teacher for ${subject.name} · ${cls.name}${cls.section ? ` (${cls.section})` : ''}`
-                : `Subject teacher released for ${subject.name} · ${cls.name}${cls.section ? ` (${cls.section})` : ''}`,
-            },
+          // ATOMIC: the canonical CSA appointment, the timetable display
+          // sync, and the audit row commit together or not at all. The
+          // timetable carries @@unique([schoolId, teacherUserId, day,
+          // period]) — the teacher double-booking guard — so appointing a
+          // teacher whose timetable cells would collide must ROLL BACK the
+          // appointment too (previously the CSA committed and the sync
+          // threw, leaving CSA ≠ timetable and a misleading CONFLICT).
+          await trackedTransaction('subjectTeacher.set', async (tx) => {
+            await tx.classSubjectAssignment.update({
+              where: { id: csa.id },
+              data: { teacherUserId },
+            })
+            // Keep the timetable display in step: the class's cells for this
+            // subject follow the appointment (the schedule stays coherent
+            // with the canonical configuration). A teacher double-booking
+            // here fails the WHOLE appointment — resolve the timetable
+            // conflict first, then appoint.
+            await tx.timetable.updateMany({
+              where: { schoolId, classId, subjectId },
+              data: { teacherUserId, ...(teacherLabel ? { teacherName: teacherLabel } : {}) },
+            })
+            await tx.activityLog.create({
+              data: {
+                schoolId,
+                userId: user.id,
+                action: 'ACADEMIC_CONFIG_UPDATED',
+                detail: teacherUserId
+                  ? `${teacherLabel} appointed subject teacher for ${subject.name} · ${cls.name}${cls.section ? ` (${cls.section})` : ''}`
+                  : `Subject teacher released for ${subject.name} · ${cls.name}${cls.section ? ` (${cls.section})` : ''}`,
+              },
+            })
           })
           return { ok: true, classId, subjectId, teacherUserId }
         }
