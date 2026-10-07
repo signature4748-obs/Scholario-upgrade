@@ -18,7 +18,7 @@
  * Uses mock data from src/lib/exams/archive-data.ts.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Archive as ArchiveIcon, Search, Calendar, Trophy,
@@ -35,6 +35,7 @@ import {
   type ArchivedSession,
   type ArchiveSearchResult,
 } from '@/lib/exams/archive-data'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { ModuleEmptyState } from '../../shared/empty-state'
 
 interface Props {
@@ -42,13 +43,26 @@ interface Props {
 }
 
 export function ArchiveView({ onBack }: Props) {
-  const sessions = useMemo(() => getArchivedSessions(), [])
-  const classNames = useMemo(() => getArchivedClassNames(), [])
+  // FINAL-GATE — the archive corpus (sessions 2022-25, toppers, pass
+  // rates) is a DEMO fabrication. It renders ONLY for the sanctioned demo
+  // tenant; a real production tenant gets the honest empty state (its
+  // genuine exam history lives in the live Exams list, not here).
+  const isDemo = useIsDemoTenant()
+  const sessions = useMemo(() => (isDemo ? getArchivedSessions() : []), [isDemo])
+  const classNames = useMemo(() => (isDemo ? getArchivedClassNames() : []), [isDemo])
 
   const [query, setQuery] = useState('')
   const [sessionFilter, setSessionFilter] = useState<string>('all')
   const [classFilter, setClassFilter] = useState<string>('all')
-  const [selectedSession, setSelectedSession] = useState<string>(sessions[0]?.session ?? '')
+  const [selectedSession, setSelectedSession] = useState<string>('')
+
+
+  // Keep the demo session selection in step once sessions are available.
+  useEffect(() => {
+    if (isDemo && !selectedSession && sessions.length > 0) {
+      setSelectedSession(sessions[0].session)
+    }
+  }, [isDemo, selectedSession, sessions])
 
   // Search is "active" when there's a query OR a non-default filter
   const searchActive = query.trim().length > 0 || sessionFilter !== 'all' || classFilter !== 'all'
@@ -63,6 +77,36 @@ export function ArchiveView({ onBack }: Props) {
   }, [query, sessionFilter, classFilter, searchActive])
 
   const currentSession = sessions.find((s) => s.session === selectedSession) ?? null
+
+  // Real tenant: honest empty state — no fabricated archive history (all
+  // hooks above have run unconditionally; only the render is gated).
+  if (!isDemo) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="border-b border-border bg-card px-4 sm:px-6 py-3 flex items-center justify-between gap-3 shrink-0 flex-wrap">
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={onBack}
+              aria-label="Back to Examinations"
+              className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <ArchiveIcon className="h-4 w-4 text-muted-foreground" />
+            <h1 className="text-sm font-semibold">Examination Archive</h1>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          <ModuleEmptyState
+            className="py-16"
+            icon={<ArchiveIcon className="h-5 w-5" aria-hidden />}
+            title="No archived sessions yet"
+            description="Completed examinations accumulate here as sessions close. Nothing is estimated in advance."
+          />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full">
