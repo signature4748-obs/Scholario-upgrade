@@ -9,6 +9,34 @@
 > migration authority; architecture is LOCKED (one repo, two Vercel
 > projects, one Supabase, custom auth, Storage, Broadcast-only Realtime).
 
+## DR status (owner decision, 2026-10-07)
+
+| Item | Status |
+| --- | --- |
+| DR classification | **B — Production Ready With Owner Action** |
+| PITR | **DEFERRED BY OWNER** (pre-scale phase) |
+| Storage off-box backup | **REMAINING GAP** — 58 Storage objects (38 `public-media` + 20 `school-media`) sit outside every backup layer |
+| Automated off-box DB backup | **REMAINING GAP** — the layer-2 logical dump is on-demand, operator-triggered, and sandbox-local until copied off-box |
+| SSL enforcement | **ENABLED** (2026-10-06; activation + verification record: `docs/hardening/SSL_NETWORK_AUDIT.md` §11) |
+| Restore drill | **VERIFIED** — fresh full-chain drill passed 2026-10-07 (§20) |
+| Production health | **VERIFIED** — both planes serving (`scholario-platform`, `scholario-app`) |
+
+Owner policy statement (verbatim):
+
+> PITR is intentionally deferred during the pre-scale phase. The current
+> logical backup/restore system is the interim recovery mechanism. Supabase
+> Pro + PITR will be enabled before SCHOLARIO reaches meaningful
+> production-data scale where an unbounded RPO is no longer acceptable.
+
+Context: SCHOLARIO is pre-scale / early deployment. Paid infrastructure
+(Supabase Pro, PITR) will be introduced after real schools are deployed and
+the platform reaches meaningful production scale and revenue. Until then:
+the current Supabase plan stays unchanged, PITR stays disabled, SSL
+enforcement stays on, all current database grants/RLS protections stay
+unchanged, the verified logical backup/restore tooling (§5 layer 2 + §20
+drill) is the interim recovery mechanism, and no production configuration
+changes are made.
+
 ## NEVER (read before any incident action)
 
 - **NEVER restore over production as the first action.** Every Supabase restore path (PITR or daily) creates a NEW project; the logical JSONL path restores into a FRESH database. Production is only ever pointed at a validated recovery target afterwards.
@@ -41,7 +69,7 @@ Single source of truth for recovering the Scholario production database, its ten
 | Pro plan (daily backups) | ≤ 24 h | platform feature |
 | PITR enabled (target) | ≤ 5 min | restore-point granularity; measured at the first post-enablement drill |
 
-Operational target: **RPO ≤ 5 min after the owner enables PITR (§6)**. Until then, the honest statement is: any disaster loses everything since the last manual dump.
+Operational target: **RPO ≤ 5 min after the owner enables PITR (§6)**. Until then, the honest statement is: any disaster loses everything since the last manual dump. **Owner decision (2026-10-07): this unbounded RPO is ACCEPTED for the pre-scale phase — PITR is intentionally deferred** (verbatim policy in the DR status block above); enablement becomes due before the platform reaches meaningful production-data scale where an unbounded RPO is no longer acceptable.
 
 ## 4. RTO
 
@@ -66,7 +94,7 @@ Live state (2026-10-06, Management API `GET /v1/projects/{ref}/database/backups`
 
 Layers:
 
-1. **Supabase platform backups (pending owner action)** — daily base backups on Pro, PITR as add-on (§6). This is the only layer that survives a full project disaster.
+1. **Supabase platform backups (DEFERRED BY OWNER — pre-scale phase, §6)** — daily base backups on Pro, PITR as add-on. This is the only layer that survives a full project disaster; until it is enabled (due before meaningful production-data scale), a full-project disaster is survived only by off-box copies of layer-2 archives plus manual Storage re-upload (§18).
 2. **Application-level logical dump** — `scripts/db-backup.ts` → `backups/scholario-<ts>.jsonl.gz` (every public table, byte-exact dates, NUMERIC strings, FK-parents-first). Run on demand; ~40 s over the pooler. Archives contain password/session hashes — treat as secrets. **Off-box copy is a manual owner step** (the sandbox copy is ephemeral). **TLS note (SSL audit 2026-10-06, `docs/hardening/SSL_NETWORK_AUDIT.md` §4.4/§11 — OPERATIVE since enforcement was enabled 2026-10-06):** the production dump DSN **must** carry `?uselibpqcompat=true&sslmode=require` — database SSL enforcement is now ON, so bare/no-sslmode node-pg DSNs are rejected (`ESSLREQUIRED`), and node-pg ≥8.23 maps a bare `sslmode=require` to verify-full, which fails on Supabase's private CA. The compat form was verified live against the pooler post-enforcement (connect + query OK). The script code needs no change — only the DSN in the isolated run directory.
 3. **Pre-migration snapshot** — mandatory before any production migration: run layer 2 + `scripts/prod-migration/preflight.ts` row-count snapshot (docs/RELEASE.md already enforces this in the pipeline).
 
@@ -74,7 +102,7 @@ Known gap (fixed today): the logical restore path aborted on tenant-guard trigge
 
 ## 6. PITR strategy
 
-Current: disabled, zero restore points (§5). Owner action required (paid — never enabled automatically):
+Current: disabled, zero restore points (§5). **Owner decision (2026-10-07): DEFERRED during the pre-scale phase** — the Supabase plan stays unchanged and PITR stays off until SCHOLARIO reaches meaningful production-data scale and revenue (paid infrastructure follows real deployment). The logical backup/restore system (§5 layer 2, §20 drill) is the interim recovery mechanism, and enablement becomes due BEFORE the point where an unbounded RPO is no longer acceptable (verbatim policy in the DR status block at the top of this file). When that trigger arrives, the owner-executed steps are (paid — never enabled automatically):
 
 1. Confirm the plan on the Supabase dashboard → Billing (the public Management API does not expose plan state for this token; behavior — WAL archiving live but zero base backups after 5 days — is consistent with Free tier).
 2. If on Free: upgrade to **Pro** (daily backups, 7-day retention).
@@ -217,7 +245,7 @@ bun scripts/db-restore-verify.ts <archive>.jsonl.gz --into public
 # 5. app connect test in isolation (§12.4)
 ```
 
-Latest drill evidence: 8,859/8,859 rows OK · parity 595,820.00 exact · 112/112 RLS · 66/66 guards enabled · 196 FKs, 0 orphans · cross-tenant INSERT blocked · full cycle 2 s. Prior drill: 2026-10-02 (Phase 8C-N, 44-table production corpus, RTO < 2 min, tenant-guard trigger verified).
+Latest drill evidence (2026-10-07 DR audit — post-SSL-enforcement, post-grants, full 15-migration chain incl. `20261006123000_least_privilege_grants`): fresh production dump via the §5 layer-2 TLS DSN (111 tables / 8,858 rows / 279.0 KiB gz / 46 s) → `prisma migrate deploy` 15/15 → restore + verify **8,858/8,858 rows OK** · parity 595,820.00 exact · 112/112 RLS, 0 policies · 66/66 guards enabled · 196 FKs, 0 orphans · cross-tenant INSERT blocked · load 0.59 s. 2026-10-06 drill: 8,859/8,859 rows OK · parity 595,820.00 exact · 112/112 RLS · 66/66 guards enabled · 196 FKs, 0 orphans · cross-tenant INSERT blocked · full cycle 2 s. Prior drill: 2026-10-02 (Phase 8C-N, 44-table production corpus, RTO < 2 min, tenant-guard trigger verified).
 
 ## 21. Lessons-learned procedure
 
@@ -227,10 +255,11 @@ After every SEV-1/SEV-2 and every drill that finds a gap: append a dated entry h
 
 ## Remaining owner actions
 
-1. **Enable Pro + PITR (§6)** — the only open SEV-1 risk left; every day without it is unbounded RPO.
-2. Copy backup archives OFF the box whenever one is taken (§5.2) until platform backups exist.
-3. Resend key + webhook registration (carried over — email delivery still unverified).
-4. Hardening follow-ups (2026-10-06 audit): least-privilege grants **DONE** (applied & verified); `disable_signup` + `site_url` still open (docs/SUPABASE_AUDIT.md); **SSL enforcement DONE — ENABLED 2026-10-06** (owner-approved; activation record + full verification in `docs/hardening/SSL_NETWORK_AUDIT.md` §11; DR dumps now require the §5 layer-2 TLS DSN form); network restrictions **NOT RECOMMENDED** for the current Vercel architecture (dynamic egress).
+1. **Enable Pro + PITR (§6)** — **DEFERRED BY OWNER (2026-10-07, pre-scale phase)**; the unbounded RPO is owner-accepted until the platform reaches meaningful production-data scale (verbatim policy in the DR status block; enablement steps remain in §6 for when the trigger arrives). Still the only open SEV-1 risk — the deferral changes the schedule, not the risk.
+2. Copy backup archives OFF the box whenever one is taken (§5.2) until platform backups exist. **REMAINING GAP (owner-accepted pre-scale): no automated off-box DB backup exists** — the dump is on-demand and sandbox-local.
+3. **Storage off-box backup: REMAINING GAP** — export/copy the 58 `public-media` + `school-media` objects off-box; no database backup covers Storage objects (§5, §18).
+4. Resend key + webhook registration (carried over — email delivery still unverified).
+5. Hardening follow-ups (2026-10-06 audit): least-privilege grants **DONE** (applied & verified); `disable_signup` + `site_url` still open (docs/SUPABASE_AUDIT.md); **SSL enforcement DONE — ENABLED 2026-10-06** (owner-approved; activation record + full verification in `docs/hardening/SSL_NETWORK_AUDIT.md` §11; DR dumps now require the §5 layer-2 TLS DSN form); network restrictions **NOT RECOMMENDED** for the current Vercel architecture (dynamic egress).
 
 ## Changes made by this hardening pass
 
@@ -242,3 +271,5 @@ After every SEV-1/SEV-2 and every drill that finds a gap: append a dated entry h
 SSL & network audit closure (2026-10-06, later the same day — docs-only): added the §5 layer-2 TLS DSN note for the logical dump; migration expectations updated 14→15 (grants migration applied same day); owner actions repointed to the SSL-enforcement gate (`docs/hardening/SSL_NETWORK_AUDIT.md`). No operational, code, schema or configuration change.
 
 SSL enforcement activation (2026-10-06, 15:05–17:12 UTC window — owner-approved, toggle performed owner-side): enforcement verified ON with the full production matrix green (SSL audit §11); the §5 layer-2 DSN requirement is now operative. This update is documentation-only.
+
+Owner PITR deferral (2026-10-07 — docs-only): Supabase plan upgrade and PITR enablement are intentionally deferred for the pre-scale phase per owner decision; the verified logical backup/restore system is the interim recovery mechanism, and Pro + PITR will be enabled before SCHOLARIO reaches meaningful production-data scale. DR classification remains **B — Production Ready With Owner Action** (PITR DEFERRED BY OWNER; storage off-box backup and automated off-box DB backup remain gaps; SSL enforcement ENABLED; restore drill VERIFIED; production health VERIFIED). No plan, billing, PITR, backup, `DATABASE_URL`, Vercel, Prisma, schema, or application-code change — documentation only.
