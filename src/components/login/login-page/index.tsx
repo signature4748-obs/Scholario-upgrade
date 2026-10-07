@@ -603,7 +603,18 @@ function RightPane({
           )}
 
           {/* Form */}
+          {/* STUDENT-QA S5-1 — method="POST" is a pre-hydration fail-safe:
+              a submit that races React hydration (slow device / fast click
+              / re-opened tab) would otherwise natively GET-submit the form,
+              writing the identifier AND PASSWORD into the URL (browser
+              history, access logs, Referer — verified live via a
+              pre-hydration click: /login?identifier=…&password=…).
+              With method POST the native fallback posts to this page URL,
+              Next answers 405 and the body (never the URL) carries the
+              fields. The hydrated path is unchanged: onSubmit calls
+              preventDefault before any submission happens. */}
           <form
+            method="POST"
             className="space-y-5"
             onSubmit={(e) => {
               e.preventDefault()
@@ -776,6 +787,7 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
               </p>
             </div>
             <form
+              method="POST"
               onSubmit={(e) => {
                 e.preventDefault()
                 if (email) setSent(true)

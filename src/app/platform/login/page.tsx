@@ -197,6 +197,7 @@ export default function PlatformLoginPage() {
             aria-labelledby="platform-login-heading"
           >
             <form
+              method="POST"
               onSubmit={submit}
               className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 space-y-5 shadow-sm"
             >

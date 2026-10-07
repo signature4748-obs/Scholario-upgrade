@@ -173,6 +173,7 @@ export function ForcePasswordChangeScreen({ user }: { user: MeUser }) {
 
             {/* The form — the REAL change-password API (audited, rotated) */}
             <form
+              method="POST"
               className="space-y-4"
               onSubmit={(e) => {
                 e.preventDefault()
