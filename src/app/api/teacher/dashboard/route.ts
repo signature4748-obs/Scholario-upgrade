@@ -131,8 +131,13 @@ export async function GET() {
       // 8B-7-f — ONE attendance query for every class-teacher class's
       // TODAY snapshot (was one findMany per class inside a Promise.all —
       // each waiting its own pooler round-trip). Rows group in memory.
+      // TQA-6: Attendance.date is a PG DATE — a DateTime parameter is
+      // truncated to date-only by the engine, so `lt: T23:59:59.999Z`
+      // became `date < today` and EXCLUDED today's rows (the dashboard
+      // showed "not marked" after the class teacher saved). The canonical
+      // bound (class-attendance.ts) is next-day midnight, exclusive.
       const todayAttStart = new Date(`${todayDayKey}T00:00:00.000Z`)
-      const todayAttEnd = new Date(`${todayDayKey}T23:59:59.999Z`)
+      const todayAttEnd = new Date(todayAttStart.getTime() + 86_400_000)
 
       // ── Wave 2 — every remaining section in ONE parallel round ────────
       // Attendance snapshots + window + follow-ups, curriculum (batched),
