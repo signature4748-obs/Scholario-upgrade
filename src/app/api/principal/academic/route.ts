@@ -389,9 +389,17 @@ export async function POST(req: NextRequest) {
             // with the canonical configuration). A teacher double-booking
             // here fails the WHOLE appointment — resolve the timetable
             // conflict first, then appoint.
+            //
+            // TQA-5 (release bug): on RELEASE (teacherUserId=null) the
+            // cells' teacherName must be cleared too — a stale display name
+            // on a vacant slot re-granted the released teacher's scope via
+            // the legacy name-fallback in teacher-scope.ts (assignment
+            // removal must remove the server-side capability IMMEDIATELY).
             await tx.timetable.updateMany({
               where: { schoolId, classId, subjectId },
-              data: { teacherUserId, ...(teacherLabel ? { teacherName: teacherLabel } : {}) },
+              data: teacherUserId
+                ? { teacherUserId, ...(teacherLabel ? { teacherName: teacherLabel } : {}) }
+                : { teacherUserId: null, teacherName: null },
             })
             await tx.activityLog.create({
               data: {
