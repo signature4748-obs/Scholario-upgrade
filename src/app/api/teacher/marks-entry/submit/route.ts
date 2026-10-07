@@ -39,6 +39,16 @@ export async function POST(request: Request) {
       const marks = await db.examMark.findMany({
         where: { examId: body.examId, classId: body.classId, subjectId: body.subjectId },
       })
+      // TQA-7: a COMPLETED/Declared exam is closed — its sheets are no
+      // longer submittable from the teacher surface (corrections flow
+      // through the exam office).
+      const examRow = await db.exam.findUnique({
+        where: { id: body.examId },
+        select: { status: true, resultStatus: true },
+      })
+      if (examRow?.resultStatus === 'Declared' || examRow?.status === 'COMPLETED') {
+        throw new Error('This exam is completed — marks are with the exam office')
+      }
       const entered = marks.filter((m) => m.marksObtained != null)
       if (entered.length === 0) throw new Error('Enter marks before submitting')
       for (const m of entered) {

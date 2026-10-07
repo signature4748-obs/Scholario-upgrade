@@ -42,18 +42,26 @@ export async function POST(request: Request) {
         subjectId: body.subjectId,
       })
 
-      // Exam-level lock: once any row of this grid is SUBMITTED, the sheet
-      // is frozen — no draft can be (re)written for it.
+      // Exam-level lock: once any row of this grid is SUBMITTED — or
+      // VERIFIED (TQA-7: VERIFIED is the final principal-verified state;
+      // the old check treated it as editable) — or the exam itself is
+      // COMPLETED/Declared, the sheet is frozen: no draft can be
+      // (re)written for it.
       const existing = await db.examMark.findFirst({
         where: {
           examId: body.examId,
           classId: body.classId,
           subjectId: body.subjectId,
-          workflowStatus: 'SUBMITTED',
+          workflowStatus: { in: ['SUBMITTED', 'VERIFIED'] },
         },
         select: { id: true },
       })
-      if (existing) {
+      const examRow = await db.exam.findUnique({
+        where: { id: body.examId },
+        select: { status: true, resultStatus: true },
+      })
+      const examClosed = existing || examRow?.resultStatus === 'Declared' || examRow?.status === 'COMPLETED'
+      if (examClosed) {
         throw new Error('Marks already submitted — corrections flow through the exam office')
       }
 

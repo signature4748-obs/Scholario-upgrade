@@ -62,13 +62,25 @@ export async function POST(request: Request) {
         where: { examId: body.examId, classId: body.classId, subjectId: body.subjectId },
         select: { studentId: true, workflowStatus: true },
       })
+      // TQA-7 (immutability lock): the sheet is locked when ANY row is
+      // SUBMITTED — or VERIFIED (VERIFIED is the FINAL principal-verified
+      // state of a declared result; the old check treated it as editable
+      // and let a teacher overwrite a published mark of a Declared exam).
+      // Corrections flow through the exam office, never here.
       const submittedIds = new Set(
-        existing.filter((m) => m.workflowStatus === 'SUBMITTED').map((m) => m.studentId)
+        existing
+          .filter((m) => m.workflowStatus === 'SUBMITTED' || m.workflowStatus === 'VERIFIED')
+          .map((m) => m.studentId)
       )
-      // Exam-level lock: once ANY row of this exam × class × subject has been
-      // submitted, the whole sheet is locked — including students who had no
-      // mark yet. Corrections flow through the exam office, never here.
-      if (submittedIds.size > 0) {
+      // Exam-level lock: a Declared exam's marks are published — immutable
+      // from the teacher surface regardless of per-row workflow state
+      // (a declared exam with zero rows is still a closed sheet).
+      const examRow = await db.exam.findUnique({
+        where: { id: body.examId },
+        select: { status: true, resultStatus: true },
+      })
+      const examDeclared = examRow?.resultStatus === 'Declared' || examRow?.status === 'COMPLETED'
+      if (submittedIds.size > 0 || examDeclared) {
         throw new Error('Marks already submitted — corrections flow through the exam office')
       }
 
