@@ -5,6 +5,7 @@ import {
   resolveClassScope,
   isValidStatus,
   writeCanonicalAttendance,
+  istDayKey,
   type AttendanceStatusValue,
 } from '@/lib/class-attendance'
 
@@ -35,7 +36,11 @@ export async function POST(request: Request) {
         throw new Error('classId, date and entries are required')
       }
       const day = parseDateParam(body.date)
-      if (day.getTime() > Date.now() + 86_400_000) throw new Error('Future dates cannot be marked')
+      // TQA-6: the IST calendar is the authority — a date beyond the
+      // school's TODAY (IST) is a future day and can never be marked.
+      // (The old `Date.now() + 24h` window accepted a full day early.)
+      const istToday = new Date(`${istDayKey()}T00:00:00.000Z`)
+      if (day.getTime() > istToday.getTime()) throw new Error('Future dates cannot be marked')
 
       const { isClassTeacher } = await resolveClassScope(user, schoolId, body.classId)
       if (!isClassTeacher) throw new Error('FORBIDDEN — only the class teacher can save the daily baseline')
