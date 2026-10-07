@@ -114,8 +114,15 @@ export async function GET(req: NextRequest) {
 //
 // Hardening model (mirrors the class-attendance service):
 //   · classId must exist in the CALLER's school (fail-safe 404)
-//   · PRINCIPAL/MANAGEMENT may mark any class; a TEACHER must have
-//     class-teacher/CSA scope for the target class (resolveClassScope)
+//   · PRINCIPAL/MANAGEMENT may mark any class; a TEACHER must be the
+//     CLASS TEACHER of the target class (TQA-6: the CSA-subject-teacher
+//     pass-through let a subject teacher overwrite the class teacher's
+//     canonical daily record via this legacy surface — direct-API probe
+//     confirmed; the canonical /api/teacher/class-attendance/** has always
+//     required isClassTeacher, so this route now matches that policy)
+//   · TQA-6: the date may never be beyond the school's TODAY (IST) — the
+//     canonical baseline/draft routes already enforce this; a phantom
+//     future row was creatable here (direct-API probe confirmed)
 //   · the roster is re-derived server-side; any entry whose studentId is
 //     not an ACTIVE student of that class+school → 404 (fail-safe, no
 //     silent foreign writes)
@@ -140,6 +147,13 @@ export async function POST(req: NextRequest) {
 
       const date = body?.date ? parseDateParam(body.date) : parseDateParam(istDayKey())
 
+      // ── TQA-6: IST calendar authority — a date beyond the school's TODAY
+      // (IST) is a future day and can never be marked. (Same guard as the
+      // canonical baseline/draft routes; the legacy surface previously
+      // accepted ANY future date.)
+      const istToday = new Date(`${istDayKey()}T00:00:00.000Z`)
+      if (date.getTime() > istToday.getTime()) throw new Error('Future dates cannot be marked')
+
       // ── Class belongs to the caller's school ──
       const cls = await db.class.findFirst({
         where: { id: classId, schoolId },
@@ -152,9 +166,17 @@ export async function POST(req: NextRequest) {
         })
       }
 
-      // ── Role gate: TEACHER needs class-teacher/CSA scope for this class ──
+      // ── Role gate: TEACHER must be the CLASS TEACHER of this class ──
+      // (TQA-6 — the canonical policy: subject teachers are view-only on
+      // attendance; only the class teacher records the daily baseline.)
       if (user.role === 'TEACHER') {
-        await resolveClassScope(user, schoolId, classId) // throws NOT_FOUND / FORBIDDEN
+        const { isClassTeacher } = await resolveClassScope(user, schoolId, classId) // throws NOT_FOUND / FORBIDDEN
+        if (!isClassTeacher) {
+          throw new AppError('FORBIDDEN', {
+            publicMessage: 'Only the class teacher can record attendance for this class',
+            internalDetail: `attendance POST: teacher ${user.id} is not the class teacher of ${classId}`,
+          })
+        }
       }
 
       // ── Roster truth from the server, never the request ──
