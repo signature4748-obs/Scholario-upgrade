@@ -145,10 +145,20 @@ export default function Home() {
         void import('@/lib/store/salary-store').then((m) => m.useSalaryStore.getState().hydrate())
       } else if (role === 'student') {
         void import('@/lib/store/students-store').then((m) => m.syncStudentsFromServer())
+        // STUDENT-QA S5-6 — school identity/branding from the DB for the
+        // student session too. The settings store seeds the client registry's
+        // only tenant (Greenwood template) when unsynced, so student-facing
+        // consumers of useSchoolSettingsStore (timetable calendar export,
+        // SchoolView header) rendered the WRONG school name for every real
+        // tenant. /api/school-settings is school-scoped for any session role
+        // (verified: student session returns the session's own identity).
+        void import('@/lib/store/school-settings-store/server-sync').then((m) => m.syncSchoolSettingsFromServer())
       } else if (role === 'teacher') {
         // PHASE 8B — the teacher's OWN salary rows (structure + payments)
         // hydrate from the canonical server ledger once per session.
         void import('@/lib/store/salary-store').then((m) => m.useSalaryStore.getState().hydrate())
+        // STUDENT-QA S5-6 — same identity fix for the teacher session.
+        void import('@/lib/store/school-settings-store/server-sync').then((m) => m.syncSchoolSettingsFromServer())
       }
     }
   }, [isAuthenticated, user?.role])
