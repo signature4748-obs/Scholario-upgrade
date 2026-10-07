@@ -154,7 +154,10 @@ export async function GET() {
     // Σ(amount − paid) over non-PAID rows — with the all-rows sum the two
     // systems agree by algebra instead of drifting).
     const [students, teachers, classes, subjects, exams, vehicles, routes, books, notifications, feesTotal, feesPaid, overdue] = await Promise.all([
-      db.student.count({ where: { schoolId } }),
+      // Enrolled students = ACTIVE roster students (same definition as
+      // /api/students/roster) so the dashboard STUDENTS KPI can never
+      // disagree with the Students module.
+      db.student.count({ where: { schoolId, user: { status: 'ACTIVE' } } }),
       db.teacher.count({ where: { schoolId } }),
       db.class.count({ where: { schoolId } }),
       db.subject.count({ where: { schoolId } }),
@@ -210,7 +213,10 @@ export async function GET() {
     })
 
     const upcomingExams = await db.exam.findMany({
-      where: { schoolId, status: { in: ['SCHEDULED', 'ONGOING'] } },
+      // Canonical status vocabulary is title-case ('Scheduled'/'Ongoing'),
+      // but legacy-seeded rows carry uppercase ('COMPLETED') — match
+      // case-insensitively so upcoming exams are never under-reported.
+      where: { schoolId, status: { in: ['Scheduled', 'Ongoing'], mode: 'insensitive' } },
       orderBy: { startDate: 'asc' },
       take: 5,
       include: { class: { select: { name: true } } },

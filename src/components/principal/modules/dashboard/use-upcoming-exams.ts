@@ -56,8 +56,17 @@ async function fetchUpcoming(): Promise<UpcomingExamsKpi | null> {
       : Array.isArray((raw as { exams?: ExamRow[] })?.exams)
         ? (raw as { exams: ExamRow[] }).exams
         : []
+    // Canonical status vocabulary is title-case ('Scheduled'/'Ongoing'),
+    // legacy-seeded rows can carry uppercase — compare case-insensitively.
+    // "Upcoming" = Scheduled (any date) + future-dated Ongoing, matching
+    // the /api/dashboard server filter.
     const scheduled = rows
-      .filter((e) => e.status === 'SCHEDULED')
+      .filter((e) => {
+        const st = (e.status ?? '').toLowerCase()
+        if (st === 'scheduled') return true
+        if (st === 'ongoing') return !!e.startDate
+        return false
+      })
       .filter((e) => !e.startDate || new Date(e.startDate).getTime() >= Date.now() - 86400000)
     let sub = 'No scheduled exams'
     if (scheduled.length > 0) {
