@@ -159,8 +159,16 @@ export async function GET(_req: NextRequest) {
       const academicsSection = async () => {
         if (!student.classId) return null
         // Latest DECLARED exam for the class with results for this student.
+        // STUDENT-QA S5-2 fix: exams are linked to classes through the
+        // ExamClass join (the modern architecture — createExam always
+        // writes examClasses and leaves the legacy Exam.classId scalar
+        // null). Filtering on the legacy scalar matched ZERO exams, so
+        // the "latest declared results" card silently never rendered for
+        // any student even with real declared Result rows. Resolve the
+        // class through the join; the legacy scalar stays untouched for
+        // legacy readers.
         const exams = await db.exam.findMany({
-          where: { schoolId: ctx.schoolId, classId: student.classId },
+          where: { schoolId: ctx.schoolId, examClasses: { some: { classId: student.classId } } },
           orderBy: [{ declaredAt: 'desc' }, { endDate: 'desc' }],
         })
         const declared = exams.find((e) => e.resultStatus === 'Declared' && e.declaredAt)
