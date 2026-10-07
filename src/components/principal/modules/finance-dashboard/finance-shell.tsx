@@ -21,11 +21,13 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Download, Calendar, ChevronDown } from 'lucide-react'
+import { Download, Calendar, ChevronDown, Landmark } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs, type SegmentedTab } from '../shared/segmented-tabs'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
+import { ModuleEmptyState } from '../shared/empty-state'
 import { useFocusStore } from '@/lib/store/focus-store'
 import { useFinanceData, useFinanceAttention, FINANCE_PERIODS } from '@/lib/store/finance-store'
 import { downloadCSVFile, safeFileName } from '@/lib/download-file'
@@ -115,6 +117,26 @@ export function FinanceShell({ onModuleNavigate }: { onModuleNavigate?: (moduleK
     const filename = safeFileName(`financial-summary-${data.period.id}`, 'csv')
     downloadCSVFile(toCsv(['Metric', 'Value'], rows), filename)
     toast.success('Financial summary exported', { description: filename })
+  }
+
+  // PHASE 6 (§14) — the Finance Dashboard's P&L / balance-sheet / cashflow
+  // statements are ILLUSTRATIVE demo-tier content (the documented demo
+  // corpus — see lib/mock/finance-dashboard.ts). They render ONLY for the
+  // sanctioned demo tenant; a real production tenant gets the honest
+  // empty state instead of fabricated ₹-crore analytics. A real school's
+  // financial truth lives in the Fees and Salary modules (server ledger).
+  const isDemo = useIsDemoTenant()
+
+  if (!isDemo) {
+    return (
+      <PageTransition className="space-y-4">
+        <ModuleEmptyState
+          icon={<Landmark className="h-10 w-10 text-muted-foreground/40" />}
+          title="Financial statements are not generated for this school"
+          description="The Finance Dashboard (P&L, balance sheet, cashflow) is illustrative content available on the demo tenant. This school's live financial data is in the Fees and Salary modules — collections, dues, payroll and their audit trails."
+        />
+      </PageTransition>
+    )
   }
 
   return (

@@ -64,55 +64,33 @@ export function useExamTypes() {
         }
       })
       .catch(() => {
+        // PHASE 6 (§8) — fail HONESTLY: a failed load shows the real
+        // "no exam types configured" state (the Add flow persists through
+        // the server). The previous silent mock-mode fallback fabricated
+        // rows the server never had.
         if (cancelled) return
-        // Fallback to defaults on auth failure (mock mode).
-        setTypes(EXAM_TYPES.map((name, i) => ({
-          id: `default-type-${i}`,
-          schoolId: 'demo-school',
-          name,
-          code: name.substring(0, 3).toUpperCase(),
-          enabled: true,
-          sortOrder: i,
-        })))
+        setTypes([])
       })
       .finally(() => !cancelled && setLoading(false))
     return () => { cancelled = true }
   }, [reloadKey])
 
+  // PHASE 6 (§8) — mutations go through the REAL API and surface the
+  // server's error to the caller (the settings tab shows the toast). The
+  // previous "mock mode" catch blocks mutated local state, making failed
+  // saves look successful (silent data loss).
   const create = useCallback(async (data: { name: string; code?: string }) => {
-    try {
-      await api('/api/exams/settings/types', { method: 'POST', json: data })
-    } catch {
-      // Mock mode: add locally.
-      setTypes((prev) => [...prev, {
-        id: `type-${Date.now()}`,
-        schoolId: 'demo-school',
-        name: data.name,
-        code: data.code ?? data.name.substring(0, 3).toUpperCase(),
-        enabled: true,
-        sortOrder: prev.length,
-      }])
-    }
+    await api('/api/exams/settings/types', { method: 'POST', json: data })
     reload()
   }, [reload])
 
   const update = useCallback(async (id: string, data: { name?: string; code?: string; enabled?: boolean }) => {
-    try {
-      await api(`/api/exams/settings/types/${id}`, { method: 'PATCH', json: data })
-    } catch {
-      // Mock mode: update locally.
-      setTypes((prev) => prev.map((t) => t.id === id ? { ...t, ...data } : t))
-    }
+    await api(`/api/exams/settings/types/${id}`, { method: 'PATCH', json: data })
     reload()
   }, [reload])
 
   const remove = useCallback(async (id: string) => {
-    try {
-      await api(`/api/exams/settings/types/${id}`, { method: 'DELETE' })
-    } catch {
-      // Mock mode: remove locally.
-      setTypes((prev) => prev.filter((t) => t.id !== id))
-    }
+    await api(`/api/exams/settings/types/${id}`, { method: 'DELETE' })
     reload()
   }, [reload])
 
@@ -150,56 +128,27 @@ export function useGradeScales() {
       })
       .catch(() => {
         if (cancelled) return
-        // Fallback to defaults on auth failure (mock mode).
-        setScales(DEFAULT_GRADE_BOUNDARIES.map((g, i) => ({
-          id: `default-grade-${i}`,
-          schoolId: 'demo-school',
-          grade: g.grade,
-          minPct: g.minPct,
-          maxPct: g.minPct === 0 ? 33 : g.minPct === 33 ? 49 : g.minPct === 90 ? 100 : g.minPct + 9,
-          color: g.color,
-          sortOrder: i,
-        })))
+        // PHASE 6 (§8) — fail honestly (no fabricated "mock mode" rows).
+        setScales([])
       })
       .finally(() => !cancelled && setLoading(false))
     return () => { cancelled = true }
   }, [reloadKey])
 
+  // PHASE 6 (§8) — mutations surface the server error to the caller
+  // (silent local fallback = silent data loss).
   const create = useCallback(async (data: { grade: string; minPct: number; maxPct: number; color?: string }) => {
-    try {
-      await api('/api/exams/settings/grades', { method: 'POST', json: data })
-    } catch {
-      // Mock mode: add locally.
-      setScales((prev) => [...prev, {
-        id: `grade-${Date.now()}`,
-        schoolId: 'demo-school',
-        grade: data.grade,
-        minPct: data.minPct,
-        maxPct: data.maxPct,
-        color: data.color ?? null,
-        sortOrder: prev.length,
-      }])
-    }
+    await api('/api/exams/settings/grades', { method: 'POST', json: data })
     reload()
   }, [reload])
 
   const update = useCallback(async (id: string, data: { grade?: string; minPct?: number; maxPct?: number; color?: string }) => {
-    try {
-      await api(`/api/exams/settings/grades/${id}`, { method: 'PATCH', json: data })
-    } catch {
-      // Mock mode: update locally.
-      setScales((prev) => prev.map((s) => s.id === id ? { ...s, ...data } : s))
-    }
+    await api(`/api/exams/settings/grades/${id}`, { method: 'PATCH', json: data })
     reload()
   }, [reload])
 
   const remove = useCallback(async (id: string) => {
-    try {
-      await api(`/api/exams/settings/grades/${id}`, { method: 'DELETE' })
-    } catch {
-      // Mock mode: remove locally.
-      setScales((prev) => prev.filter((s) => s.id !== id))
-    }
+    await api(`/api/exams/settings/grades/${id}`, { method: 'DELETE' })
     reload()
   }, [reload])
 
@@ -228,20 +177,17 @@ export function useExamRules() {
       })
       .catch(() => {
         if (cancelled) return
-        // Fallback to defaults on auth failure (mock mode).
-        setRules(DEFAULT_EXAM_RULES)
+        // PHASE 6 (§8) — fail honestly (no "mock mode" rule fabrication).
+        setRules({})
       })
       .finally(() => !cancelled && setLoading(false))
     return () => { cancelled = true }
   }, [reloadKey])
 
   const save = useCallback(async (updatedRules: Record<string, string>) => {
-    try {
-      await api('/api/exams/settings/rules', { method: 'PUT', json: { rules: updatedRules } })
-    } catch {
-      // Mock mode: update locally.
-      setRules(updatedRules)
-    }
+    // PHASE 6 (§8) — the server save must succeed; a failure surfaces to
+    // the caller instead of silently pretending the rules were saved.
+    await api('/api/exams/settings/rules', { method: 'PUT', json: { rules: updatedRules } })
     reload()
   }, [reload])
 
@@ -277,12 +223,9 @@ export function useAdmitCardConfig() {
   }, [reloadKey])
 
   const save = useCallback(async (updated: Partial<AdmitCardConfigDTO>) => {
-    try {
-      await api('/api/exams/settings/admit-card', { method: 'PUT', json: updated })
-    } catch {
-      // Mock mode: update locally.
-      setConfig((prev) => ({ ...(prev ?? DEFAULT_ADMIT_CARD_CONFIG), ...updated }))
-    }
+    // PHASE 6 (§8) — the server save must succeed; failures surface to
+    // the settings tab's own error handling (no silent local fallback).
+    await api('/api/exams/settings/admit-card', { method: 'PUT', json: updated })
     reload()
   }, [reload])
 
@@ -319,12 +262,9 @@ export function useReportCardConfig() {
   }, [reloadKey])
 
   const save = useCallback(async (updated: Partial<ReportCardConfigDTO>) => {
-    try {
-      await api('/api/exams/settings/report-card', { method: 'PUT', json: updated })
-    } catch {
-      // Mock mode: update locally.
-      setConfig((prev) => ({ ...(prev ?? DEFAULT_REPORT_CARD_CONFIG), ...updated }))
-    }
+    // PHASE 6 (§8) — the server save must succeed; failures surface to
+    // the settings tab's own error handling (no silent local fallback).
+    await api('/api/exams/settings/report-card', { method: 'PUT', json: updated })
     reload()
   }, [reload])
 

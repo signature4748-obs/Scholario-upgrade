@@ -6,7 +6,7 @@
  * These are loaded inside ExamWorkspaceDialog alongside the existing tabs.
  */
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { Plus, Trash2, MapPin, RefreshCw, Sparkles, Send, AlertTriangle, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,13 +23,14 @@ import {
   useGenerateSeating,
   useImportMarksCsv,
   downloadCsvTemplate,
+  useApplyGrace,
+  useOutcomes,
+  useComputeOutcomes,
+  useOverrideOutcome,
   type CsvImportRow,
 } from '@/lib/exams/use-exams-extended'
-import { useApplyGraceMock } from '@/lib/exams/use-marks-mock'
-import { useMockMarksStore } from '@/lib/exams/mock-marks-data'
-import { useMockOutcomesStore, type Outcome } from '@/lib/exams/mock-outcomes-data'
-import { useIsDemoTenant } from '@/lib/store/demo-tenant'
-import { useStudentsStore } from '@/lib/store/students-store'
+import { useMarks } from '@/lib/exams/use-exams'
+import type { Outcome } from '@/lib/exams/types'
 import { useRoleGate } from '@/lib/exams/use-role-gate'
 import { generateSeatingPlanPDF, generateBatchAdmitCardPDF } from '@/lib/exams/pdf'
 import { fetchAdmitCardsBatch } from '@/lib/exams/use-exams-extended'
@@ -207,29 +208,34 @@ export function SeatingSection({ examId, exam, onReload }: SectionProps) {
 export function GraceSection({ examId, exam }: SectionProps) {
   const [classId, setClassId] = useState(exam?.classes[0]?.classId ?? '')
   const [subjectId, setSubjectId] = useState('')
-  // Read marks from the mock store (canonical source) + students from students store.
-  const storeMarks = useMockMarksStore((s) => s.marks)
-  const allStudents = useStudentsStore((s) => s.students)
-  const marks = useMemo(
-    () => storeMarks.filter((m) => m.examId === examId && m.classId === classId && m.subjectId === subjectId),
-    [storeMarks, examId, classId, subjectId],
-  )
-  const students = useMemo(
-    () => allStudents.filter((s) => s.classId === classId && s.status === 'Active'),
-    [allStudents, classId],
+  // PHASE 6 (§8) — the mock in-memory marks store is retired: the roster
+  // and marks come from the REAL paper endpoint
+  // (GET /api/exams/[id]/marks?classId=&subjectId=) and grace is applied
+  // through the audited POST /api/exams/[id]/grace (server writes the
+  // ExamAuditLog GRACE_APPLIED row + preserves original marks).
+  const { students, marks, loading: marksLoading, reload: reloadMarks } = useMarks(
+    examId,
+    classId || null,
+    subjectId || null,
   )
   const [selectedMarkId, setSelectedMarkId] = useState<string | null>(null)
   const [graceMarks, setGraceMarks] = useState(0)
   const [reason, setReason] = useState('')
   const [studentSearch, setStudentSearch] = useState('')
-  const { apply, loading } = useApplyGraceMock()
+  const { apply, loading } = useApplyGrace()
   const gate = useRoleGate()
 
   const subjectsForClass = exam?.subjects.filter((s: any) => !classId || s.classId === classId) ?? []
-  const markRows = students.map((s) => {
-    const m = marks.find((mk) => mk.studentId === s.id)
-    return { student: s, mark: m }
-  }).filter((r) => r.mark)
+  const markRows = useMemo(
+    () =>
+      students
+        .map((s) => {
+          const m = marks.find((mk) => mk.studentId === s.id)
+          return { student: s, mark: m }
+        })
+        .filter((r) => r.mark),
+    [students, marks],
+  )
 
   // Filter mark rows by student search.
   const filteredMarkRows = useMemo(() => {
@@ -251,6 +257,7 @@ export function GraceSection({ examId, exam }: SectionProps) {
       setSelectedMarkId(null)
       setGraceMarks(0)
       setReason('')
+      reloadMarks()
     } catch (e: any) {
       toast.error('Failed to apply grace', { description: e.message })
     }
@@ -295,6 +302,8 @@ export function GraceSection({ examId, exam }: SectionProps) {
             <p className="text-xs font-medium text-muted-foreground">Select a class and subject to view marks</p>
             <p className="text-[10px] text-muted-foreground/60 mt-1">Grace marks can be applied to individual student records</p>
           </div>
+        ) : marksLoading ? (
+          <div className="py-10 text-center text-xs text-muted-foreground">Loading marks…</div>
         ) : markRows.length === 0 ? (
           <div className="py-10 text-center">
             <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-muted/40 mb-2">
@@ -388,37 +397,43 @@ export function GraceSection({ examId, exam }: SectionProps) {
 
 export function OutcomesSection({ examId, exam }: SectionProps) {
   const [classId, setClassId] = useState(exam?.classes[0]?.classId ?? '')
-  const outcomesStore = useMockOutcomesStore()
-  const outcomes = useMemo(
-    () => outcomesStore.outcomes.filter((o) => o.examId === examId && (classId === '' || o.classId === classId)),
-    [outcomesStore.outcomes, examId, classId],
+  // PHASE 6 (§8) — outcomes are SERVER truth: GET /api/exams/[id]/outcomes
+  // (?classId=), computed via POST …/outcomes/compute (server derives
+  // PROMOTED/COMPARTMENT/RETEST/NOT_PROMOTED from the real marks ledger)
+  // and overridden through the audited POST …/outcomes/[studentId]. The
+  // in-memory mock store (with its demo-tier auto-init) is retired.
+  const { outcomes, loading: outcomesLoading, reload: reloadOutcomes } = useOutcomes(
+    examId,
+    // "all" is a UI sentinel (Radix Select forbids empty-string item
+    // values — the original value="" item crashed the tab into the error
+    // boundary); it maps to a null classId = unfiltered server query.
+    classId && classId !== 'all' ? classId : null,
   )
+  const { compute, loading: computing } = useComputeOutcomes()
+  const { override } = useOverrideOutcome()
   const gate = useRoleGate()
 
-  // Auto-init outcomes for completed/ongoing exams.
-  // FINAL-GATE (EG-9F/R6) — outcome seeding derives from the demo-tier
-  // marks corpus; only the demo tenant auto-inits. A real tenant computes
-  // outcomes explicitly from its own (real) entered marks.
-  const isDemo = useIsDemoTenant()
-  const [initialized, setInitialized] = useState(false)
-  useEffect(() => {
-    if (!isDemo || !exam || initialized) return
-    outcomesStore.initOutcomes(exam)
-    setInitialized(true)
-  }, [isDemo, exam, initialized, outcomesStore])
-
-  const handleCompute = () => {
-    if (!classId) return
-    const count = outcomesStore.computeForClass(examId, classId)
-    toast.success(`Outcomes computed for ${count} students`, {
-      description: 'PROMOTED if passed, COMPARTMENT if 1 fail, RETEST if 2 fails, NOT_PROMOTED otherwise.',
-    })
+  const handleCompute = async () => {
+    if (!classId || classId === 'all') return
+    try {
+      const { autoCount } = await compute(examId, classId)
+      reloadOutcomes()
+      toast.success(`Outcomes computed for ${autoCount} students`, {
+        description: 'PROMOTED if passed, COMPARTMENT if 1 fail, RETEST if 2 fails, NOT_PROMOTED otherwise.',
+      })
+    } catch (e: any) {
+      toast.error('Failed to compute outcomes', { description: e?.message ?? 'The server rejected the request.' })
+    }
   }
 
-  const handleOverride = (studentId: string, outcome: Outcome) => {
-    const ok = outcomesStore.overrideOutcome(examId, studentId, outcome, 'Manual override by Principal')
-    if (ok) toast.success(`Outcome overridden to ${outcome}`)
-    else toast.error('Failed to override outcome')
+  const handleOverride = async (studentId: string, outcome: Outcome) => {
+    try {
+      await override(examId, studentId, outcome, 'Manual override by Principal')
+      reloadOutcomes()
+      toast.success(`Outcome overridden to ${outcome}`)
+    } catch (e: any) {
+      toast.error('Failed to override outcome', { description: e?.message ?? 'The server rejected the request.' })
+    }
   }
 
   const summary = {
@@ -435,13 +450,15 @@ export function OutcomesSection({ examId, exam }: SectionProps) {
         <Select value={classId} onValueChange={setClassId}>
           <SelectTrigger size="sm" className="text-xs w-[180px]"><SelectValue placeholder="Select class" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All Classes</SelectItem>
+            {/* PHASE 6 — "all" sentinel (Radix forbids value="" on items;
+                the previous empty-string item crashed this tab). */}
+            <SelectItem value="all">All Classes</SelectItem>
             {exam?.classes.map((c: any) => <SelectItem key={c.classId} value={c.classId}>{c.className}</SelectItem>)}
           </SelectContent>
         </Select>
         {gate.canOverrideOutcome && (
-          <Button size="sm" variant="default" className="h-7 text-xs gap-1.5" onClick={handleCompute} disabled={!classId}>
-            <Sparkles className="h-3 w-3" /> Re-compute Outcomes
+          <Button size="sm" variant="default" className="h-7 text-xs gap-1.5" onClick={handleCompute} disabled={!classId || classId === 'all' || computing}>
+            <Sparkles className="h-3 w-3" /> {computing ? 'Computing…' : 'Re-compute Outcomes'}
           </Button>
         )}
         {outcomes.length > 0 && (
@@ -454,9 +471,11 @@ export function OutcomesSection({ examId, exam }: SectionProps) {
         )}
       </div>
 
-      {outcomes.length === 0 ? (
+      {outcomesLoading ? (
+        <div className="rounded-xl border border-border bg-card p-6 text-center text-xs text-muted-foreground">Loading outcomes…</div>
+      ) : outcomes.length === 0 ? (
         <div className="rounded-xl border border-border bg-card p-6 text-center text-xs text-muted-foreground">
-          No outcomes computed yet. Select a class and click "Re-compute Outcomes" to derive from marks.
+          No outcomes recorded for this class yet. Click "Re-compute Outcomes" to derive them from the entered marks.
         </div>
       ) : (
         <div className="rounded-xl border border-border bg-card overflow-hidden">
@@ -481,7 +500,7 @@ export function OutcomesSection({ examId, exam }: SectionProps) {
                   <TableCell className="text-xs text-muted-foreground">{o.className}</TableCell>
                   <TableCell className="text-xs tabular-nums text-center">{o.percentage}%</TableCell>
                   <TableCell className="text-xs font-bold text-center">{o.grade}</TableCell>
-                  <TableCell className="text-xs text-center tabular-nums">{o.subjectsFailed}/{o.subjectsCount}</TableCell>
+                  <TableCell className="text-xs text-center tabular-nums">{o.subjectsFailed}</TableCell>
                   <TableCell><OutcomePill outcome={o.outcome} /></TableCell>
                   <TableCell>
                     {gate.canOverrideOutcome ? (
