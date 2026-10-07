@@ -9,15 +9,20 @@ export const runtime = 'nodejs'
 export async function GET() {
   return withUser(async (user) => {
     // Task 4-d (audit 3-a fix #7): gate the school branch to the
-    // 'school.dashboard.read' capability roles (P/M/T) while keeping the
+    // 'school.dashboard.read' capability roles (P/M) while keeping the
     // SUPER_ADMIN platform branch reachable. STUDENT/PARENT/DRIVER/
     // ACCOUNTANT get 403 (the school branch carries financials + the
     // activity log). Grep-verified: the only GET consumer is the principal
     // dashboard (use-school-stats.ts); the student and teacher panels use
     // /api/student/dashboard + /api/teacher/dashboard.
+    // TQA-13: TEACHER was removed from the school-scope branch — the
+    // payload carries school-wide financial aggregates (feesTotal,
+    // feesPaid, overdue) and the school activity log. A teacher has no
+    // business surface for them (their dashboard is /api/teacher/dashboard,
+    // assignment-scoped); direct API access must meet the same policy.
     if (
       user.role !== 'SUPER_ADMIN' &&
-      !['PRINCIPAL', 'MANAGEMENT', 'TEACHER'].includes(user.role)
+      !['PRINCIPAL', 'MANAGEMENT'].includes(user.role)
     ) {
       throw new Error('FORBIDDEN')
     }
