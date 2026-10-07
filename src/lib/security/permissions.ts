@@ -32,6 +32,35 @@ export type Role =
   | 'DRIVER'
 
 /**
+ * PHASE 1 (role-architecture audit) — the CANONICAL school-application role
+ * model is EXACTLY three roles: PRINCIPAL, TEACHER, STUDENT.
+ *
+ * There is no Parent role, no Guardian role, no Accountant role, no Staff
+ * role and no fourth school-user role. Parents reach information through
+ * the student's existing account/portal — a separate parent identity
+ * system must never exist. (Guardian CONTACT fields on Student rows are
+ * data, not authorization identities.)
+ *
+ * `Role` above still lists the legacy vocabulary (PARENT, MANAGEMENT,
+ * ACCOUNTANT, DRIVER) because historical User rows, seed personas and the
+ * permission matrix reference it — those rows remain as contact/anchor
+ * data, but NONE of them may authenticate into the school application.
+ * The login door and the withUser guard enforce this allowlist; the
+ * entries here are residue documentation, not granted roles.
+ *
+ * SUPER_ADMIN is the PLATFORM administrator concept — platform identities
+ * authenticate through the platform plane only, never the school door.
+ */
+export const CANONICAL_SCHOOL_ROLES = ['PRINCIPAL', 'TEACHER', 'STUDENT'] as const
+
+export type CanonicalSchoolRole = (typeof CANONICAL_SCHOOL_ROLES)[number]
+
+/** Fail-closed school-plane role check (used by login + withUser). */
+export function isCanonicalSchoolRole(role: string): role is CanonicalSchoolRole {
+  return (CANONICAL_SCHOOL_ROLES as readonly string[]).includes(role)
+}
+
+/**
  * The capability matrix. Keys are stable permission strings; values are the
  * roles that hold the capability (order irrelevant).
  *

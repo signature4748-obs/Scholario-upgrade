@@ -39,6 +39,9 @@ export const AUDIT_ACTIONS = [
   // login credentials (teacher/student creation by P/M): the credentials
   // hand-over is a security event, so the funnel needs a canonical name.
   'ACCOUNT_CREATED',
+  // TQA c345de6 — teacher profile mutations persisted server-side need a
+  // canonical update action (PATCH /api/teachers/[id]).
+  'ACCOUNT_UPDATED',
   'STUDENT_DATA_EXPORT',
   'FEE_OPERATION',
   'MARKS_CHANGE',
@@ -63,6 +66,11 @@ export const AUDIT_ACTIONS = [
   // ActivityLog so principals see platform oversight of their tenant).
   'PLATFORM_SUPPORT_SESSION',
   'PLATFORM_LOGIN_BLOCKED',
+  // PHASE 1 (role-architecture audit) — a school-door login attempt by a
+  // role outside the canonical model (PRINCIPAL|TEACHER|STUDENT): legacy
+  // PARENT/MANAGEMENT/ACCOUNTANT/DRIVER rows exist as contact data and
+  // must never authenticate; the refusal is an audited attack signal.
+  'SCHOOL_LOGIN_ROLE_BLOCKED',
   // CREDENTIAL-RESET — school-visible marker for a platform credential
   // reset (single-account or whole-roster) on this tenant.
   'PLATFORM_CREDENTIAL_RESET',

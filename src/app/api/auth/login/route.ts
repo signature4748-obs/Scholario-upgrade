@@ -13,6 +13,7 @@ import {
 } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, emailSchema, passwordInputSchema } from '@/lib/security/validation'
 import { auditEvent, auditRateLimit } from '@/lib/security/audit'
+import { isCanonicalSchoolRole } from '@/lib/security/permissions'
 import { evaluateTenantEntitlement, publicEntitlement } from '@/lib/entitlement/entitlement'
 
 export const runtime = 'nodejs'
@@ -121,6 +122,30 @@ export async function POST(req: NextRequest) {
       throw new AppError('AUTH_REQUIRED', {
         publicMessage: 'Invalid email or password',
         internalDetail: 'school login refused a platform identity (Phase 6 invariant)',
+      })
+    }
+    // 1b. PHASE 1 (role-architecture audit) — the canonical school role
+    //     model is EXACTLY PRINCIPAL | TEACHER | STUDENT. There is no
+    //     Parent/Guardian/Accountant/Staff/fourth school-user role: parents
+    //     reach information through the student's account. Historical
+    //     User rows with legacy roles (PARENT, MANAGEMENT, ACCOUNTANT,
+    //     DRIVER) exist as contact/thread-anchor data — they are NEVER
+    //     issued a school session. Fail-closed: any role outside the
+    //     allowlist is refused (and audited), so a future stray role
+    //     value can never authenticate either.
+    if (!isCanonicalSchoolRole(user.role)) {
+      await auditEvent({
+        schoolId: user.schoolId,
+        userId: user.id,
+        action: 'SCHOOL_LOGIN_ROLE_BLOCKED',
+        actorLabel: body.email,
+        ip,
+        requestId,
+        detail: `role ${user.role} is outside the canonical school roles (PRINCIPAL|TEACHER|STUDENT) — parents use the student account`,
+      }).catch(() => {})
+      throw new AppError('AUTH_REQUIRED', {
+        publicMessage: 'Invalid email or password',
+        internalDetail: `school login refused a non-canonical role (${user.role}) — canonical model is PRINCIPAL|TEACHER|STUDENT`,
       })
     }
     // 2. SaaS-HARDENING (§2): authentication NEVER depends on subscription

@@ -7,6 +7,7 @@ import { log } from './observability/logger'
 import { sanitizeRequestId } from './observability/http'
 import { entitlementForUser } from './entitlement/server'
 import { isEntitlementExemptRoute } from './entitlement/entitlement'
+import { isCanonicalSchoolRole } from './security/permissions'
 
 export type Ctx = { user: AuthUser }
 
@@ -124,6 +125,19 @@ export async function withUser(
         internalDetail: `withUser: account status ${user.status}`,
       })
     }
+    // ── PHASE 1 (role-architecture audit) — canonical school-role invariant.
+    // The school application has EXACTLY three user roles: PRINCIPAL,
+    // TEACHER, STUDENT. Any other role value on a school identity
+    // (PARENT, MANAGEMENT, ACCOUNTANT, DRIVER, SUPER_ADMIN, or a future
+    // stray value) is refused here — fail-closed — so a legacy/forged
+    // session for a non-canonical role can never reach a school API.
+    // Parent User rows remain valid as contact/thread-anchor data for
+    // teacher-side surfaces; they simply hold no school authorization.
+    if (!isCanonicalSchoolRole(user.role)) {
+      throw new AppError('FORBIDDEN', {
+        internalDetail: `withUser: role ${user.role} is not a canonical school role (PRINCIPAL|TEACHER|STUDENT)`,
+      })
+    }
     // ── CREDENTIAL-RESET — forced first-password-change gate ──────────
     // The account authenticated (login ALWAYS succeeds — the auth
     // architecture is untouched), but it has not yet established its own
@@ -148,6 +162,9 @@ export async function withUser(
       }
     }
     // ── SaaS-HARDENING — tenant-subscription entitlement gate ──────────
+    // (The historical `user.role !== 'SUPER_ADMIN'` skip is gone: the
+    // canonical-role invariant above already refuses platform identities,
+    // so every school session reaching this gate is a school identity.)
     // Authentication NEVER depends on the subscription (login always
     // succeeds); THIS is where a restricted/suspended tenant is stopped:
     // every BUSINESS API rejects with SUBSCRIPTION_REQUIRED while the
@@ -156,7 +173,7 @@ export async function withUser(
     // understands "Your SCHOLARIO subscription needs renewal."
     // Fail-closed: unknown routes are business; unknown states restrict.
     // UI lock screens are convenience only — THIS is the authority.
-    if (user.role !== 'SUPER_ADMIN' && user.schoolId) {
+    if (user.schoolId) {
       const entitlement = entitlementForUser(user)
       const route = await currentRouteContext()
       const routeExempt = isEntitlementExemptRoute(route)

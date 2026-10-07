@@ -1,6 +1,7 @@
 import { getCurrentUser, getCurrentSession, parseUserAgent } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { publicEntitlementForUser } from '@/lib/entitlement/server'
+import { isCanonicalSchoolRole } from '@/lib/security/permissions'
 
 export const runtime = 'nodejs'
 
@@ -28,6 +29,12 @@ export async function GET() {
     // Task 4-d (fix #9) — mirror withUser semantics: a non-ACTIVE account
     // (suspended/pending) must not read its own session context.
     if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
+    // PHASE 1 (role-architecture audit) — mirror the withUser canonical-role
+    // invariant: a session for a non-canonical school role (PARENT,
+    // MANAGEMENT, ACCOUNTANT, DRIVER, SUPER_ADMIN) hydrates as logged-out,
+    // so the client shell never renders a parent/staff identity that no
+    // business API would serve anyway.
+    if (!isCanonicalSchoolRole(user.role)) throw new Error('UNAUTHORIZED')
 
     const session = await getCurrentSession()
     const ua = parseUserAgent(session?.userAgent ?? null)
