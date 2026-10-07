@@ -97,3 +97,9 @@ db/pg/
 
 # internal agent worklog — never part of the product repo
 worklog.md
+
+# TQA — local teacher-QA workspace (probe scripts + curl cookie jars contain
+# live session tokens; never committed). The stray w12.jar cookie file was
+# removed from tracking in the same cleanup.
+/tqa/
+w12.jar
