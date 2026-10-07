@@ -388,6 +388,10 @@ model Room {
   updatedAt DateTime @updatedAt
 
   classes   Class[]
+  /// Timetable cells canonically linked to this room (TQA-9 — the
+  /// room double-booking guard links cells by roomId; the free-text
+  /// `room` display column stays untouched for legacy readers).
+  timetableCells Timetable[]
 
   @@unique([schoolId, name])
   @@index([schoolId, active])
@@ -965,7 +969,14 @@ model Timetable {
   teacherUserId String?
   teacherUser   User?   @relation("TimetableTeacher", fields: [teacherUserId], references: [id], onDelete: SetNull)
   teacherName String?
-  room        String?
+  /// Canonical room reference (TQA-9 — room double-booking guard). The
+  /// free-text `room` column stays as the DISPLAY name (historical values
+  /// remain readable even after a room is archived); new writes resolve
+  /// the name to a Room row so the DB can enforce one booking per room
+  /// per (day, period).
+  roomId String?
+  roomRef Room? @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  room    String?
   createdAt   DateTime @default(now())
 
   // PHASE 3 — timetable conflict prevention AT THE DATABASE LEVEL:
@@ -975,6 +986,10 @@ model Timetable {
   // WHERE teacher_user_id IS NOT NULL to close that.
   @@unique([schoolId, classId, day, period])
   @@unique([schoolId, teacherUserId, day, period])
+  // TQA-9 — room double-booking guard (same pattern as the teacher key:
+  // NULL roomId rows are distinct in Postgres, so display-only cells
+  // never collide).
+  @@unique([schoolId, roomId, day, period])
   @@index([schoolId, classId, day])
   @@index([schoolId, teacherUserId, day])
 }

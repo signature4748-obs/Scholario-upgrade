@@ -127,6 +127,27 @@ export async function POST(req: NextRequest) {
         teacherUserId: d.teacherName ? (teacherIdByName.get(d.teacherName.trim().toLowerCase()) ?? null) : null,
       }))
 
+      // 4c — TQA-9: resolve ROOM names to canonical Room rows the same
+      //     way (case-insensitive trim; ACTIVE rooms only — archived rooms
+      //     are excluded from new scheduling exactly like the homeroom
+      //     room.assign guard). Unresolvable names keep the display text
+      //     with roomId = null (never invented, never renamed silently).
+      //     The (schoolId, roomId, day, period) unique then makes the DB
+      //     the source of truth for ROOM double-booking too.
+      const roomRoster = await db.room.findMany({
+        where: { schoolId, active: true },
+        select: { id: true, name: true },
+      })
+      const roomKey = (name: string) => name.trim().toLowerCase()
+      const roomIdByName = new Map<string, string>()
+      for (const r of roomRoster) {
+        if (r.name) roomIdByName.set(roomKey(r.name), r.id)
+      }
+      const draftsRoomResolved = draftsResolved.map((d) => ({
+        ...d,
+        roomId: d.room ? (roomIdByName.get(roomKey(d.room)) ?? null) : null,
+      }))
+
       // 5 — replace-all within the school (publish = the new truth) — ONE
       //     $transaction (Phase 3): subject auto-create (with code-collision
       //     retry), CSA ensure, the deleteMany and the createMany commit
@@ -207,7 +228,7 @@ export async function POST(req: NextRequest) {
 
           const removed = await tx.timetable.deleteMany({ where: { schoolId } })
           const written = await tx.timetable.createMany({
-            data: draftsResolved.map((d) => ({
+            data: draftsRoomResolved.map((d) => ({
               schoolId,
               classId: classByKey.get(d.className)!.id,
               subjectId: subjectByKey.get(d.subject)?.id ?? null,
@@ -217,6 +238,7 @@ export async function POST(req: NextRequest) {
               endTime: d.endTime,
               teacherUserId: d.teacherUserId,
               teacherName: d.teacherName,
+              roomId: d.roomId,
               room: d.room || null,
             })),
           })
@@ -234,12 +256,16 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         const err = e as { code?: string; message?: string }
         if (err?.code === 'P2002') {
-          const teacherConflict = (err.message ?? '').includes('teacherUserId')
+          const msg = err.message ?? ''
+          const teacherConflict = msg.includes('teacherUserId')
+          const roomConflict = msg.includes('roomId')
           throw new AppError('CONFLICT', {
             publicMessage: teacherConflict
               ? 'Timetable conflict — this teacher is already booked at that day and period. Resolve the overlap before publishing.'
-              : 'Timetable conflict — this class already has a slot at that day and period. Resolve the overlap before publishing.',
-            internalDetail: `TIMETABLE_CONFLICT P2002: ${(err.message ?? '').slice(0, 300)}`,
+              : roomConflict
+                ? 'Timetable conflict — that room is already booked at that day and period. Resolve the overlap before publishing.'
+                : 'Timetable conflict — this class already has a slot at that day and period. Resolve the overlap before publishing.',
+            internalDetail: `TIMETABLE_CONFLICT P2002: ${msg.slice(0, 300)}`,
           })
         }
         throw e
