@@ -58,6 +58,12 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     // CREDENTIAL-RESET — forced first-password-change gate (business APIs
     // reject a bootstrap-credential session; exempt surfaces stay open).
     PASSWORD_CHANGE_REQUIRED: 403,
+    // PHASE 8 §2(A) — timetable publish domain conflict codes (same 409
+    // semantics as the generic CONFLICT; only the timetable publish route
+    // throws them — the P2002 classifier default stays 'CONFLICT').
+    ROOM_CONFLICT: 409,
+    TEACHER_CONFLICT: 409,
+    CLASS_CONFLICT: 409,
   }
 
   test('the table is exactly the documented taxonomy (no stray/missing codes)', () => {

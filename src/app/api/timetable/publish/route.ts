@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
-import { AppError } from '@/lib/security/errors'
+import { AppError, type AppErrorCode } from '@/lib/security/errors'
 import { slotsToServerRows, type PublishableSlot } from '@/lib/timetable/server-mapping'
 import { publishToSchool } from '@/lib/realtime/publish'
 
@@ -148,15 +148,68 @@ export async function POST(req: NextRequest) {
         roomId: d.room ? (roomIdByName.get(roomKey(d.room)) ?? null) : null,
       }))
 
+      // 4d — PHASE 8 §2(A) payload-level duplicate pre-check (fast-path for
+      //     precise, STABLE machine-readable domain errors): mirror the
+      //     three DB uniques — (schoolId, classId, day, period), (schoolId,
+      //     teacherUserId, day, period), (schoolId, roomId, day, period) —
+      //     across the resolved drafts and throw the SPECIFIC domain
+      //     AppError on the first duplicate, naming the room/teacher/class,
+      //     day and period. NULL teacherUserId/roomId never conflict
+      //     (Postgres treats NULLs as distinct — the same semantics as the
+      //     DB keys, so the check can never reject a payload the DB would
+      //     accept). The DB uniques remain the authority: this pre-check
+      //     only buys a precise message + domain code BEFORE the
+      //     transaction runs; it does not remove or weaken anything — a
+      //     payload that passes here is still fully constrained at the
+      //     createMany below (and under concurrent publishes, the P2002
+      //     catch below is the backstop).
+      const seenRoomKeys = new Set<string>()
+      const seenTeacherKeys = new Set<string>()
+      const seenClassKeys = new Set<string>()
+      for (const d of draftsRoomResolved) {
+        if (d.roomId) {
+          const key = `${d.roomId}|${d.day}|${d.period}`
+          if (seenRoomKeys.has(key)) {
+            throw new AppError('ROOM_CONFLICT', {
+              publicMessage: `Timetable conflict — ${d.room} is scheduled twice on ${d.day}, period ${d.period}. Resolve the overlap before publishing.`,
+              internalDetail: `TIMETABLE_CONFLICT payload pre-check: duplicate (roomId, day, period) — room "${d.room}" on ${d.day} period ${d.period}`,
+            })
+          }
+          seenRoomKeys.add(key)
+        }
+        if (d.teacherUserId) {
+          const key = `${d.teacherUserId}|${d.day}|${d.period}`
+          if (seenTeacherKeys.has(key)) {
+            throw new AppError('TEACHER_CONFLICT', {
+              publicMessage: `Timetable conflict — teacher ${d.teacherName} is scheduled twice on ${d.day}, period ${d.period}. Resolve the overlap before publishing.`,
+              internalDetail: `TIMETABLE_CONFLICT payload pre-check: duplicate (teacherUserId, day, period) — teacher "${d.teacherName}" on ${d.day} period ${d.period}`,
+            })
+          }
+          seenTeacherKeys.add(key)
+        }
+        const classId = classByKey.get(d.className)!.id
+        const classKey = `${classId}|${d.day}|${d.period}`
+        if (seenClassKeys.has(classKey)) {
+          throw new AppError('CLASS_CONFLICT', {
+            publicMessage: `Timetable conflict — class ${d.className} is scheduled twice on ${d.day}, period ${d.period}. Resolve the overlap before publishing.`,
+            internalDetail: `TIMETABLE_CONFLICT payload pre-check: duplicate (classId, day, period) — class "${d.className}" on ${d.day} period ${d.period}`,
+          })
+        }
+        seenClassKeys.add(classKey)
+      }
+
       // 5 — replace-all within the school (publish = the new truth) — ONE
       //     $transaction (Phase 3): subject auto-create (with code-collision
       //     retry), CSA ensure, the deleteMany and the createMany commit
       //     atomically. The new Timetable DB uniques — (schoolId, classId,
-      //     day, period) and (schoolId, teacherUserId, day, period) — make
-      //     the DB the source of truth for class-slot / teacher-booking
-      //     conflicts; a P2002 is translated to a clean 409
-      //     TIMETABLE_CONFLICT (the payload itself scheduled the same class
-      //     or teacher twice at one day/period).
+      //     day, period), (schoolId, teacherUserId, day, period) and
+      //     (schoolId, roomId, day, period) — make the DB the source of
+      //     truth for class-slot / teacher-booking / room-booking
+      //     conflicts; a duplicate payload is refused with a clean 409 and
+      //     a STABLE machine-readable domain code (Phase 8 §2(A)):
+      //     ROOM_CONFLICT / TEACHER_CONFLICT / CLASS_CONFLICT — the payload
+      //     pre-check (4d) fires first with the precise message; the P2002
+      //     catch below is the DB-level backstop with the same codes.
       let removedCount = 0
       let writtenCount = 0
       let csaCreated = 0
@@ -257,14 +310,24 @@ export async function POST(req: NextRequest) {
         const err = e as { code?: string; message?: string }
         if (err?.code === 'P2002') {
           const msg = err.message ?? ''
-          const teacherConflict = msg.includes('teacherUserId')
-          const roomConflict = msg.includes('roomId')
-          throw new AppError('CONFLICT', {
-            publicMessage: teacherConflict
-              ? 'Timetable conflict — this teacher is already booked at that day and period. Resolve the overlap before publishing.'
-              : roomConflict
-                ? 'Timetable conflict — that room is already booked at that day and period. Resolve the overlap before publishing.'
-                : 'Timetable conflict — this class already has a slot at that day and period. Resolve the overlap before publishing.',
+          // PHASE 8 §2(A): classify the STABLE domain code from the Prisma
+          // message — both message forms carry the discriminating
+          // substring (field list: "(`schoolId`,`roomId`,`day`,`period`)";
+          // constraint name: "Timetable_schoolId_roomId_day_period_key").
+          // roomId/teacherUserId are mutually exclusive across the three
+          // Timetable uniques, so an unmatched P2002 is the class key.
+          const domainCode: AppErrorCode = msg.includes('roomId')
+            ? 'ROOM_CONFLICT'
+            : msg.includes('teacherUserId')
+              ? 'TEACHER_CONFLICT'
+              : 'CLASS_CONFLICT'
+          throw new AppError(domainCode, {
+            publicMessage:
+              domainCode === 'TEACHER_CONFLICT'
+                ? 'Timetable conflict — this teacher is already booked at that day and period. Resolve the overlap before publishing.'
+                : domainCode === 'ROOM_CONFLICT'
+                  ? 'Timetable conflict — that room is already booked at that day and period. Resolve the overlap before publishing.'
+                  : 'Timetable conflict — this class already has a slot at that day and period. Resolve the overlap before publishing.',
             internalDetail: `TIMETABLE_CONFLICT P2002: ${msg.slice(0, 300)}`,
           })
         }
