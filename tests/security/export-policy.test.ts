@@ -106,8 +106,14 @@ beforeAll(async () => {
     }),
   )
 
-  // Throwaway MANAGEMENT principal for the deterministic rate-limit
-  // boundary: a FRESH user owns a fresh `rl:export:${userId}` bucket.
+  // Throwaway PRINCIPAL for the deterministic rate-limit boundary: a
+  // FRESH user owns a fresh `rl:export:${userId}` bucket. (Was MANAGEMENT
+  // until the Phase-1 canonical-role invariant — withUser refuses any
+  // school role outside PRINCIPAL|TEACHER|STUDENT — made that premise
+  // stale: a MANAGEMENT session can never reach /api/export regardless of
+  // the route's permission matrix. PRINCIPAL is the canonical role the
+  // matrix actually admits, so the 30/h boundary is exercised on a role
+  // that can genuinely hit it.)
   rateLimitUser = {
     id: '',
     email: `pih5.export.${MARKER}@hawkings.test`,
@@ -117,7 +123,7 @@ beforeAll(async () => {
       schoolId: schoolA.id,
       email: rateLimitUser.email,
       name: `PIH5 Export Probe ${MARKER}`,
-      role: 'MANAGEMENT',
+      role: 'PRINCIPAL',
       status: 'ACTIVE',
     },
   })
