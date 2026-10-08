@@ -11,8 +11,10 @@
 `server-only` guard):
 
 - **Transports**
-  - `RESEND_API_KEY` set → Resend REST (`POST https://api.resend.com/send`),
-    bounded retries (2 attempts, 250 ms backoff, 5 s timeout each).
+  - `RESEND_API_KEY` set → Resend REST (`POST https://api.resend.com/emails`),
+    bounded retries (3 attempts by default, 250 ms/1 s backoff, 5 s timeout
+    each; the latency-sensitive public admission call site passes
+    `maxAttempts: 2`).
   - key absent (local dev / CI) → **dev-log transport**: structured
     `email_dev_delivery` log lines, nothing leaves the machine.
 - **Outbox / audit**: every send is recorded in the `EmailDelivery` table
@@ -32,7 +34,6 @@
 | --- | --- | --- |
 | Admission enquiry accepted | `admission-enquiry-received` | `POST /api/admissions/public` (best-effort; the public response never depends on email) |
 | Salary payment recorded | `salary-payment-recorded` | `POST /api/salary/payments` (receipt to the teacher) |
-| Salary payment voided | `salary-payment-voided` | `POST /api/salary/payments/[id]/void` |
 | Platform password reset requested | `platform-password-reset` | `POST /api/platform/auth/forgot-password` + admin-assisted `/api/platform/admins/[id]/reset-password` + recovery-confirm execution (single-use link; anti-enumeration generic response; see `docs/PLATFORM_ACCOUNT_RECOVERY.md`) |
 
 ## Custom sending domain (status + runbook)
