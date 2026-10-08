@@ -36,6 +36,16 @@
  *   PAYLOAD_TOO_LARGE        413
  *   UNSUPPORTED_MEDIA_TYPE   415
  *   CONFLICT                 409  uniqueness / state conflicts (P2002 …)
+ *                                 — generic default for all P2002 sites
+ *   ROOM_CONFLICT            409  PHASE 8 §2(A) — timetable publish: the
+ *                                 payload schedules the same ROOM twice at
+ *                                 one (day, period)
+ *   TEACHER_CONFLICT         409  PHASE 8 §2(A) — timetable publish: the
+ *                                 payload schedules the same TEACHER twice
+ *                                 at one (day, period)
+ *   CLASS_CONFLICT           409  PHASE 8 §2(A) — timetable publish: the
+ *                                 payload schedules the same CLASS twice at
+ *                                 one (day, period)
  *   CSRF_REJECTED            403  origin check
  *   DATABASE_FAILURE         500  Prisma/DB engine failures (internal)
  *   EXTERNAL_SERVICE_FAILURE 503  upstream dependency failure (AI gateway,
@@ -88,6 +98,14 @@ export type AppErrorCode =
                              // completes; the exempt identity surface
                              // (auth/profile/subscription/support) stays
                              // reachable so the forced-change screen works.
+  // PHASE 8 §2(A) — timetable publish domain conflict codes. Same 409
+  // semantics as the generic CONFLICT, but STABLE and machine-readable per
+  // dimension, so clients (and regression tests) can tell WHICH unique
+  // fired. Only the timetable publish route throws these; every other
+  // P2002 site keeps the generic 'CONFLICT' (the classifyPrisma default).
+  | 'ROOM_CONFLICT'
+  | 'TEACHER_CONFLICT'
+  | 'CLASS_CONFLICT'
   // deprecated aliases (legacy typed throws; classify to themselves)
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
@@ -135,6 +153,9 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   PAYLOAD_TOO_LARGE: 413,
   UNSUPPORTED_MEDIA_TYPE: 415,
   CONFLICT: 409,
+  ROOM_CONFLICT: 409,
+  TEACHER_CONFLICT: 409,
+  CLASS_CONFLICT: 409,
   DATABASE_FAILURE: 500,
   INTERNAL_ERROR: 500,
   EXTERNAL_SERVICE_FAILURE: 503,
@@ -163,6 +184,10 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   PAYLOAD_TOO_LARGE: 'Request payload is too large',
   UNSUPPORTED_MEDIA_TYPE: 'Unsupported file type',
   CONFLICT: 'The request conflicts with existing data',
+  ROOM_CONFLICT: 'That room is already booked at this day and period. Resolve the overlap before publishing.',
+  TEACHER_CONFLICT:
+    'That teacher is already booked at this day and period. Resolve the overlap before publishing.',
+  CLASS_CONFLICT: 'That class already has a slot at this day and period. Resolve the overlap before publishing.',
   DATABASE_FAILURE: 'Internal server error',
   INTERNAL_ERROR: 'Internal server error',
   EXTERNAL_SERVICE_FAILURE: 'An external service is temporarily unavailable',
