@@ -1,4 +1,5 @@
 import type { AppointmentLetterData } from './types'
+import { sessionActorName } from './helpers'
 
 /**
  * Appointment letter factory — the ONE builder for issued appointment
@@ -9,6 +10,11 @@ import type { AppointmentLetterData } from './types'
  *
  * Reference scheme: GWS/APT/{year}/{employeeDigits}-{issueSeq} —
  * deterministic, never random, consistent with previously issued seeds.
+ *
+ * Signatory (7-HONESTY2): the REAL session principal via sessionActorName()
+ * (the /api/auth/me identity, honest 'Principal' fallback) or an explicit
+ * principalName override — never a fabricated persona. The reporting
+ * authority line derives from the same name.
  */
 
 /** Default appointment clauses — school policy, not invented per teacher. */
@@ -42,6 +48,9 @@ export function createAppointmentLetterSnapshot(
   const issueSeq = input.issueSeq ?? 1
   const empDigits = (input.employeeId.match(/\d+/g) || []).join('') || input.employeeId
   const seq = String(issueSeq).padStart(2, '0')
+  // Signatory — the session principal (server identity) unless the caller
+  // explicitly overrides; never a fabricated name (7-HONESTY2).
+  const principalName = input.principalName ?? sessionActorName()
 
   return {
     id: `APT-GWS-${year}-${empDigits}-${seq}`,
@@ -61,8 +70,8 @@ export function createAppointmentLetterSnapshot(
       input.customTerms && input.customTerms.length > 0
         ? input.customTerms
         : APPOINTMENT_DEFAULT_TERMS,
-    principalName: input.principalName ?? 'Dr. Ananya Iyer',
-    reportingAuthority: 'Dr. Ananya Iyer, Principal',
+    principalName,
+    reportingAuthority: `${principalName}, Principal`,
     schoolSealAttached: true,
     teacherAddress: input.teacherAddress,
   }

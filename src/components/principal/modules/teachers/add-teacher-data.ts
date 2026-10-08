@@ -1,6 +1,12 @@
 // Static data, initial form state, and the buildNewTeacherRecord helper
 // for the Add Teacher wizard. Kept separate so the wizard component
 // file stays under the 300-line budget.
+//
+// Attribution (7-HONESTY2): position assignedBy + the appointment letter
+// signatory resolve from the REAL session identity via sessionActorName()
+// (teachers-store/helpers — /api/auth/me, honest 'Principal' fallback),
+// evaluated at the point of use (wizard submit) — never a hardcoded
+// persona.
 
 import { classList } from '@/lib/mock/school'
 import type {
@@ -9,6 +15,7 @@ import type {
   TeacherMediaRecord,
 } from '@/lib/store/teachers-store'
 import { createAppointmentLetterSnapshot } from '@/lib/store/teachers-store/letter-factory'
+import { sessionActorName } from '@/lib/store/teachers-store/helpers'
 
 export const availableClassesList: string[] = (classList && classList.length > 0)
   ? classList.map((c) => (typeof c === 'string' ? c : c.name))
@@ -146,13 +153,17 @@ export function buildNewTeacherRecord(form: AddTeacherForm): TeacherRecord {
       ? form.inchargePosition
       : 'Subject Teacher'
 
+  // Who is assigning — the REAL signed-in principal (7-HONESTY2), resolved
+  // at call time so every initial assignment carries the session identity.
+  const assignedBy = sessionActorName()
+
   const initPositions: PositionAssignment[] = [
     {
       id: `pa-init-${seq}`,
       positionId: 'pos-subject-teacher',
       positionTitle: 'Subject Teacher',
       assignedDate: new Date().toISOString().split('T')[0],
-      assignedBy: 'Dr. Ananya Iyer',
+      assignedBy,
       status: 'Active',
       effectiveDate: form.joiningDate,
     },
@@ -164,7 +175,7 @@ export function buildNewTeacherRecord(form: AddTeacherForm): TeacherRecord {
       positionId: `pos-inc-${form.inchargePosition.toLowerCase().replace(/\s+/g, '-')}`,
       positionTitle: form.inchargePosition,
       assignedDate: new Date().toISOString().split('T')[0],
-      assignedBy: 'Dr. Ananya Iyer',
+      assignedBy,
       status: 'Active',
       effectiveDate: form.joiningDate,
     })
@@ -176,7 +187,7 @@ export function buildNewTeacherRecord(form: AddTeacherForm): TeacherRecord {
       positionId: 'pos-class-teacher',
       positionTitle: `Class Teacher (${form.classTeacherRole})`,
       assignedDate: new Date().toISOString().split('T')[0],
-      assignedBy: 'Dr. Ananya Iyer',
+      assignedBy,
       status: 'Active',
       effectiveDate: form.joiningDate,
     })
@@ -188,7 +199,7 @@ export function buildNewTeacherRecord(form: AddTeacherForm): TeacherRecord {
       positionId: 'pos-asst-class-teacher',
       positionTitle: `Assistant Class Teacher (${form.assistantClassTeacherRole})`,
       assignedDate: new Date().toISOString().split('T')[0],
-      assignedBy: 'Dr. Ananya Iyer',
+      assignedBy,
       status: 'Active',
       effectiveDate: form.joiningDate,
     })

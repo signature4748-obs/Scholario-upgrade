@@ -15,6 +15,14 @@
  *
  * MONEY RULE: payments go through fee-store recordPayment() only — this
  * module never marks anything paid itself. See apply-dialog.tsx.
+ *
+ * HONESTY (7-HONESTY2, from 7-M hygiene note c): this whole module runs on
+ * client-side demo state — applications-store (localStorage) plus a demo
+ * payment step whose UPI reference is fabricated and whose receipt is
+ * client-minted (genReceiptNo fallback). Nothing here reaches the school
+ * server. The Principal twin of this module carries the same label (7-I),
+ * so both planes say the same honest thing; the banner is mounted once
+ * at the module root.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -41,6 +49,7 @@ import { toast } from 'sonner'
 import { useDemoStudent, submissionStatusChipClass, daysUntil } from './student'
 import { ApplyDialog } from './apply-dialog'
 import { SubmissionDocumentDialog } from './print-dialog'
+import { DemoModuleNotice } from '../shared/demo-module-notice'
 
 // ─── Category icons — the SHARED map (application-category.tsx) so every
 // category shows its own icon (APPS-IA-1: tour is just one type). ────────
@@ -123,6 +132,11 @@ export function StudentApplicationsModule() {
 
   return (
     <div className="space-y-5">
+      {/* 7-HONESTY2 — honest label (student-plane twin of the Principal 7-I
+          banner): client-side demo state, demo payments included; nothing
+          reaches the school server. Mounted once at the module root. */}
+      <DemoModuleNotice moduleName="Applications" />
+
       {/* LR-1 — compact context line, no giant module title. The section
           labels below ("Open for you", …) carry the real structure. */}
       <p className="text-xs text-muted-foreground">

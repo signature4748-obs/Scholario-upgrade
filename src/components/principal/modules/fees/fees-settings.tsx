@@ -30,6 +30,13 @@
  * Card anatomy mirrors Salary Settings via the shared SettingsCard
  * primitive (modules/shared/settings-card.tsx): one flat card per group,
  * clean rows, no box-inside-box nesting.
+ *
+ * HONESTY (7-HONESTY2): every rule this tab edits lives in the CLIENT
+ * fee-store — it never reaches the server (server truth = fee structures
+ * + transactions + ledger; the student balance derives from the server
+ * roster fees block per 7-E). The muted line at the top of the tab says
+ * so. Rewiring is future scope; do not add a demo banner here (this is
+ * the core Fees module, not a secondary demo module).
  */
 
 import { useMemo, useState } from 'react'
@@ -78,8 +85,15 @@ function ViewOnlyChip({ label = 'View only' }: { label?: string }) {
 export function FeesSettingsSection() {
   return (
     // No page heading / banner — the "Settings" tab establishes context and
-    // content starts immediately (Salary Settings benchmark).
+    // content starts immediately (Salary Settings benchmark). The single
+    // muted honesty line below (7-HONESTY2) is a note, not a banner: these
+    // rules are workspace-local and never reach the server.
     <div className="space-y-4">
+      <p className="text-[11px] text-muted-foreground">
+        Workspace-local rules — applied when computing amounts in this
+        browser; the school server&rsquo;s fee structures and ledger remain the
+        source of truth.
+      </p>
       <LateFeeSettings />
       <ConcessionSettings />
       <EntryFeePolicyCard />

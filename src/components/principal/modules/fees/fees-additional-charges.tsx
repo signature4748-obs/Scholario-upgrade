@@ -27,6 +27,13 @@
  * Money flow: recording payments happens through the ONE canonical flow
  * (the Payments page's Collect Fee wizard bound to the charge) — this
  * surface reads those transactions and never invents new ones.
+ *
+ * HONESTY (7-HONESTY2): the collection definitions themselves (create /
+ * publish / close / archive) live in the CLIENT fee-store — they never
+ * reach the server (server truth = fee structures + transactions +
+ * ledger). The muted line at the top of this surface says so. Rewiring
+ * is future scope; no demo banner (this lives inside the core Fees
+ * module's Payments tab).
  */
 
 import { Fragment, useMemo, useState } from 'react'
@@ -355,6 +362,14 @@ export function FeesAdditionalCharges({ data, onCollect }: {
 
   return (
     <>
+      {/* 7-HONESTY2 — one muted honesty line (audit-logs-tab pattern):
+          the collection definitions are workspace-local; the server's fee
+          structures + transactions + ledger remain the source of truth. */}
+      <p className="text-[11px] text-muted-foreground">
+        Workspace-local collections — applied when computing amounts in this
+        browser; the school server&rsquo;s fee structures and ledger remain the
+        source of truth.
+      </p>
       <Panel
         title={
           <span className="inline-flex items-center gap-2">
