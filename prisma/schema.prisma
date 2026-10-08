@@ -605,6 +605,12 @@ model ExamScheduleItem {
   createdAt       DateTime @default(now())
 
   examAttendance   ExamAttendance[]
+
+  // PHASE 8 §7(G) — evidence-based: (examId, classId, subjectId) serves the
+  // per-mark attendance-sync findFirst loop + schedule conflict checks + the
+  // Exam→Cascade delete path (this table had zero non-PK indexes; 219 rows,
+  // 420 seq scans observed in production).
+  @@index([examId, classId, subjectId])
 }
 
 model ExamMark {
@@ -1703,6 +1709,11 @@ model FeeTransaction {
   @@index([schoolId, source])
   @@index([studentId])
   @@index([feeId])
+  // PHASE 8 §7(G) — evidence-based: settlement drill-down (fees/settlements
+  // includes transactions WHERE settlementId ORDER BY createdAt DESC — the
+  // per-settlement ledger view; 413 seq scans observed on this growing
+  // financial table).
+  @@index([settlementId, createdAt])
 
   // PHASE 3 — financial document numbers and duplicate-detection
   // references become DATABASE-unique per school (NULL bypasses for

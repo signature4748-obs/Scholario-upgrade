@@ -283,7 +283,11 @@ export async function POST(req: NextRequest) {
         include: { subject: true },
       })
       const timetable = await db.timetable.findMany({
-        where: { classId: student.classId || undefined },
+        // PHASE 8 §7(G): schoolId leads the where-clause so the existing
+        // (schoolId, classId, day, period) unique index serves the student
+        // dashboard lookup (was classId-only → seq scan; it also always
+        // scopes to the student's own school even if classId is unset).
+        where: { schoolId: student.schoolId, classId: student.classId || undefined },
         include: { subject: true },
         orderBy: [{ day: 'asc' }, { period: 'asc' }],
       })
