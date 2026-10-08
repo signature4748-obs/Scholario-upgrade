@@ -172,16 +172,16 @@ export function useAdmissionWizard() {
 
   const handleSubmit = () => {
     // Document completion gate: every document the school has marked
-    // REQUIRED must be uploaded before submission. Optional documents
-    // never block; a school with no required documents is never blocked
-    // (canonical policy — see lib/documents.ts).
+    // REQUIRED must be collected (marked received) before submission.
+    // Optional documents never block; a school with no required
+    // documents is never blocked (canonical policy — see lib/documents.ts).
     const docCompletion = getDocumentCompletion(data.docStatuses, documentPolicy)
     if (!docCompletion.complete) {
       toast.error('Required document missing', {
         description:
           docCompletion.missingRequired.length > 0
-            ? `Upload ${docCompletion.missingRequired.join(', ')} before submitting — optional documents are not required.`
-            : 'Upload all required documents before submitting.',
+            ? `Collect and mark received ${docCompletion.missingRequired.join(', ')} before submitting — optional documents are not required.`
+            : 'Collect all required documents before submitting.',
       })
       const docsStep = visibleSteps.find((s) => s.id === 9)
       if (docsStep) setStep(9)

@@ -27,6 +27,7 @@ import { SegmentedTabs } from '../shared/segmented-tabs'
 import { useCertificatesStore } from '@/lib/store/certificates-store'
 import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { CERT_PRINT_STYLES } from './cert-shared'
+import { DemoModuleNotice } from '../shared/demo-module-notice'
 import { GenerateTab } from './generate-tab'
 import { TemplatesTab } from './templates-tab'
 import { HistoryTab } from './history-tab'
@@ -65,6 +66,9 @@ export function CertificatesModule() {
   return (
     <PageTransition className="space-y-4 cert-shell">
       <style dangerouslySetInnerHTML={{ __html: CERT_PRINT_STYLES }} />
+
+      {/* 7-I — honest label: client-side demo state, no server API. */}
+      <DemoModuleNotice moduleName="Certificates" />
 
       {/* Tab row — SegmentedTabs on the left, no right-side control. */}
       <div className="flex items-center justify-between gap-3 flex-wrap">

@@ -16,6 +16,7 @@ import {
   type CsvImportResult,
   type AdmitCardStudent,
   type Outcome,
+  type MarkStatus,
 } from './types'
 
 // Re-export for backward compatibility with existing callers
@@ -195,25 +196,78 @@ export function useGenerateSeating() {
 
 // ─── Exam attendance ──────────────────────────────────────────────────
 
+/**
+ * Real ExamAttendance rows (GET /api/exams/[id]/attendance). `classId`
+ * narrows the server query; pass null for the whole examination (rows are
+ * then filtered client-side per paper scope). Errors are surfaced — never
+ * silently swallowed into an empty list.
+ */
 export function useExamAttendance(examId: string | null, classId: string | null) {
   const [attendance, setAttendance] = useState<ExamAttendanceDTO[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
 
   useEffect(() => {
-    if (!examId) { setAttendance([]); return }
+    if (!examId) { setAttendance([]); setError(null); return }
     let cancelled = false
     setLoading(true)
     const url = `/api/exams/${examId}/attendance${classId ? `?classId=${classId}` : ''}`
     api<ExamAttendanceDTO[]>(url)
-      .then((d) => !cancelled && setAttendance(d))
-      .catch(() => !cancelled && setAttendance([]))
+      .then((d) => { if (!cancelled) { setAttendance(d); setError(null) } })
+      .catch((e: { message?: string }) => {
+        if (!cancelled) { setAttendance([]); setError(e?.message ?? 'Failed to load exam attendance') }
+      })
       .finally(() => !cancelled && setLoading(false))
     return () => { cancelled = true }
   }, [examId, classId, reloadKey])
 
-  return { attendance, loading, reload }
+  return { attendance, loading, error, reload }
+}
+
+/** Body shape accepted by POST /api/exams/[id]/attendance (one row per call). */
+export interface MarkExamAttendanceInput {
+  scheduleItemId?: string
+  classId: string
+  studentId: string
+  subjectId: string
+  /** YYYY-MM-DD */
+  date: string
+  status: MarkStatus
+  remarks?: string
+}
+
+/**
+ * Upsert one ExamAttendance row (POST /api/exams/[id]/attendance).
+ * Server identity: examId + studentId + subjectId + date — re-posting the
+ * same row updates it, so re-saves are idempotent.
+ */
+export function useMarkAttendance() {
+  const [loading, setLoading] = useState(false)
+  const mark = useCallback(async (examId: string, input: MarkExamAttendanceInput): Promise<{ upserted: boolean }> => {
+    setLoading(true)
+    try {
+      const body: Record<string, unknown> = {
+        classId: input.classId,
+        studentId: input.studentId,
+        subjectId: input.subjectId,
+        date: input.date,
+        status: input.status,
+      }
+      if (input.scheduleItemId) body.scheduleItemId = input.scheduleItemId
+      // zod safeText(500) rejects empty strings (min 1) — omit instead of send ''.
+      const remarks = input.remarks?.trim()
+      if (remarks) body.remarks = remarks.slice(0, 500)
+      return await api<{ upserted: boolean }>(`/api/exams/${examId}/attendance`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+  return { mark, loading }
 }
 
 export function useAutoMarkAttendance() {

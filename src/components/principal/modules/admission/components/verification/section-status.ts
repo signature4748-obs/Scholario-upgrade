@@ -51,8 +51,12 @@ export function deriveSectionStatus(
     if (collected.length === 0) return { status: 'Verified', flaggedByOfficer: false }
     const completion = getDocumentCompletion(formData.docStatuses, policy)
     if (completion.complete) return { status: 'Verified', flaggedByOfficer: false }
+    const isOnFile = (k: string) => {
+      const s = formData.docStatuses[k]?.status
+      return s === 'received' || s === 'uploaded'
+    }
     const missing = getRequiredDocuments(policy)
-      .filter((d) => formData.docStatuses[d.key]?.status !== 'uploaded')
+      .filter((d) => !isOnFile(d.key))
       .map((d) => d.name)
     return {
       status: 'Incomplete',
@@ -178,7 +182,7 @@ export function getSectionSummary(
       const collected = getCollectedDocuments(policy)
       if (collected.length === 0) return 'No documents collected'
       const c = getDocumentCompletion(f.docStatuses, policy)
-      return `Required ${c.requiredCompleted}/${c.requiredTotal} · Optional ${c.optionalUploaded}/${c.optionalTotal}`
+      return `Required ${c.requiredCompleted}/${c.requiredTotal} · Optional ${c.optionalReceived}/${c.optionalTotal}`
     }
     case 'photo':
       return f.photoDataUrl || f.photoUploaded
@@ -189,14 +193,17 @@ export function getSectionSummary(
   }
 }
 
-/** Document list with per-doc status + actions metadata (spec §21). */
+/** Document list with per-doc status + actions metadata (spec §21).
+ *
+ * PHASE 7-H: there is no server-stored file behind a document — the
+ * `received` flag records the office's physical collection (legacy
+ * 'uploaded' records count too), and fileName is display-only history. */
 export interface VerificationDocRow {
   key: string
   name: string
   required: boolean
-  uploaded: boolean
+  received: boolean
   fileName?: string
-  fileId?: string
   verified: boolean
 }
 
@@ -207,13 +214,13 @@ export function getDocumentRows(
   const statuses = app.formData.docStatuses || {}
   return getCollectedDocuments(policy).map((d) => {
     const st = statuses[d.key]
+    const received = st?.status === 'received' || st?.status === 'uploaded'
     return {
       key: d.key,
       name: d.name,
       required: d.required,
-      uploaded: st?.status === 'uploaded',
+      received,
       fileName: st?.fileName,
-      fileId: st?.fileId,
       verified: st?.verificationStatus === 'verified',
     }
   })

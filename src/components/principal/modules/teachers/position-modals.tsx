@@ -10,9 +10,10 @@
  * Acceptance request and can accept or decline) — the row's status
  * communicates it, no explanatory paragraph needed.
  *
- * Emergency Override — NOT part of the normal flow. Reached only through
- * "More options" inside the assign modal; keeps its confirmation, the
- * Principal authorization code, the mandatory reason and the audit trail.
+ * (7-B) The former "Emergency Override" affordance — an instant activation
+ * gated by a hardcoded client-side authorization code — was a fake
+ * authorization surface with no server-side mutation behind it, and has
+ * been removed entirely. Responsibilities follow the acceptance workflow.
  *
  * Create Custom Responsibility — a small focused form; the definition
  * becomes part of the canonical school positions list (permissions stay
@@ -21,7 +22,7 @@
 
 import { useEffect, useState } from 'react'
 import {
-  Shield, ShieldAlert, Plus, ChevronDown, ChevronUp,
+  Shield, Plus,
 } from 'lucide-react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -30,7 +31,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DatePicker } from '@/components/ui/date-picker'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
@@ -59,25 +59,21 @@ interface AssignPositionModalProps extends CommonProps {
   onConfirm: (payload: { effectiveDate: string; assignedBy: string }) => void
   /** Opens the Create Custom Responsibility dialog. */
   onCreateCustomPosition?: () => void
-  /** Opens the Emergency Override dialog (behind "More options"). */
-  onEmergencyOverride?: () => void
 }
 
 export function AssignPositionModal({
   teacher, positionsList,
   selectedPosIdToAssign, setSelectedPosIdToAssign,
   open, onClose, onConfirm,
-  onCreateCustomPosition, onEmergencyOverride,
+  onCreateCustomPosition,
 }: AssignPositionModalProps) {
   const [effectiveDate, setEffectiveDate] = useState(today())
   const [assignedBy, setAssignedBy] = useState('')
-  const [moreOpen, setMoreOpen] = useState(false)
 
   useEffect(() => {
     if (open) {
       setEffectiveDate(today())
       setAssignedBy('')
-      setMoreOpen(false)
     }
   }, [open])
 
@@ -149,33 +145,6 @@ export function AssignPositionModal({
             </div>
           </div>
 
-          {onEmergencyOverride && (
-            <div className="pt-0.5">
-              <button
-                type="button"
-                onClick={() => setMoreOpen((v) => !v)}
-                aria-expanded={moreOpen}
-                className="inline-flex items-center gap-1 text-[10px] uppercase font-semibold tracking-wider text-muted-foreground/80 hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
-              >
-                {moreOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />} More options
-              </button>
-              {moreOpen && (
-                <button
-                  type="button"
-                  onClick={onEmergencyOverride}
-                  className="mt-2 flex w-full items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.04] px-3 py-2 text-left text-[11px] text-amber-800 dark:text-amber-300 hover:bg-amber-500/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    <span className="font-medium">Emergency override</span>
-                    <span className="block text-muted-foreground">
-                      Activate instantly, bypassing acceptance — requires the authorization code.
-                    </span>
-                  </span>
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
         <DialogFooter>
@@ -185,94 +154,6 @@ export function AssignPositionModal({
             className="text-xs h-9 bg-primary text-primary-foreground"
           >
             Assign
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/* ---------- EMERGENCY OVERRIDE MODAL (More options only) ---------- */
-interface EmergencyOverrideModalProps extends CommonProps {
-  /** Pre-targeted teacher — the override never asks to re-pick the target. */
-  teacher: TeacherRecord | null
-  positionsList: PositionDefinition[]
-  selectedPosForOverride: string
-  setSelectedPosForOverride: (v: string) => void
-  overrideAuthCode: string
-  setOverrideAuthCode: (v: string) => void
-  overrideReason: string
-  setOverrideReason: (v: string) => void
-  onConfirm: () => void
-}
-
-export function EmergencyOverrideModal({
-  teacher, positionsList,
-  selectedPosForOverride, setSelectedPosForOverride,
-  overrideAuthCode, setOverrideAuthCode,
-  overrideReason, setOverrideReason,
-  open, onClose, onConfirm,
-}: EmergencyOverrideModalProps) {
-  return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base font-semibold text-rose-600 dark:text-rose-400">
-            <ShieldAlert className="h-4 w-4" /> Emergency Override
-          </DialogTitle>
-          {teacher && (
-            <DialogDescription className="text-xs">
-              {teacher.name} · {teacher.designation}
-            </DialogDescription>
-          )}
-        </DialogHeader>
-
-        <div className="space-y-3.5 py-1">
-          <div>
-            <Label className="text-xs">Responsibility</Label>
-            <Select value={selectedPosForOverride} onValueChange={setSelectedPosForOverride}>
-              <SelectTrigger className="mt-1 h-9 text-xs">
-                <SelectValue placeholder="Choose responsibility" />
-              </SelectTrigger>
-              <SelectContent className="max-h-60">
-                {positionsList.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <Label className="text-xs">Authorization code</Label>
-            <Input
-              type="password"
-              placeholder="Principal authorization code"
-              value={overrideAuthCode}
-              onChange={(e) => setOverrideAuthCode(e.target.value)}
-              className="mt-1 h-9 text-xs font-mono"
-            />
-            <p className="text-[10px] text-muted-foreground mt-1">
-              Demo override code: <code className="bg-muted px-1 rounded">OVERRIDE-2025</code>
-            </p>
-          </div>
-
-          <div>
-            <Label className="text-xs">
-              Reason <span className="text-muted-foreground font-normal">(recorded in the audit trail)</span>
-            </Label>
-            <Textarea
-              placeholder="e.g. Urgent examination duty — previous coordinator on sudden leave"
-              value={overrideReason}
-              onChange={(e) => setOverrideReason(e.target.value)}
-              className="mt-1 text-xs min-h-[72px]"
-            />
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} className="text-xs h-9">Cancel</Button>
-          <Button variant="destructive" onClick={onConfirm} className="text-xs h-9">
-            Confirm Override
           </Button>
         </DialogFooter>
       </DialogContent>

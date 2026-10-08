@@ -7,7 +7,19 @@
  *   1. find     — find student (by name / ID / admission / roll / class / section)
  *   2. review   — see outstanding, select fee head + amount + mode
  *   3. confirm  — review all details, validate, submit
- *   4. success  — payment recorded, receipt available
+ *   4. processing → server write (offline: server receipt; online: server
+ *      PENDING gateway order)
+ *   4b. awaiting (ONLINE only) — honest PENDING state while the SERVER
+ *       owns the order; the modal polls the server row and only leaves
+ *       this stage when the server says SUCCESS (gateway capture
+ *       webhook / sandbox confirm) or FAILED.
+ *   5. success  — payment recorded, receipt available
+ *
+ * 7-E (online) — SERVER-FIRST: the online branch records NOTHING locally
+ * until the server-settled row is observed. The local mirror is written
+ * only from the server's canonical fields (receipt number, amount,
+ * gateway ids) — a cache of VERIFIED server state, never a client
+ * assertion of paid.
  *
  * Validation:
  *   - amount > 0
@@ -46,7 +58,28 @@ import { MoneyInput } from './money-input'
 // MODES (UPI/Card/Net Banking chips) stay selectable as before.
 import { useFeatureGate } from '@/lib/tenant/store'
 
-type Stage = 'find' | 'review' | 'confirm' | 'processing' | 'success' | 'failed'
+type Stage = 'find' | 'review' | 'confirm' | 'processing' | 'awaiting' | 'success' | 'failed'
+
+/** The server's own row snapshot the online poll reads
+ * (/api/fees/receipts/[txnId] → data.txn). Only server-owned fields. */
+interface ServerTxnSnapshot {
+  status: string
+  receiptNo: string | null
+  amount: number
+  gatewayOrderId: string | null
+  gatewayPaymentId: string | null
+}
+
+/** Submission context captured at ONLINE order time — used when the poll
+ * observes the server-settled row so the local mirror is written with the
+ * server's canonical money fields, not re-derived client state. */
+interface OnlineCtx {
+  studentId: string
+  mode: PaymentMode
+  purpose: string
+  feeHead: string
+  additionalChargeId: string | null
+}
 
 interface Props {
   open: boolean
@@ -96,13 +129,29 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
   const [error, setError] = useState<string | null>(null)
   const [recordedTxnId, setRecordedTxnId] = useState<string | null>(null)
   const [processingStep, setProcessingStep] = useState(0) // 0=validate, 1=record, 2=receipt
+  // ── 7-E ONLINE (server-first) ──────────────────────────────────────
+  // The PENDING gateway order this modal is OBSERVING (set right after
+  // POST /api/fees/orders succeeds). While it is set and the stage is
+  // 'awaiting', the poll effect re-reads the SERVER row — the client never
+  // flips it to paid itself.
+  const [pendingOrder, setPendingOrder] = useState<{ orderId: string; txnId: string } | null>(null)
+  const [cancelSubmitting, setCancelSubmitting] = useState(false)
+  const onlineCtxRef = useRef<OnlineCtx | null>(null)
+  // Stable refs so the poll effect can call back without re-subscribing
+  // on every parent render.
+  const onRecordedRef = useRef(onRecorded)
+  onRecordedRef.current = onRecorded
+  const cancelGuardRef = useRef(false)
   // Guard against double-click re-entry into handleSubmit. The Pay button is
   // also disabled during processing, but the ref is the authoritative guard
   // because React state updates are asynchronous — a fast double-click can
   // fire handleSubmit twice before the `disabled` prop re-renders the button.
   const submittingRef = useRef(false)
 
-  // Reset on open
+  // Reset on open — and stop observing a gateway order when the modal is
+  // closed mid-wait. The server row stays honestly PENDING (nothing was
+  // recorded locally); it surfaces in the Transactions tab when the
+  // gateway settles it.
   useEffect(() => {
     if (open) {
       setStage(preselectStudentId ? 'review' : 'find')
@@ -116,7 +165,19 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
       setMeta({})
       setError(null)
       setRecordedTxnId(null)
+      setPendingOrder(null)
+      onlineCtxRef.current = null
+    } else if (pendingOrder) {
+      toast.info('Gateway order left pending', {
+        description: `Order ${pendingOrder.orderId} stays PENDING on the server until the gateway confirms — it will appear in the Transactions tab. Nothing was recorded locally.`,
+      })
+      setPendingOrder(null)
+      onlineCtxRef.current = null
     }
+    // pendingOrder is intentionally read from the render closure: this
+    // effect must only fire on open/preselect changes, not on every poll
+    // state update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, preselectStudentId])
 
   const selectedStudent = useMemo(() => students.find((s) => s.id === selectedId) ?? null, [students, selectedId])
@@ -222,75 +283,69 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
     // Fee.paid was never credited and the client receipt diverged from the
     // server's.
     //
-    // ONLINE (gateway modes with the school gate ON): the local record
-    // stands (the gateway PENDING order is the server's audit row; money
-    // moves on payment.captured) — but the order POST is now AWAITED and a
-    // failure surfaces an error toast instead of vanishing.
+    // 7-E — ONLINE is server-first too. The OLD flow recorded a local
+    // Success transaction + receipt FIRST and only then posted a PENDING
+    // server order ("awaiting payment.captured webhook") — the browser was
+    // the financial authority until the webhook fired. Now the ONLY thing
+    // the client does is ask the server for an order and then OBSERVE the
+    // server's own row:
+    //   1. POST /api/fees/orders → server creates the PENDING
+    //      FeeTransaction (orderId + txnId, NO receipt).
+    //   2. The modal shows the honest PENDING state ('awaiting gateway
+    //      confirmation') and polls the server row every ~3s (≤ ~2 min).
+    //   3. Only when the SERVER state becomes SUCCESS (webhook capture in
+    //      production / sandbox confirm in dev) is the payment mirrored
+    //      into the local cache with the server's canonical fields
+    //      (receipt number, amount, gateway ids) — mirroring VERIFIED
+    //      server state as a cache; fabricating a PAID state client-side
+    //      is gone. Failure/cancel/timeout → honest failed state, local
+    //      ledger untouched.
     const submitPayment = async () => {
       const isOnline = onlinePayments && (mode === 'UPI' || mode === 'Card' || mode === 'Net Banking')
 
       if (isOnline) {
-        const result = recordPayment({
-          studentId: selectedStudent.id,
-          amount,
-          mode,
-          purpose,
-          feeHead,
-          collectedBy: 'Principal',
-          // PAY-REWORK-1: the Principal/school office IS the authorised finance
-          // role — money confirmed at the counter is verified at record time
-          // (any mode). Teacher/self submissions verify through the queue.
-          collectorRole: 'principal',
-          referenceNo: referenceNo || undefined,
-          meta,
-          // The payment's financial category — Core fee / Exam fee, or
-          // ADDITIONAL when collected against an event-based charge (never
-          // silently part of Tuition/regular fee collection).
-          ...(selectedCharge ? { additionalChargeId: selectedCharge.charge.id, category: 'ADDITIONAL' as const } : {}),
-        })
-        if (result.success && result.transaction) {
-          setRecordedTxnId(result.transaction.id)
-          setStage('success')
-          onRecorded?.()
-          toast.success('Payment recorded', {
-            description: `${result.transaction.receiptNo} · ${formatINR(result.transaction.amount)} via ${result.transaction.mode}`,
+        try {
+          const res = await fetch('/api/fees/orders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              studentId: selectedStudent.id,
+              studentName: selectedStudent.name,
+              className: selectedStudent.className,
+              feeHeadName: feeHead,
+              amount,
+              method: mode,
+              gateway: 'razorpay',
+              notes: { studentId: selectedStudent.id, feeHead, studentName: selectedStudent.name },
+            }),
           })
-          try {
-            const res = await fetch('/api/fees/orders', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                studentId: selectedStudent.id,
-                studentName: selectedStudent.name,
-                className: selectedStudent.className,
-                feeHeadName: feeHead,
-                amount,
-                method: mode,
-                gateway: 'razorpay',
-                notes: { studentId: selectedStudent.id, feeHead, studentName: selectedStudent.name },
-              }),
-            })
-            const json = await res.json().catch(() => null)
-            if (res.ok && json?.ok && json?.data?.orderId) {
-              // For online payments, surface the order id so the principal
-              // (or parent) can complete payment via the gateway. In a real
-              // deployment, the Razorpay checkout JS would auto-open here.
-              toast.info('Gateway order created', {
-                description: `Order ${json.data.orderId} · awaiting payment.captured webhook for auto-reconciliation`,
-              })
-            } else {
-              toast.error('Gateway order not created', {
-                description: json?.error || 'The DB audit-trail order could not be created — check the Reconcile tab before retrying.',
-              })
-            }
-          } catch {
-            toast.error('Gateway order not created', {
-              description: 'Network error — the DB audit-trail order could not be created.',
-            })
+          const json = await res.json().catch(() => null)
+          if (!res.ok || !json?.ok || !json?.data?.orderId || !json?.data?.txnId) {
+            throw new Error(json?.error || 'The gateway order could not be created on the server — no payment was recorded.')
           }
-        } else {
-          setError(result.error ?? 'Payment failed.')
+          // Order created: the SERVER row is PENDING — nothing is recorded
+          // locally. Capture the submission context for the eventual
+          // server-verified mirror, then hand the flow to the poll effect.
+          onlineCtxRef.current = {
+            studentId: selectedStudent.id,
+            mode,
+            purpose,
+            feeHead,
+            additionalChargeId: selectedCharge?.charge.id ?? null,
+          }
+          setPendingOrder({ orderId: json.data.orderId as string, txnId: json.data.txnId as string })
+          setStage('awaiting')
+          toast.info('Gateway order created', {
+            description: `Order ${json.data.orderId} is PENDING on the server — awaiting gateway confirmation before anything is recorded.`,
+          })
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Payment failed.')
           setStage('failed')
+          toast.error('Gateway order not created', {
+            description: e instanceof Error
+              ? e.message
+              : 'No money was moved. No receipt was issued.',
+          })
         }
         submittingRef.current = false
         return
@@ -384,7 +439,175 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
     setMeta({})
     setError(null)
     setRecordedTxnId(null)
+    setPendingOrder(null)
+    onlineCtxRef.current = null
     setStage('find')
+  }
+
+  // ── 7-E ONLINE poll — OBSERVE the server order until it settles ────
+  // The modal never flips a gateway order to paid: every 3s (up to ~2 min)
+  // it re-reads the server's own FeeTransaction row via
+  // /api/fees/receipts/[txnId]. PENDING stays honestly pending; SUCCESS
+  // (webhook-verified in production, sandbox-confirm in dev) mirrors the
+  // server's canonical fields into the local cache; FAILED / timeout land
+  // the honest failure state with the local ledger untouched —
+  // recordPayment is never called on the online path before the server
+  // says SUCCESS.
+  useEffect(() => {
+    if (stage !== 'awaiting' || !pendingOrder) return
+    // Narrowed local copy — the hoisted checkOrder closure keeps the
+    // guaranteed non-null order identity.
+    const order = pendingOrder
+    let cancelled = false
+    let attempts = 0
+    const MAX_ATTEMPTS = 40 // 40 × 3s ≈ 2 minutes
+    const timer = window.setInterval(() => { void checkOrder() }, 3000)
+    const stop = () => window.clearInterval(timer)
+
+    // Mirror the SERVER-VERIFIED payment — canonical fields only: the
+    // server minted the receipt number, decided the amount and holds the
+    // gateway payment id (which also satisfies the reference requirement
+    // for gateway rails). recordPayment stores them verbatim and the
+    // client receipt counter is not advanced. This is a CACHE of verified
+    // server state, not a client assertion of paid.
+    const settleFromServer = (txn: ServerTxnSnapshot) => {
+      const ctx = onlineCtxRef.current
+      if (!ctx || cancelled) return
+      stop()
+      const result = recordPayment({
+        studentId: ctx.studentId,
+        // Exact SERVER value (rupees) — never the client's copy.
+        amount: txn.amount,
+        mode: ctx.mode,
+        purpose: ctx.purpose,
+        feeHead: ctx.feeHead,
+        collectedBy: 'Principal',
+        collectorRole: 'principal',
+        receiptNo: txn.receiptNo ?? undefined,
+        gatewayPaymentId: txn.gatewayPaymentId ?? undefined,
+        gatewayOrderId: txn.gatewayOrderId ?? undefined,
+        gateway: 'razorpay',
+        paymentSource: 'gateway',
+        ...(ctx.additionalChargeId ? { additionalChargeId: ctx.additionalChargeId, category: 'ADDITIONAL' as const } : {}),
+      })
+      if (result.success && result.transaction) {
+        setRecordedTxnId(result.transaction.id)
+        setPendingOrder(null)
+        onlineCtxRef.current = null
+        setStage('success')
+        onRecordedRef.current?.()
+        toast.success('Gateway payment confirmed', {
+          description: `${txn.receiptNo} · ${formatINR(txn.amount)} via ${ctx.mode} — verified on the server.`,
+        })
+      } else {
+        // The server settled the money but the local mirror refused (e.g.
+        // duplicate guard) — surface it honestly, never a fake success.
+        setPendingOrder(null)
+        onlineCtxRef.current = null
+        setStage('failed')
+        setError(result.error ?? 'The server settled this payment, but the local update failed — check the Transactions tab.')
+        toast.error('Payment settled on the server', {
+          description: 'The local ledger mirror failed — verify the payment in the Transactions tab.',
+        })
+      }
+    }
+
+    async function checkOrder() {
+      if (cancelled) return
+      attempts += 1
+      try {
+        const res = await fetch(`/api/fees/receipts/${order.txnId}`, { cache: 'no-store', credentials: 'same-origin' })
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        const txn: ServerTxnSnapshot | null =
+          res.ok && json?.ok && json?.data?.txn && typeof json.data.txn.status === 'string'
+            ? {
+                status: String(json.data.txn.status),
+                receiptNo: json.data.txn.receiptNo ?? null,
+                amount: Number(json.data.txn.amount),
+                gatewayOrderId: json.data.txn.gatewayOrderId ?? null,
+                gatewayPaymentId: json.data.txn.gatewayPaymentId ?? null,
+              }
+            : null
+        if (txn) {
+          if (txn.status === 'SUCCESS') {
+            settleFromServer(txn)
+            return
+          }
+          if (txn.status === 'FAILED' || txn.status === 'REJECTED' || txn.status === 'REFUNDED') {
+            stop()
+            setPendingOrder(null)
+            onlineCtxRef.current = null
+            setError('The gateway did not confirm this payment — the order failed on the server. No money was recorded locally.')
+            setStage('failed')
+            return
+          }
+          // PENDING / UNDER_VERIFICATION — the honest state; keep waiting.
+        }
+        if (attempts >= MAX_ATTEMPTS) {
+          stop()
+          // The server row is still PENDING — keep pendingOrder set so the
+          // cancel affordance in the failed stage remains available.
+          setError(`The gateway has not confirmed order ${order.orderId} after 2 minutes. It stays PENDING on the server — if the gateway confirms later it will settle on the server and appear in the Transactions tab. Nothing has been recorded locally.`)
+          setStage('failed')
+        }
+      } catch {
+        // Transient network error — keep polling; the attempt cap above
+        // lands the honest timeout state if it never recovers.
+      }
+    }
+
+    return () => { cancelled = true; stop() }
+    // Only the stage + order identity (+ the stable zustand action) subscribe:
+    // the settle path reads the submission context from a ref so a re-render
+    // can never restart or double-fire the observation.
+  }, [stage, pendingOrder, recordPayment])
+
+  // ── 7-E ONLINE cancel — the ONLY client-invoked state change on the
+  // gateway rail, and it is a server-owned one: POST /api/fees/payments/
+  // confirm { orderId, outcome: 'cancelled' } moves a still-PENDING row to
+  // FAILED server-side (guarded — a concurrently settled order is never
+  // overwritten). 'cancelled' asserts no money moved, never a success.
+  const cancelPendingOrder = async () => {
+    if (!pendingOrder || cancelGuardRef.current) return
+    cancelGuardRef.current = true
+    setCancelSubmitting(true)
+    const orderId = pendingOrder.orderId
+    try {
+      const res = await fetch('/api/fees/payments/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, outcome: 'cancelled' }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || 'The order could not be cancelled on the server.')
+      }
+      if (json.data?.status === 'FAILED') {
+        setPendingOrder(null)
+        onlineCtxRef.current = null
+        setStage('failed')
+        setError('Cancelled at the gateway — no money was recorded. You can safely retry with a new order.')
+        toast.info('Gateway order cancelled', {
+          description: `Order ${orderId} was cancelled on the server. No money was recorded.`,
+        })
+      } else {
+        // The server answered a terminal/authoritative state (e.g. a
+        // concurrent settlement won). Resume observing — the poll mirrors
+        // the server-verified outcome within seconds.
+        setStage('awaiting')
+        toast.info('Order state changed on the server', {
+          description: `Order ${orderId} answered ${String(json.data?.status ?? 'a terminal state')} — picking up the server state.`,
+        })
+      }
+    } catch (e) {
+      toast.error('Could not cancel the order', {
+        description: e instanceof Error ? e.message : 'Please retry, or leave the order PENDING — it can be reconciled from the Reconcile tab.',
+      })
+    } finally {
+      setCancelSubmitting(false)
+      cancelGuardRef.current = false
+    }
   }
 
   const recordedTxn = useFeeStore((s) => recordedTxnId ? s.transactions.find((t) => t.id === recordedTxnId) : null)
@@ -400,7 +623,7 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
             Collect Fee Payment
           </DialogTitle>
           <DialogDescription>
-            Stage {stage === 'find' ? 1 : stage === 'review' ? 2 : stage === 'confirm' ? 3 : stage === 'processing' ? 4 : stage === 'success' ? 5 : 4} of 5 — {stageDescription(stage)}
+            Stage {stage === 'find' ? 1 : stage === 'review' ? 2 : stage === 'confirm' ? 3 : stage === 'processing' || stage === 'awaiting' ? 4 : stage === 'success' ? 5 : 4} of 5 — {stageDescription(stage)}
           </DialogDescription>
         </DialogHeader>
 
@@ -668,12 +891,18 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
                   </div>
                 </div>
                 <p className="text-sm font-semibold mt-4">
-                  {['Validating payment details…', 'Recording transaction…', 'Generating receipt…'][processingStep]}
+                  {(onlinePayments && (mode === 'UPI' || mode === 'Card' || mode === 'Net Banking')
+                    ? ['Validating payment details…', 'Creating gateway order…', 'Awaiting gateway confirmation…']
+                    : ['Validating payment details…', 'Recording transaction…', 'Generating receipt…']
+                  )[Math.min(processingStep, 2)]}
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-1 tabular-nums">{formatINR(amount)} via {mode} · {selectedStudent?.name}</p>
                 {/* Step indicator: 3 dots that fill as processing advances */}
                 <div className="flex items-center gap-1.5 mt-4">
-                  {['Validate', 'Record', 'Receipt'].map((label, i) => (
+                  {(onlinePayments && (mode === 'UPI' || mode === 'Card' || mode === 'Net Banking')
+                    ? ['Validate', 'Order', 'Confirm']
+                    : ['Validate', 'Record', 'Receipt']
+                  ).map((label, i) => (
                     <div key={label} className="flex items-center gap-1.5">
                       <div className={cn('flex items-center gap-1.5 rounded-full px-2 py-0.5 transition-colors',
                         i <= processingStep ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-muted/50 text-muted-foreground/60')}>
@@ -686,6 +915,36 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
                 </div>
                 <p className="text-[10px] text-muted-foreground/60 mt-4 flex items-center gap-1.5">
                   <ShieldCheck className="h-3 w-3" /> Do not close this window
+                </p>
+              </motion.div>
+            )}
+
+            {/* ─── Stage 4b: AWAITING GATEWAY (online, server-first) ─── */}
+            {stage === 'awaiting' && pendingOrder && (
+              <motion.div key="awaiting" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center justify-center py-10 text-center">
+                <div className="relative">
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+                    className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-amber-500/20 border-t-amber-500"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="h-6 w-6 text-amber-500" />
+                  </div>
+                </div>
+                <p className="text-sm font-semibold mt-4">Awaiting gateway confirmation</p>
+                <p className="text-[11px] text-muted-foreground mt-1 tabular-nums">{formatINR(amount)} via {mode} · {selectedStudent?.name}</p>
+                <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 max-w-md">
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    Order <span className="font-mono text-foreground/80">{pendingOrder.orderId}</span> is
+                    <span className="font-semibold text-amber-700 dark:text-amber-400"> PENDING on the school server</span>.
+                    It becomes a paid receipt only when the gateway&apos;s confirmation is verified
+                    server-side (payment.captured webhook) — this window updates automatically.
+                    Nothing has been recorded locally yet.
+                  </p>
+                </div>
+                <p className="text-[10px] text-muted-foreground/60 mt-4 flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Checking the server every 3 seconds (up to 2 minutes)…
                 </p>
               </motion.div>
             )}
@@ -789,6 +1048,21 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
               </Button>
             </>
           )}
+          {stage === 'awaiting' && pendingOrder && (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => { void cancelPendingOrder() }}
+                disabled={cancelSubmitting}
+              >
+                {cancelSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertCircle className="h-3.5 w-3.5" />}
+                Cancel order
+              </Button>
+              <Button variant="ghost" disabled className="text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Waiting for the gateway…
+              </Button>
+            </>
+          )}
           {stage === 'success' && (
             <>
               <Button variant="outline" onClick={collectAnother}>
@@ -801,6 +1075,20 @@ export function CollectPaymentModal({ open, onOpenChange, preselectStudentId, on
           )}
           {stage === 'failed' && (
             <>
+              {/* 7-E — after a poll timeout the server row is still PENDING:
+                  offer the server-owned cancel (confirm outcome:'cancelled')
+                  before/alongside a retry, so a straggler order doesn't sit
+                  in the gateway queue forever. */}
+              {pendingOrder && (
+                <Button
+                  variant="outline"
+                  onClick={() => { void cancelPendingOrder() }}
+                  disabled={cancelSubmitting}
+                >
+                  {cancelSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertCircle className="h-3.5 w-3.5" />}
+                  Cancel pending order
+                </Button>
+              )}
               <Button variant="outline" onClick={() => setStage('review')}><ArrowLeft className="h-3.5 w-3.5" /> Edit Details</Button>
               <Button
                 onClick={() => setStage('confirm')}
@@ -822,6 +1110,7 @@ function stageDescription(stage: Stage): string {
     case 'review': return 'Review outstanding + enter payment'
     case 'confirm': return 'Confirm details'
     case 'processing': return 'Recording payment'
+    case 'awaiting': return 'Awaiting gateway confirmation'
     case 'success': return 'Receipt generated'
     case 'failed': return 'Payment not recorded'
   }

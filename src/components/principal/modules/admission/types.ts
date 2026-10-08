@@ -13,13 +13,18 @@ export type DocVerificationStatus =
   | 'replace_requested'
 
 export interface DocStatus {
-  status: 'uploaded' | 'pending' | 'later'
+  /**
+   * PHASE 7-H (admissions honesty): digital uploads are not built (the
+   * admissions upload route this module once referenced never existed).
+   * 'received' records that the office physically collected the
+   * document — it is what satisfies the school's required-document
+   * gate. Legacy persisted records may still carry 'uploaded' (treated
+   * as received). 'pending' / 'later' = not yet received.
+   */
+  status: 'received' | 'uploaded' | 'pending' | 'later'
   verificationStatus?: DocVerificationStatus
+  /** Legacy display-only filename from records created before uploads were removed. */
   fileName?: string
-  /** Server-stored file reference from POST /api/admissions/upload. */
-  fileId?: string
-  /** Uploaded file size in bytes (server-validated). */
-  fileSize?: number
   ocrConfidence?: number
   verifiedBy?: string
   verificationTime?: string

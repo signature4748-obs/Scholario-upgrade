@@ -13,6 +13,9 @@ import { ModuleHeader } from './shared/module-header'
 import { SegmentedTabs } from './shared/segmented-tabs'
 import { OverviewTab } from './students/overview-tab'
 import { DirectoryTab } from './students/directory-tab'
+// Phase 7-A — the real server-side "Add Student" flow (POST /api/students
+// + one-time credential slip + canonical roster refresh).
+import { AddStudentDialog } from './students/add-student-dialog'
 import { StudentProfilePage } from './students/student-profile-page'
 import { useStudentProfileDetail } from './students/use-student-profile-detail'
 import { ClassesView } from './classes'
@@ -34,6 +37,8 @@ export function StudentsClassesModule({ initialTab = 'overview' }: { initialTab?
   const [archiveReason, setArchiveReason] = useState('Graduation')
   const [transferTarget, setTransferTarget] = useState<StudentRecord | null>(null)
   const [transferToClass, setTransferToClass] = useState('')
+  // Phase 7-A — the Add Student dialog (server-first enrollment).
+  const [showAddStudent, setShowAddStudent] = useState(false)
 
   useEffect(() => { if (initialTab) setActiveTab(initialTab) }, [initialTab])
 
@@ -228,6 +233,7 @@ export function StudentsClassesModule({ initialTab = 'overview' }: { initialTab?
           students={store.students.filter((st) => st.status === 'Active')}
           classes={store.classes}
           onStudentClick={(st) => openProfile(st, 'Students Directory')}
+          onAddStudent={() => setShowAddStudent(true)}
         />
       )}
       {activeTab === 'classes' && (
@@ -242,6 +248,11 @@ export function StudentsClassesModule({ initialTab = 'overview' }: { initialTab?
       )}
 
       {workflowDialogs}
+
+      {/* Phase 7-A — real server-side student enrollment. On success the
+          dialog triggers the canonical roster sync, so the directory above
+          re-renders from server data (no fabricated local record). */}
+      <AddStudentDialog open={showAddStudent} onOpenChange={setShowAddStudent} />
     </PageTransition>
   )
 }

@@ -49,7 +49,11 @@ import { FeesTransactionsSection } from './fees-transactions'
 import { FeesSettingsSection } from './fees-settings'
 import { CollectPaymentModal } from './fees-collect-payment'
 
-export function FeesShell({ onNavigate }: { onNavigate?: (moduleKey: string) => void }) {
+// Phase 7-D — `onNavigate` stays in the module contract (principal-panel
+// wires it), but the structures tab no longer needs cross-module hops now
+// that it is server-backed; no other fee section consumes it, so the
+// binding is parked under the eslint-allowed `_` prefix.
+export function FeesShell({ onNavigate: _onNavigate }: { onNavigate?: (moduleKey: string) => void }) {
   const [tab, setTab] = useState<FeeTab>('overview')
   const [collectOpen, setCollectOpen] = useState(false)
   const [preselectStudentId, setPreselectStudentId] = useState<string | undefined>(undefined)
@@ -184,7 +188,7 @@ export function FeesShell({ onNavigate }: { onNavigate?: (moduleKey: string) => 
           >
             {tab === 'overview' && <FeesOverviewSection data={data} onNavigate={setTab} />}
             {tab === 'accounts' && <FeesStudentAccountsSection data={data} onCollect={(id) => openCollect(id)} focusStudent={feeFocusStudent} />}
-            {tab === 'structures' && <FeesStructuresSection data={data} onNavigate={onNavigate} />}
+            {tab === 'structures' && <FeesStructuresSection />}
             {tab === 'payments' && <PaymentsSection data={data} onCollect={() => openCollect()} onOpenTransactions={() => setTab('transactions')} />}
             {tab === 'outreach' && <FeesDefaultersSection />}
             {tab === 'transactions' && <FeesTransactionsSection data={data} />}

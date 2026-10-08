@@ -15,8 +15,16 @@
  * Principal can change any of them at any time.
  *
  * Completion rule: requiredCompleted === requiredTotal (never
- * uploaded/total — optional documents must not be able to block an
+ * collected/total — optional documents must not be able to block an
  * application; a school with zero required documents is always complete).
+ *
+ * PHASE 7-H (admissions honesty): digital document UPLOADS are not
+ * built — the admissions upload route that this module referenced
+ * never existed (phantom endpoint, always 404) and the fake
+ * client-side "upload" success was removed. What the checklist records
+ * honestly today is what the office has PHYSICALLY COLLECTED (a
+ * required document gates submission once it is marked received).
+ * Server-backed document storage is future scope.
  */
 
 import type {
@@ -106,7 +114,13 @@ export function getOptionalDocuments(
 }
 
 export interface DocStatusLike {
-  status?: 'uploaded' | 'pending' | 'later' | string
+  /**
+   * 'received' = the office physically collected the document (PHASE
+   * 7-H: no server upload exists — the legacy 'uploaded' value from
+   * persisted records is treated as received too). 'pending' / 'later'
+   * = not yet received.
+   */
+  status?: 'received' | 'uploaded' | 'pending' | 'later' | string
   fileName?: string
   verificationStatus?: string
 }
@@ -115,10 +129,10 @@ export interface DocumentCompletion {
   requiredTotal: number
   requiredCompleted: number
   optionalTotal: number
-  optionalUploaded: number
-  /** True ONLY when every required document is uploaded (0 required → true). */
+  optionalReceived: number
+  /** True ONLY when every required document is received (0 required → true). */
   complete: boolean
-  /** e.g. "Required 1/1 complete ✓ · Optional 0/5 uploaded" */
+  /** e.g. "Required 1/1 complete ✓ · Optional 0/5 collected" */
   summaryLine: string
   /** Short badge label, e.g. "Documents ✓ Complete" or "Documents Incomplete". */
   badgeLabel: string
@@ -126,56 +140,17 @@ export interface DocumentCompletion {
   missingRequired: string[]
 }
 
-const isUploaded = (st?: DocStatusLike): boolean =>
-  !!st && st.status === 'uploaded'
+const isReceived = (st?: DocStatusLike): boolean =>
+  !!st && (st.status === 'received' || st.status === 'uploaded')
 
 /* ------------------------------------------------------------------ */
-/*  Upload policy — client side of the CLIENT + SERVER contract.       */
-/*  The server route re-validates everything (type by magic bytes,     */
-/*  size) so a client-side bypass cannot store an oversized file.      */
+/*  Document receipt — OFFICE CHECKLIST (no server upload exists).     */
+/*  PHASE 7-H: the client half of the former "client + server" upload  */
+/*  contract (the upload + delete-file helpers targeting the never-    */
+/*  built admissions upload route) was REMOVED. Digital uploads are    */
+/*  coming soon; today the office marks what it has collected on       */
+/*  paper, and the required-document gate keys on that.                */
 /* ------------------------------------------------------------------ */
-
-/** Maximum supporting-document size (5 MB), enforced client AND server side. */
-export const DOC_MAX_BYTES = 5 * 1024 * 1024
-/** Native file-input accept list for supporting documents. */
-export const DOC_ACCEPT = 'application/pdf,image/jpeg,image/png'
-
-/**
- * Client-side pre-validation. Returns an error message, or null when the
- * file may be sent to the server (which will validate it again).
- */
-export function validateDocumentFile(file: File): string | null {
-  if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
-    return 'Unsupported file type. Allowed: PDF, JPG, PNG.'
-  }
-  if (file.size > DOC_MAX_BYTES) {
-    return 'File is too large. Maximum size is 5 MB.'
-  }
-  return null
-}
-
-export interface UploadedDocFile {
-  fileId: string
-  fileName: string
-  size: number
-}
-
-/** Upload a supporting document; throws Error with a user-facing message. */
-export async function uploadAdmissionDocument(file: File): Promise<UploadedDocFile> {
-  const fd = new FormData()
-  fd.append('file', file)
-  const res = await fetch('/api/admissions/upload', { method: 'POST', body: fd })
-  const json = await res.json().catch(() => null)
-  if (!res.ok || !json?.success) {
-    throw new Error(json?.error || 'Upload failed. Please try again.')
-  }
-  return { fileId: json.fileId, fileName: json.fileName, size: json.size }
-}
-
-/** Fire-and-forget removal of a stored file (record cleanup is local). */
-export function deleteAdmissionDocumentFile(fileId: string): void {
-  fetch(`/api/admissions/upload/${encodeURIComponent(fileId)}`, { method: 'DELETE' }).catch(() => {})
-}
 
 /**
  * Compute document completion for an application's docStatuses map under
@@ -190,11 +165,11 @@ export function getDocumentCompletion(
   const required = getRequiredDocuments(policy)
   const optional = getOptionalDocuments(policy)
   const missingRequired = required
-    .filter((d) => !isUploaded(statuses[d.key]))
+    .filter((d) => !isReceived(statuses[d.key]))
     .map((d) => d.name)
   const requiredCompleted = required.length - missingRequired.length
-  const optionalUploaded = optional.filter((d) =>
-    isUploaded(statuses[d.key])
+  const optionalReceived = optional.filter((d) =>
+    isReceived(statuses[d.key])
   ).length
   const requiredTotal = required.length
   const optionalTotal = optional.length
@@ -204,12 +179,12 @@ export function getDocumentCompletion(
     requiredTotal,
     requiredCompleted,
     optionalTotal,
-    optionalUploaded,
+    optionalReceived,
     complete,
     missingRequired,
     summaryLine: `Required ${requiredCompleted}/${requiredTotal} complete${
       complete ? ' ✓' : ''
-    } · Optional ${optionalUploaded}/${optionalTotal} uploaded`,
+    } · Optional ${optionalReceived}/${optionalTotal} collected`,
     badgeLabel: complete ? 'Documents ✓ Complete' : 'Documents Incomplete',
   }
 }

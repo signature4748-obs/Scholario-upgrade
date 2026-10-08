@@ -50,6 +50,7 @@ import { formatINR, formatDate } from '@/lib/format'
 import { toast } from 'sonner'
 import type { Book, IssueRecord } from '@/lib/store/library-store'
 import { LIB_GLOBAL_STYLES, LibPill, LibKpiCard, type LibTab } from './library-shared'
+import { DemoModuleNotice } from '../shared/demo-module-notice'
 import { BooksCatalogue, IssuedBooksTable } from './books-tables'
 import { IssueBookDialog } from './issue-book-dialog'
 import { AddBookDialog } from './add-book-dialog'
@@ -139,6 +140,10 @@ export function LibraryModule() {
     <>
       <style dangerouslySetInnerHTML={{ __html: LIB_GLOBAL_STYLES }} />
       <PageTransition className="space-y-4 library-shell">
+      {/* 7-I — honest label: the UI runs client-side demo state (real
+          read-only GET APIs exist, writes are demo-only). */}
+      <DemoModuleNotice moduleName="Library" variant="preview" />
+
       {/* Tab row + Issue Book action on the right */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <SegmentedTabs

@@ -29,15 +29,12 @@ export function useTeachersState() {
     addTeacher,
     addCustomPosition,
     assignPositionToTeacher,
-    emergencyOverridePosition,
     removePositionFromTeacher,
     assignSubjectsAndClasses,
     regenerateAppointmentLetter,
     issueAppointmentLetter,
     setTeacherMedia,
-    resetTeacherPassword,
-    toggleLockTeacherAccount,
-    requestPayrollRevision,
+    updateTeacher,
     terminateTeacher,
   } = useTeachersStore()
 
@@ -55,9 +52,18 @@ export function useTeachersState() {
 
   const [lockModalOpen, setLockModalOpen] = useState(false)
   const [lockConfirmText, setLockConfirmText] = useState('')
+  /** 7-B — honest in-flight/error states for the server-backed lock. */
+  const [lockSubmitting, setLockSubmitting] = useState(false)
+  const [lockError, setLockError] = useState<string | null>(null)
 
-  const [payrollModalOpen, setPayrollModalOpen] = useState(false)
-  const [proposedSalaryInput, setProposedSalaryInput] = useState<number>(65000)
+  /** 7-C — the salary-structure dialog state (PUT /api/salary/structure). */
+  const [salaryModalOpen, setSalaryModalOpen] = useState(false)
+  const [salaryAmountInput, setSalaryAmountInput] = useState('')
+  const [salaryEffectiveFromInput, setSalaryEffectiveFromInput] = useState(
+    () => new Date().toISOString().split('T')[0],
+  )
+  const [salarySubmitting, setSalarySubmitting] = useState(false)
+  const [salaryError, setSalaryError] = useState<string | null>(null)
 
   const [terminationModalOpen, setTerminationModalOpen] = useState(false)
   const [terminationReason, setTerminationReason] = useState('Contract Completion')
@@ -66,11 +72,6 @@ export function useTeachersState() {
 
   const [assignPosModalOpen, setAssignPosModalOpen] = useState(false)
   const [customPosModalOpen, setCustomPosModalOpen] = useState(false)
-  const [emergencyOverrideModalOpen, setEmergencyOverrideModalOpen] = useState(false)
-  const [overrideTeacherId, setOverrideTeacherId] = useState('')
-  const [selectedPosForOverride, setSelectedPosForOverride] = useState<string>('')
-  const [overrideAuthCode, setOverrideAuthCode] = useState('')
-  const [overrideReason, setOverrideReason] = useState('')
 
   const [targetTeacherIdForPos, setTargetTeacherIdForPos] = useState('')
   const [selectedPosIdToAssign, setSelectedPosIdToAssign] = useState('')
@@ -113,11 +114,10 @@ export function useTeachersState() {
     // store data + actions
     teachers, positionsList, auditLogs, syncStatus,
     addTeacher, addCustomPosition,
-    assignPositionToTeacher, emergencyOverridePosition,
+    assignPositionToTeacher,
     removePositionFromTeacher, assignSubjectsAndClasses,
     regenerateAppointmentLetter, issueAppointmentLetter, setTeacherMedia,
-    resetTeacherPassword,
-    toggleLockTeacherAccount, requestPayrollRevision, terminateTeacher,
+    updateTeacher, terminateTeacher,
     // navigation
     activeTab, setActiveTab,
     // search / filter
@@ -139,9 +139,14 @@ export function useTeachersState() {
     // lock modal
     lockModalOpen, setLockModalOpen,
     lockConfirmText, setLockConfirmText,
-    // payroll modal
-    payrollModalOpen, setPayrollModalOpen,
-    proposedSalaryInput, setProposedSalaryInput,
+    lockSubmitting, setLockSubmitting,
+    lockError, setLockError,
+    // salary structure modal (7-C)
+    salaryModalOpen, setSalaryModalOpen,
+    salaryAmountInput, setSalaryAmountInput,
+    salaryEffectiveFromInput, setSalaryEffectiveFromInput,
+    salarySubmitting, setSalarySubmitting,
+    salaryError, setSalaryError,
     // termination modal
     terminationModalOpen, setTerminationModalOpen,
     terminationReason, setTerminationReason,
@@ -153,12 +158,6 @@ export function useTeachersState() {
     selectedPosIdToAssign, setSelectedPosIdToAssign,
     // custom position modal
     customPosModalOpen, setCustomPosModalOpen,
-    // emergency override modal
-    emergencyOverrideModalOpen, setEmergencyOverrideModalOpen,
-    overrideTeacherId, setOverrideTeacherId,
-    selectedPosForOverride, setSelectedPosForOverride,
-    overrideAuthCode, setOverrideAuthCode,
-    overrideReason, setOverrideReason,
     // workload modal
     workloadModalOpen, setWorkloadModalOpen,
     selectedSubjects, setSelectedSubjects,

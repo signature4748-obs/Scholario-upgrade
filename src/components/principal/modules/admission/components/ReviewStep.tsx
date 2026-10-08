@@ -295,13 +295,17 @@ export function ReviewStep({
                                 <span className="text-muted-foreground">· {docCompletion.summaryLine}</span>
                               </div>
                               {Object.entries(data.docStatuses)
-                                .filter(([key, st]) => st.status === 'uploaded' && collectedDocs.some((d) => d.key === key))
+                                .filter(
+                                  ([key, st]) =>
+                                    (st.status === 'received' || st.status === 'uploaded') &&
+                                    collectedDocs.some((d) => d.key === key)
+                                )
                                 .map(([key, st]) => {
                                   const name = collectedDocs.find((d) => d.key === key)?.name || key
                                   return (
                                     <div key={key} className="flex justify-between items-start text-xs gap-2">
                                       <span className="text-muted-foreground shrink-0">{name}:</span>
-                                      <span className="font-medium text-foreground text-right font-mono text-[11px] truncate">{st.fileName || 'uploaded'}</span>
+                                      <span className="font-medium text-foreground text-right font-mono text-[11px] truncate">{st.fileName || 'received'}</span>
                                     </div>
                                   )
                                 })}

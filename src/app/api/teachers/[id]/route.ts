@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { hashPassword } from '@/lib/auth'
+import { generateTempPassword } from '@/lib/account-provisioning'
+import { enforceRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { auditEvent } from '@/lib/security/audit'
 
@@ -29,6 +32,18 @@ export const runtime = 'nodejs'
  *                    read-only/portal access per business choice.
  *   · reactivate  — { action } — restores an ACTIVE account + re-links
  *                    the CSA assignments the terminate deactivated.
+ *   · reset-credential — { action } — the school-plane credential reset
+ *                    (mirrors the platform reset-credentials semantics):
+ *                    fresh server-generated temp password, forced
+ *                    first-change state, every live session revoked, one
+ *                    audit row. The temp password rides the response
+ *                    EXACTLY ONCE (never logged, never audited).
+ *   · set-status   — { action, status: 'ACTIVE' | 'SUSPENDED', reason? } —
+ *                    the portal lock/unlock: SUSPENDED accounts cannot
+ *                    authenticate (login + withUser both refuse non-ACTIVE
+ *                    status) and their live sessions are revoked. No
+ *                    history is touched (unlike terminate — no capability
+ *                    release, no data deletes).
  *
  * Every mutation writes a canonical audit row (real actor from the
  * session — never a hardcoded name).
@@ -37,6 +52,7 @@ interface UpdateBody {
   action?: string
   reason?: string
   lockLogin?: boolean
+  status?: string
   name?: string
   phone?: string
   employeeId?: string
@@ -60,7 +76,9 @@ export async function PATCH(
       // ids resolve to NOT_FOUND — never a cross-tenant write).
       const teacher = await db.teacher.findFirst({
         where: { id, schoolId },
-        include: { user: { select: { id: true, name: true, email: true, status: true } } },
+        include: {
+          user: { select: { id: true, name: true, email: true, status: true, role: true } },
+        },
       })
       if (!teacher) {
         throw new AppError('RESOURCE_NOT_FOUND', {
@@ -207,8 +225,107 @@ export async function PATCH(
         return { ok: true, id: teacher.id, teacher: after, action }
       }
 
+      // ── reset-credential — one-time temp credential + forced change ───
+      if (action === 'reset-credential') {
+        // Guard: this action only ever targets TEACHER accounts (the
+        // caller is PRINCIPAL/MANAGEMENT — they can never reset here).
+        if (teacher.user.role !== 'TEACHER') {
+          throw new AppError('FORBIDDEN', {
+            publicMessage: 'Credential reset is only available for teacher accounts',
+            internalDetail: `teachers/[id] reset-credential: target role ${teacher.user.role}`,
+          })
+        }
+        // Abuse brake — the principal's account-control budget (20/h).
+        enforceRateLimit(`rl:tcred:${user.id}`, RATE_LIMITS.teacherCredentialReset)
+
+        // The SAME generator the platform reset-credentials route uses
+        // (src/lib/account-provisioning.ts) — one policy, one library; a
+        // route-local password mint would be a policy fork.
+        const tempPassword = generateTempPassword(16)
+        let revokedSessions = 0
+        await db.$transaction(async (tx) => {
+          await tx.user.update({
+            where: { id: teacher.userId },
+            data: {
+              passwordHash: hashPassword(tempPassword),
+              // The temp credential is a single-purpose bootstrap: the
+              // forced first-password-change state is re-armed so the
+              // account cannot run the tenant on it (withUser rejects
+              // business APIs until a real password is set).
+              mustChangePassword: true,
+            },
+          })
+          // Mirror the platform reset semantics EXACTLY: every live
+          // session of the reset account dies immediately.
+          const revoked = await tx.session.deleteMany({
+            where: { userId: teacher.userId },
+          })
+          revokedSessions = revoked.count
+          await tx.activityLog.create({
+            data: {
+              schoolId,
+              userId: user.id,
+              action: 'TEACHER_CREDENTIAL_RESET',
+              // NEVER the password — ids and counts only.
+              detail: `Portal credential reset for ${teacher.user.name ?? 'teacher'} (${teacher.user.email}) by ${user.name ?? 'the principal'} — ${revoked.count} session(s) revoked; one-time temporary password issued (forced change at first sign-in).`,
+            },
+          })
+        })
+        // Surfaced ONCE — never logged, never stored in plaintext.
+        return { ok: true, id: teacher.id, action, tempPassword, revokedSessions }
+      }
+
+      // ── set-status — portal lock / unlock (record NEVER deleted) ────
+      if (action === 'set-status') {
+        const status = body?.status
+        if (status !== 'ACTIVE' && status !== 'SUSPENDED') {
+          throw new AppError('INVALID_INPUT', {
+            publicMessage: "status must be 'ACTIVE' or 'SUSPENDED'",
+          })
+        }
+        if (teacher.user.role !== 'TEACHER') {
+          throw new AppError('FORBIDDEN', {
+            publicMessage: 'Account lock is only available for teacher accounts',
+            internalDetail: `teachers/[id] set-status: target role ${teacher.user.role}`,
+          })
+        }
+        const reason =
+          typeof body?.reason === 'string' ? body.reason.trim().slice(0, 300) : ''
+        const locked = status === 'SUSPENDED'
+
+        // Login (auth/login) and withUser BOTH refuse non-ACTIVE status,
+        // so SUSPENDED is the server-side lock. Unlike terminate, NOTHING
+        // is released or deleted — the Teacher row, CSA assignments,
+        // class-teacher appointments and all history stay untouched; only
+        // the login capability flips (and live sessions die on lock).
+        let revokedSessions = 0
+        await db.$transaction(async (tx) => {
+          if (teacher.user.status !== status) {
+            await tx.user.update({
+              where: { id: teacher.userId },
+              data: { status },
+            })
+          }
+          if (locked) {
+            const revoked = await tx.session.deleteMany({
+              where: { userId: teacher.userId },
+            })
+            revokedSessions = revoked.count
+          }
+          await tx.activityLog.create({
+            data: {
+              schoolId,
+              userId: user.id,
+              action: locked ? 'TEACHER_ACCOUNT_LOCKED' : 'TEACHER_ACCOUNT_UNLOCKED',
+              detail: `${teacher.user.name ?? 'Teacher'} (${teacher.user.email}) portal account ${locked ? 'LOCKED' : 'UNLOCKED'} by ${user.name ?? 'the principal'}${reason ? ` — reason: ${reason}` : ''}${locked ? `. ${revokedSessions} live session(s) revoked` : ''}. Full record and history preserved.`,
+            },
+          })
+        })
+        return { ok: true, id: teacher.id, action, status, revokedSessions }
+      }
+
       throw new AppError('INVALID_INPUT', {
-        publicMessage: 'action must be update, terminate or reactivate',
+        publicMessage: 'action must be update, terminate, reactivate, reset-credential or set-status',
       })
     },
     { roles: ['PRINCIPAL', 'MANAGEMENT'] },

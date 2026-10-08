@@ -4,6 +4,9 @@ import type {
   PositionDefinition,
   TeachersStoreState,
 } from '../types'
+// 7-POLISH — the default assigning actor is the REAL session user
+// (server identity via /api/auth/me), never a fabricated principal.
+import { sessionActorName } from '../helpers'
 
 export const createPositionsSlice: StateCreator<
   TeachersStoreState,
@@ -13,7 +16,6 @@ export const createPositionsSlice: StateCreator<
     TeachersStoreState,
     | 'addCustomPosition'
     | 'assignPositionToTeacher'
-    | 'emergencyOverridePosition'
     | 'removePositionFromTeacher'
     | 'acceptPosition'
     | 'rejectPosition'
@@ -31,7 +33,7 @@ export const createPositionsSlice: StateCreator<
     return newPos
   },
 
-  assignPositionToTeacher: (teacherId, positionId, assignedBy = 'Dr. Ananya Iyer', classAssigned?: string, effectiveDate?: string) => {
+  assignPositionToTeacher: (teacherId, positionId, assignedBy = sessionActorName(), classAssigned?: string, effectiveDate?: string) => {
     const state = get()
     const targetPos = state.positionsList.find((p) => p.id === positionId)
     if (!targetPos) return
@@ -68,55 +70,7 @@ export const createPositionsSlice: StateCreator<
     })
   },
 
-  emergencyOverridePosition: (teacherId, positionId, reason, authCode, actorName = 'Dr. Ananya Iyer') => {
-    const state = get()
-    const targetPos = state.positionsList.find((p) => p.id === positionId)
-    if (!targetPos) return
-
-    const teacher = state.teachers.find((t) => t.id === teacherId)
-    if (!teacher) return
-
-    // Check if existing assignment exists
-    const existingIdx = teacher.positions.findIndex((p) => p.positionId === positionId)
-
-    let updatedPositions = [...teacher.positions]
-    if (existingIdx >= 0) {
-      updatedPositions[existingIdx] = {
-        ...updatedPositions[existingIdx],
-        status: 'Active',
-        isEmergencyOverride: true,
-        overrideReason: reason,
-      }
-    } else {
-      updatedPositions.push({
-        id: `pa-emg-${Date.now()}`,
-        positionId: targetPos.id,
-        positionTitle: targetPos.title,
-        assignedDate: new Date().toISOString().split('T')[0],
-        assignedBy: actorName,
-        status: 'Active',
-        effectiveDate: new Date().toISOString().split('T')[0],
-        isEmergencyOverride: true,
-        overrideReason: reason,
-      })
-    }
-
-    set((s) => ({
-      teachers: s.teachers.map((t) => (t.id === teacherId ? { ...t, positions: updatedPositions } : t)),
-    }))
-
-    get().logAudit({
-      category: 'Emergency Override',
-      actorName,
-      actorRole: 'Principal',
-      targetTeacherId: teacher.id,
-      targetTeacherName: teacher.name,
-      details: `EMERGENCY OVERRIDE: Activated position "${targetPos.title}" with AuthCode ${authCode}. Reason: ${reason}`,
-      isEmergencyOverride: true,
-    })
-  },
-
-  removePositionFromTeacher: (teacherId, assignmentId, reason = 'Administrative Reassignment', emergency = false, authCode) => {
+  removePositionFromTeacher: (teacherId, assignmentId, reason = 'Administrative Reassignment') => {
     const state = get()
     const teacher = state.teachers.find((t) => t.id === teacherId)
     if (!teacher) return
@@ -124,33 +78,21 @@ export const createPositionsSlice: StateCreator<
     const assignment = teacher.positions.find((p) => p.id === assignmentId)
     if (!assignment) return
 
-    let updatedPositions = teacher.positions
-    if (emergency) {
-      // Instant removal
-      updatedPositions = teacher.positions.filter((p) => p.id !== assignmentId)
-      get().logAudit({
-        category: 'Emergency Override',
-        actorName: 'Dr. Ananya Iyer',
-        actorRole: 'Principal',
-        targetTeacherId: teacher.id,
-        targetTeacherName: teacher.name,
-        details: `EMERGENCY OVERRIDE: Removed position "${assignment.positionTitle}" instantly with AuthCode ${authCode}. Reason: ${reason}`,
-        isEmergencyOverride: true,
-      })
-    } else {
-      // Flag as Pending Removal
-      updatedPositions = teacher.positions.map((p) =>
-        p.id === assignmentId ? { ...p, status: 'Pending Removal' as const } : p
-      )
-      get().logAudit({
-        category: 'Position Action',
-        actorName: 'Dr. Ananya Iyer',
-        actorRole: 'Principal',
-        targetTeacherId: teacher.id,
-        targetTeacherName: teacher.name,
-        details: `Initiated position removal for "${assignment.positionTitle}" (Pending Acknowledgement)`,
-      })
-    }
+    // Soft removal — flag as Pending Removal (record kept for audit).
+    // (7-B) the former "emergency" instant-removal leg (gated by a
+    // hardcoded client-side auth code) was a fake authorization surface
+    // and has been removed.
+    const updatedPositions = teacher.positions.map((p) =>
+      p.id === assignmentId ? { ...p, status: 'Pending Removal' as const } : p
+    )
+    get().logAudit({
+      category: 'Position Action',
+      actorName: 'Principal',
+      actorRole: 'Principal',
+      targetTeacherId: teacher.id,
+      targetTeacherName: teacher.name,
+      details: `Initiated removal for "${assignment.positionTitle}" (Pending Acknowledgement). Reason: ${reason}`,
+    })
 
     set((s) => ({
       teachers: s.teachers.map((t) => (t.id === teacherId ? { ...t, positions: updatedPositions } : t)),

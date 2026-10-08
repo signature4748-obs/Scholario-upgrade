@@ -195,7 +195,6 @@ export function syncTeachersFromServer(): Promise<boolean> {
             photo: old.photo,
             signature: old.signature,
             isLocked: old.isLocked,
-            pendingPayrollUpdate: old.pendingPayrollUpdate,
             remarks: old.remarks,
           }
         })

@@ -106,6 +106,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ txn
           source: txn.source,
           referenceNumber: txn.referenceNumber,
           note: txn.note,
+          // 7-E — gateway identity fields: the collect-payment modal polls
+          // this endpoint while a gateway order is PENDING and mirrors the
+          // SERVER-settled row into the client cache on SUCCESS. The
+          // canonical receipt number, amount AND gateway ids it mirrors are
+          // read from this payload — additive fields, no consumer breaks.
+          gatewayOrderId: txn.gatewayOrderId,
+          gatewayPaymentId: txn.gatewayPaymentId,
           studentName: txn.studentName,
           className: txn.className,
           feeHeadName: txn.feeHeadName,

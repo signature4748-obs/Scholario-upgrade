@@ -23,8 +23,9 @@
  */
 
 import { useState, useMemo } from 'react'
-import { Search, LayoutGrid, List, ChevronRight } from 'lucide-react'
+import { Search, LayoutGrid, List, ChevronRight, UserPlus } from 'lucide-react'
 import { GradientAvatar } from '@/components/shared/ui'
+import { Button } from '@/components/ui/button'
 import {
   StudentCard as SharedStudentCard,
   AT_RISK_ATTENDANCE_PCT,
@@ -72,7 +73,14 @@ export function studentRecordToCardData(s: StudentRecord, classLabel = `${s.clas
   }
 }
 
-export function DirectoryTab({ students, classes, onStudentClick }: { students: StudentRecord[]; classes: ClassRecord[]; onStudentClick: (s: StudentRecord) => void }) {
+export function DirectoryTab({ students, classes, onStudentClick, onAddStudent }: {
+  students: StudentRecord[]
+  classes: ClassRecord[]
+  onStudentClick: (s: StudentRecord) => void
+  /** Opens the Principal's Add Student dialog (module-level state — the
+   *  dialog itself POSTs /api/students and triggers the roster sync). */
+  onAddStudent?: () => void
+}) {
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
   const [feeFilter, setFeeFilter] = useState('all')
@@ -96,7 +104,28 @@ export function DirectoryTab({ students, classes, onStudentClick }: { students: 
 
   return (
     <div className="space-y-3">
-      <SearchFilterBar search={search} onSearchChange={setSearch} placeholder="Search name, admission no, roll, phone, parent…" filters={[classFilterConfig, feeFilterConfig]} actions={viewToggle} />
+      <SearchFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        placeholder="Search name, admission no, roll, phone, parent…"
+        filters={[classFilterConfig, feeFilterConfig]}
+        actions={
+          <>
+            {/* Phase 7-A — the REAL server-side student enrollment entry
+                point (POST /api/students). */}
+            {onAddStudent && (
+              <Button
+                size="sm"
+                onClick={onAddStudent}
+                className="h-9 gap-1.5 bg-emerald-600 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700"
+              >
+                <UserPlus className="h-3.5 w-3.5" aria-hidden="true" /> Add Student
+              </Button>
+            )}
+            {viewToggle}
+          </>
+        }
+      />
       <p className="text-xs text-muted-foreground">{filtered.length} of {students.length} students</p>
 
       {filtered.length === 0 ? (

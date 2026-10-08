@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { computeAccount, findStructureForStudent } from '@/lib/store/fee-store'
-import { useFeeStore, type FeeTransaction } from '@/lib/store/fee-store'
+import { useFeeStore, type FeeTransaction, type StudentFeeAccount, type FeePaymentStatus } from '@/lib/store/fee-store'
 import { useMyStudentRecord } from '@/lib/store/students-store'
 import { useFeatureGate } from '@/lib/tenant/store'
 // STRUCT-REV — mid-session fee-structure acknowledgement (student side).
@@ -17,17 +17,49 @@ import type { PaymentConfigResponse } from './data'
 /**
  * FeesModule — the student's financial truth.
  *
- * ONE derivation: computeAccount over the ONE fee ledger (the same engine
- * the school's finance office reads). Balance-first hero, the real
- * configured structure breakdown, the real concession + late-fee policy,
- * and receipts from the official ledger. Online payment is THE path:
+ * 7-E — the DISPLAYED BALANCE is SERVER-DERIVED. The local computeAccount
+ * engine (fee-store) still supplies the structure breakdown, concession
+ * and late-fee policy context, but the money truth (outstanding / paid /
+ * status) is read from the server's own canonical standing: the caller's
+ * OWN row in GET /api/students/roster carries fees.totalBilled / totalPaid /
+ * outstanding / status computed from the canonical Fee + FeeTransaction
+ * rows — the exact ledger every server-verified payment path (webhook,
+ * /api/student/payments/verify, sandbox confirm, office collections)
+ * credits. Payments made ANYWHERE (office counter, another device, the
+ * gateway) therefore reduce this balance; the persisted localStorage
+ * fee-store is never the source of the displayed balance again.
+ *
+ * Receipts: server rows first (canonical history), live in-session mirrors
+ * after — display-only for the receipts list. Online payment is THE path:
  * server-created order → gateway → SERVER-side signature verification →
- * server-minted receipt (RCP-2026-XXXX) → notification. The browser is
- * never trusted to declare success.
+ * server-minted receipt → notification. The browser is never trusted to
+ * declare success.
  *
  * No big "My Fees" title renders here — the shell header + sidebar are
  * the single WHERE-AM-I (nav dedup rule).
  */
+
+/** The server's canonical fee standing for THIS student (roster self row's
+ * `fees` block — computed server-side from Fee + FeeTransaction rows). */
+interface ServerFeeStanding {
+  totalBilled: number
+  totalPaid: number
+  outstanding: number
+  status: 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE' | 'NONE'
+  awaitingVerification: number
+}
+
+/** Map the server standing's status onto the account display vocabulary. */
+function serverStatusToDisplay(status: ServerFeeStanding['status']): FeePaymentStatus {
+  switch (status) {
+    case 'OVERDUE': return 'Overdue'
+    case 'PARTIAL': return 'Partially Paid'
+    case 'UNPAID': return 'Due'
+    // NONE (no fee rows) / PAID — nothing outstanding.
+    default: return 'Paid'
+  }
+}
+
 export function FeesModule() {
   // Canonical identity — the session user's own roster record (server
   // sync stamps the userId/email link fields; the legacy demo record
@@ -45,6 +77,13 @@ export function FeesModule() {
   const optionalHeadApplicability = useFeeStore((s) => s.optionalHeadApplicability)
   const receiptSettings = useFeeStore((s) => s.receiptSettings)
 
+  // ── 7-E server refresh key — bumped after a server-verified payment so
+  // BOTH server sources (receipt history + fee standing) refetch.
+  const [serverRefresh, setServerRefresh] = useState(0)
+  const refreshServerData = useCallback(() => {
+    setServerRefresh((k) => k + 1)
+  }, [])
+
   // STUDENT-QA S5-7 — server receipt history: the canonical FeeTransaction
   // rows for THIS student (school + student scoped, session-resolved).
   // The client store's `transactions` holds only live payment mirrors made
@@ -52,8 +91,6 @@ export function FeesModule() {
   // from another device) live exclusively in the DB. Without this fetch
   // the receipts section rendered "No payments recorded yet this session"
   // on a fresh browser even with real SUCCESS receipts in the ledger.
-  // Display-only: computeAccount keeps consuming the raw store list so the
-  // paid/standing derivation (roster feePaid + live mirrors) is unchanged.
   const [serverPayments, setServerPayments] = useState<FeeTransaction[]>([])
   useEffect(() => {
     let cancelled = false
@@ -66,7 +103,41 @@ export function FeesModule() {
       })
       .catch(() => { if (!cancelled) setServerPayments([]) })
     return () => { cancelled = true }
-  }, [])
+  }, [serverRefresh])
+
+  // ── 7-E SERVER STANDING — the canonical money truth for THIS student.
+  // GET /api/students/roster answers the caller's OWN row with a
+  // server-computed `fees` block (totalBilled / totalPaid / outstanding /
+  // status / awaitingVerification — derived from the canonical Fee +
+  // FeeTransaction rows, exactly where applyPaymentToLedger credits
+  // money). Component-local read: the students-store roster sync is NOT
+  // re-triggered (its once-per-session guard exists precisely so live
+  // in-session mirrors are not double-counted against a refreshed
+  // feePaid); this fetch only READS the standing.
+  // Falls back to the local derivation ONLY while the server row is
+  // loading/unavailable (documented — the balance then renders from the
+  // engine until the next successful fetch, e.g. on remount).
+  const [standing, setStanding] = useState<ServerFeeStanding | null>(null)
+  const studentId = student?.id
+  useEffect(() => {
+    if (!studentId) return
+    let cancelled = false
+    fetch('/api/students/roster', { cache: 'no-store', credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled) return
+        const data = j && typeof j === 'object' && 'data' in j ? j.data : null
+        const self = data && Array.isArray(data.students)
+          ? data.students.find((s: { id: string }) => s.id === studentId)
+          : null
+        const fees = self && typeof self === 'object' && self.fees && typeof self.fees.outstanding === 'number'
+          ? self.fees
+          : null
+        setStanding(fees)
+      })
+      .catch(() => { if (!cancelled) setStanding(null) })
+    return () => { cancelled = true }
+  }, [studentId, serverRefresh])
 
   // Receipt list for display — server rows first (canonical history),
   // then any live mirror rows not already present (id-deduped, newest first).
@@ -83,6 +154,23 @@ export function FeesModule() {
       : null),
     [student, transactions, lateFeeRule, additionalCharges, concessions, optionalHeadApplicability],
   )
+
+  // 7-E — the account the UI renders: the local engine's structure context
+  // (heads / concession / late-fee policy / ledger narrative) with the
+  // MONEY TRUTH overridden by the server standing (exact server integers
+  // — no client arithmetic on money). While the standing is loading (or a
+  // fetch failed) the local derivation is the documented fallback.
+  const displayAcct = useMemo<StudentFeeAccount | null>(() => {
+    if (!acct) return null
+    if (!standing) return acct
+    return {
+      ...acct,
+      outstanding: standing.outstanding,
+      totalDue: standing.outstanding,
+      paid: standing.totalPaid,
+      status: serverStatusToDisplay(standing.status),
+    }
+  }, [acct, standing])
 
   // The primary core fee head (largest billed head) — the note the server
   // stamps on the payment order.
@@ -118,11 +206,12 @@ export function FeesModule() {
   }, [])
 
   const canPayOnline = onlinePaymentsFeature && !!payConfig?.available
-  const allSettled = !!acct && acct.totalDue <= 0 && acct.additional.outstanding <= 0
+  // 7-E — settled + payable figures consume the SERVER-derived account.
+  const allSettled = !!displayAcct && displayAcct.totalDue <= 0 && displayAcct.additional.outstanding <= 0
 
   const [payOpen, setPayOpen] = useState(false)
 
-  if (!student || !acct) {
+  if (!student || !displayAcct) {
     return (
       <div className="flex items-center justify-center py-24">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" aria-label="Loading fees" />
@@ -131,7 +220,9 @@ export function FeesModule() {
   }
 
   const latestTxn = receiptTxns.find((t) => t.status === 'Success')
-  const balanceForPayment = Math.max(0, acct.totalDue)
+  // The payable amount is the SERVER outstanding — the gateway order is
+  // bounded by the canonical ledger, never by a localStorage balance.
+  const balanceForPayment = Math.max(0, displayAcct.totalDue)
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -140,10 +231,10 @@ export function FeesModule() {
       <FeeRevisionApprovalCard canonicalStudentId={student.id} />
 
       {allSettled ? (
-        <AllPaidState acct={acct} latestTxn={latestTxn} receiptSettings={receiptSettings} />
+        <AllPaidState acct={displayAcct} latestTxn={latestTxn} receiptSettings={receiptSettings} />
       ) : (
         <BalanceHero
-          acct={acct}
+          acct={displayAcct}
           lateFeeRule={lateFeeRule}
           canPayOnline={canPayOnline}
           onPay={() => setPayOpen(true)}
@@ -154,9 +245,9 @@ export function FeesModule() {
           server-side) → the office is the path, the balance stays visible. */}
       {!allSettled && !canPayOnline && <OnlineUnavailableCard outstanding={balanceForPayment} />}
 
-      <FeeStructure acct={acct} />
+      <FeeStructure acct={displayAcct} />
 
-      <Statement acct={acct} transactions={receiptTxns} receiptSettings={receiptSettings} />
+      <Statement acct={displayAcct} transactions={receiptTxns} receiptSettings={receiptSettings} />
 
       {canPayOnline && balanceForPayment > 0 && (
         <PaymentDialog
@@ -172,6 +263,7 @@ export function FeesModule() {
           balanceDue={balanceForPayment}
           primaryHead={primaryHead}
           config={payConfig}
+          onPaymentSuccess={refreshServerData}
         />
       )}
     </div>

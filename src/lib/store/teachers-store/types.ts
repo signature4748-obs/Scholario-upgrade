@@ -183,25 +183,13 @@ export interface TeacherRecord {
   isLocked?: boolean
   loginCredentials: {
     username: string
+    /** Always empty on the client — a real temp credential is issued
+     *  server-side (POST /api/teachers, PATCH reset-credential) and
+     *  surfaced ONCE in the slip dialog; it is never persisted here. */
     tempPassword: string
     passwordResetRequired: boolean
     createdDate: string
     lastLogin?: string
-  }
-
-  pendingPayrollUpdate?: {
-    proposalId: string
-    proposedSalary: number
-    code: string
-    date: string
-    proposedBreakdown: {
-      basic: number
-      hra: number
-      da: number
-      specialAllowance: number
-      pfDeduction: number
-      netPay: number
-    }
   }
 
   remarks?: string
@@ -227,18 +215,13 @@ export interface TeachersStoreState {
    *  calling UI can immediately preselect it in the assign flow). */
   addCustomPosition: (position: Omit<PositionDefinition, 'id'>) => PositionDefinition
   assignPositionToTeacher: (teacherId: string, positionId: string, assignedBy?: string, classAssigned?: string, effectiveDate?: string) => void
-  emergencyOverridePosition: (teacherId: string, positionId: string, reason: string, authCode: string, actorName?: string) => void
-  removePositionFromTeacher: (teacherId: string, assignmentId: string, reason?: string, emergency?: boolean, authCode?: string) => void
+  removePositionFromTeacher: (teacherId: string, assignmentId: string, reason?: string) => void
   assignSubjectsAndClasses: (teacherId: string, subjects: string[], classes: string[], examResp?: string[]) => void
   regenerateAppointmentLetter: (teacherId: string, customTerms?: string[], newSalary?: number) => void
   /** Issue a NEW appointment letter (archives the previous one). */
   issueAppointmentLetter: (teacherId: string, customTerms?: string[], newSalary?: number) => AppointmentLetterData | null
   /** Replace the stored photo/signature media record for a teacher. */
   setTeacherMedia: (teacherId: string, kind: 'photo' | 'signature', media: TeacherMediaRecord | null) => void
-  resetTeacherPassword: (teacherId: string) => { username: string; tempPassword: string }
-  toggleLockTeacherAccount: (teacherId: string, locked: boolean, reason?: string) => void
-  requestPayrollRevision: (teacherId: string, newSalary: number) => { code: string }
-  confirmPayrollRevision: (teacherId: string, code: string) => boolean
   terminateTeacher: (teacherId: string, reason: string, lockLogin: boolean) => void
 
   // Teacher Actions (Approval Workflow)

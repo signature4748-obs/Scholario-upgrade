@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Lock, Coins, ShieldCheck, ShieldAlert, Copy, Eye, EyeOff } from 'lucide-react'
+import { Lock, Coins, ShieldCheck, ShieldAlert, Copy, Eye, EyeOff, Loader2 } from 'lucide-react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
@@ -11,9 +11,11 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { DatePicker } from '@/components/ui/date-picker'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { formatINR } from '@/lib/format'
+import { useSalaryStore } from '@/lib/store/salary-store'
 // Slip letterhead — the identity cascade (server → settings → neutral).
 import { useSchoolProfile } from '@/lib/school-profile'
 import type { TeacherRecord } from '@/lib/store/teachers-store'
@@ -29,12 +31,18 @@ interface LockModalProps extends CommonProps {
   teacher: TeacherRecord | null
   lockConfirmText: string
   setLockConfirmText: (v: string) => void
+  /** 7-B — honest in-flight + failure states (server-backed lock). */
+  submitting: boolean
+  error: string | null
   onConfirm: () => void
 }
 
-export function LockAccountModal({ teacher, lockConfirmText, setLockConfirmText, open, onClose, onConfirm }: LockModalProps) {
+export function LockAccountModal({
+  teacher, lockConfirmText, setLockConfirmText, submitting, error, open, onClose, onConfirm,
+}: LockModalProps) {
+  const requiredWord = teacher?.isLocked ? 'UNLOCK' : 'LOCK'
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <Dialog open={open} onOpenChange={(v) => { if (!v && !submitting) onClose() }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-amber-600">
@@ -49,23 +57,30 @@ export function LockAccountModal({ teacher, lockConfirmText, setLockConfirmText,
 
         <div className="space-y-3 py-2 text-xs">
           <p className="text-muted-foreground">
-            Type <strong className="text-foreground font-mono">{teacher?.isLocked ? 'UNLOCK' : 'LOCK'}</strong> to confirm:
+            Type <strong className="text-foreground font-mono">{requiredWord}</strong> to confirm:
           </p>
           <Input
             value={lockConfirmText}
             onChange={(e) => setLockConfirmText(e.target.value)}
-            placeholder={teacher?.isLocked ? 'Type UNLOCK' : 'Type LOCK'}
+            placeholder={`Type ${requiredWord}`}
             className="font-mono text-xs uppercase"
+            disabled={submitting}
           />
+          {error && (
+            <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+              {error}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
           <Button
             variant={teacher?.isLocked ? 'default' : 'destructive'}
             onClick={onConfirm}
-            disabled={lockConfirmText.trim().toUpperCase() !== (teacher?.isLocked ? 'UNLOCK' : 'LOCK')}
+            disabled={submitting || lockConfirmText.trim().toUpperCase() !== requiredWord}
           >
+            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {teacher?.isLocked ? 'Unlock Account' : 'Lock Account'}
           </Button>
         </DialogFooter>
@@ -200,67 +215,116 @@ export function CredentialsSlipModal({ credentials, open, onClose }: Credentials
   )
 }
 
-/* ---------- PAYROLL REVISION PROPOSAL MODAL ---------- */
-interface PayrollModalProps extends CommonProps {
+/* ---------- MONTHLY SALARY STRUCTURE MODAL (7-C, server-backed) ---------- */
+interface SalaryStructureModalProps extends CommonProps {
   teacher: TeacherRecord | null
-  proposedSalaryInput: number
-  setProposedSalaryInput: (v: number) => void
+  amountInput: string
+  setAmountInput: (v: string) => void
+  effectiveFromInput: string
+  setEffectiveFromInput: (v: string) => void
+  /** Honest in-flight + failure states for the PUT /api/salary/structure call. */
+  submitting: boolean
+  error: string | null
   onConfirm: () => void
 }
 
-export function PayrollRevisionModal({ teacher, proposedSalaryInput, setProposedSalaryInput, open, onClose, onConfirm }: PayrollModalProps) {
+/**
+ * 7-C — the REAL salary-structure dialog (replaces the fabricated
+ * PAY-XXXXXX payroll-revision flow). One fixed monthly amount + an
+ * optional effective date, written through PUT /api/salary/structure
+ * (zod strict, per-teacher upsert, SALARY_STRUCTURE_SET audit). No
+ * HRA/PF/tax/gross/basic/net arithmetic exists — fixed amount only.
+ * Payments, receipts and history remain in the Salary & Payroll module.
+ */
+export function SalaryStructureModal({
+  teacher, amountInput, setAmountInput, effectiveFromInput, setEffectiveFromInput,
+  submitting, error, open, onClose, onConfirm,
+}: SalaryStructureModalProps) {
+  const currentMonthly = useSalaryStore(
+    (st) => st.structures.find((x) => x.teacherId === teacher?.id)?.monthlyAmount ?? null,
+  )
+
+  const amountNum = Math.floor(Number(amountInput) || 0)
+  const invalidAmount = amountInput !== '' && (amountNum <= 0 || amountNum > 5_000_000)
+
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <Dialog open={open} onOpenChange={(v) => { if (!v && !submitting) onClose() }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-emerald-700">
-            <Coins className="h-5 w-5" /> Request Payroll Revision
+            <Coins className="h-5 w-5" /> {currentMonthly != null ? 'Edit Monthly Salary' : 'Set Monthly Salary'}
           </DialogTitle>
           <DialogDescription className="text-xs">
-            Propose salary revision for {teacher?.name}. A 6-digit confirmation code will be issued to the teacher's portal for explicit acceptance.
+            {teacher?.name} · current {currentMonthly != null ? formatINR(currentMonthly) : 'not set'} · saved on the school payroll record.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2 text-xs">
           <div className="p-3 bg-muted/40 rounded-xl space-y-1">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Current Gross Salary:</span>
-              <span className="font-bold text-foreground">{teacher ? formatINR(teacher.salary) : '₹0'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Teacher Name & ID:</span>
+              <span className="text-muted-foreground">Teacher Name &amp; ID:</span>
               <span className="font-semibold">{teacher?.name} ({teacher?.employeeId})</span>
             </div>
           </div>
 
           <div>
-            <Label className="text-xs font-semibold mb-1 block">New Monthly Gross Salary (₹ INR)</Label>
+            <Label className="text-xs font-semibold mb-1 block">Monthly Salary (₹ INR)</Label>
             <Input
-              type="number"
-              value={proposedSalaryInput}
-              onChange={(e) => setProposedSalaryInput(Number(e.target.value))}
+              inputMode="numeric"
+              value={amountInput}
+              onChange={(e) => setAmountInput(e.target.value.replace(/[^0-9]/g, ''))}
               className="font-mono text-base font-bold"
-              placeholder="e.g. 68000"
+              placeholder="e.g. 42000"
+              disabled={submitting}
+            />
+            {invalidAmount && (
+              <p className="text-[10px] text-rose-600 dark:text-rose-400 mt-1">
+                Enter a whole monthly amount between ₹1 and ₹50,00,000.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <Label className="text-xs font-semibold mb-1 block">Effective From</Label>
+            <DatePicker
+              value={effectiveFromInput}
+              onChange={(v) => { if (v) setEffectiveFromInput(v) }}
+              placeholder="Select date"
+              compact
+                formatStr="d MMM yyyy"
+              className="h-9"
             />
             <p className="text-[10px] text-muted-foreground mt-1">
-              Basic Pay, HRA, DA, and PF deductions will automatically recalculate.
+              {effectiveFromInput
+                ? `Applies from ${format(new Date(`${effectiveFromInput}T00:00:00`), 'd MMMM yyyy')}`
+                : 'Recorded on the structure as its effective date.'}
             </p>
           </div>
 
-          <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-900 space-y-1">
-            <p className="font-bold flex items-center gap-1 text-[11px]">
-              <ShieldCheck className="h-4 w-4 text-emerald-700" /> Two-Way Confirmation Security
+          {error && (
+            <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+              {error}
             </p>
-            <p className="text-[10px] leading-relaxed text-emerald-800">
-              Salary changes require mutual consent. Upon submitting, a unique code (PAY-XXXXXX) is dispatched to the teacher's panel. The salary updates live once the teacher enters the code.
+          )}
+
+          <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-900 space-y-1 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-300">
+            <p className="font-bold flex items-center gap-1 text-[11px]">
+              <ShieldCheck className="h-4 w-4 text-emerald-700" /> One fixed amount — no components
+            </p>
+            <p className="text-[10px] leading-relaxed text-emerald-800 dark:text-emerald-300/90">
+              The salary is a single fixed monthly amount. Payments, receipts and payment history are recorded from the Salary &amp; Payroll module.
             </p>
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={onConfirm} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
-            Dispatch Proposal & Generate Code
+          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button
+            onClick={onConfirm}
+            disabled={submitting || amountInput === '' || invalidAmount}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+          >
+            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save Monthly Salary
           </Button>
         </DialogFooter>
       </DialogContent>

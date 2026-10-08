@@ -17,12 +17,11 @@ interface CredentialsTabProps {
  *
  * This tab used to print a FABRICATED portal login (loginId +
  * tempPassword + "portal.scholario.app") for credentials that were never
- * created: no account is provisioned by the admission completion, and no
- * such portal host exists. The sheet now documents the REAL provisioning
- * path — the school office enrols the student (Students & Classes) with
- * the guardian's email, and the platform creates the account and
- * surfaces a one-time password exactly once — plus the admission
- * references the office needs at hand. It prints cleanly on its own.
+ * created. The sheet now documents the REAL provisioning path — since
+ * Phase 7-H the issuance workspace itself enrolls the student on the
+ * school server (Complete Admission & Enroll → POST /api/students) and
+ * surfaces the platform-created one-time password exactly once. It
+ * prints cleanly on its own.
  */
 export function CredentialsTab({ artifacts, guardianEmail }: CredentialsTabProps) {
   const sheetRef = useRef<HTMLDivElement>(null)
@@ -68,9 +67,11 @@ export function CredentialsTab({ artifacts, guardianEmail }: CredentialsTabProps
           <ol className="space-y-2 text-[11.5px] text-slate-700 leading-relaxed list-decimal list-inside">
             <li className="flex items-start gap-2">
               <span className="pt-0.5">
-                The office enrolls the student from{' '}
-                <strong className="font-semibold">Students &amp; Classes → Add Student</strong>, using the
-                guardian&rsquo;s email below as the login ID.
+                The office completes the admission here —{' '}
+                <strong className="font-semibold">Complete Admission &amp; Enroll</strong> creates the
+                student&apos;s account on the school server (the same enrollment is also available from{' '}
+                <strong className="font-semibold">Students &amp; Classes → Add Student</strong>),
+                using the guardian&rsquo;s email below as the login ID.
               </span>
             </li>
             <li className="flex items-start gap-2">

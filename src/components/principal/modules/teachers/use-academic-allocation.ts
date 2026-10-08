@@ -111,7 +111,17 @@ export function useAcademicConfig(active: boolean): AcademicConfigState {
             label: academicClassLabel({ name: c.name, section: c.section ?? null }),
             subjects: (c.subjects ?? []).map((s) => s.name),
           })),
-          catalog: (data.catalog ?? []).map((s: { name: string }) => s.name),
+          // 7-POLISH — dedupe the catalog by NAME. The Subject table has no
+          // unique(schoolId, name) constraint, so a school can hold two rows
+          // with the same name (observed live: 'Mathematics' ×2 — the
+          // tenant-isolation probe seeded a second 'Mathematics' row
+          // alongside the canonical MAT row). The server returns every row;
+          // this picker is name-based (teacher.subjects stores subject
+          // NAMES), so the same name twice would render two identical chips
+          // AND collide React keys ("Encountered two children with the same
+          // key"). First occurrence wins (server orders by name, so
+          // duplicates are adjacent).
+          catalog: [...new Set<string>((data.catalog ?? []).map((s: { name: string }) => s.name))],
         }
         if (!cancelled) setState({ status: 'ready', config })
       })

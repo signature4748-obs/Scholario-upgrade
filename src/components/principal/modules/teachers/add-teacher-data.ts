@@ -251,7 +251,10 @@ export function buildNewTeacherRecord(form: AddTeacherForm): TeacherRecord {
     }),
     loginCredentials: {
       username: form.email,
-      tempPassword: `GWS#Teacher${seq}`,
+      // NEVER fabricated: the real one-time credential is generated
+      // server-side by POST /api/teachers and surfaced ONCE in the
+      // wizard's success toast (the server response is the only source).
+      tempPassword: '',
       passwordResetRequired: true,
       createdDate: new Date().toISOString().split('T')[0],
     },

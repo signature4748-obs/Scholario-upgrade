@@ -15,6 +15,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useApplicationsStore, ensureApplicationSeedData, type TourDocTemplate } from '@/lib/store/applications-store'
 import type { SchoolApplication } from '@/lib/store/applications-store'
 import { PageTransition } from '@/components/shared/ui'
+import { DemoModuleNotice } from '../shared/demo-module-notice'
 import { ApplicationsDashboard } from './applications-dashboard'
 import { TourConfigScreen } from './tour-config'
 import { TourSubmissions } from './tour-submissions'
@@ -42,6 +43,12 @@ export function ApplicationsModule() {
   return (
     <div data-testid="applications-module">
       <PageTransition className="space-y-4">
+        {/* 7-I — honest label: client-side demo state, no server API.
+            Mounted once at the module root so every view (dashboard /
+            config / submissions) carries it. */}
+        <div className="max-w-7xl mx-auto">
+          <DemoModuleNotice moduleName="Applications & Forms" />
+        </div>
         <AnimatePresence mode="wait">
           <motion.div
             key={view.name + ('appId' in view ? view.appId : '') + ('editingId' in view ? view.editingId ?? '' : '')}

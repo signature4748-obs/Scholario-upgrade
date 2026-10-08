@@ -48,6 +48,7 @@ import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import type { InventoryItem } from '@/lib/store/inventory-store'
 import { formatINR } from '@/lib/format'
 import { INV_GLOBAL_STYLES, InvKpiCard, type InvTab } from './inventory-shared'
+import { DemoModuleNotice } from '../shared/demo-module-notice'
 import { ItemsTable } from './items-table'
 import { AddItemDialog } from './add-item-dialog'
 import { ItemActionDialog, type ActionKind } from './item-action-dialog'
@@ -114,6 +115,9 @@ export function InventoryModule() {
     <>
       <style dangerouslySetInnerHTML={{ __html: INV_GLOBAL_STYLES }} />
       <PageTransition className="space-y-4 inventory-shell">
+      {/* 7-I — honest label: client-side demo state, no server API. */}
+      <DemoModuleNotice moduleName="Inventory" />
+
       {/* Tab row + Add Item action on the right */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <SegmentedTabs

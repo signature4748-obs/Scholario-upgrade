@@ -7,15 +7,18 @@
  * Settings → Documents): each canonical document is Required, Optional,
  * or Not Collected. Not-collected documents do not appear here at all.
  * Group headers carry the live counts ("Required 1/1 complete", "Optional
- * 0/5 uploaded") — no explanatory paragraphs.
+ * 0/5 collected") — no explanatory paragraphs.
  *
- * Uploads are REAL: the file is client-validated (type + ≤5 MB), sent to
- * /api/admissions/upload where the server re-validates by magic bytes and
- * stores it, and the returned fileId is kept on the application record so
- * the verification workspace can View / Download the actual document.
+ * PHASE 7-H (admissions honesty): DIGITAL UPLOADS ARE NOT BUILT. The
+ * former upload path targeted an admissions upload route that was
+ * never built (phantom endpoint) and showed a fake success toast.
+ * It is removed. The checklist below is the office's paper-collection
+ * record: "Mark Received" notes that a physical copy is on file, which
+ * is exactly what the required-document gate keys on. Server-backed
+ * document uploads are coming soon.
  */
-import { useMemo, useRef, useState } from 'react'
-import { FileText, ShieldCheck, CheckCircle2 } from 'lucide-react'
+import { useMemo } from 'react'
+import { FileText, ShieldCheck, CheckCircle2, Info } from 'lucide-react'
 import { toast } from 'sonner'
 import type { DocStatus } from '../types'
 import { useAdmissionFeatureFlags, useAdmissionDocumentPolicy } from '../lib/admission-utils'
@@ -23,23 +26,11 @@ import {
   getRequiredDocuments,
   getOptionalDocuments,
   getDocumentCompletion,
-  validateDocumentFile,
-  uploadAdmissionDocument,
-  deleteAdmissionDocumentFile,
-  DOC_ACCEPT,
   type AdmissionDocumentDef,
 } from '../lib/documents'
 import type { FormData } from '../constants'
 import { StepHeader } from './StepShared'
 import { DocumentCard } from './DocumentCard'
-
-const nowTimeStr = () =>
-  new Date().toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 
 export function DocumentsStep({
   data,
@@ -54,9 +45,6 @@ export function DocumentsStep({
   const policy = useAdmissionDocumentPolicy()
   const requiredDocs = useMemo(() => getRequiredDocuments(policy), [policy])
   const optionalDocs = useMemo(() => getOptionalDocuments(policy), [policy])
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [activeUploadKey, setActiveUploadKey] = useState<string | null>(null)
-  const [uploadingKey, setUploadingKey] = useState<string | null>(null)
 
   const completion = useMemo(
     () => getDocumentCompletion(data.docStatuses, policy),
@@ -71,70 +59,36 @@ export function DocumentsStep({
     })
   }
 
-  const handleUploadClick = (key: string) => {
-    setActiveUploadKey(key)
-    fileInputRef.current?.click()
-  }
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    const key = activeUploadKey
-    // A closed dialog with no selection changes nothing — never invent a file.
-    if (!file || !key) {
-      setActiveUploadKey(null)
-      if (e.target) e.target.value = ''
-      return
-    }
+  // The office physically collected the document — record exactly that
+  // (no fileId, no invented filename, no invented OCR score). The
+  // verification workspace can still review it as demo state.
+  const handleMarkReceived = (key: string) => {
+    handleUpdateDoc(key, {
+      status: 'received',
+      fileName: undefined,
+      ocrConfidence: undefined,
+      verificationStatus: verificationEnabled ? 'pending' : undefined,
+      verifiedBy: undefined,
+      verificationTime: undefined,
+      rejectionReason: undefined,
+    })
     const doc = [...requiredDocs, ...optionalDocs].find((d) => d.key === key)
-
-    // Client-side policy check (the server re-checks on arrival).
-    const validationError = validateDocumentFile(file)
-    if (validationError) {
-      toast.error(validationError)
-      setActiveUploadKey(null)
-      e.target.value = ''
-      return
-    }
-
-    setUploadingKey(key)
-    try {
-      const uploaded = await uploadAdmissionDocument(file)
-      const oldFileId = data.docStatuses[key]?.fileId
-      handleUpdateDoc(key, {
-        status: 'uploaded',
-        fileName: uploaded.fileName,
-        fileId: uploaded.fileId,
-        fileSize: uploaded.size,
-        // Honest upload — no invented OCR score. OCR confidence is only
-        // ever set by the real OCR scan flow.
-        ocrConfidence: undefined,
-        verificationStatus: verificationEnabled ? 'pending' : undefined,
-        verifiedBy: undefined,
-        verificationTime: undefined,
-        rejectionReason: undefined,
-      })
-      // Replacing an existing upload — remove the previous stored file.
-      if (oldFileId && oldFileId !== uploaded.fileId) {
-        deleteAdmissionDocumentFile(oldFileId)
-      }
-      toast.success(`${doc?.name} uploaded`, {
-        description: verificationEnabled
-          ? 'Awaiting verifier review'
-          : doc?.required
-            ? 'Required document received'
-            : undefined,
-      })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Upload failed. Please try again.')
-    } finally {
-      setUploadingKey(null)
-      setActiveUploadKey(null)
-      e.target.value = ''
-    }
+    toast.success(`${doc?.name} marked received`, {
+      description: verificationEnabled
+        ? 'Awaiting verifier review'
+        : doc?.required
+          ? 'Required document collected'
+          : undefined,
+    })
   }
 
   const handleVerify = (key: string) => {
-    const timeStr = nowTimeStr()
+    const timeStr = new Date().toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
     handleUpdateDoc(key, {
       verificationStatus: 'verified',
       verifiedBy: 'Principal',
@@ -147,14 +101,9 @@ export function DocumentsStep({
   }
 
   const handleRemove = (key: string) => {
-    const stored = data.docStatuses[key]
-    // Remove the stored file along with the record.
-    if (stored?.fileId) deleteAdmissionDocumentFile(stored.fileId)
     handleUpdateDoc(key, {
       status: 'pending',
       fileName: undefined,
-      fileId: undefined,
-      fileSize: undefined,
       ocrConfidence: undefined,
       verificationStatus: undefined,
       verifiedBy: undefined,
@@ -181,8 +130,7 @@ export function DocumentsStep({
         doc={doc}
         st={st}
         verificationEnabled={verificationEnabled}
-        uploading={uploadingKey === doc.key}
-        onUploadClick={handleUploadClick}
+        onMarkReceived={handleMarkReceived}
         onVerify={handleVerify}
         onRemove={handleRemove}
       />
@@ -191,14 +139,6 @@ export function DocumentsStep({
 
   return (
     <div className="space-y-5">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept={DOC_ACCEPT}
-        className="hidden"
-        onChange={handleFileChange}
-      />
-
       <StepHeader
         title="Documents"
         icon={<FileText className="h-5 w-5" />}
@@ -222,6 +162,18 @@ export function DocumentsStep({
           </span>
         }
       />
+
+      {/* Honest state — no server upload exists (the old upload button
+          hit a route that was never built). */}
+      <div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/30 px-3.5 py-3">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Document uploads are coming soon. Until then, collect physical copies at the office and
+          mark them received below — this checklist records exactly what has been collected, and
+          the required documents gate the submission on it. Nothing is uploaded or stored on a
+          server from this step.
+        </p>
+      </div>
 
       {/* REQUIRED group — emphasised, live count in the header */}
       {requiredDocs.length > 0 && (
@@ -256,7 +208,7 @@ export function DocumentsStep({
               Optional
             </h3>
             <span className="text-[11px] text-muted-foreground font-semibold tabular-nums">
-              {completion.optionalUploaded} / {completion.optionalTotal} uploaded
+              {completion.optionalReceived} / {completion.optionalTotal} collected
             </span>
           </div>
           <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2.5">

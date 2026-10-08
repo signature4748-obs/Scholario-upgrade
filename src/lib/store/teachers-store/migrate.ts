@@ -217,7 +217,10 @@ function normalizeTeacher(v: unknown): TeacherRecord | null {
     loginCredentials: isPlainObject(v.loginCredentials)
       ? {
           username: asString(v.loginCredentials.username),
-          tempPassword: asString(v.loginCredentials.tempPassword),
+          // 7-M hygiene — a pre-7-B fabricated tempPassword must never
+          // survive migration: zero it out and let the server roster
+          // sync repopulate real state (server rows always carry '').
+          tempPassword: '',
           passwordResetRequired: v.loginCredentials.passwordResetRequired === true,
           createdDate: asString(v.loginCredentials.createdDate),
           lastLogin:

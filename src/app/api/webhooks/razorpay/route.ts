@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { db, trackedTransaction } from '@/lib/db'
-import { applyPaymentToLedger } from '@/lib/fee-workflow'
+import { applyPaymentToLedger, mintReceiptNo, resolveFeeIdForTxn } from '@/lib/fee-workflow'
 import { RATE_LIMITS, checkRateLimit, clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { auditRateLimit } from '@/lib/security/audit'
 import { log } from '@/lib/observability/logger'
@@ -35,6 +35,22 @@ import { webhookSecretCandidates } from '@/lib/payments/tenant-gateway'
  *        gateway sent us — created by /api/fees/orders).
  *      - Update its status → SUCCESS, set gatewayPaymentId + signature,
  *        set reconciliationStatus = 'reconciled', set reconciledAt.
+ *      - Mint the canonical SCH-YYYY-NNNNNN receiptNo INSIDE the same
+ *        settlement transaction and set it on the SAME write that flips
+ *        status → SUCCESS (R-1, 7-M: a captured payment must never be
+ *        SUCCESS with receiptNo null — mirrors the sandbox confirm
+ *        route's PIH-4b mint discipline).
+ *      - Resolve the target fee for the student exactly as the confirm
+ *        route does (txn feeId → feeHeadName title → oldest unsettled
+ *        fee → minimal Fee row), persist it on the settlement write and
+ *        credit the ledger (applyPaymentToLedger) in the SAME
+ *        transaction (R-2, 7-R1 finding: both order-creation routes
+ *        persist feeId null, so a verbatim txn.feeId made the credit a
+ *        no-op — a webhook-only settlement left Fee.paid permanently
+ *        stale). Idempotent on Payment.transactionId (the gateway
+ *        payment id — the same key checkout verify keys); only the
+ *        settling writer credits, so a row already settled by verify /
+ *        the sandbox confirm rail is never double-credited.
  *      - Create a Reconciliation row.
  *   2. On `payment.failed`:
  *      - Mark the transaction FAILED + reconciliationStatus = 'exception'.
@@ -313,6 +329,55 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
       // once (the DB @unique on Payment.transactionId backstops this).
       const ledgerKey = gatewayPaymentId || txn.gatewayPaymentId || orderId
       const updated = await trackedTransaction('webhook-payment-captured', async (tx) => {
+        // R-1 (7-M) — receipts belong to SETTLEMENT (PIH-4b): the canonical
+        // SCH-YYYY-NNNNNN number is minted HERE, inside the settlement
+        // transaction, and set on the SAME write that flips status →
+        // SUCCESS — a real gateway payment can never settle with
+        // receiptNo null (the 7-E client poll would otherwise fall back
+        // to its client-side genReceiptNo and mint a client-authoritative
+        // RCP- number for a REAL payment). Same discipline as the sandbox
+        // confirm route: a row already settled by another writer
+        // (checkout verify / sandbox confirm racing this webhook) keeps
+        // ITS receipt — the mint only fires for a receipt-less row, and
+        // the (schoolId, receiptNo) DB unique backstops the residual
+        // concurrent-mint race.
+        const receiptNo = txn.receiptNo ?? (await mintReceiptNo(txn.schoolId, tx))
+        // 7-R2 — fee targeting at settlement (mirrors /api/fees/payments/
+        // confirm): BOTH order-creation routes persist feeId: null (the
+        // target fee is resolved at settlement, never at order time), so
+        // passing txn.feeId verbatim made applyPaymentToLedger no-op
+        // (fee-workflow: `if (!input.feeId) return null`) for every
+        // gateway-order row — a payment that settles ONLY through this
+        // webhook (client never calls verify — browser closed, crash,
+        // redirect flow; the principal-collect ONLINE flow has no verify
+        // call at all) left Fee.paid / the student's outstanding
+        // permanently stale. Resolve the target fee exactly as the
+        // confirm route does (txn feeId → feeHeadName title match →
+        // oldest unsettled fee → minimal Fee row) and PERSIST it on the
+        // settlement write, so a settled order always carries its ledger
+        // link.
+        //
+        // Winner discipline (confirm's `settled.count > 0` equivalent for
+        // this unguarded update): resolve + apply ONLY when THIS webhook
+        // is the settling writer (the row was not already SUCCESS when
+        // we read it). A row settled by another writer was ledger-
+        // credited by that writer — checkout verify keys the SAME gateway
+        // payment id (applyPaymentToLedger is idempotent on it), but the
+        // sandbox confirm rail keys 'confirm:<orderId>' — re-applying
+        // here would double-credit. No studentId → no fee targeting
+        // (mirrors confirm): the settlement still succeeds with receipt +
+        // SUCCESS and the ledger untouched.
+        const settling = txn.status !== 'SUCCESS'
+        const feeId = settling && txn.studentId
+          ? await resolveFeeIdForTxn(tx, {
+              schoolId: txn.schoolId,
+              studentId: txn.studentId,
+              feeId: txn.feeId,
+              feeHeadName: txn.feeHeadName,
+              amount: txn.amount,
+              method: txn.method,
+            })
+          : txn.feeId
         const u = await tx.feeTransaction.update({
           where: { id: txn.id },
           data: {
@@ -323,18 +388,22 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
             reconciledAt: new Date(),
             reconciledBy: 'razorpay-webhook',
             reconciliationNote: `Auto-reconciled by webhook ${eventId}`,
+            receiptNo,
+            ...(feeId ? { feeId } : {}),
           },
         })
-        await applyPaymentToLedger(
-          {
-            txnId: ledgerKey,
-            schoolId: txn.schoolId,
-            feeId: txn.feeId,
-            amount: txn.amount,
-            method: txn.method,
-          },
-          tx,
-        )
+        if (settling && feeId) {
+          await applyPaymentToLedger(
+            {
+              txnId: ledgerKey,
+              schoolId: txn.schoolId,
+              feeId,
+              amount: txn.amount,
+              method: txn.method,
+            },
+            tx,
+          )
+        }
         return u
       })
       matchedTransactionId = updated.id

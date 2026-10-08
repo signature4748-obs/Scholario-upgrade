@@ -54,6 +54,7 @@ import {
   TPT_GLOBAL_STYLES,
   type TptTab,
 } from './transport-shared'
+import { DemoModuleNotice } from '../shared/demo-module-notice'
 import { RoutesTable } from './routes-table'
 import { VehiclesTable } from './vehicles-table'
 import {
@@ -133,6 +134,10 @@ export function TransportModule() {
     <>
       <style dangerouslySetInnerHTML={{ __html: TPT_GLOBAL_STYLES }} />
       <PageTransition className="space-y-4 transport-shell">
+      {/* 7-I — honest label: the UI runs client-side demo state (real
+          read-only GET APIs exist, writes are demo-only). */}
+      <DemoModuleNotice moduleName="Transport" variant="preview" />
+
       {/* Tab row + Assign Student action on the right */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <SegmentedTabs

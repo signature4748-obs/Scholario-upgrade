@@ -28,11 +28,11 @@ import { AddTeacherWizard } from './add-teacher-wizard'
 import { TeacherProfilePage } from './teacher-profile-page'
 import { TeacherSettingsPage } from './teacher-settings-page'
 import {
-  LockAccountModal, CredentialsSlipModal,
+  LockAccountModal, CredentialsSlipModal, SalaryStructureModal,
   TerminationModal,
 } from './account-modals'
 import {
-  AssignPositionModal, EmergencyOverrideModal, CreateCustomPositionModal,
+  AssignPositionModal, CreateCustomPositionModal,
 } from './position-modals'
 import { WorkloadAllocationModal } from './workload-modal'
 
@@ -66,11 +66,9 @@ export function TeachersModule() {
     })
   }
 
-  // The responsibility-hub / override modals are pre-targeted at a specific
+  // The responsibility-hub modals are pre-targeted at a specific
   // teacher — resolve that teacher for the modal's context header.
   const assignTargetTeacher = s.teachers.find((t) => t.id === s.targetTeacherIdForPos) ?? null
-  const overrideTargetTeacher =
-    s.teachers.find((t) => t.id === s.overrideTeacherId) ?? assignTargetTeacher
 
   // Live record: the selected teacher is re-resolved from the store on
   // every render so profile edits (positions, workload, media, letters)
@@ -152,6 +150,7 @@ export function TeachersModule() {
           onOpenJoiningLetter={() => actions.handleOpenJoiningLetter(liveSelectedTeacher!)}
           onResetPassword={() => actions.handleResetPassword(liveSelectedTeacher!)}
           onToggleLock={() => actions.handleOpenLockModal(liveSelectedTeacher!)}
+          onOpenSalary={() => actions.handleOpenSalaryModal(liveSelectedTeacher!)}
           onOpenTermination={() => actions.handleOpenTerminationModal(liveSelectedTeacher!)}
           onManageWorkload={actions.handleManageWorkload}
           onManageResponsibilities={actions.handleManageResponsibilities}
@@ -310,25 +309,46 @@ export function TeachersModule() {
         </DialogContent>
       </Dialog>
 
-      {/* LOCK / UNLOCK ACCOUNT MODAL */}
+      {/* LOCK / UNLOCK ACCOUNT MODAL — server-backed (7-B): SUSPENDED
+          users cannot authenticate; honest pending/error states */}
       <LockAccountModal
         open={s.lockModalOpen}
         onClose={() => s.setLockModalOpen(false)}
         teacher={s.selectedTeacher}
         lockConfirmText={s.lockConfirmText}
         setLockConfirmText={s.setLockConfirmText}
+        submitting={s.lockSubmitting}
+        error={s.lockError}
         onConfirm={actions.handleConfirmLockToggle}
       />
 
-      {/* CREDENTIALS SLIP MODAL */}
+      {/* CREDENTIALS SLIP MODAL — displays the server-issued one-time
+          temp password (component state only; never persisted) */}
       <CredentialsSlipModal
         open={s.credentialsModalOpen}
         onClose={() => s.setCredentialsModalOpen(false)}
         credentials={s.currentCredentials}
       />
 
+      {/* MONTHLY SALARY STRUCTURE MODAL (7-C) — real write through
+          PUT /api/salary/structure; payments/history live in Salary & Payroll */}
+      <SalaryStructureModal
+        open={s.salaryModalOpen}
+        onClose={() => s.setSalaryModalOpen(false)}
+        teacher={s.selectedTeacher}
+        amountInput={s.salaryAmountInput}
+        setAmountInput={s.setSalaryAmountInput}
+        effectiveFromInput={s.salaryEffectiveFromInput}
+        setEffectiveFromInput={s.setSalaryEffectiveFromInput}
+        submitting={s.salarySubmitting}
+        error={s.salaryError}
+        onConfirm={actions.handleSubmitSalaryStructure}
+      />
+
       {/* ASSIGN RESPONSIBILITY MODAL — opened from a teacher's profile,
-          pre-targeted at that teacher (context, not a form field) */}
+          pre-targeted at that teacher (context, not a form field). The
+          assignment follows the acceptance workflow; instant "emergency
+          override" was a fake authorization affordance and is gone (7-B). */}
       <AssignPositionModal
         open={s.assignPosModalOpen}
         onClose={() => s.setAssignPosModalOpen(false)}
@@ -338,13 +358,6 @@ export function TeachersModule() {
         setSelectedPosIdToAssign={s.setSelectedPosIdToAssign}
         onConfirm={actions.handleConfirmAssignPosition}
         onCreateCustomPosition={() => s.setCustomPosModalOpen(true)}
-        onEmergencyOverride={() => {
-          // Carry the hub's current selection into the override modal.
-          s.setOverrideTeacherId(s.targetTeacherIdForPos)
-          s.setSelectedPosForOverride(s.selectedPosIdToAssign)
-          s.setAssignPosModalOpen(false)
-          s.setEmergencyOverrideModalOpen(true)
-        }}
       />
 
       {/* CREATE CUSTOM RESPONSIBILITY MODAL — the definition joins the
@@ -360,22 +373,6 @@ export function TeachersModule() {
             description: 'Selected in the assign dialog — set the effective date and assign.',
           })
         }}
-      />
-
-      {/* EMERGENCY OVERRIDE MODAL — reached only through "More options";
-          keeps auth code + mandatory reason + audit trail */}
-      <EmergencyOverrideModal
-        open={s.emergencyOverrideModalOpen}
-        onClose={() => s.setEmergencyOverrideModalOpen(false)}
-        teacher={overrideTargetTeacher}
-        positionsList={assignablePositions}
-        selectedPosForOverride={s.selectedPosForOverride}
-        setSelectedPosForOverride={s.setSelectedPosForOverride}
-        overrideAuthCode={s.overrideAuthCode}
-        setOverrideAuthCode={s.setOverrideAuthCode}
-        overrideReason={s.overrideReason}
-        setOverrideReason={s.setOverrideReason}
-        onConfirm={actions.handleConfirmEmergencyOverride}
       />
 
       {/* CLASS & SUBJECT ALLOCATION MODAL — school-config-driven picker */}

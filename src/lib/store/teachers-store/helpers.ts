@@ -1,4 +1,17 @@
 import type { PositionDefinition, TeacherRecord } from './types'
+import { useCurrentUser } from '@/lib/store/current-user-store'
+
+/**
+ * Session actor (7-POLISH) — the REAL signed-in user's name for
+ * workspace-side audit entries, resolved from the server identity store
+ * (/api/auth/me → AppShell hydration), NEVER a fabricated person. Falls
+ * back to the honest generic 'Principal' while the identity is not yet
+ * hydrated (or a degraded fetch) so no fake name can ever render.
+ */
+export function sessionActorName(): string {
+  const name = useCurrentUser.getState().me?.name
+  return name?.trim() || 'Principal'
+}
 
 /**
  * Permission derivation — the single model shared by the Teacher Profile

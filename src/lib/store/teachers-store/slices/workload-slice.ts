@@ -3,6 +3,9 @@ import type {
   TeachersStoreState,
 } from '../types'
 import { createAppointmentLetterSnapshot } from '../letter-factory'
+// 7-POLISH — audit entries are attributed to the REAL session user
+// (server identity via /api/auth/me), never a fabricated principal.
+import { sessionActorName } from '../helpers'
 
 export const createWorkloadSlice: StateCreator<
   TeachersStoreState,
@@ -34,7 +37,7 @@ export const createWorkloadSlice: StateCreator<
 
     get().logAudit({
       category: 'Subject Assigned',
-      actorName: 'Dr. Ananya Iyer',
+      actorName: sessionActorName(),
       actorRole: 'Principal',
       targetTeacherId: teacher.id,
       targetTeacherName: teacher.name,
@@ -90,7 +93,7 @@ export const createWorkloadSlice: StateCreator<
 
     get().logAudit({
       category: 'Appointment Letter',
-      actorName: 'Dr. Ananya Iyer',
+      actorName: sessionActorName(),
       actorRole: 'Principal',
       targetTeacherId: teacher.id,
       targetTeacherName: teacher.name,

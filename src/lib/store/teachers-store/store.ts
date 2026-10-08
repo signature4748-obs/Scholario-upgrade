@@ -8,8 +8,6 @@ import { createAuditSlice } from './slices/audit-slice'
 import { createLifecycleSlice } from './slices/lifecycle-slice'
 import { createPositionsSlice } from './slices/positions-slice'
 import { createWorkloadSlice } from './slices/workload-slice'
-import { createCredentialsSlice } from './slices/credentials-slice'
-import { createPayrollSlice } from './slices/payroll-slice'
 // SaaS-STAGE-2A — tenant-scoped persistence (per-school staff dataset).
 import { migrateLegacyScopedStore, createTenantScopedStorage, TENANT_SCOPED_BASES } from '@/lib/tenant/tenant-storage'
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
@@ -40,8 +38,6 @@ export const useTeachersStore = create<TeachersStoreState>()(
       ...createLifecycleSlice(...a),
       ...createPositionsSlice(...a),
       ...createWorkloadSlice(...a),
-      ...createCredentialsSlice(...a),
-      ...createPayrollSlice(...a),
     }),
     {
       name: TENANT_SCOPED_BASES.teachers,

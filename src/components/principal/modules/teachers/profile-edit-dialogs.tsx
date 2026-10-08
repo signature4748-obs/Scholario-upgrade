@@ -6,9 +6,9 @@
  * The Teacher Profile is a VIEW screen first: every edit lives behind a
  * small, focused dialog instead of turning the page into a giant form.
  * Every dialog is wired to the REAL store actions (updateTeacher,
- * removePositionFromTeacher, emergencyOverridePosition, setTeacherMedia)
- * and the REAL shared media pipeline (server-validated uploads) — no
- * parallel state, no fake controls.
+ * removePositionFromTeacher, setTeacherMedia) and the REAL shared media
+ * pipeline (server-validated uploads) — no parallel state, no fake
+ * controls.
  */
 
 import { useEffect, useState } from 'react'
@@ -23,7 +23,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { DatePicker } from '@/components/ui/date-picker'
 import { toast } from 'sonner'
@@ -317,10 +316,11 @@ export function EmploymentEditDialog({ teacher, open, onClose }: { teacher: Teac
 /* ------------------------------------------------------------------ */
 
 /**
- * Soft removal is the default: the assignment is flagged 'Pending Removal'
- * (disappears from the active list, record kept for audit). Emergency
- * removal takes effect instantly and requires the Principal authorization
- * code — both are the store's existing removal semantics.
+ * Soft removal is the flow: the assignment is flagged 'Pending Removal'
+ * (disappears from the active list, record kept for audit) after the
+ * principal records a reason. (7-B) The former "emergency removal" leg —
+ * instant removal gated by a hardcoded client-side authorization code —
+ * was a fake authorization surface and has been removed.
  */
 export function RemoveResponsibilityDialog({
   teacher, assignment, open, onClose,
@@ -332,11 +332,9 @@ export function RemoveResponsibilityDialog({
 }) {
   const removePositionFromTeacher = useTeachersStore((s) => s.removePositionFromTeacher)
   const [reason, setReason] = useState('')
-  const [emergency, setEmergency] = useState(false)
-  const [authCode, setAuthCode] = useState('')
 
   useEffect(() => {
-    if (open) { setReason('Administrative Reassignment'); setEmergency(false); setAuthCode('') }
+    if (open) { setReason('Administrative Reassignment') }
   }, [open])
 
   if (!assignment) return null
@@ -346,22 +344,11 @@ export function RemoveResponsibilityDialog({
       toast.error('A removal reason is required for the audit trail')
       return
     }
-    if (emergency && authCode.trim() !== 'OVERRIDE-2025' && authCode.trim() !== '123456') {
-      toast.error('Invalid authorization code', { description: 'Emergency removal requires the Principal override code.' })
-      return
-    }
-    removePositionFromTeacher(teacher.id, assignment.id, reason.trim(), emergency, authCode.trim())
+    removePositionFromTeacher(teacher.id, assignment.id, reason.trim())
     onClose()
-    toast.success(
-      emergency
-        ? `Removed "${assignment.positionTitle}" immediately`
-        : `Removal of "${assignment.positionTitle}" initiated`,
-      {
-        description: emergency
-          ? 'Emergency removal recorded in the audit trail with the authorization code.'
-          : 'The teacher acknowledges the change; the historical record is preserved.',
-      }
-    )
+    toast.success(`Removal of "${assignment.positionTitle}" initiated`, {
+      description: 'The teacher acknowledges the change; the historical record is preserved.',
+    })
   }
 
   return (
@@ -374,7 +361,7 @@ export function RemoveResponsibilityDialog({
         <>
           <Button variant="outline" size="sm" onClick={onClose} className="text-xs h-8">Cancel</Button>
           <Button variant="destructive" size="sm" onClick={confirm} className="text-xs h-8">
-            {emergency ? 'Remove immediately' : 'Request removal'}
+            Request removal
           </Button>
         </>
       }
@@ -384,21 +371,6 @@ export function RemoveResponsibilityDialog({
           <Label className="text-xs">Reason</Label>
           <Textarea value={reason} onChange={(e) => setReason(e.target.value)} className="mt-1 text-xs min-h-16" rows={2} />
         </div>
-        <label className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 cursor-pointer">
-          <Checkbox checked={emergency} onCheckedChange={(v) => setEmergency(v === true)} className="mt-0.5" />
-          <span className="text-xs">
-            <span className="font-medium text-foreground">Remove immediately (emergency)</span>
-            <span className="block text-muted-foreground mt-0.5">
-              Bypasses the acknowledgement step. Requires the Principal authorization code and is logged as an emergency override.
-            </span>
-          </span>
-        </label>
-        {emergency && (
-          <div>
-            <Label className="text-xs">Authorization code</Label>
-            <Input value={authCode} onChange={(e) => setAuthCode(e.target.value)} placeholder="OVERRIDE-XXXX" className={`mt-1 ${smallInput} font-mono`} />
-          </div>
-        )}
       </div>
     </EditDialogShell>
   )

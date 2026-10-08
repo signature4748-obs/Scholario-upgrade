@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useAdmissionStore } from '@/lib/store/admission-store'
+import { resetRosterSyncGuard, syncStudentsFromServer } from '@/lib/store/students-store'
 import { toast } from 'sonner'
 
 import { buildIssuanceArtifacts } from './issuance/letter-data'
@@ -14,6 +15,7 @@ import { FeeReceiptTab } from './issuance/FeeReceiptTab'
 import { CredentialsTab } from './issuance/CredentialsTab'
 import { WelcomeLetterTab } from './issuance/WelcomeLetterTab'
 import { DispatchesTab } from './issuance/DispatchesTab'
+import { EnrollStudentDialog } from './issuance/EnrollStudentDialog'
 
 interface IssuanceWorkspaceProps {
   appId: string
@@ -30,6 +32,11 @@ export function IssuanceWorkspace({
   const app = store.applications.find((a) => a.id === appId)
 
   const [activeTab, setActiveTab] = useState<IssuanceTabKey>('letter')
+  // PHASE 7-H — real enrollment: "Complete & Enrol" opens the enroll
+  // dialog (POST /api/students). The workspace only leaves the issuance
+  // view after the SERVER has confirmed the enrollment.
+  const [enrollOpen, setEnrollOpen] = useState(false)
+  const [enrolled, setEnrolled] = useState(false)
 
   if (!app) {
     return (
@@ -45,17 +52,48 @@ export function IssuanceWorkspace({
   const artifacts = buildIssuanceArtifacts(app)
 
   const handleCompleteAndEnroll = () => {
+    setEnrolled(false)
+    setEnrollOpen(true)
+  }
+
+  // Fired ONCE by the dialog, only after the server confirms the create.
+  // The local record is marked Completed WITH the server student id +
+  // admission number, and the roster re-syncs from the server (the fake
+  // localStorage roster insertion is gone).
+  const handleEnrolled = ({
+    studentId,
+    admissionNo,
+  }: {
+    studentId: string
+    admissionNo: string
+  }) => {
+    setEnrolled(true)
     store.completeAdmission(app.id, {
-      admissionNo: artifacts.admissionNo,
-      studentId: artifacts.studentId,
+      studentId,
+      admissionNo,
       rollNo: artifacts.rollNo,
       regNo: artifacts.regNo,
     })
 
-    toast.success(
-      `Admission Issued! ${formData.firstName} ${formData.lastName} enrolled into ${formData.className} (${artifacts.rollNo}).`
-    )
-    onCompleted()
+    resetRosterSyncGuard()
+    void syncStudentsFromServer().then((ok) => {
+      if (!ok) {
+        toast.error('Roster could not be refreshed', {
+          description:
+            'The student was enrolled on the server — reload the page to see the updated roster.',
+        })
+      }
+    })
+  }
+
+  const handleEnrollDialogClose = (open: boolean) => {
+    setEnrollOpen(open)
+    // Leaving the dialog after a successful enrollment returns to the
+    // applications dashboard (the record now shows as Enrolled there).
+    if (!open && enrolled) {
+      setEnrolled(false)
+      onCompleted()
+    }
   }
 
   return (
@@ -101,6 +139,15 @@ export function IssuanceWorkspace({
       {activeTab === 'dispatches' && (
         <DispatchesTab app={app} />
       )}
+
+      {/* REAL server enrollment (POST /api/students) — replaces the fake
+          local roster insertion that used to run on "Complete & Enrol". */}
+      <EnrollStudentDialog
+        open={enrollOpen}
+        onOpenChange={handleEnrollDialogClose}
+        app={app}
+        onEnrolled={handleEnrolled}
+      />
     </div>
   )
 }

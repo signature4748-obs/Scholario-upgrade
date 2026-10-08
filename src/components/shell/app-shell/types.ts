@@ -9,6 +9,12 @@ export interface NavItem {
   label: string
   icon: React.ReactNode
   badge?: number
+  /** PHASE 7-I — honest module labeling: a tiny inline chip rendered next
+   *  to the label (hidden in the collapsed sidebar, like `badge`). Used by
+   *  the Principal nav to mark demo/preview modules (client-side demo
+   *  state, no production persistence). Roles that never set it are
+   *  visually unchanged. */
+  tag?: string
   children?: NavSubItem[]
   /** ARCHITECTURE RESET — permission-aware navigation: when set, the item
    *  renders ONLY if the authenticated role holds this server-matrix

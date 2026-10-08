@@ -5,9 +5,12 @@
  * the officer expands the section (View). REAL application data only:
  * no invented fallbacks, no fake OCR metrics, no compliance claims.
  * Aadhaar numbers are masked (XXXX XXXX 3847) per the privacy policy.
+ *
+ * PHASE 7-H: the per-document View/Download links (signed URLs via a
+ * never-built admissions upload-access endpoint) are REMOVED —
+ * documents are physically collected, and the row records exactly
+ * that. Digital uploads are coming soon.
  */
-import { ExternalLink, Download } from 'lucide-react'
-import { useSignedFileUrl } from '@/lib/secure-media'
 import type { AdmissionApplication } from '@/lib/store/admission-store'
 import type { SectionKey } from '@/lib/store/admission-store'
 import type { AdmissionDocumentPolicy } from '@/lib/store/school-settings-store'
@@ -17,39 +20,6 @@ interface SectionDataContentProps {
   sectionKey: SectionKey
   app: AdmissionApplication
   documentPolicy?: AdmissionDocumentPolicy
-}
-
-/**
- * Phase 1 — View/Download links for a stored admission document resolve
- * through a short-lived signed URL (no anonymous file reads). The links
- * appear once the grant resolves; the fileId is unguessable otherwise.
- */
-function SignedDocLinks({ fileId }: { fileId: string }) {
-  const viewUrl = useSignedFileUrl(fileId, 'admissions', false)
-  const downloadUrl = useSignedFileUrl(fileId, 'admissions', true)
-  if (!viewUrl && !downloadUrl) return null
-  return (
-    <span className="flex items-center gap-1 shrink-0">
-      {viewUrl && (
-        <a
-          href={viewUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground font-medium"
-        >
-          <ExternalLink className="h-3 w-3" /> View
-        </a>
-      )}
-      {downloadUrl && (
-        <a
-          href={downloadUrl}
-          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground font-medium"
-        >
-          <Download className="h-3 w-3" /> Download
-        </a>
-      )}
-    </span>
-  )
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -212,20 +182,20 @@ export function SectionDataContent({ sectionKey, app, documentPolicy }: SectionD
                 'text-[11px] font-semibold shrink-0 ' +
                 (d.verified
                   ? 'text-emerald-600 dark:text-emerald-400'
-                  : d.uploaded
+                  : d.received
                     ? 'text-foreground'
                     : d.required
                       ? 'text-rose-600 dark:text-rose-400'
                       : 'text-muted-foreground')
               }
             >
-              {d.verified ? '✓ Verified' : d.uploaded ? 'Uploaded' : d.required ? '✕ Missing' : 'Not uploaded'}
+              {d.verified ? '✓ Verified' : d.received ? 'Received' : d.required ? '✕ Missing' : 'Not received'}
             </span>
-            {d.fileId && <SignedDocLinks fileId={d.fileId} />}
           </div>
         ))}
         <p className="text-[10px] text-muted-foreground pt-1">
-          Replace an upload from the application form (Documents step).
+          Mark documents received from the application form (Documents step). Digital uploads are
+          coming soon — nothing is stored on a server.
         </p>
       </div>
     )

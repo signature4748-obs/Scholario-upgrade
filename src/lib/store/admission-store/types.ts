@@ -1,6 +1,5 @@
 import type { AdmissionFormData } from '@/components/principal/modules/admission/types'
 import type { FeeDataState } from '@/components/principal/modules/FeeStructureStep'
-import type { Student } from '@/lib/mock/students'
 
 export type AdmissionStatus =
   | 'Draft'
@@ -96,18 +95,28 @@ export interface AdmissionStoreState {
   requestCorrection: (appId: string, generalRemarks: string) => void
   rejectApplication: (appId: string, reason: string, retentionDays?: number) => void
   restoreRejectedApplication: (appId: string) => void
+  /**
+   * PHASE 7-H (admissions honesty): completion is a RECORDER for a REAL
+   * server enrollment. The issuance workspace first POSTs the applicant's
+   * collected data to /api/students; on success it calls this action with
+   * the SERVER-issued student id + admission number so the local record
+   * references the real student. No roster insertion, no fabricated
+   * credentials, no placeholder contact data happens here.
+   */
   completeAdmission: (
     appId: string,
     issuanceDetails?: {
-      admissionNo?: string
+      /** Server Student row id from POST /api/students (the real record). */
       studentId?: string
+      /** Server admission number from POST /api/students (ADM-…). */
+      admissionNo?: string
       rollNo?: string
       regNo?: string
     }
-  ) => Student | null
+  ) => AdmissionApplication | null
   deleteArchivedApplication: (appId: string) => void
 }
 
 // Re-export the imported types so existing type-only imports through this
 // module keep working if other files re-route through us.
-export type { AdmissionFormData, FeeDataState, Student }
+export type { AdmissionFormData, FeeDataState }

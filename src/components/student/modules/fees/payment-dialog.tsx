@@ -40,6 +40,10 @@ interface PaymentDialogProps {
   /** Primary core fee head the payment is applied against (order note). */
   primaryHead: string
   config: PaymentConfigResponse | null
+  /** 7-E — fired once the SERVER has verified the payment (success
+   * stage). The Fees module refetches its server-derived balance +
+   * receipt history so the displayed truth drops immediately. */
+  onPaymentSuccess?: () => void
 }
 
 interface RazorpayCheckoutResponse {
@@ -48,7 +52,7 @@ interface RazorpayCheckoutResponse {
   razorpay_signature: string
 }
 
-export function PaymentDialog({ open, onOpenChange, studentId, student, balanceDue, primaryHead, config }: PaymentDialogProps) {
+export function PaymentDialog({ open, onOpenChange, studentId, student, balanceDue, primaryHead, config, onPaymentSuccess }: PaymentDialogProps) {
   const [stage, setStage] = useState<PayStage>('amount')
   const [amountInput, setAmountInput] = useState('')
   const [method, setMethod] = useState(paymentMethods[0]?.id ?? 'upi')
@@ -227,6 +231,9 @@ export function PaymentDialog({ open, onOpenChange, studentId, student, balanceD
       setStage('success')
       if (result.error) toast.info('Already recorded', { description: result.error })
     }
+    // 7-E — the server has verified this payment: let the Fees module
+    // refetch the server-derived balance + receipt history.
+    onPaymentSuccess?.()
   }
 
   const stageLabel: Record<PayStage, string> = {

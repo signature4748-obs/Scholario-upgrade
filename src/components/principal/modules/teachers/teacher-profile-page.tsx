@@ -20,7 +20,7 @@
 import { useState } from 'react'
 import {
   Lock, Unlock, ShieldAlert, ArrowLeft, FileCheck2, FileSignature,
-  KeyRound, ChevronDown, Camera, Pencil, UserRoundPen,
+  KeyRound, ChevronDown, Camera, Pencil, UserRoundPen, Wallet,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -51,6 +51,8 @@ interface Props {
   onOpenJoiningLetter: () => void
   onResetPassword: () => void
   onToggleLock: () => void
+  /** 7-C — opens the module's salary-structure dialog (server-backed). */
+  onOpenSalary: () => void
   onOpenTermination: () => void
   /** Opens the module's WorkloadAllocationModal pre-targeted at this teacher. */
   onManageWorkload: (t: TeacherRecord) => void
@@ -60,7 +62,7 @@ interface Props {
 
 export function TeacherProfilePage({
   teacher, positionsList, onBack,
-  onOpenAppointment, onOpenJoiningLetter, onResetPassword, onToggleLock, onOpenTermination,
+  onOpenAppointment, onOpenJoiningLetter, onResetPassword, onToggleLock, onOpenSalary, onOpenTermination,
   onManageWorkload, onManageResponsibilities,
 }: Props) {
   return (
@@ -118,6 +120,9 @@ export function TeacherProfilePage({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button variant="outline" size="sm" onClick={onOpenSalary} className="text-xs h-8 gap-1.5">
+            <Wallet className="h-3.5 w-3.5" /> Salary
+          </Button>
           <Button variant="outline" size="sm" onClick={onToggleLock}
             className={cn('text-xs h-8 gap-1.5', teacher.isLocked && 'border-amber-500 text-amber-700 hover:bg-amber-50')}>
             {teacher.isLocked ? <Unlock className="h-3.5 w-3.5 text-amber-600" /> : <Lock className="h-3.5 w-3.5 text-slate-500" />}

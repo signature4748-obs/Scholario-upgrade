@@ -198,6 +198,14 @@ export function SidebarAside({
                         {item.icon}
                       </span>
                       {!collapsed && <span className="truncate flex-1">{item.label}</span>}
+                      {!collapsed && item.tag && (
+                        <span
+                          title="Demo module — changes are not saved to the database"
+                          className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300"
+                        >
+                          {item.tag}
+                        </span>
+                      )}
                       {!collapsed && hasChildren && (
                         <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 transition-transform duration-200', isParentActive ? 'rotate-0 text-slate-500' : '-rotate-90 text-slate-400')} />
                       )}
