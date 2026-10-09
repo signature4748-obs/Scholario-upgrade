@@ -8,6 +8,7 @@ import { auditEvent } from '@/lib/security/audit'
 import { storageUpload, storageDelete } from '@/lib/storage/supabase'
 import {
   TEACHER_UPLOAD_POLICY,
+  isTeacherMediaAdminRole,
   sniffFileType,
   readImageDimensions,
   EXT_BY_TYPE,
@@ -23,8 +24,11 @@ export const runtime = 'nodejs'
  *
  * Phase 1 hardening (baseline B-5 remediation — this endpoint was
  * ANONYMOUS; now it is authenticated + rate-limited + audited):
- *   - Authorization: PRINCIPAL / MANAGEMENT only (the teacher-onboarding
- *     module that consumes it).
+ *   - Authorization: PRINCIPAL only — the administrative role of the
+ *     teacher-onboarding module that consumes this endpoint. Enforced
+ *     through the shared canonical-role guard (isTeacherMediaAdminRole,
+ *     Gate E): every non-canonical role value (MANAGEMENT included) is
+ *     fail-closed, mirroring withUser's canonical invariant.
  *   - Rate limit: 30 uploads/hour per account.
  *   - Type policy (unchanged, now centralized in lib/security/upload):
  *     JPG / PNG / WebP verified by MAGIC BYTES — a renamed file cannot
@@ -55,7 +59,7 @@ export async function POST(req: NextRequest) {
   if (!user || user.status !== 'ACTIVE') {
     return NextResponse.json({ success: false, error: 'Authentication required.' }, { status: 401 })
   }
-  if (user.role !== 'PRINCIPAL' && user.role !== 'MANAGEMENT') {
+  if (!isTeacherMediaAdminRole(user.role)) {
     return NextResponse.json({ success: false, error: 'Not authorized for media uploads.' }, { status: 403 })
   }
   // 3-c V5/V10: the ownership registry binds the file to a school — a
