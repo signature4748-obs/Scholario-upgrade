@@ -16,6 +16,7 @@ import { AppError, newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimitStrict } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, passwordInputSchema, newPasswordSchema } from '@/lib/security/validation'
 import { auditEvent } from '@/lib/security/audit'
+import { isCanonicalSchoolRole } from '@/lib/security/permissions'
 
 export const runtime = 'nodejs'
 
@@ -34,6 +35,13 @@ export const runtime = 'nodejs'
  *     login (Set-Cookie always; response body only in the dev preview
  *     bearer mode).
  *   - audit row (PASSWORD_CHANGED + SESSION_ROTATED)
+ *
+ * GATE F — identity-surface canonical-role invariant, mirroring
+ * /api/auth/me: only an ACTIVE canonical school role (PRINCIPAL |
+ * TEACHER | STUDENT) may operate on its own credential. Non-canonical
+ * sessions (PARENT, MANAGEMENT, ACCOUNTANT, DRIVER, SUPER_ADMIN, stray
+ * values) hydrate as logged-out BEFORE the per-account throttle, so
+ * forged probes neither change nor rate-limit anything.
  */
 const changePasswordBodySchema = strictBody({
   currentPassword: passwordInputSchema,
@@ -48,6 +56,10 @@ export async function POST(req: NextRequest) {
     if (!user) throw new Error('UNAUTHORIZED')
     // Task 4-d (fix #9) — mirror withUser semantics (ACTIVE accounts only).
     if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
+    // GATE F — canonical-role invariant (mirrors /api/auth/me), checked
+    // BEFORE the rate limiter: a forged session must not consume the
+    // account's password-change attempts.
+    if (!isCanonicalSchoolRole(user.role)) throw new Error('UNAUTHORIZED')
 
     // Per-account throttle — wrong current-password attempts are limited.
     // PHASE 8B (§21) — strict shared-budget gate (credential-adjacent mutation).
