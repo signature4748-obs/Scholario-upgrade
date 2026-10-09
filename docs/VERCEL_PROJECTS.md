@@ -157,12 +157,21 @@ verify A–G) → RELEASE GATE → deploy → SHA-provenance + /health/ready
 ## 7. Legacy project `scholario-production` — DEPRECATED
 
 **Status: deprecated.** The unified deployment was superseded by the
-two-plane architecture on 2026-10-06. It is **retained** (not deleted)
-during a stability window as the known-good rollback path. It still
-auto-deploys `main`, keeps serving both planes at
-`https://scholario-production.vercel.app`, and requires the explicit
-`SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1` opt-in to boot in production
-(without that opt-in, `unified` fails closed like any other legacy value).
+two-plane architecture on 2026-10-06. It still auto-deploys `main`, keeps
+serving both planes at `https://scholario-production.vercel.app`, and
+requires the explicit `SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1` opt-in to
+boot in production (without that opt-in, `unified` fails closed like any
+other legacy value).
+
+**Rollback status (audited 2026-10-08): BROKEN — not a rollback target.**
+The project auto-deploys current `main` (READY) with its legacy
+environment set, but its `/health/ready` answers
+`503 {"status":"unavailable","checks":{"database":"failed"}}` — the stale
+database configuration cannot serve any tenant traffic. The two plane
+projects are the only working deployments; rollback goes through them
+(Vercel deployment rollback on a plane project, or redeploying an
+earlier `main` commit). The decommission decision below no longer waits
+on a stability window for the unified plane's sake.
 
 **What still references the legacy URL (audit 2026-10-06):**
 
@@ -199,5 +208,7 @@ auto-deploys `main`, keeps serving both planes at
    knowledge from onboarding docs if desired; the code keeps accepting the
    opt-in harmlessly (it is simply never set).
 
-**Do not delete before step 1.** Until then the legacy project is the only
-deployment that can serve BOTH planes from one URL — the rollback story.
+**Deletion remains an explicit owner decision.** Since the 2026-10-08
+audit (above) the unified plane can no longer serve traffic at all —
+there is no technical reason to keep it, only the owner's call on when
+to remove the URL and its legacy secrets from the world.
