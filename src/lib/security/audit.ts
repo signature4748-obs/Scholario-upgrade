@@ -49,6 +49,10 @@ export const AUDIT_ACTIONS = [
   'ACCOUNT_ACTIVATED',
   'PLATFORM_SETTING_CHANGE',
   'PAYMENT_VERIFIED',
+  // BATCH2-B4 — canonical fee-ledger refund (POST /api/fees/transactions/
+  // [id]/refund): a settled payment was reversed through the ledger with
+  // an audit trail; joins the canonical vocabulary.
+  'FEE_TRANSACTION_REFUNDED',
   'FILE_UPLOADED',
   'FILE_DELETED',
   'FILE_ACCESS_GRANTED',

@@ -50,6 +50,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import { useFeeStore } from '@/lib/store/fee-store'
+// BATCH2-B5 — the webhook audit list reads the REAL server event stream
+// (GET /api/fees/webhook, safe projection — no rawPayload/signature).
+import { useServerResource, type WebhookEventRow } from '../fees/use-fee-server-data'
 import type {
   PaymentMode, GatewayProvider, GatewayEnvironment, BankAccountType,
   UpiQrType,
@@ -67,7 +70,120 @@ export function FinancePaymentCollectionSettings() {
       <BankAndSettlement />
       <UpiQrConfigSection />
       <PaymentGatewaySection />
+      {/* BATCH2-B5 — the REAL webhook event audit (server rows); the
+          gateway card above keeps its existing config UI intact. */}
+      <WebhookEventAuditSection />
     </>
+  )
+}
+
+// ─── E. Webhook Event Audit (server rows — GET /api/fees/webhook) ────
+
+/** Status chip vocabulary for the audit rows. */
+function webhookStatusMeta(status: string): { label: string; tone: string } {
+  switch (status) {
+    case 'processed': return { label: 'Processed', tone: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-emerald-500/20' }
+    case 'error': return { label: 'Error', tone: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-rose-500/20' }
+    case 'processing': return { label: 'Processing', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 ring-amber-500/20' }
+    default: return { label: status, tone: 'bg-muted text-muted-foreground ring-border' }
+  }
+}
+
+function WebhookEventAuditSection() {
+  const events = useServerResource<WebhookEventRow[]>('/api/fees/webhook?limit=50')
+  const rows = events.data ?? []
+
+  return (
+    <SettingsCard
+      label="Webhook Event Audit"
+      icon={<Webhook />}
+      summary={
+        events.loading
+          ? 'loading server events…'
+          : `${rows.length} event${rows.length === 1 ? '' : 's'} · server audit log`
+      }
+      action={
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 text-xs gap-1"
+          onClick={events.reload}
+          aria-label="Refresh webhook audit list"
+        >
+          <RefreshCw className={cn('h-3 w-3', events.loading && 'animate-spin')} /> Refresh
+        </Button>
+      }
+    >
+      {/* Loading skeleton */}
+      {events.loading && (
+        <div className="space-y-1" aria-busy="true" aria-label="Loading webhook events">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 py-2">
+              <div className="h-3 w-32 animate-pulse rounded bg-muted/60" />
+              <div className="h-3 w-16 animate-pulse rounded bg-muted/50" />
+              <div className="ml-auto h-3 w-20 animate-pulse rounded bg-muted/50" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Error — honest, retryable */}
+      {events.error && events.data === null && !events.loading && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden />
+          <p className="min-w-0 flex-1 text-[11px] text-muted-foreground">
+            <span className="font-semibold text-foreground">Webhook audit unavailable.</span> {events.error}
+          </p>
+          <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1" onClick={events.reload}>
+            <RefreshCw className="h-3 w-3" aria-hidden /> Retry
+          </Button>
+        </div>
+      )}
+
+      {/* Empty — nothing received yet */}
+      {!events.loading && events.error === null && rows.length === 0 && (
+        <div className="flex items-center gap-2.5 py-3">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted/50 text-muted-foreground" aria-hidden>
+            <Webhook className="h-3.5 w-3.5" />
+          </span>
+          <p className="text-[11px] text-muted-foreground">
+            No webhook events received yet — gateway payment events land here as the provider posts them.
+          </p>
+        </div>
+      )}
+
+      {/* The audit rows — safe projection columns only. */}
+      {rows.length > 0 && (
+        <div className="space-y-1 max-h-72 overflow-y-auto custom-scrollbar">
+          {rows.map((e) => {
+            const meta = webhookStatusMeta(e.status)
+            return (
+              <div key={e.id} className="flex items-center gap-2.5 rounded-md border border-border/60 px-2.5 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium truncate font-mono">{e.eventType}</p>
+                  <p className="text-[9px] text-muted-foreground truncate">
+                    {e.gatewayName} · {formatDate(e.receivedAt)} · {formatRelativeTime(e.receivedAt)}
+                    {e.matchedTransactionId ? ` · txn ${e.matchedTransactionId.slice(0, 10)}…` : ''}
+                  </p>
+                  {e.error && (
+                    <p className="text-[9px] text-rose-600 truncate" title={e.error}>{e.error}</p>
+                  )}
+                </div>
+                <span
+                  className={cn('inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-semibold whitespace-nowrap ring-1 shrink-0', meta.tone)}
+                  title={e.status}
+                >
+                  {meta.label}
+                </span>
+              </div>
+            )
+          })}
+          <p className="text-[9px] text-muted-foreground border-t border-border/60 pt-2">
+            Server audit projection — payloads and signatures never leave the server.
+          </p>
+        </div>
+      )}
+    </SettingsCard>
   )
 }
 

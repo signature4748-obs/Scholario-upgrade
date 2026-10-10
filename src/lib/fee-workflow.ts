@@ -73,13 +73,28 @@ export const TXN_STATUS = {
 /**
  * Mint the next sequential receipt number for this school + calendar
  * year: SCH-2026-000001. Sequential and unique by construction (max+1
- * inside the caller's transaction; SQLite serialises writers, and every
- * mint site runs inside db.$transaction).
+ * inside the caller's transaction).
+ *
+ * BATCH2-B4 — concurrency: the max+1 scan is serialised per school with a
+ * PostgreSQL transaction-scoped advisory lock (`pg_advisory_xact_lock`),
+ * so concurrent settlement writers (webhook / checkout verify / sandbox
+ * confirm / manual transaction) mint DIFFERENT numbers instead of racing
+ * to the same one and surfacing P2002 as a 500. The lock lives for the
+ * caller's transaction only — it cannot leak or deadlock across mints;
+ * the (schoolId, receiptNo) DB unique remains the backstop. (SQLite-era
+ * comment retained for history: SQLite serialises writers by itself —
+ * the advisory lock is a no-op-equivalent there.)
  */
 export async function mintReceiptNo(
   schoolId: string,
   client: Prisma.TransactionClient = db,
 ): Promise<string> {
+  // Serialize same-school mint racing inside THIS transaction. hashtext()
+  // maps the school id into the lock's int4 key space; the xact-scoped
+  // lock is released automatically at commit/rollback. $executeRaw (not
+  // $queryRaw): the lock statement returns void, which $queryRaw's column
+  // deserializer rejects.
+  await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${schoolId}))`
   const year = new Date().getFullYear()
   const prefix = `SCH-${year}-`
   const rows = await client.feeTransaction.findMany({
@@ -284,6 +299,51 @@ export async function applyPaymentToLedger(
     applied: num(applied),
     alreadyApplied: false,
   }
+}
+
+// ── Server-side obligation check for order creation (BATCH2-B2) ────────
+
+/**
+ * Compute what a student actually owes, SERVER-SIDE, for order-amount
+ * validation — the amount a client may request an order for is bounded by
+ * this number, never by the client's own claim. NEVER creates rows: an
+ * obligation exists or it does not.
+ *
+ *   · explicit feeId (optional): the fee must belong to (schoolId,
+ *     studentId); its outstanding is the single obligation in scope.
+ *   · otherwise: the SUM of outstanding across the student's OPEN fees
+ *     (UNPAID / PARTIAL / PENDING — the same open-status vocabulary the
+ *     settlement-time resolver uses).
+ *
+ * Returns the resolved feeId (when the explicit fee validated — persist it
+ * on the order row so settlement credits the intended obligation) plus the
+ * outstanding total. A caller receiving feeId: null with outstanding 0 and
+ * a non-null requestedFeeId must treat the fee reference as invalid
+ * (foreign tenant / another student's fee / unknown id).
+ */
+export async function outstandingForOrder(
+  client: Prisma.TransactionClient | typeof db,
+  input: { schoolId: string; studentId: string; feeId?: string | null },
+): Promise<{ feeId: string | null; outstanding: number; feeTitle: string | null }> {
+  if (input.feeId) {
+    const fee = await client.fee.findFirst({
+      where: { id: input.feeId, schoolId: input.schoolId, studentId: input.studentId },
+      select: { id: true, title: true, amount: true, paid: true },
+    })
+    if (!fee) return { feeId: null, outstanding: 0, feeTitle: null }
+    return {
+      feeId: fee.id,
+      outstanding: num(outstandingDec(fee.amount, fee.paid)),
+      feeTitle: fee.title,
+    }
+  }
+  const fees = await client.fee.findMany({
+    where: { studentId: input.studentId, schoolId: input.schoolId, status: { in: ['UNPAID', 'PARTIAL', 'PENDING'] } },
+    select: { amount: true, paid: true },
+  })
+  let total = dec(0)
+  for (const f of fees) total = total.plus(outstandingDec(f.amount, f.paid))
+  return { feeId: null, outstanding: num(total), feeTitle: null }
 }
 
 // ── Fee targeting for gateway transactions (Phase 3) ─────────────────

@@ -6,6 +6,7 @@ import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { parseJsonBody, idSchema, safeText } from '@/lib/security/validation'
 import { num, dec, outstandingDec, formatINRServer } from '@/lib/money'
+import { applyPaymentToLedger, mintReceiptNo } from '@/lib/fee-workflow'
 
 export const runtime = 'nodejs'
 
@@ -59,6 +60,17 @@ export async function GET(req: NextRequest) {
 ///     balance) so a single POST can no longer mark a fee PAID with a
 ///     ₹500000 overpayment.
 ///   · parseJsonBody schema (ids, amount 1..500000, bounded text).
+///
+/// BATCH2-B4 — the payment-record branch is now CANONICAL: it writes ONE
+/// FeeTransaction row (source SCHOOL_OFFICE, status SUCCESS, receipt
+/// SCH-YYYY-NNNNNN minted server-side inside the transaction) and credits
+/// the ledger through applyPaymentToLedger (idempotency key
+/// `manual:{txn.id}`) — exactly the /api/fees/transactions discipline.
+/// Before this, the branch wrote a Payment mirror row with NO
+/// transactionId (a retried POST double-credited the fee) and NO
+/// FeeTransaction row (broke the Σ Payment = Σ FeeTransaction = Σ Fee.paid
+/// parity invariant, and minted no receipt). The response keeps its shape
+/// ({ ok, feeId, paid, status }) and adds receiptNo/txnId/ledger.
 const feePostSchema = z
   .object({
     feeId: idSchema.optional(),
@@ -80,13 +92,20 @@ export async function POST(req: NextRequest) {
     // record a payment on an existing fee
     if (body.feeId) {
       const amount = body.amount
-      // Phase 3: the fee is re-read INSIDE the transaction, the outstanding
-      // balance is checked against that fresh row, the credit is written as
-      // a clamped `{ increment }`, and the Payment mirror row carries
-      // schoolId — a concurrent double-POST can no longer overpay the fee
-      // (the Fee.paid DB bound-guard backstops whatever still races).
+      // BATCH2-B4: canonical writer — the fee is re-read INSIDE the
+      // transaction, the outstanding balance is checked against that
+      // fresh row, and the money lands through the SAME pipeline every
+      // other settlement writer uses: ONE FeeTransaction (SUCCESS,
+      // receipt SCH- minted inside the tx) + applyPaymentToLedger
+      // (idempotent on `manual:{txn.id}`, clamped to outstanding,
+      // Payment mirror with schoolId). A concurrent double-POST can
+      // neither overpay the fee (bound-guard backstop) nor double-credit
+      // (Payment.transactionId @unique backstop).
       const result = await trackedTransaction('payment-record-manual', async (tx) => {
-        const fee = await tx.fee.findUnique({ where: { id: body.feeId! } })
+        const fee = await tx.fee.findUnique({
+          where: { id: body.feeId! },
+          include: { student: { select: { id: true, user: { select: { name: true } } } } },
+        })
         if (!fee || fee.schoolId !== schoolId) throw new AppError('RESOURCE_NOT_FOUND')
         const remaining = outstandingDec(fee.amount, fee.paid)
         if (remaining.lessThanOrEqualTo(0)) {
@@ -101,22 +120,38 @@ export async function POST(req: NextRequest) {
             internalDetail: `fee ${fee.id} payment ${amount} > remaining ${formatINRServer(remaining)}`,
           })
         }
-        const newPaid = dec(fee.paid).plus(amount)
-        const status = newPaid.greaterThanOrEqualTo(fee.amount) ? 'PAID' : newPaid.greaterThan(0) ? 'PARTIAL' : fee.status
-        await tx.payment.create({
+        const method = String(body.method || 'CASH').toUpperCase().replace(' ', '_')
+        const receiptNo = await mintReceiptNo(schoolId, tx)
+        const created = await tx.feeTransaction.create({
           data: {
+            schoolId,
+            studentId: fee.studentId,
+            studentName: fee.student?.user?.name ?? null,
+            feeHeadName: fee.title,
+            feeId: fee.id,
+            amount,
+            method,
+            status: 'SUCCESS',
+            source: 'SCHOOL_OFFICE',
+            gatewayName: 'manual',
+            receiptNo,
+            note: body.note ? String(body.note).slice(0, 500) : null,
+            reconciliationStatus: 'unreconciled',
+            reconciledBy: ctx.user.id,
+          },
+        })
+        const ledger = await applyPaymentToLedger(
+          {
+            txnId: `manual:${created.id}`,
             schoolId,
             feeId: fee.id,
             amount,
-            method: body.method || 'CASH',
-            note: body.note || null,
+            method,
           },
-        })
-        await tx.fee.update({
-          where: { id: fee.id },
-          data: { paid: { increment: amount }, status, method: body.method || fee.method, paidDate: new Date() },
-        })
-        return { feeId: fee.id, paid: num(newPaid), status }
+          tx,
+        )
+        const paidNow = num(ledger ? ledger.paid : dec(fee.paid))
+        return { feeId: fee.id, paid: paidNow, status: ledger ? ledger.status : fee.status, receiptNo, txnId: created.id, ledger }
       })
       return { ok: true, ...result }
     }
