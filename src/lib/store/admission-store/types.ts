@@ -62,6 +62,45 @@ export interface AdmissionApplication {
   rejectedAt?: string
   auditTrail: AuditLogEntry[]
   /**
+   * FEE-ADMISSIONS MVP — the SERVER-issued workflow link. Set when the
+   * application was submitted through the flag-gated server flow
+   * (POST /api/admissions/applications). While present, review decisions,
+   * enrolment and official documents go through the server-owned
+   * endpoints (decision / enrol / fee-snapshot). Absent → the legacy
+   * client-only workflow runs unchanged.
+   */
+  serverApplicationId?: string
+  /** Mirror of the server status machine (SUBMITTED/UNDER_REVIEW/…). */
+  serverStatus?: string
+  /**
+   * Server-issued fee selections + quote captured at submission (the
+   * published-structure line items the principal selected).
+   */
+  serverFeeSelections?: {
+    optionalHeadIds?: string[]
+    quantities?: Record<string, number>
+    discountCode?: string
+  }
+  /** The persisted AdmissionFeeSnapshot (fetched for official documents). */
+  serverFeeSnapshot?: {
+    totalAmount: number
+    discountAmount: number
+    discountName: string | null
+    academicYear: string
+    lineItems: {
+      headId: string
+      name: string
+      category: string
+      kind: string
+      quantity: number
+      unitAmount: number
+      amount: number
+      discounted: boolean
+      discountCode?: string
+    }[]
+    issuedAt: string
+  }
+  /**
    * FINAL-GATE honesty: completion claims nothing that did not happen.
    * `generatedCredentials` (fabricated loginId/tempPassword/portalUrl)
    * is RETIRED — portal accounts are provisioned by the real Students &

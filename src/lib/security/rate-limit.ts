@@ -147,6 +147,10 @@ export const RATE_LIMITS = {
   // principal's account-control surface on PATCH /api/teachers/[id]
   // (reset-credential rewrites a password hash + revokes sessions).
   teacherCredentialReset: { name: 'teacher-credential-reset', limit: 20, windowMs: 60 * 60_000 },
+  // FEE-ADMISSIONS MVP — school-plane STUDENT bootstrap-credential reset
+  // (per-user): POST /api/students/[id]/reset-credential reissues an
+  // expiring one-time credential (same posture as the teacher surface).
+  studentCredentialReset: { name: 'student-credential-reset', limit: 20, windowMs: 60 * 60_000 },
 } satisfies Record<string, RateLimitProfile>
 
 export interface RateLimitResult {

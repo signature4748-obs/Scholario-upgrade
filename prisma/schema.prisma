@@ -170,6 +170,12 @@ model School {
   // PHASE 8B — canonical payroll persistence (fixed monthly salary)
   salaryStructures SalaryStructure[]
   salaryPayments   SalaryPayment[]
+
+  // FEE-ADMISSIONS MVP — server-issued admissions workflow (flag
+  // `admissionsServerIssuance`, default OFF) + per-school fee discount rules.
+  admissionApplications AdmissionApplication[]
+  admissionSequences   AdmissionSequence[]
+  feeDiscountRules     FeeDiscountRule[]
 }
 
 /// Per-user conversation state for DIRECT (Message-row) threads. The
@@ -230,6 +236,15 @@ model User {
   /// /api/auth/change-password (null = never; the migration's
   /// mustChangePassword input).
   passwordChangedAt DateTime?
+  /// FEE-ADMISSIONS MVP — expiry for server-provisioned bootstrap
+  /// credentials (mustChangePassword accounts). While set and in the
+  /// future, the account may authenticate with the bootstrap credential
+  /// and is gated to PASSWORD_CHANGE_REQUIRED on business APIs. Once
+  /// passed, login with the bootstrap credential is refused
+  /// (CREDENTIAL_EXPIRED) and a NEW one-time credential must be issued
+  /// through the verified principal-plane reset flow. Null for accounts
+  /// that already established their own password (no bootstrap state).
+  credentialExpiresAt DateTime?
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -1580,6 +1595,12 @@ model FeeStructure {
   classLevel     String    @default("Primary") // Pre-Primary, Primary, Middle, Secondary, Senior Secondary
   status         String    @default("draft") // draft, current, scheduled, archived
   version        Int       @default(1)
+  /// FEE-ADMISSIONS MVP — canonical academic year ("YYYY-YYYY", server-
+  /// normalized) this structure applies to. NULL on legacy rows whose
+  /// school had no configured year at migration time (the quote engine
+  /// fails closed on those — a year is never invented). New writes are
+  /// always normalized server-side.
+  academicYear   String?
   effectiveFrom  DateTime?
   effectiveTo    DateTime?
   publishedAt    DateTime?
@@ -1592,7 +1613,15 @@ model FeeStructure {
   versions     FeeStructureVersion[]
   transactions FeeTransaction[]
 
-  @@unique([schoolId, classId, status])
+  /// FEE-ADMISSIONS MVP — the compound unique (schoolId,classId,status)
+  /// was REPLACED by partial unique indexes in Postgres:
+  ///   FeeStructure_current_key   UNIQUE (schoolId,classId) WHERE status='current'
+  ///   FeeStructure_scheduled_key UNIQUE (schoolId,classId) WHERE status='scheduled'
+  /// Drafts and archived rows are unconstrained (a class may hold any
+  /// number of archived/draft versions). Code must look up per-status
+  /// rows with findFirst + status filter (the old
+  /// `schoolId_classId_status` findUnique key no longer exists).
+  @@index([schoolId, classId, status])
   @@index([schoolId, status])
 }
 
@@ -1615,6 +1644,20 @@ model FeeHead {
   amount      Decimal         @db.Decimal(12, 2) @default(0)
   frequency   String         @default("Monthly")
   mandatory   Boolean        @default(true)
+  /// FEE-ADMISSIONS MVP — line-item behavior kind. Truth table (single
+  /// source, mirrored by the backfill SQL, the zod validation and the DB
+  /// CHECK constraints — H1-R2 contract):
+  ///   FIXED     — always applied, fixed amount. mandatory MUST be true.
+  ///   OPTIONAL  — applied only when explicitly selected. mandatory MUST
+  ///               be false.
+  ///   QUANTITY  — per-unit price; a quantity (1..MAX_QUANTITY) is
+  ///               supplied at selection time. Reachable ONLY via
+  ///               explicit configuration (the legacy backfill never
+  ///               assigns it). mandatory may be either (required count
+  ///               vs opt-in).
+  /// Legacy migration: mandatory=true → FIXED, mandatory=false →
+  /// OPTIONAL (amount preserved verbatim).
+  kind        String         @default("FIXED")
   active      Boolean        @default(true)
   sortOrder   Int            @default(0)
   createdAt   DateTime       @default(now())
@@ -1634,6 +1677,10 @@ model FeeStructureVersion {
   structureId String
   structure   FeeStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
   version     Int
+  /// FEE-ADMISSIONS MVP — canonical academic year the version was
+  /// published under (mirrors FeeStructure.academicYear at publish time;
+  /// historical snapshots are never rewritten).
+  academicYear String?
   /// JSON snapshot of the entire FeeStructureConfig (heads + examFees +
   /// meta) at publish time. Kept as a single JSON column so we don't
   /// need a parallel FeeHeadVersion table.
@@ -1643,6 +1690,181 @@ model FeeStructureVersion {
   notes       String?
 
   @@index([schoolId, structureId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FEE-ADMISSIONS MVP — server-issued admissions workflow (H1-R2 contract)
+//
+// The whole workflow is feature-flagged (`admissionsServerIssuance` in
+// School.featureFlags, default OFF). All tables below are additive; the
+// legacy client-side admission module keeps operating unchanged while
+// the flag is off.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Canonical admission application — the server-owned record for the
+/// new issuance workflow. Submission idempotency is keyed on
+/// (schoolId, clientRequestId): the SAME key + the SAME canonical
+/// payload replays the existing application; the SAME key with a
+/// DIFFERENT payload fails 409 IDEMPOTENCY_KEY_REUSED. A key used in
+/// another school is an independent application. Guardian emails are
+/// CONTACT DATA only — they are never assumed to be the student's login
+/// email (loginEmail is required explicitly at enrolment, unique via
+/// User.email). Duplicate-applicant detection is ADVISORY at review
+/// time — there is deliberately NO (school, applicant, year) natural
+/// uniqueness: siblings may legitimately share guardian emails.
+model AdmissionApplication {
+  id            String        @id @default(cuid())
+  schoolId      String
+  school        School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// Per-school submission idempotency key (client-generated UUID).
+  clientRequestId String
+  /// DRAFT → SUBMITTED → UNDER_REVIEW → APPROVED → ENROLLED.
+  /// UNDER_REVIEW → SUBMITTED only via the request-correction transition.
+  /// REJECTED is terminal. (Server records are created at SUBMITTED —
+  /// the DRAFT stage lives in the principal's local wizard; the server
+  /// never saw a draft it must represent.)
+  status        String        @default("SUBMITTED")
+  /// Canonical academic year "YYYY-YYYY" (server-normalized at write).
+  academicYear  String
+  classId       String?
+  className     String
+  section       String?
+  /// Applicant particulars (contact/identity data as collected on the
+  /// admission form). applicantEmail is the OPTIONAL contact email of
+  /// the applicant — NOT a login email.
+  applicantFirstName String
+  applicantLastName  String
+  applicantDob       String?
+  applicantGender    String?
+  applicantEmail     String?
+  guardianName       String?
+  guardianPhone      String?
+  guardianEmail      String?
+  /// Canonical JSON snapshot of the submitted AdmissionFormData (the
+  /// whole wizard payload, including the fee selections).
+  payload       String
+  /// sha256 hex of the canonical payload — persisted so idempotency
+  /// replay comparison never depends on JSON key ordering.
+  payloadHash   String
+  submittedAt   DateTime?
+  reviewedAt    DateTime?
+  decisionAt    DateTime?
+  decisionBy    String?
+  decisionNotes String?
+  rejectionReason String?
+  enrolledAt      DateTime?
+  enrolledStudentId String?
+  /// JSON of the canonical enrolment RESULT (student id, admissionNo,
+  /// snapshot totals, credentialIssued marker) — WITHOUT the one-time
+  /// credential. Idempotent replays return exactly this, never a new
+  /// credential.
+  enrolResult   String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  events       AdmissionApplicationEvent[]
+  feeSnapshot  AdmissionFeeSnapshot?
+
+  @@unique([schoolId, clientRequestId])
+  @@index([schoolId, status, createdAt])
+  @@index([schoolId, classId, status])
+}
+
+/// Append-only audit trail for every admission lifecycle transition.
+model AdmissionApplicationEvent {
+  id            String   @id @default(cuid())
+  schoolId      String
+  applicationId String
+  application   AdmissionApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  /// SUBMITTED | START_REVIEW | REQUEST_CORRECTION | RESUBMITTED |
+  /// APPROVED | REJECTED | ENROLLED | IDEMPOTENT_REPLAY
+  action        String
+  actorUserId   String?
+  actorRole     String?
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  @@index([schoolId, applicationId, createdAt])
+}
+
+/// Immutable admission fee snapshot — THE authoritative fee statement for
+/// an enrolled student's official admission documents. Issued exactly
+/// once, atomically with the enrolment transaction; later fee-structure
+/// edits never change it. FK Restrict: an application with an issued
+/// snapshot can never be silently deleted.
+model AdmissionFeeSnapshot {
+  id             String   @id @default(cuid())
+  schoolId       String
+  applicationId  String   @unique
+  application    AdmissionApplication @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  studentId      String?
+  structureId    String?
+  structureVersion Int?
+  academicYear   String
+  /// JSON array of line items:
+  /// [{headId, name, category, kind, quantity, unitAmount, amount,
+  ///   frequency, discounted, discountCode}] (amounts in rupees, exact
+  /// 2-decimal NUMERIC-string semantics).
+  lineItems      String
+  discountName   String?
+  discountAmount Decimal  @db.Decimal(12, 2) @default(0)
+  totalAmount    Decimal  @db.Decimal(12, 2)
+  issuedAt       DateTime @default(now())
+  issuedBy       String?
+
+  @@index([schoolId, studentId])
+}
+
+/// Per-school admission-number sequence (one row per school, PK = the
+/// school). Default mint format "ADM-NNNNNN", strict maximum sequence
+/// value 999999 (enforced by the application allocator AND the DB CHECK —
+/// allocation uses in-transaction UPDATE … RETURNING so concurrent
+/// enrolments serialize on the row lock). Initialization is
+/// inventory-driven: the first allocation seeds currentValue from the
+/// school's existing Student.admissionNos that EXACTLY match
+/// ^ADM-\d{6}$ (max+1, else 0) — arbitrary legacy formats are never
+/// parsed. Every allocated candidate is collision-checked against ALL
+/// existing admissionNos (any format) with a bounded skip loop.
+model AdmissionSequence {
+  schoolId     String   @id
+  school       School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  currentValue Int      @default(0)
+  format       String   @default("ADM-NNNNNN")
+  maxValue     Int      @default(999999)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  /// DB-side backstop: the allocator may only ever hand out values the
+  /// CHECK range admits; exhaustion fails with 409
+  /// ADMISSION_SEQUENCE_EXHAUSTED (never overflow/truncate).
+  /// (CHECK constraints are added in the SQL migration — see
+  /// prisma/migrations/…__fee_admissions_mvp.)
+}
+
+/// Per-school fee discount rule — v1 MVP policy (H1-R2): at most ONE
+/// rule applies to a quote (NO stacking), only on its EXPLICITLY
+/// eligible fee head, and only when the rule is active. Percent or flat
+/// amount; server-side validation on every use.
+model FeeDiscountRule {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  code        String
+  name        String
+  /// Eligibility: the single fee head (FeeHead.id, in-tenant) this rule
+  /// may discount. NULL = not yet eligible for any head (rule inert).
+  headId      String?
+  /// PERCENT (1..100, applied to the head's line amount) | FLAT (fixed
+  /// rupee reduction of the line, never below zero).
+  type        String   @default("PERCENT")
+  value       Decimal  @db.Decimal(12, 2)
+  active      Boolean  @default(true)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([schoolId, code])
+  @@index([schoolId, headId])
 }
 
 /// Immutable financial transaction — every payment event is recorded here

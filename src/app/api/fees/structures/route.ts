@@ -4,6 +4,8 @@ import { db } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { num } from '@/lib/money'
+import { feeHeadInputSchema, resolveHeadKind } from '@/lib/fees/head-kind'
+import { schoolAcademicYearOrNull } from '@/lib/admissions/academic-year'
 
 export const runtime = 'nodejs'
 
@@ -99,10 +101,12 @@ export async function POST(req: NextRequest) {
 
     // If a current structure already exists for this class, refuse — the
     // principal must archive or amend instead. Drafts/scheduled are allowed
-    // (the @@unique constraint allows one per status per class).
-    const existing = await db.feeStructure.findUnique({
-      where: { schoolId_classId_status: { schoolId, classId, status: 'current' } },
-    }).catch(() => null)
+    // (the partial unique indexes allow one current/scheduled per class;
+    // drafts and archived are unconstrained).
+    const existing = await db.feeStructure.findFirst({
+      where: { schoolId, classId, status: 'current' },
+      select: { id: true },
+    })
     if (existing) throw new AppError('CONFLICT', { publicMessage: 'A current structure already exists for this class. Archive it first.' })
 
     // Phase 8A — bounded money validation per head BEFORE the write
@@ -114,6 +118,24 @@ export async function POST(req: NextRequest) {
       })
     }
 
+    // FEE-ADMISSIONS MVP — kind/mandatory invariant (API layer twin of
+    // the DB CHECK; absent kind derives from mandatory via the exact
+    // legacy truth table: true→FIXED, false→OPTIONAL).
+    const resolvedKinds = heads.map((h: any) => {
+      const parsed = feeHeadInputSchema.safeParse(h)
+      if (!parsed.success) {
+        throw new AppError('INVALID_INPUT', {
+          publicMessage: 'Each fee head must have a name and an amount between 0 and 500000',
+          internalDetail: `structures POST: head validation failed`,
+        })
+      }
+      return resolveHeadKind(parsed.data)
+    })
+
+    // FEE-ADMISSIONS MVP — stamp the school's canonical academic year
+    // when configured (NULL otherwise; publish re-validates fail-closed).
+    const academicYear = await schoolAcademicYearOrNull(schoolId)
+
     const structure = await db.feeStructure.create({
       data: {
         schoolId,
@@ -122,6 +144,7 @@ export async function POST(req: NextRequest) {
         classLevel,
         status: 'draft',
         version: 1,
+        academicYear,
         heads: {
           create: heads.map((h: any, i: number) => ({
             schoolId,
@@ -130,7 +153,8 @@ export async function POST(req: NextRequest) {
             category: String(h.category || 'Other'),
             amount: parsedHeadAmounts[i].data,
             frequency: String(h.frequency || 'Monthly'),
-            mandatory: h.mandatory !== false,
+            mandatory: resolvedKinds[i].mandatory,
+            kind: resolvedKinds[i].kind,
             active: true,
             sortOrder: i,
           })),
