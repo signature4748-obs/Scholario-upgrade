@@ -51,6 +51,8 @@ export function AdmissionModule() {
     handleContinueAnyway,
     handleCancelSubmission,
     admissionStore,
+    admissionsConfig,
+    submitting,
     beginEdit,
   } = wizard
 
@@ -73,7 +75,15 @@ export function AdmissionModule() {
           >
             <ArrowLeft className="h-3.5 w-3.5" /> Back to Dashboard
           </Button>
-          <StatusBadge status={`Step ${currentVisibleIndex + 1} of ${visibleSteps.length}`} variant="primary" dot />
+          <StatusBadge
+            status={
+              admissionsConfig.serverMode
+                ? `Step ${currentVisibleIndex + 1} of ${visibleSteps.length} · Server-issued workflow`
+                : `Step ${currentVisibleIndex + 1} of ${visibleSteps.length}`
+            }
+            variant="primary"
+            dot
+          />
         </div>
       )}
 
@@ -170,6 +180,8 @@ export function AdmissionModule() {
           flags={flags}
           seatCapacity={seatCapacity}
           initialFeeState={initialData.feeState as FeeDataState}
+          serverMode={admissionsConfig.serverMode}
+          submitting={submitting}
         />
       )}
 

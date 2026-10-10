@@ -198,7 +198,7 @@ export async function computeAdmissionQuote(
       headId: head.id,
       name: head.name,
       category: head.category,
-      kind: head.kind,
+      kind: head.kind as FeeHeadKind,
       frequency: head.frequency,
       quantity,
       unitAmount: num(head.amount),

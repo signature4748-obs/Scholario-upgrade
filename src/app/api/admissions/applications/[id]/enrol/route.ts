@@ -79,24 +79,10 @@ export async function POST(
     }
     const loginEmail = body.loginEmail
 
-    // Pre-check (fast 409 outside the transaction; the unique index is
-    // the real guard inside it — the pre-check only gives a cleaner
-    // error when the application is NOT yet consumed).
-    const emailOwner = await db.user.findUnique({
-      where: { email: loginEmail },
-      select: { id: true },
-    })
-    if (emailOwner) {
-      throw new AppError('EMAIL_TAKEN', {
-        publicMessage: 'This login email is already in use. Choose another email for the student account.',
-        internalDetail: `enrol POST: email taken (user ${emailOwner.id.slice(0, 8)}…)`,
-      })
-    }
-
-    // The school's CURRENT academic year must match the application's
-    // year — a year rollover between submission and enrolment is a
-    // deterministic INVALID_STATE (re-submit under the new year), never
-    // a silent fee mismatch.
+    // Load the application FIRST: an already-ENROLLED application is the
+    // idempotent-replay path — the stored result returns unchanged, so
+    // the email pre-check below MUST NOT fire (the login email now
+    // belongs to the student the ORIGINAL enrolment created).
     const application = await db.admissionApplication.findFirst({ where: { id, schoolId } })
     if (!application) {
       throw new AppError('RESOURCE_NOT_FOUND', {
@@ -104,6 +90,27 @@ export async function POST(
         internalDetail: 'enrol POST: id missing or foreign tenant',
       })
     }
+
+    // Pre-check (fast 409 outside the transaction; the unique index is
+    // the real guard inside it — the pre-check only gives a cleaner
+    // error when the application is NOT yet consumed; replays skip it).
+    if (application.status !== 'ENROLLED') {
+      const emailOwner = await db.user.findUnique({
+        where: { email: loginEmail },
+        select: { id: true },
+      })
+      if (emailOwner) {
+        throw new AppError('EMAIL_TAKEN', {
+          publicMessage: 'This login email is already in use. Choose another email for the student account.',
+          internalDetail: `enrol POST: email taken (user ${emailOwner.id.slice(0, 8)}…)`,
+        })
+      }
+    }
+
+    // The school's CURRENT academic year must match the application's
+    // year — a year rollover between submission and enrolment is a
+    // deterministic INVALID_STATE (re-submit under the new year), never
+    // a silent fee mismatch.
     const schoolYear = await requireSchoolAcademicYear(schoolId)
     if (application.status !== 'ENROLLED' && application.academicYear !== schoolYear) {
       throw new AppError('INVALID_STATE', {
@@ -167,7 +174,8 @@ async function enrolApplication(opts: {
   | { replay: true; response: Record<string, unknown> }
   | { replay: false; response: Record<string, unknown>; tempPassword: string; generated: boolean }
 > {
-  const { applicationId, schoolId, loginEmail, rollNo, classId, password, actorUserId } = opts
+  const { applicationId, schoolId, loginEmail, rollNo, password, actorUserId } = opts
+  const bodyClassId = opts.classId
 
   try {
     return await trackedTransaction('admission-enrol', async (tx) => {
@@ -203,9 +211,9 @@ async function enrolApplication(opts: {
       // enrolment keeps the same authority the legacy dialog had.
       let classId = locked.classId
       let className = locked.className
-      if (classId && classId !== locked.classId) {
+      if (bodyClassId && bodyClassId !== locked.classId) {
         const cls = await tx.class.findFirst({
-          where: { id: classId, schoolId },
+          where: { id: bodyClassId, schoolId },
           select: { id: true, name: true, section: true },
         })
         if (!cls) {
@@ -307,47 +315,12 @@ async function enrolApplication(opts: {
         },
       })
 
-      // 8 — transition + canonical result (WITHOUT the credential).
+      // 8 — transition + the CANONICAL result (the exact response shape,
+      // WITHOUT the credential) so an idempotent replay returns the
+      // ORIGINAL result verbatim — same fields, same amounts.
       const now = new Date()
-      const enrolResult = JSON.stringify({
-        studentId: student.id,
-        userId: user.id,
-        admissionNo,
-        loginEmail,
-        className,
-        section: locked.section,
-        academicYear: quote.academicYear,
-        feeSnapshot: {
-          totalAmount: quote.totals.net,
-          discountAmount: quote.totals.discount,
-          discountName: quote.discount?.name ?? null,
-          lineItemCount: quote.lineItems.length,
-        },
-        credentialIssuedAt: now.toISOString(),
-        credentialExpiresAt: credentialExpiresAt.toISOString(),
-      })
-      const updated = await tx.admissionApplication.update({
-        where: { id: locked.id },
-        data: {
-          status: 'ENROLLED',
-          enrolledAt: now,
-          enrolledStudentId: student.id,
-          enrolResult,
-        },
-      })
-      await tx.admissionApplicationEvent.create({
-        data: {
-          schoolId,
-          applicationId: locked.id,
-          action: 'ENROLLED',
-          actorUserId,
-          actorRole: 'PRINCIPAL',
-          notes: `Enrolled as ${admissionNo} (${loginEmail})`,
-        },
-      })
-
       const response = {
-        application: { id: updated.id, status: updated.status },
+        application: { id: locked.id, status: 'ENROLLED' },
         student: {
           id: student.id,
           userId: user.id,
@@ -367,7 +340,31 @@ async function enrolApplication(opts: {
           lineItems: quote.lineItems,
         },
         totals: quote.totals,
+        // Credential LIFETIME bookkeeping (timestamps only — the one-time
+        // credential itself is NEVER persisted).
+        credentialIssuedAt: now.toISOString(),
+        credentialExpiresAt: credentialExpiresAt.toISOString(),
       }
+      const enrolResult = JSON.stringify(response)
+      await tx.admissionApplication.update({
+        where: { id: locked.id },
+        data: {
+          status: 'ENROLLED',
+          enrolledAt: now,
+          enrolledStudentId: student.id,
+          enrolResult,
+        },
+      })
+      await tx.admissionApplicationEvent.create({
+        data: {
+          schoolId,
+          applicationId: locked.id,
+          action: 'ENROLLED',
+          actorUserId,
+          actorRole: 'PRINCIPAL',
+          notes: `Enrolled as ${admissionNo} (${loginEmail})`,
+        },
+      })
 
       return { replay: false, response, tempPassword: bootstrap, generated } as const
     })

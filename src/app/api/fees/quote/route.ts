@@ -26,8 +26,6 @@ export const runtime = 'nodejs'
  * in v1). Tenant is resolved from the session (never body input).
  */
 
-const quantityEntry = z.tuple([z.string(), z.number().int().min(1).max(MAX_QUANTITY)])
-
 const quoteBodySchema = z.object({
   classId: z.string().min(1).max(64),
   selections: z

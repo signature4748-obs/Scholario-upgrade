@@ -55,7 +55,7 @@ export type FeeHeadInput = z.infer<typeof feeHeadInputSchema>
  */
 export function resolveHeadKind(
   input: Pick<FeeHeadInput, 'kind' | 'mandatory'>,
-  label = 'fee head',
+  _label = 'fee head',
 ): { kind: FeeHeadKind; mandatory: boolean } {
   const mandatory = input.mandatory ?? true
   if (input.kind === 'FIXED' && !mandatory) {

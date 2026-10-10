@@ -101,6 +101,18 @@ export const AUDIT_ACTIONS = [
   'WEBSITE_NOTICE_PUBLISHED',
   'WEBSITE_NOTICE_UNPUBLISHED',
   'WEBSITE_ADMISSIONS_UPDATED',
+  // FEE-ADMISSIONS MVP — server-issued admissions lifecycle + credential
+  // events (school-scoped; the application event trail is the domain
+  // record, these are the security-plane mirrors).
+  'ADMISSION_SUBMITTED',
+  'ADMISSION_DRAFT',
+  'ADMISSION_UNDER_REVIEW',
+  'ADMISSION_ENROLLED',
+  'ADMISSION_REJECTED',
+  'CREDENTIAL_RESET',
+  // FEE-ADMISSIONS MVP — bootstrap credential expired at school-door
+  // login (48h one-time credential lifecycle).
+  'LOGIN_CREDENTIAL_EXPIRED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
