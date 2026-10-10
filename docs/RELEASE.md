@@ -205,22 +205,43 @@ All of the above are server-only variables — never `NEXT_PUBLIC_*`.
 
 ## 9. One-time enablement (owner, in this order)
 
-1. **GitHub environment `production`** — already provisioned:
-   `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`. Add:
-   `VERCEL_TOKEN`, `VERCEL_PROJECT_ID` (`scholario-production`),
-   `VERCEL_ORG_ID` (team scope, if any), and later
-   `VERCEL_DEPLOY_HOOK_URL`. (Repo → Settings → Environments → production →
-   Add secret.)
+> **Status after Batch 1 (2026-10-10):** step 1 is DONE (all six Vercel
+> secrets provisioned via the API, encrypted, values never printed —
+> `VERCEL_PROJECT_ID` points at the active `scholario-platform` plane,
+> both plane deploy-hook URLs stored); the deploy hooks of step 3 are
+> CREATED (`release-gate-platform` / `release-gate-school`, ref `main`).
+> The remaining owner actions are step 2 (workflow un-park — the push
+> token carries `repo` scope only, re-verified Batch 1) and the two
+> toggles of step 3 (skip-auto-deploy is NOT exposed by the Vercel REST
+> API — verified against the live project model; it must be flipped in
+> the dashboard). **The GitHub `production` environment's
+> `SUPABASE_ACCESS_TOKEN` is INVALID (Management API 401 — re-verified
+> Batch 1)**: replace it with a valid token or the migration stages can
+> never run. Safe-path evidence from Batch 1: `config-preflight` GREEN
+> against `scholario-platform`; `verify-deployment` GREEN against the live
+> `3ae3c854` deployment; migration `preflight` fails loud on the invalid
+> token with zero writes; the full 18-migration chain + 18/18 true
+> checksums verified on disposable PostgreSQL (docs/STAGING.md §3).
+
+1. **GitHub environment `production`** — provisioned:
+   `SUPABASE_PROJECT_REF`, `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`
+   (`scholario-platform`), `VERCEL_ORG_ID`, `VERCEL_DEPLOY_HOOK_URL`,
+   `VERCEL_DEPLOY_HOOK_URL_SCHOOL`, `PRODUCTION_URL`.
+   ⚠ `SUPABASE_ACCESS_TOKEN` exists but is INVALID — replace it (owner).
 2. **Enable the workflows** (the push token lacks `workflow` scope — use the
    GitHub web UI or a workflow-scoped PAT; 60 seconds each): create
    `.github/workflows/release.yml`, `ci.yml`, `production-db-migration.yml`
-   from the parked files' exact content.
+   from the parked files' exact content. (The release-candidate branch
+   `release/fee-admissions-rc1` carries them parked for review.)
 3. **Vercel deploy-hook switch** (before un-commenting `on: push` in
-   release.yml): Vercel → Project → Settings → Git → disable auto-deploy for
-   production; create a Deploy Hook → store its URL as the
-   `VERCEL_DEPLOY_HOOK_URL` secret; then un-comment the `push: branches:
-   [main]` trigger in release.yml. From that point a main push can
-   physically never deploy before the migration is green.
+   release.yml): Vercel → each plane project → Settings → Git → disable
+   auto-deploy for production; the Deploy Hooks are already created and
+   stored as the `VERCEL_DEPLOY_HOOK_URL` (platform) /
+   `VERCEL_DEPLOY_HOOK_URL_SCHOOL` (school) secrets; then un-comment the
+   `push: branches: [main]` trigger in release.yml. From that point a main
+   push can physically never deploy before the migration is green. The
+   skip-auto-deploy toggle is dashboard-only (not in the REST project
+   model — verified).
 4. Until step 3, keep using dispatch mode (§5) — Vercel still auto-deploys
    main pushes directly.
 

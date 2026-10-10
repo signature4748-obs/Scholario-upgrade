@@ -146,6 +146,26 @@ interface AccessResponse {
 
 const FLAGGABLE_MODULES = ['exams', 'fees', 'homework', 'library', 'transport'] as const
 const SCHOOL_PLANS = ['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'] as const
+
+// Admissions server-issuance control (Batch 1 / WS-C) — the API contract
+// of GET/PATCH /api/platform/schools/[id]/admissions-issuance.
+interface AdmissionsReadiness {
+  academicYear: string | null
+  academicYearSet: boolean
+  publishedFeeStructures: number
+  ready: boolean
+}
+
+interface AdmissionsIssuanceState {
+  enabled: boolean
+  source: 'school' | 'platform' | 'default'
+  readiness: AdmissionsReadiness
+}
+
+interface AdmissionsIssuancePatchResponse extends AdmissionsIssuanceState {
+  ok: true
+  previous: boolean
+}
 const SCHOOL_BOARDS = ['CBSE', 'UP_BOARD', 'ICSE', 'STATE', 'CUSTOM'] as const
 const DURATION_OPTIONS = [5, 15, 30, 45, 60] as const
 
@@ -825,6 +845,10 @@ export function SchoolDetailModule() {
   const [flags, setFlags] = useState<Record<string, boolean>>({})
   const [flagBusy, setFlagBusy] = useState<string | null>(null)
 
+  const [admissions, setAdmissions] = useState<AdmissionsIssuanceState | null>(null)
+  const [admissionsBusy, setAdmissionsBusy] = useState(false)
+  const [admissionsConfirmNext, setAdmissionsConfirmNext] = useState(false)
+
   const [statusBusy, setStatusBusy] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
@@ -849,6 +873,25 @@ export function SchoolDetailModule() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  // Admissions-issuance control state (fails soft to null — the toggle
+  // remains usable; the readiness panel shows "unavailable").
+  const reloadAdmissions = useCallback(async () => {
+    if (!id) return
+    try {
+      setAdmissions(
+        await platformApi<AdmissionsIssuanceState>(
+          `/api/platform/schools/${id}/admissions-issuance`,
+        ),
+      )
+    } catch {
+      setAdmissions(null)
+    }
+  }, [id])
+
+  useEffect(() => {
+    void reloadAdmissions()
+  }, [reloadAdmissions])
 
   // Sync local editors whenever fresh data lands.
   useEffect(() => {
@@ -938,6 +981,37 @@ export function SchoolDetailModule() {
       toast.error(err.error || 'Could not update the module flag')
     } finally {
       setFlagBusy(null)
+    }
+  }
+
+  const toggleAdmissions = (next: boolean) => {
+    // Enabling an UNREADY school asks for explicit confirmation — the
+    // operator must see the workflow will fail closed until configured.
+    if (next && admissions && !admissions.readiness.ready) {
+      setAdmissionsConfirmNext(true)
+      return
+    }
+    void applyAdmissionsIssuance(next)
+  }
+
+  const applyAdmissionsIssuance = async (next: boolean) => {
+    if (!id) return
+    setAdmissionsBusy(true)
+    try {
+      const res = await gate(() =>
+        platformApi<AdmissionsIssuancePatchResponse>(
+          `/api/platform/schools/${id}/admissions-issuance`,
+          { method: 'PATCH', body: JSON.stringify({ enabled: next }) },
+        ),
+      )
+      if (!res) return // cancelled at the step-up prompt
+      setAdmissions({ enabled: res.enabled, source: res.source, readiness: res.readiness })
+      toast.success(`Server-issued admissions ${next ? 'enabled' : 'disabled'} for this school`)
+    } catch (e) {
+      const err = e as PlatformApiError
+      toast.error(err.error || 'Could not update the admissions flag')
+    } finally {
+      setAdmissionsBusy(false)
     }
   }
 
@@ -1611,6 +1685,143 @@ export function SchoolDetailModule() {
               </p>
             )}
           </div>
+
+          {/* Admissions — server-issued workflow (Batch 1 / WS-C): schools.manage + step-up */}
+          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+              <h2 className="font-display text-sm font-bold text-slate-900">
+                Admissions — server-issued workflow
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                <span className="font-mono text-slate-600">admissionsServerIssuance</span> — a fail-closed
+                financial-workflow flag: absent means OFF. Changing it requires{' '}
+                <span className="font-mono text-slate-600">schools.manage</span> + step-up verification and
+                writes a platform audit event (actor, school, previous → new state).
+              </p>
+            </div>
+            <div className="space-y-3 p-4 sm:px-5">
+              <div className="flex min-h-[56px] items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-900">
+                    {admissions
+                      ? admissions.enabled
+                        ? 'Enabled for this school'
+                        : 'Disabled (fail-closed)'
+                      : 'State unavailable'}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {admissions
+                      ? admissions.source === 'school'
+                        ? 'School override in effect'
+                        : admissions.source === 'platform'
+                          ? 'No school override — platform master switch in effect'
+                          : 'No override anywhere — default OFF'
+                      : 'Could not load the flag state (the toggle still works)'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  {admissionsBusy && (
+                    <span className="text-[11px] text-slate-500" role="status">
+                      saving…
+                    </span>
+                  )}
+                  <Switch
+                    checked={admissions?.enabled ?? false}
+                    disabled={!canManage || admissionsBusy || !admissions}
+                    onCheckedChange={(next) => toggleAdmissions(next)}
+                    aria-label="Server-issued admissions workflow — enable or disable for this school"
+                    className="data-[state=checked]:bg-teal-600 data-[state=unchecked]:bg-slate-300 focus-ring"
+                  />
+                </div>
+              </div>
+              {admissions && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                    Workflow readiness
+                  </p>
+                  <ul className="mt-1.5 space-y-1.5 text-xs">
+                    <li className="flex items-start gap-2">
+                      {admissions.readiness.academicYearSet ? (
+                        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+                      ) : (
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden="true" />
+                      )}
+                      <span className="text-slate-600">
+                        {admissions.readiness.academicYearSet
+                          ? `Academic year set (${admissions.readiness.academicYear})`
+                          : 'No academic year set — submissions fail closed until the session is set'}
+                      </span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      {admissions.readiness.publishedFeeStructures > 0 ? (
+                        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+                      ) : (
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden="true" />
+                      )}
+                      <span className="text-slate-600">
+                        {admissions.readiness.publishedFeeStructures > 0
+                          ? `${admissions.readiness.publishedFeeStructures} published fee structure${admissions.readiness.publishedFeeStructures === 1 ? '' : 's'} (current/scheduled)`
+                          : 'No published fee structure — enrolment fails closed (FEE_CONFIGURATION_REQUIRED) until one is published'}
+                      </span>
+                    </li>
+                  </ul>
+                  {admissions.enabled && !admissions.readiness.ready && (
+                    <p className="mt-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden="true" />
+                      Enabled but not ready — the workflow refuses submissions and enrolments until
+                      the missing configuration above is completed (fail-closed by design).
+                    </p>
+                  )}
+                </div>
+              )}
+              {!canManage && (
+                <p className="text-xs text-slate-500">
+                  You do not hold <span className="font-mono text-slate-600">schools.manage</span> — the
+                  switch is read-only for you.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Enable-an-unready-workflow confirmation (Batch 1 / WS-C) */}
+          <AlertDialog open={admissionsConfirmNext} onOpenChange={setAdmissionsConfirmNext}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Enable an unconfigured workflow?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This school{' '}
+                  {admissions?.readiness.academicYearSet
+                    ? 'has an academic year set'
+                    : 'has NO academic year set'}{' '}
+                  and{' '}
+                  {admissions && admissions.readiness.publishedFeeStructures > 0
+                    ? `has ${admissions.readiness.publishedFeeStructures} published fee structure(s)`
+                    : 'has NO published fee structure'}
+                  . The server-issued admissions workflow fails closed — no submissions, no
+                  enrolments, no fee quotes — until the missing configuration is completed. Enable
+                  anyway?
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setAdmissionsConfirmNext(false)}
+                  className="h-10"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setAdmissionsConfirmNext(false)
+                    void applyAdmissionsIssuance(true)
+                  }}
+                  className="h-10 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
+                >
+                  Enable anyway
+                </Button>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </TabsContent>
 
         {/* ── Identity change requests (schools.manage) — SAAS §8 ── */}
