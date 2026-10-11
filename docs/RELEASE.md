@@ -254,9 +254,13 @@ All of the above are server-only variables — never `NEXT_PUBLIC_*`.
 > toggles of step 3 (skip-auto-deploy is NOT exposed by the Vercel REST
 > API — verified against the live project model; it must be flipped in
 > the dashboard). **The GitHub `production` environment's
-> `SUPABASE_ACCESS_TOKEN` is INVALID (Management API 401 — re-verified
-> Batch 1)**: replace it with a valid token or the migration stages can
-> never run. Safe-path evidence from Batch 1: `config-preflight` GREEN
+> `SUPABASE_ACCESS_TOKEN` was 401-invalid through Batch 1; it was
+> ROTATED 2026-10-11 to a token verified live against the Management API
+> (project `kbyknezedewvgrnqervj` ACTIVE_HEALTHY → HTTP 200) — that
+> blocker is RESOLVED (re-verified same day: `config-preflight` GREEN on
+> BOTH planes; migration `preflight` GREEN read-only — 17 applied /
+> exactly 1 pending `fee_admissions_mvp`; live workflow-registration
+> rejection evidence + owner actions tracked in GitHub issue #3). Safe-path evidence from Batch 1: `config-preflight` GREEN
 > against `scholario-platform`; `verify-deployment` GREEN against the live
 > `3ae3c854` deployment; migration `preflight` fails loud on the invalid
 > token with zero writes; the full 18-migration chain + 18/18 true
