@@ -5,7 +5,7 @@
 > database receives every migration the release depends on (applied +
 > verified) BEFORE any application code that needs it is deployed. Never the
 > other way around. This runbook is executed by the **Release** workflow
-> (`.github/release.yml.parked`) and by hand with the same scripts.
+> (`.github/workflows/release.yml`) and by hand with the same scripts.
 >
 > Contains no secrets — every credential lives in GitHub environment
 > `production` or Vercel, never in the repo.
@@ -41,9 +41,9 @@ Current state of the triggers (see §9 Enablement):
 
 | Stage | Mechanism | Status |
 | --- | --- | --- |
-| PR tests | `.github/ci.yml.parked` (`pull_request`) | parked (token scope) |
-| Release chain | `.github/release.yml.parked` (`workflow_dispatch`; `push: main` commented until the Vercel switch) | parked (token scope) |
-| Migration only | `.github/production-db-migration.yml.parked` | parked (token scope) |
+| PR tests | `.github/workflows/ci.yml` (`pull_request`/`push: main`) | **live** (2026-10-11: workflows un-parked + registered; CI ran) |
+| Release chain | `.github/workflows/release.yml` (`workflow_dispatch`; `push: main` stays off until the Vercel switch) | live (dispatch mode) |
+| Migration only | `.github/workflows/production-db-migration.yml` | live (`workflow_dispatch`) |
 | Vercel production deploy | Vercel Git integration — **auto-deploys on push to main** | live (main = production branch) |
 
 Because Vercel still auto-deploys `main`, the safe order today is the
@@ -286,7 +286,14 @@ All of the above are server-only variables — never `NEXT_PUBLIC_*`.
    `VERCEL_DEPLOY_HOOK_URL_SCHOOL`, `PRODUCTION_URL` (and, optionally,
    `PRODUCTION_URL_SCHOOL`).
    ⚠ `SUPABASE_ACCESS_TOKEN` exists but is INVALID — replace it (owner).
-2. **Enable the workflows** (the push token lacks `workflow` scope — use the
+2. ~~**Enable the workflows**~~ — **DONE 2026-10-11**: the 2026-10-11 token
+   carries the `workflow` scope (verified server-side: pushes that create
+   `.github/workflows/*.yml` are accepted; a PAT without the scope is
+   rejected by GitHub). Workflows are un-parked, registered, and CI ran
+   on main. Note the one schema fix that was required:
+   `timeout-minutes` is a jobs/steps-level key only — a top-level
+   `timeout-minutes` made all three workflows invalid ("failed to parse
+   workflow"); the values were promoted to every job.
    GitHub web UI or a workflow-scoped PAT; 60 seconds each): create
    `.github/workflows/release.yml`, `ci.yml`, `production-db-migration.yml`
    from the parked files' exact content. (The release-candidate branch
