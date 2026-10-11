@@ -34,13 +34,20 @@ export const runtime = 'nodejs'
  *   email.bounced     → status BOUNCED, lastError 'bounce: <reason>'
  *   email.complained  → status COMPLAINED, lastError 'complaint (FBL)'
  *   email.failed      → status FAILED, lastError 'provider failure: …'
- *   email.delivered / email.sent / email.delivery_delayed / anything
- *   else              → recorded in WebhookEvent only (the audit trail;
- *                       the send-side row stays as the pipeline wrote it)
+ *   email.delivered   → a QUEUED/PENDING row becomes SENT — this is
+ *                       the DELIVERY EVIDENCE that upgrades "provider
+ *                       accepted" (QUEUED, written at API time) to
+ *                       "delivered" (SENT). A row already SENT stays
+ *                       untouched (idempotent redelivery).
+ *   email.sent / email.delivery_delayed / anything else
+ *                     → recorded in WebhookEvent only (audit trail;
+ *                       the send-side row stays exactly as the
+ *                       pipeline wrote it — delayed ≠ delivered)
  *
- * NOTE on retry semantics: a BOUNCED/FAILED row is a non-SENT row, so a
- * dedupeKey retry may legitimately re-send (Resend itself suppresses
- * hard-bounced addresses at the provider edge — no double-bounce loop).
+ * NOTE on retry semantics: a BOUNCED/FAILED row is a non-accepted
+ * row, so a dedupeKey retry may legitimately re-send (Resend itself
+ * suppresses hard-bounced addresses at the provider edge — no
+ * double-bounce loop).
  *
  * Never throws: malformed bodies are 400, processing errors 500 with the
  * WebhookEvent row carrying the honest error. Responses are generic —
@@ -60,6 +67,8 @@ const LAST_ERROR_MAX = 500
 const BOUNCED = 'email.bounced'
 const COMPLAINED = 'email.complained'
 const FAILED = 'email.failed'
+/** The delivery-evidence event: upgrades QUEUED/PENDING → SENT. */
+const DELIVERED = 'email.delivered'
 
 function clip(text: string, max: number): string {
   const trimmed = text.trim()
@@ -201,6 +210,37 @@ export async function POST(req: NextRequest) {
   })
 
   try {
+    // DELIVERY EVIDENCE: email.delivered upgrades a provider-accepted
+    // (QUEUED) or crashed-mid-send (PENDING) row to SENT. Already-SENT
+    // rows are untouched (idempotent redelivery); FAILED/BOUNCED rows
+    // are never upgraded by this path (a failure verdict stands until
+    // a newer delivered event explicitly carries the same id).
+    if (body.type === DELIVERED) {
+      const messageId = providerMessageId(body.data)
+      if (messageId) {
+        const result = await db.emailDelivery.updateMany({
+          where: { providerMessageId: messageId, status: { in: ['QUEUED', 'PENDING'] } },
+          data: { status: 'SENT' },
+        })
+        await db.webhookEvent.update({
+          where: { id: row.id },
+          data: {
+            status: 'processed',
+            processedAt: new Date(),
+            matchedTransactionId: result.count > 0 ? messageId : null,
+          },
+        })
+        return NextResponse.json({ ok: true, processed: true, matched: result.count })
+      }
+      // Signed provider event without a usable message id — record
+      // honestly, never guess a match.
+      await db.webhookEvent.update({
+        where: { id: row.id },
+        data: { status: 'error', error: 'no provider message id in payload', processedAt: new Date() },
+      })
+      return NextResponse.json({ ok: true, processed: false, reason: 'no message id' })
+    }
+
     // Terminal-failure events sync EmailDelivery by providerMessageId.
     if (body.type === BOUNCED || body.type === COMPLAINED || body.type === FAILED) {
       const messageId = providerMessageId(body.data)

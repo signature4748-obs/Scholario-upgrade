@@ -116,7 +116,10 @@ export async function invalidateAdminResetTokens(adminId: string): Promise<void>
  * for every issuance site: self-service forgot-password, admin-
  * assisted reset, dual-control recovery execution). The send outcome
  * is a VALUE (never throws — sendEmail contract); callers decide how
- * to surface a failed delivery.
+ * to surface a failed delivery. emailStatus 'queued' means the
+ * provider ACCEPTED the message (delivery unconfirmed — see
+ * docs/EMAIL.md honest status semantics); only 'failed' means the
+ * recipient will definitely NOT get the email.
  */
 export async function issueAndEmailPasswordReset(
   admin: { id: string; email: string; name: string },
@@ -126,7 +129,7 @@ export async function issueAndEmailPasswordReset(
     userAgent?: string | null
     requestId?: string | null
   },
-): Promise<{ issued: IssuedResetToken; emailStatus: 'sent' | 'skipped' | 'failed' }> {
+): Promise<{ issued: IssuedResetToken; emailStatus: 'sent' | 'queued' | 'skipped' | 'failed' }> {
   const issued = await issuePasswordReset(admin.id, {
     requestIp: opts.requestIp,
     userAgent: opts.userAgent,

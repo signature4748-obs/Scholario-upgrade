@@ -3031,7 +3031,14 @@ model EmailDelivery {
   schoolId  String?
   template  String
   recipient String
-  /// PENDING | SENT | FAILED.
+  /// PENDING | QUEUED | SENT | FAILED | BOUNCED | COMPLAINED.
+  /// QUEUED = provider ACCEPTED the message (API 2xx / SMTP 250) —
+  /// delivery unconfirmed. SENT = delivery EVIDENCE (Resend webhook
+  /// `email.delivered`, or the dev-log transport where the log line IS
+  /// the delivery). FAILED carries lastError prefixed with a
+  /// machine-parseable [error-class] tag (provider-errors.ts) — a 403
+  /// testing-recipient restriction is classified, never mislabeled as
+  /// an invalid API key.
   status    String   @default("PENDING")
   attempts  Int      @default(0)
   lastError String?

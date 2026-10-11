@@ -91,7 +91,20 @@ export async function GET(req: NextRequest) {
 
       const where: Record<string, unknown> = { schoolId }
       if (classId) where.classId = classId
-      if (date) where.date = new Date(date)
+      if (date) {
+        // Phase B hardening: the date param must be a valid YYYY-MM-DD —
+        // malformed input used to become an Invalid Date → Prisma 500.
+        const dm = /^\d{4}-\d{2}-\d{2}$/.exec(date.trim())
+        if (!dm) {
+          throw new AppError('INVALID_INPUT', { publicMessage: 'date must be YYYY-MM-DD' })
+        }
+        // Day-window query (UTC calendar day) — the canonical day
+        // normalization: rows carry time-of-day components from legacy
+        // writers, and day-level semantics must capture them all.
+        const dayStart = new Date(`${date.trim()}T00:00:00.000Z`)
+        const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+        where.date = { gte: dayStart, lt: dayEnd }
+      }
       const rows = await db.attendance.findMany({
         where,
         include: { student: { include: { user: { select: { name: true } } } } },
@@ -219,11 +232,21 @@ export async function POST(req: NextRequest) {
         valid.push({ studentId: e.studentId, status: e.status })
       }
 
-      // ── Tenant-safe upsert (never overwrite another school's row) ──
+      // ── Tenant-safe day-window upsert (never overwrite another school's
+      // row; never split a student-day) ──
+      // Phase B duplicate-prevention parity with writeCanonicalAttendance:
+      // legacy rows can carry time-of-day components, so an exact-match
+      // findFirst({ studentId, date }) could MISS the day's earlier row and
+      // create a second one (day-level duplication). The lookup is now the
+      // full UTC day window, latest row first — same normalization as the
+      // overview aggregation and the canonical writer's day-window replace.
+      const dayStart = date
+      const dayEnd = new Date(date.getTime() + 24 * 60 * 60 * 1000)
       await trackedTransaction('attendance-batch-mark', async (tx) => {
         for (const e of valid) {
           const existing = await tx.attendance.findFirst({
-            where: { studentId: e.studentId, date },
+            where: { studentId: e.studentId, date: { gte: dayStart, lt: dayEnd } },
+            orderBy: { date: 'desc' },
             select: { id: true, schoolId: true },
           })
           if (existing && existing.schoolId !== schoolId) {

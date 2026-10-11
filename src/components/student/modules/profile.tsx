@@ -26,13 +26,15 @@ import { motion } from 'framer-motion'
 import {
   User, Phone, Mail, Calendar, Droplet, Crown, GraduationCap,
   Activity, TrendingUp, IndianRupee, IdCard, Award, Bus,
-  ChevronRight, ClipboardList, ShieldCheck,
+  ChevronRight, ClipboardList, ShieldCheck, AlertTriangle, RotateCw,
 } from 'lucide-react'
 import { GlassCard, StatusBadge, GradientAvatar } from '@/components/shared/ui'
+import { getInitials } from '@/components/shared/avatar'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useStudentsStore, useMyStudentRecord } from '@/lib/store/students-store'
 import type { StudentRecord } from '@/lib/store/students-store'
+import { useCurrentUser } from '@/lib/store/current-user-store'
 import { useStudentAttendanceStore, computeStats, studentRecords } from '@/lib/store/student-attendance-store'
 import { useFeeStore } from '@/lib/store/fee-store'
 import { useCertificatesStore } from '@/lib/store/certificates-store'
@@ -67,6 +69,31 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
   const studentId = student?.id
   const allPositions = useStudentsStore((st) => st.studentPositions)
 
+  // B-fix — the SERVER identity (/api/auth/me) is the fallback truth this
+  // profile renders from when the roster record is missing: a real tenant
+  // whose roster sync failed used to hit the old `!student` gate and spin
+  // FOREVER. The honest state machine below: resolving → spinner, /me
+  // failed after one auto-retry → error card, /me resolved + roster
+  // missing → canonical server identity render.
+  const me = useCurrentUser((s) => s.me)
+  const sessionLoading = useCurrentUser((s) => s.loading)
+  const sessionError = useCurrentUser((s) => s.error)
+  const refresh = useCurrentUser((s) => s.refresh)
+  const sessionResolving = sessionLoading || (me == null && !sessionError)
+  const [retried, setRetried] = useState(false)
+  // Kick /api/auth/me ourselves when the shell hasn't yet (the machine
+  // below always progresses — never a forever-spinner) ...
+  useEffect(() => {
+    if (me == null && !sessionLoading && !sessionError) void refresh()
+  }, [me, sessionLoading, sessionError, refresh])
+  // ... and retry a FAILED fetch exactly once before the honest error state.
+  useEffect(() => {
+    if (sessionError && !retried) {
+      setRetried(true)
+      void refresh()
+    }
+  }, [sessionError, retried, refresh])
+
   // STU-RES — the ONE canonical results store (same source as the Results
   // module + dashboard). Overall + rank derive from the LATEST PUBLISHED
   // assessment — never from stale roster academics fields. Rank hides
@@ -90,10 +117,12 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
   // (e.g. the DB-synced roster), the roster record's server-derived pct
   // (canonical Attendance derivation) is the honest number — never a fake 0%.
   const allAttendance = useStudentAttendanceStore((s) => s.records)
+  // Null (→ renders “—”) while no rows and no roster record exist — a
+  // missing record must not print a fabricated 0% attendance.
   const attendancePct = useMemo(() => {
     const mine = studentRecords(allAttendance, studentId ?? '')
     if (mine.length > 0) return computeStats(mine).percent
-    return student?.attendance ?? 0
+    return student?.attendance ?? null
   }, [allAttendance, studentId, student?.attendance])
 
   // Certificates — the same store My Certificates reads (raw array +
@@ -130,7 +159,87 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
     guardianPhone: student?.guardianPhone,
   })
 
-  if (!student) {
+  // B-fix — SERVER-IDENTITY FALLBACK record, used only while the roster
+  // record is missing but the session is live. Roster-only fields carry
+  // their honest empty ('—' / 0 / []): academics, fees and the attendance
+  // snapshot render “Awaited”/“—”/“—”, while name + every enrollment
+  // particular comes from the server identity. The empty id matches no
+  // fee/attendance/certificate/position row — another student's data can
+  // never leak onto this profile.
+  const fallbackRecord = useMemo<StudentRecord>(() => {
+    const fallbackName = identity.name ?? me?.name ?? 'Student'
+    return {
+      id: '',
+      admissionNo: identity.admissionNo,
+      rollNo: identity.rollNo,
+      name: fallbackName,
+      avatar: getInitials(fallbackName) || '?',
+      // Type-required filler — never rendered in this mode (the Personal
+      // tab reads identity.gender, honestly null when the server has none).
+      gender: identity.gender === 'Female' ? 'Female' : 'Male',
+      classId: '',
+      className: '',
+      section: '',
+      dob: identity.dob ?? '',
+      bloodGroup: identity.bloodGroup ?? '—',
+      category: '—',
+      fatherName: identity.guardianName ?? '—',
+      motherName: '—',
+      guardianPhone: identity.guardianPhone ?? '—',
+      guardianEmail: '—',
+      guardianName: identity.guardianName ?? '—',
+      city: '—',
+      state: '—',
+      hostel: false,
+      disciplinePoints: 0,
+      address: identity.address ?? '—',
+      admissionDate: '—',
+      previousSchool: '—',
+      status: me?.status === 'INACTIVE' ? 'Archived' : 'Active',
+      attendance: 0,
+      feeStatus: 'Pending',
+      feePaid: 0,
+      feeTotal: 0,
+      transport: false,
+      scholarship: 0,
+      medical: '—',
+      academics: { overallGrade: '—', overallPercent: 0, rankInClass: 0, subjects: [] },
+      attendanceTrend: [],
+      achievements: [],
+      disciplineRecords: [],
+      documents: [],
+      timeline: [],
+    }
+  }, [identity, me])
+
+  // ── B-fix honest gate — NEVER a forever-spinner ────────────────────
+  // (a) /me failed after the auto-retry → honest error + manual retry;
+  // (b) /me in flight → spinner; (c) /me resolved + roster missing →
+  // render from the server identity (fallbackRecord path below).
+  if (!student && sessionError && me == null) {
+    return (
+      <div className="max-w-4xl">
+        <GlassCard className="px-6 py-16 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-6 w-6" aria-hidden />
+          </div>
+          <p className="text-sm font-semibold">Profile unavailable</p>
+          <p className="mx-auto mt-1.5 max-w-sm text-xs leading-relaxed text-muted-foreground">
+            Your profile could not be loaded. Please reload the page.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-4 h-8 gap-1.5"
+            onClick={() => void refresh()}
+          >
+            <RotateCw className="h-3.5 w-3.5" aria-hidden /> Try again
+          </Button>
+        </GlassCard>
+      </div>
+    )
+  }
+  if (!student && sessionResolving) {
     return (
       <div className="flex items-center justify-center py-24">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" aria-label="Loading profile" />
@@ -138,12 +247,15 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
     )
   }
 
-  const s = student
+  const s = student ?? fallbackRecord
   // Honest fee status: a student with NO billed fees shows “—”, not a
   // fabricated “Paid” (₹0/₹0 ≠ paid).
   const feePending = s.feeTotal > 0 ? Math.max(0, s.feeTotal - feePaid) : 0
   const feeStatus =
     s.feeTotal === 0 ? '—' : feePending === 0 ? 'Paid' : feePaid > 0 ? 'Partial' : 'Pending'
+  // B-fix — server-first display name/initials for the identity card.
+  const displayName = identity.name ?? s.name
+  const displayInitials = getInitials(displayName) || '?'
 
   return (
     <div className="space-y-5 sm:space-y-6 max-w-4xl">
@@ -157,7 +269,7 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
             className="relative shrink-0 mx-auto sm:mx-0"
           >
             <div className="flex h-16 w-16 sm:h-[4.5rem] sm:w-[4.5rem] items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white text-xl sm:text-2xl font-extrabold shadow-premium-lg ring-1 ring-emerald-500/25">
-              {s.avatar}
+              {displayInitials}
             </div>
             <span
               className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white border-[3px] border-background"
@@ -170,7 +282,7 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
 
           <div className="flex-1 min-w-0 text-center sm:text-left">
             <div className="flex items-center gap-2 flex-wrap justify-center sm:justify-start">
-              <h2 className="font-display text-xl sm:text-2xl font-extrabold tracking-tight truncate">{s.name}</h2>
+              <h2 className="font-display text-xl sm:text-2xl font-extrabold tracking-tight truncate">{displayName}</h2>
               <StatusBadge status="Active" variant="success" dot />
               {positions.map((p) => (
                 <span
@@ -183,7 +295,7 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
               ))}
             </div>
             <p className="text-sm text-muted-foreground mt-1.5">
-              {identity.classLabel} · Roll #{identity.rollNo} · {s.houseName} House
+              {identity.classLabel} · Roll #{identity.rollNo}{s.houseName ? ` · ${s.houseName} House` : ''}
             </p>
             <p className="text-[11px] text-muted-foreground/80 mt-0.5">
               Admission No {identity.admissionNo} · {sessionLabel ?? SESSION_NOT_SET_LABEL}
@@ -214,7 +326,7 @@ export function ProfileModule({ onNavigate }: { onNavigate?: (key: string) => vo
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-0 sm:divide-x sm:divide-border">
           <SnapshotStat
             label="Attendance"
-            value={`${attendancePct}%`}
+            value={attendancePct != null ? `${attendancePct}%` : '—'}
             icon={<Activity className="h-4 w-4" />}
             color="text-emerald-600 dark:text-emerald-400"
             bg="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
@@ -503,6 +615,11 @@ function RecordsTab({ student: s, certCount, onNavigate }: {
   return (
     <GlassCard className="p-2 sm:p-3">
       <div className="divide-y divide-border">
+        {rows.length === 0 && (
+          <p className="p-4 text-center text-xs text-muted-foreground">
+            No records yet — they appear here as the school publishes them.
+          </p>
+        )}
         {rows.map((r, i) => (
           <motion.button
             key={r.key}

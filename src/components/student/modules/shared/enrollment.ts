@@ -17,6 +17,11 @@ import { useCurrentUser } from '@/lib/store/current-user-store'
 
 /** Everything a surface needs to say "who I am". */
 export interface EnrollmentIdentity {
+  /** Canonical server name (me.name — User → Student DB row). Null
+   *  while /api/auth/me is still resolving; callers fall back to the
+   *  roster record's name (B-fix: server-first, same priority as the
+   *  sidebar). */
+  name: string | null
   /** Section-merged label, e.g. "Grade 9 - A" (server format). */
   classLabel: string
   rollNo: string
@@ -59,9 +64,11 @@ function displayGender(raw: string | null | undefined): string | null {
  */
 export function useEnrollmentIdentity(seed: EnrollmentSeed): EnrollmentIdentity {
   const srv = useCurrentUser((s) => s.me?.student)
+  const srvName = useCurrentUser((s) => s.me?.name)
   const resolving = useCurrentUser((s) => s.loading || s.me == null)
 
   return useMemo(() => ({
+    name: srvName ?? null,
     classLabel: srv?.classLabel ?? `${seed.className}-${seed.section}`,
     rollNo: srv?.rollNo ?? seed.rollNo,
     admissionNo: srv?.admissionNo ?? seed.admissionNo,
@@ -72,5 +79,5 @@ export function useEnrollmentIdentity(seed: EnrollmentSeed): EnrollmentIdentity 
     guardianPhone: srv?.guardianPhone ?? seed.guardianPhone ?? null,
     address: srv?.address ?? null,
     resolving,
-  }), [srv, seed, resolving])
+  }), [srv, srvName, seed, resolving])
 }

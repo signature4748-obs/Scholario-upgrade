@@ -180,8 +180,15 @@ export default function Home() {
     if (!meLoaded) return
     if (isDemoTenant) {
       void import('@/lib/store/students-store').then((m) => m.ensureStudentsDemoSeed())
+      // B-fix — the RT-SEED-* responsibility tasks are the same demo-tier
+      // class of content (STU-58 pinned rows): applied only to the demo
+      // tenant via the makeDemoSeedApplier pristine guard.
+      void import('@/lib/store/class-responsibility-store').then((m) => m.ensureClassResponsibilityDemoSeed())
     } else {
       void import('@/lib/store/students-store').then((m) => m.purgeSeedRosterForRealTenant())
+      // B-fix — evict any RT-SEED-* rows a pre-gate namespace rehydrated
+      // for a real tenant (user-created tasks are always kept).
+      void import('@/lib/store/class-responsibility-store').then((m) => m.purgeSeedResponsibilityTasksForRealTenant())
     }
   }, [meLoaded, isDemoTenant])
 

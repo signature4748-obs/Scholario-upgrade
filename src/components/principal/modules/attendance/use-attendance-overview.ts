@@ -1,18 +1,24 @@
 'use client'
 
 /**
- * use-attendance-overview — the canonical school-wide attendance overview
- * feed (attendance-overview-real).
+ * use-attendance-overview — the canonical attendance overview feed
+ * (attendance-overview-real). Phase B: supports an optional per-class
+ * scope — `useAttendanceOverview(classId)` fetches
+ * `GET /api/attendance/overview?classId=<id>` (REAL per-class series,
+ * trends, summary + Live Class Snapshot roster) instead of the retired
+ * demo classSections corpus.
  *
- * GET /api/attendance/overview derives EVERYTHING from the Attendance table
- * (latest recorded day breakdown, 6-day trend, 6-month trend, per
- * grade-group rates, per-date daily series). This hook unwraps the
- * { ok, data } envelope and exposes it as `{ data, loading, error, refresh }`:
+ * GET /api/attendance/overview derives EVERYTHING from the Attendance
+ * table (latest recorded day breakdown, 6-day trend, 6-month trend, per
+ * grade-group rates, per-date daily series; scoped: per-class series +
+ * one summary row + per-student roster). This hook unwraps the
+ * `{ ok, data }` envelope and exposes it as `{ data, loading, error, refresh }`:
  *
  *   · `data` is undefined while the fetch is in flight — consumers render
  *     their existing skeleton / loading tile;
- *   · the fetch is module-level cached (stale-while-revalidate, 60s TTL) —
- *     one shared request per window, a NEW mount after the TTL keeps the
+ *   · the fetch is module-level cached PER SCOPE (school-wide + one entry
+ *     per classId, stale-while-revalidate, 60s TTL) — one shared request
+ *     per scope per window, a NEW mount after the TTL keeps the
  *     data visible and refetches in the background;
  *   · a failed fetch is NOT cached — the next mount retries, and
  *     `refresh()` is the retry the KPI card's affordance calls;
@@ -76,12 +82,33 @@ export interface AttendanceDayRecord {
   rate: number
 }
 
+/** Per-class scope extras (only present with ?classId=). */
+export interface AttendanceClassScope {
+  id: string
+  /** The Class row's own name (e.g. "Class 7 A"). */
+  name: string
+  /** Class-teacher display name (null when unassigned). */
+  teacher: string | null
+}
+
+export interface AttendanceRosterEntry {
+  rollNo: string
+  name: string
+  status: string
+}
+
 export interface AttendanceOverviewData {
   today: AttendanceOverviewToday
   weekTrend: AttendanceWeekTrendPoint[]
   monthly: AttendanceMonthlyPoint[]
   byClass: AttendanceClassRate[]
   daily: AttendanceDayRecord[]
+  /** Per-class scope only: class label + teacher name. */
+  class?: AttendanceClassScope
+  /** Per-class scope only: per-student statuses on the latest recorded date. */
+  roster?: AttendanceRosterEntry[]
+  /** Per-class scope only: the roster's date (null = no rows at all). */
+  rosterDate?: string | null
 }
 
 export interface UseAttendanceOverviewResult {
@@ -93,18 +120,27 @@ export interface UseAttendanceOverviewResult {
   refresh: () => void
 }
 
-/** Module-level session cache — one shared fetch per window (60s TTL). */
-let cachedOverview: AttendanceOverviewData | null = null
-let cachedAt = 0
-let inflight: Promise<AttendanceOverviewData | null> | null = null
+/** Module-level session cache — one shared fetch per scope (60s TTL). */
+interface CacheEntry {
+  data: AttendanceOverviewData | null
+  at: number
+}
+const cache = new Map<string, CacheEntry>()
+const inflight = new Map<string, Promise<AttendanceOverviewData | null>>()
 const FRESH_FOR_MS = 60_000
 
-function fetchOverview(force = false): Promise<AttendanceOverviewData | null> {
-  if (!force && cachedOverview && Date.now() - cachedAt < FRESH_FOR_MS) {
-    return Promise.resolve(cachedOverview)
+function fetchOverview(classId: string | undefined, force = false): Promise<AttendanceOverviewData | null> {
+  const scopeKey = classId ?? 'all'
+  const entry = cache.get(scopeKey)
+  if (!force && entry?.data && Date.now() - entry.at < FRESH_FOR_MS) {
+    return Promise.resolve(entry.data)
   }
-  if (!inflight) {
-    const run = fetch('/api/attendance/overview', {
+  let run = inflight.get(scopeKey)
+  if (!run) {
+    const url = classId
+      ? `/api/attendance/overview?classId=${encodeURIComponent(classId)}`
+      : '/api/attendance/overview'
+    run = fetch(url, {
       cache: 'no-store',
       credentials: 'same-origin',
     })
@@ -124,8 +160,7 @@ function fetchOverview(force = false): Promise<AttendanceOverviewData | null> {
       .then((data) => {
         // Stamp ONLY on a real network success (a fresh-cache resolve must
         // not re-arm the TTL).
-        cachedOverview = data
-        cachedAt = Date.now()
+        cache.set(scopeKey, { data, at: Date.now() })
         return data
       })
       .catch((e: unknown) => {
@@ -134,21 +169,21 @@ function fetchOverview(force = false): Promise<AttendanceOverviewData | null> {
         console.warn('[attendance-overview] unavailable, staying on loading state:', e)
         return null
       })
-    inflight = run
+    inflight.set(scopeKey, run)
     run.finally(() => {
-      if (inflight === run) inflight = null
+      if (inflight.get(scopeKey) === run) inflight.delete(scopeKey)
     })
   }
-  return inflight
+  return run
 }
 
-export function useAttendanceOverview(): UseAttendanceOverviewResult {
-  const [data, setData] = useState<AttendanceOverviewData | undefined>(cachedOverview ?? undefined)
+export function useAttendanceOverview(classId?: string): UseAttendanceOverviewResult {
+  const [data, setData] = useState<AttendanceOverviewData | undefined>(() => cache.get(classId ?? 'all')?.data ?? undefined)
   const [error, setError] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    void fetchOverview().then((d) => {
+    void fetchOverview(classId).then((d) => {
       if (cancelled) return
       if (d) setData(d)
       else setError(true)
@@ -156,18 +191,18 @@ export function useAttendanceOverview(): UseAttendanceOverviewResult {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [classId]) // strings compare by value — scope identity is the classId itself
 
   const refresh = useCallback(() => {
-    void fetchOverview(true).then((d) => {
+    void fetchOverview(classId, true).then((d) => {
       if (d) {
         setData(d)
         setError(false)
-      } else if (!cachedOverview) {
+      } else if (!cache.get(classId ?? 'all')?.data) {
         setError(true)
       }
     })
-  }, [])
+  }, [classId])
 
   return { data, loading: data === undefined && !error, error, refresh }
 }

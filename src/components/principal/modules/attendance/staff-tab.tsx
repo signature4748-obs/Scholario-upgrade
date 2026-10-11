@@ -50,7 +50,9 @@ export function StaffAttendanceTab() {
           <CalendarCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             Student and class attendance <span className="font-medium text-foreground">is</span> tracked —
-            open the Classes tab to review and mark daily class attendance.
+            review it on the Overview and History tabs of this module. Daily
+            marking happens in the teacher Class Hub (each class's teacher
+            marks their own class; the Overview shows the recorded results).
           </p>
         </div>
       </GlassCard>

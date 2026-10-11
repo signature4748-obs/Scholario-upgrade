@@ -27,6 +27,7 @@ import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
 import { getActiveTenantPermissionsSync, getActiveTenantConfigSync } from '@/lib/tenant/store'
 import type { CapabilityKey } from '@/lib/tenant/types'
 import { useStudentsStore } from '@/lib/store/students-store'
+import { readIsDemoTenant } from '@/lib/store/demo-tenant'
 import type { StudentRecord } from '@/lib/store/students-store'
 import { STALE_APPLICATION_PURGE } from './applications-purge'
 import { useCommunicationStore } from '@/lib/store/communication-store'
@@ -3901,9 +3902,17 @@ export const useFeeStore = create<FeeState>()(
     // derives from the ONE ledger. Backfills his seed payment when the
     // persisted state predates the roster extension. Never touches any other
     // transaction.
+    // B-fix (store-seed gating) — the backfill is DEMO-TIER content (a
+    // fabricated ₹4,750 UPI receipt): gated on the server-derived demo
+    // signal (readIsDemoTenant). Persist migrations run during store
+    // rehydration — before /api/auth/me resolves — so a real tenant's
+    // namespace can never receive the fabricated receipt.
     if (fromVersion < 14 && persistedState && typeof persistedState === 'object') {
       const st = persistedState as Record<string, any>
-      if (Array.isArray(st.transactions) && !st.transactions.some((t: any) => t?.studentId === 'STU-58')) {
+      if (
+        readIsDemoTenant() &&
+        Array.isArray(st.transactions) && !st.transactions.some((t: any) => t?.studentId === 'STU-58')
+      ) {
         return { ...st, transactions: [...STU58_SEED_TXNS, ...st.transactions] }
       }
       return st

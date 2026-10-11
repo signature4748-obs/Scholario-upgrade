@@ -25,6 +25,7 @@ import {
   HOLIDAY_CELL_COLOR,
   formatMonthLabel,
   formatMonthLabelCompact,
+  useSchoolHolidays,
 } from './data'
 import { CalendarLegend, SelectedDayPanel } from './shared'
 import type { AttendanceDayRecord } from './use-attendance-overview'
@@ -63,15 +64,20 @@ export function AttendanceHeatmap({ selectedDay, setSelectedDay, onViewFullAtten
     for (const d of daily ?? []) map[d.date] = d.rate
     return map
   }, [daily])
-  // `daily` provided (even empty) ⇒ REAL mode — unrecorded days honestly
-  // show "no attendance yet". The legacy deterministic fallback only applies
-  // when the caller passes no daily data at all.
-  const dailyProvided = daily !== undefined
+  // `daily` is always provided by the caller (the canonical overview —
+  // school-wide or class-scoped); unrecorded days honestly show "no
+  // attendance yet". The deterministic fabrication fallback is retired.
+
+  // Phase B: holidays from the AUTHORITATIVE DB source —
+  // GET /api/events?type=HOLIDAY (tenant-scoped SchoolEvent rows), fetched
+  // once per window. While loading / on failure the bundled mirror applies
+  // (the documented fallback — never fabricated rates).
+  const dbHolidays = useSchoolHolidays()
 
   // Brief PART 7: rebuild the calendar for the current month.
   const calendar = useMemo(
-    () => buildMonthCalendar(year, month, dailyProvided ? recordedRates : undefined),
-    [year, month, recordedRates, dailyProvided],
+    () => buildMonthCalendar(year, month, recordedRates, dbHolidays),
+    [year, month, recordedRates, dbHolidays],
   )
 
   // Brief PART 8: when month changes, clear the selected day if it's no

@@ -169,11 +169,18 @@ export function ResultsModule() {
   // neutral placeholders only for the brief unresolved window. ctx.studentId
   // is the SAME resolved id useMyResults threads through every derivation,
   // so the lookups below can never fall back to another student's rows.
+  // B-fix — className/section are server-first with EMPTY honest fallbacks
+  // (the 'Class 2'/'A' STU-58 defaults are retired), so the joined label
+  // only carries what is genuinely known.
+  const classSection =
+    ctx.className && ctx.section
+      ? `${ctx.className}-${ctx.section}`
+      : ctx.className || '—'
   const identity = {
     studentId: ctx.student?.id ?? ctx.studentId,
     name: ctx.student?.name ?? '—',
     admissionNo: ctx.student?.admissionNo ?? '—',
-    classSection: `${ctx.className}-${ctx.section}`,
+    classSection,
     rollNo: ctx.student?.rollNo ?? '—',
   }
 
@@ -226,7 +233,7 @@ export function ResultsModule() {
     return (
       <PageTransition>
         <div className="space-y-6 sm:space-y-7">
-          <ScopeChips sessionLabel={session.label} classLabel={`${ctx.className}-${ctx.section}`} />
+          <ScopeChips sessionLabel={session.label} classLabel={classSection} />
           <GlassCard hover={false} className="on-card px-6 py-16 text-center">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
               <Award className="h-6 w-6" aria-hidden />
@@ -249,7 +256,7 @@ export function ResultsModule() {
         {/* LR-1 — no module title: the sidebar + top bar already say
             "Results". The session + class chips below are the page's one
             scope line (§5/§32); nothing repeats them. */}
-        <ScopeChips sessionLabel={session.label} classLabel={`${ctx.className}-${ctx.section}`} />
+        <ScopeChips sessionLabel={session.label} classLabel={classSection} />
 
         {/* The one prominent control — which result am I reading? */}
         <AssessmentSelector

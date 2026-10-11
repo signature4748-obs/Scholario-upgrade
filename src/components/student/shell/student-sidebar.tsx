@@ -24,6 +24,7 @@ import { ChevronLeft, ChevronRight, X, Search } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
+import { getInitials } from '@/components/shared/avatar'
 import { useMyStudentRecord } from '@/lib/store/students-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
 import { APP_VERSION } from '@/lib/app-version'
@@ -69,7 +70,10 @@ export function StudentSidebar({
   // identity) when one is set, initials otherwise.
   const student = useMyStudentRecord()
   const me = useCurrentUser((s) => s.me)
-  const initials = student?.avatar ?? '·'
+  // B-fix — initials are SERVER-FIRST: derived from the canonical session
+  // name (same getInitials rule as the profile/ID card) whenever it is
+  // known; the roster avatar only covers the pre-hydration paint.
+  const initials = me?.name ? (getInitials(me.name) || '·') : (student?.avatar ?? '·')
   const avatarUrl = useCurrentUser((s) => s.me?.avatarUrl)
   const displayName = me?.name || student?.name || 'My Profile'
   const identityTitle = me?.student?.classLabel
@@ -156,7 +160,7 @@ export function StudentSidebar({
               )}
             >
               {avatarUrl ? (
-                <img src={avatarUrl} alt={student?.name ?? 'My profile photo'} className="h-full w-full object-cover" />
+                <img src={avatarUrl} alt={displayName} className="h-full w-full object-cover" />
               ) : (
                 initials
               )}

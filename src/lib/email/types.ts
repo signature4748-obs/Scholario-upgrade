@@ -3,10 +3,21 @@
 // ------------------------------------------------------------
 // Server-only contract shared by the template renderer and the
 // sendEmail pipeline (src/lib/email/index.ts). Phase 8B mission §7:
-// one place that knows how transactional email leaves Scholario —
-// Resend in production, a structured-log dev transport when
-// RESEND_API_KEY is unset. Every payload is recorded in the
-// EmailDelivery table (audit + idempotency via dedupeKey).
+// one place that knows how transactional email leaves Scholario.
+// Every payload is recorded in the EmailDelivery table (audit +
+// idempotency via dedupeKey).
+//
+// PHASE A (email hardening) additions:
+//   · EmailProviderId — the pipeline is provider-agnostic; adapters
+//     live in src/lib/email/providers/ (resend REST, gmail-smtp,
+//     dev-log) behind one ProviderAttempt shape.
+//   · QUEUED status — a provider 2xx means "accepted into the
+//     provider's queue", NOT delivered. SENT now requires delivery
+//     EVIDENCE (Resend webhook `email.delivered` event; the dev-log
+//     transport where the log line IS the delivery). Never report an
+//     email as delivered when it was merely queued or rejected.
+//   · Provider error classes — auth vs testing-restriction vs
+//     unverified-domain vs rate-limit vs transient (provider-errors.ts).
 //
 // Do not import from Client Components — see the guard in index.ts.
 // ============================================================
@@ -84,7 +95,7 @@ export interface RenderedEmail {
 
 /**
  * The single send entry-point contract. `sendEmail` NEVER throws —
- * every outcome (sent / skipped / failed) comes back as a value.
+ * every outcome comes back as a value.
  */
 export interface EmailInput {
   to: string
@@ -95,7 +106,7 @@ export interface EmailInput {
   /**
    * Idempotency key — the logical identity of the email (e.g.
    * 'admission-enquiry:<ActivityLog row id>'). A row with this key and
-   * status SENT short-circuits the send as 'skipped'.
+   * status SENT or QUEUED short-circuits the send as 'skipped'.
    */
   dedupeKey?: string
   /** Correlation id for log lines (request id at the call site). */
@@ -116,16 +127,23 @@ export interface SendEmailOptions {
 /**
  * Outcome of one sendEmail call.
  *
- *   status    'sent'    — delivered (resend 2xx, or dev transport)
- *             'skipped' — dedupeKey already has a SENT row (idempotent)
- *             'failed'  — invalid recipient / render failure / transport
- *                         exhausted (details in the row's lastError)
- *   transport which transport WOULD carry / carried the email
+ *   status    'sent'    — DELIVERED (dev transport: the log line IS
+ *                         the delivery; or provider delivery evidence)
+ *             'queued'  — provider ACCEPTED the message (2xx/250) but
+ *                         delivery is unconfirmed — this is the honest
+ *                         status for provider-accepted sends awaiting
+ *                         a delivery event; NEVER reported as delivered
+ *             'skipped' — dedupeKey already has a SENT/QUEUED row
+ *                         (idempotent — accepted sends never re-fire)
+ *             'failed'  — invalid recipient / render failure / provider
+ *                         rejection / transport exhausted (details in
+ *                         the row's lastError, with a `[class]` tag)
+ *   transport which transport carried / would carry the email
  *   attempts  transport attempts actually made (0 for pre-transport failures)
  */
 export interface EmailResult {
-  status: 'sent' | 'skipped' | 'failed'
-  transport: 'resend' | 'dev-log'
+  status: 'sent' | 'queued' | 'skipped' | 'failed'
+  transport: EmailProviderId
   attempts: number
   /** Provider message id ('dev-log' in the dev transport). */
   messageId?: string
@@ -133,7 +151,41 @@ export interface EmailResult {
   deliveryId?: string
 }
 
-/** Diagnostics surface for health/status pages. */
+/** The providers the pipeline can dispatch to (providers/*.ts). */
+export type EmailProviderId = 'resend' | 'gmail-smtp' | 'dev-log'
+
+/**
+ * One provider attempt result — the adapter-neutral outcome the retry
+ * loop reasons about. NEVER contains credentials.
+ */
+export interface ProviderAttempt {
+  ok: boolean
+  /** Provider message id on acceptance (queue id / SMTP accepted id). */
+  messageId?: string
+  /** Retry the same provider? (rate-limited / transient only) */
+  retryable: boolean
+  /** Typed failure class (when classifiable). */
+  errorClass?: string
+  /** Formatted error detail (status + provider body; no secrets). */
+  error?: string
+}
+
+/** Diagnostics surface for health/status pages (booleans only). */
 export interface EmailTransportStatus {
   resendConfigured: boolean
+}
+
+/**
+ * Resolved provider for this process, honoring EMAIL_PROVIDER override:
+ *   'resend' | 'gmail-smtp' | 'dev-log' | 'auto' (default).
+ * Explicit overrides that lack their credentials resolve to
+ * configured:false with configError — sends fail loudly (honest
+ * misconfiguration) instead of silently falling back.
+ */
+export interface ResolvedProvider {
+  id: EmailProviderId
+  /** 'explicit' (EMAIL_PROVIDER) or 'auto' (credential detection). */
+  selection: 'explicit' | 'auto'
+  configured: boolean
+  configError?: string
 }

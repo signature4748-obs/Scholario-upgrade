@@ -9,16 +9,30 @@
  *                           'email_dev_delivery' log line IS the delivery,
  *                           result { status:'sent', transport:'dev-log' }
  *   2. idempotency        — a second send with the same dedupeKey and a
- *                           prior SENT row → 'skipped', NO new row
- *   3. resend success     — stubbed fetch 200 {id} → SENT + provider id
- *   4. resend retry       — 429 then 200 → attempts 2, SENT
+ *                           prior SENT or QUEUED row → 'skipped', NO new
+ *                           row (an ACCEPTED email is never re-sent)
+ *   3. resend success     — stubbed fetch 200 {id} → QUEUED + provider
+ *                           id (provider 2xx = accepted, NOT delivered)
+ *   4. resend retry       — 429 then 200 → attempts 2, QUEUED
  *   5. permanent failure  — 400 always → attempts 1 (no retry), FAILED
+ *                           with a machine-parseable [invalid-request]
+ *                           class tag in lastError
+ *   5b. 403 testing       — Resend testing-mode body → FAILED,
+ *       [testing-recipient-restricted] class, no retry (the production
+ *       failure mode — never mislabeled as an invalid API key)
+ *   5c. 401 auth          — [auth-invalid] class, no retry
+ *   5d. 403 domain        — unverified-domain body →
+ *       [unverified-sender-domain] class
  *   6. unknown template   → failed BEFORE any transport call
  *   7. invalid recipient  → failed BEFORE any transport call (audited row)
  *   8. render safety      — admission template carries school branding and
  *                           HTML-ESCAPES dynamic props (XSS boundary);
  *                           salary template uses fixed-payment language
  *                           only (no gross/net/deduction wording)
+ *   9. provider pinning   — EMAIL_PROVIDER explicit overrides: dev-log
+ *                           pinned with a key present; resend pinned
+ *                           without a key → LOUD [provider-config]
+ *                           failure, never a silent fallback
  *
  * SAFETY: no test can send a real email — the resend tests use an
  * obviously-stub key ('re_stub_not_a_real_key') plus a stubbed
@@ -60,10 +74,21 @@ const SAVED_ENV = {
   resendKey: process.env.RESEND_API_KEY,
   emailFrom: process.env.EMAIL_FROM,
   logLevel: process.env.LOG_LEVEL,
+  emailProvider: process.env.EMAIL_PROVIDER,
+  gmailUser: process.env.GMAIL_SMTP_USER,
+  gmailPass: process.env.GMAIL_SMTP_APP_PASSWORD,
 }
 const REAL_FETCH = globalThis.fetch
 
-function restoreEnv(name: 'RESEND_API_KEY' | 'EMAIL_FROM' | 'LOG_LEVEL', value: string | undefined): void {
+type SavableEnvName =
+  | 'RESEND_API_KEY'
+  | 'EMAIL_FROM'
+  | 'LOG_LEVEL'
+  | 'EMAIL_PROVIDER'
+  | 'GMAIL_SMTP_USER'
+  | 'GMAIL_SMTP_APP_PASSWORD'
+
+function restoreEnv(name: SavableEnvName, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
   else process.env[name] = value
 }
@@ -116,6 +141,9 @@ beforeEach(() => {
   // Default test posture: dev transport (no key) + info logging.
   delete process.env.RESEND_API_KEY
   delete process.env.EMAIL_FROM
+  delete process.env.EMAIL_PROVIDER
+  delete process.env.GMAIL_SMTP_USER
+  delete process.env.GMAIL_SMTP_APP_PASSWORD
   process.env.LOG_LEVEL = 'info'
 })
 
@@ -123,6 +151,9 @@ afterEach(() => {
   restoreEnv('RESEND_API_KEY', SAVED_ENV.resendKey)
   restoreEnv('EMAIL_FROM', SAVED_ENV.emailFrom)
   restoreEnv('LOG_LEVEL', SAVED_ENV.logLevel)
+  restoreEnv('EMAIL_PROVIDER', SAVED_ENV.emailProvider)
+  restoreEnv('GMAIL_SMTP_USER', SAVED_ENV.gmailUser)
+  restoreEnv('GMAIL_SMTP_APP_PASSWORD', SAVED_ENV.gmailPass)
   globalThis.fetch = REAL_FETCH
 })
 
@@ -212,12 +243,45 @@ describe('email infrastructure — idempotency', () => {
     expect(rows[0]?.status).toBe('SENT')
     expect(rows[0]?.providerMessageId).toBe('dev-log')
   })
+
+  test('second send with the same dedupeKey after a provider 2xx (QUEUED row) → skipped, never re-sent', async () => {
+    process.env.RESEND_API_KEY = STUB_KEY
+    const calls = stubFetch([{ status: 200, body: { id: 're_idem' } }])
+    const key = dk('idem-queued')
+    const props = admissionProps('Ishaan Verma')
+
+    const first = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props,
+      dedupeKey: key,
+    })
+    expect(first.status).toBe('queued')
+    expect(calls.length).toBe(1)
+
+    // Re-triggering the same logical email must NOT hit the provider
+    // again — the first copy is already in the provider's queue.
+    const second = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props,
+      dedupeKey: key,
+    })
+    expect(second.status).toBe('skipped')
+    expect(second.attempts).toBe(0)
+    expect(calls.length).toBe(1) // still exactly ONE provider call
+
+    const rows = await db.emailDelivery.findMany({ where: { dedupeKey: key } })
+    expect(rows.length).toBe(1)
+    expect(rows[0]?.status).toBe('QUEUED')
+    expect(rows[0]?.providerMessageId).toBe('re_idem')
+  })
 })
 
 // ─── 3-5. resend transport (stubbed fetch — never a real API call) ──────
 
 describe('email infrastructure — resend transport (stubbed fetch)', () => {
-  test('2xx {id} → SENT + providerMessageId, correct request shape', async () => {
+  test('2xx {id} → QUEUED + providerMessageId, correct request shape', async () => {
     process.env.RESEND_API_KEY = STUB_KEY
     expect(getEmailTransportStatus().resendConfigured).toBe(true)
 
@@ -231,7 +295,9 @@ describe('email infrastructure — resend transport (stubbed fetch)', () => {
       dedupeKey: key,
     })
 
-    expect(result.status).toBe('sent')
+    // Provider 2xx = ACCEPTED, not delivered — the honest result is
+    // 'queued' until the webhook's delivered event upgrades the row.
+    expect(result.status).toBe('queued')
     expect(result.transport).toBe('resend')
     expect(result.attempts).toBe(1)
     expect(result.messageId).toBe('re_123')
@@ -249,12 +315,12 @@ describe('email infrastructure — resend transport (stubbed fetch)', () => {
     expect(String(body.html)).toContain('Aarav Sharma')
 
     const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
-    expect(row?.status).toBe('SENT')
+    expect(row?.status).toBe('QUEUED')
     expect(row?.providerMessageId).toBe('re_123')
     expect(row?.attempts).toBe(1)
   })
 
-  test('429 then 200 → retried once, attempts 2, SENT', async () => {
+  test('429 then 200 → retried once, attempts 2, QUEUED', async () => {
     process.env.RESEND_API_KEY = STUB_KEY
     const calls = stubFetch([
       { status: 429, body: { message: 'rate limited' } },
@@ -269,18 +335,18 @@ describe('email infrastructure — resend transport (stubbed fetch)', () => {
       dedupeKey: key,
     })
 
-    expect(result.status).toBe('sent')
+    expect(result.status).toBe('queued')
     expect(result.attempts).toBe(2)
     expect(result.messageId).toBe('re_456')
     expect(calls.length).toBe(2)
 
     const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
-    expect(row?.status).toBe('SENT')
+    expect(row?.status).toBe('QUEUED')
     expect(row?.attempts).toBe(2)
     expect(row?.providerMessageId).toBe('re_456')
   })
 
-  test('400 (permanent, non-429) → attempts 1, no retry, FAILED row + lastError', async () => {
+  test('400 (permanent, non-429) → attempts 1, no retry, FAILED row + classified lastError', async () => {
     process.env.RESEND_API_KEY = STUB_KEY
     // Single scripted step repeats for any extra call — the assert below
     // proves the retry policy never made one.
@@ -301,7 +367,175 @@ describe('email infrastructure — resend transport (stubbed fetch)', () => {
     const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
     expect(row?.status).toBe('FAILED')
     expect(row?.attempts).toBe(1)
+    expect(row?.lastError).toContain('[invalid-request]')
     expect(row?.lastError).toContain('HTTP 400')
+  })
+
+  test('403 testing-mode body → FAILED, [testing-recipient-restricted] class, no retry', async () => {
+    process.env.RESEND_API_KEY = STUB_KEY
+    const calls = stubFetch([
+      {
+        status: 403,
+        body: {
+          message:
+            'You can only send testing emails to your own email address (owner@example.com). To send emails to other recipients, please verify a domain at resend.com/domains, and change the `from` address to an email using this domain.',
+          name: 'validation_error',
+          statusCode: 403,
+        },
+      },
+    ])
+    const key = dk('testing-403')
+
+    const result = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props: admissionProps(),
+      dedupeKey: key,
+    })
+
+    // THE production failure mode (2026-10): the key is VALID, the
+    // account is in testing mode. Classified precisely, no retry —
+    // retrying a 403 would only burn attempts.
+    expect(result.status).toBe('failed')
+    expect(result.attempts).toBe(1)
+    expect(calls.length).toBe(1)
+
+    const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
+    expect(row?.status).toBe('FAILED')
+    expect(row?.lastError).toContain('[testing-recipient-restricted]')
+    expect(row?.lastError).toContain('verify a domain') // remediation preserved
+  })
+
+  test('401 → FAILED, [auth-invalid] class, no retry', async () => {
+    process.env.RESEND_API_KEY = STUB_KEY
+    const calls = stubFetch([{ status: 401, body: { message: 'Unauthorized' } }])
+    const key = dk('auth-401')
+
+    const result = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props: admissionProps(),
+      dedupeKey: key,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.attempts).toBe(1)
+    expect(calls.length).toBe(1)
+
+    const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
+    expect(row?.status).toBe('FAILED')
+    expect(row?.lastError).toContain('[auth-invalid]')
+  })
+
+  test('403 unverified-domain body → FAILED, [unverified-sender-domain] class', async () => {
+    process.env.RESEND_API_KEY = STUB_KEY
+    stubFetch([
+      { status: 403, body: { message: 'You can only send emails from verified domains. The domain example.com is not verified.' } },
+    ])
+    const key = dk('domain-403')
+
+    const result = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props: admissionProps(),
+      dedupeKey: key,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.attempts).toBe(1)
+
+    const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
+    expect(row?.status).toBe('FAILED')
+    expect(row?.lastError).toContain('[unverified-sender-domain]')
+  })
+})
+
+// ─── 9. provider pinning (EMAIL_PROVIDER explicit override) ──────────────
+
+describe('email infrastructure — EMAIL_PROVIDER explicit pinning', () => {
+  test("EMAIL_PROVIDER='dev-log' pins the dev transport even with a key present", async () => {
+    process.env.RESEND_API_KEY = STUB_KEY
+    process.env.EMAIL_PROVIDER = 'dev-log'
+    const calls = stubFetch([]) // any fetch call throws → wrong transport
+    const key = dk('pinned-dev')
+
+    const result = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props: admissionProps(),
+      dedupeKey: key,
+    })
+
+    expect(result.status).toBe('sent')
+    expect(result.transport).toBe('dev-log')
+    expect(result.messageId).toBe('dev-log')
+    expect(calls.length).toBe(0)
+
+    const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
+    expect(row?.status).toBe('SENT') // the dev log line IS the delivery
+  })
+
+  test("EMAIL_PROVIDER='resend' without RESEND_API_KEY → loud [provider-config] failure, no silent fallback", async () => {
+    delete process.env.RESEND_API_KEY
+    process.env.EMAIL_PROVIDER = 'resend'
+    const calls = stubFetch([]) // any fetch call throws → no fallback send
+    const key = dk('pinned-resend-missing')
+
+    const result = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props: admissionProps(),
+      dedupeKey: key,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.transport).toBe('resend')
+    expect(calls.length).toBe(0)
+
+    const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
+    expect(row?.status).toBe('FAILED')
+    expect(row?.lastError).toContain('[provider-config]')
+    expect(row?.lastError).toContain('RESEND_API_KEY is not set')
+  })
+
+  test("EMAIL_PROVIDER='gmail-smtp' without credentials → loud [provider-config] failure", async () => {
+    process.env.EMAIL_PROVIDER = 'gmail-smtp'
+    const calls = stubFetch([])
+    const key = dk('pinned-gmail-missing')
+
+    const result = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props: admissionProps(),
+      dedupeKey: key,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.transport).toBe('gmail-smtp')
+    expect(calls.length).toBe(0)
+
+    const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
+    expect(row?.status).toBe('FAILED')
+    expect(row?.lastError).toContain('[provider-config]')
+  })
+
+  test("EMAIL_PROVIDER='nonsense' → recognized as misconfiguration, not silently ignored", async () => {
+    process.env.EMAIL_PROVIDER = 'nonsense'
+    const key = dk('pinned-nonsense')
+
+    const result = await sendEmail({
+      to: RECIPIENT,
+      template: 'admission-enquiry-received',
+      props: admissionProps(),
+      dedupeKey: key,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.transport).toBe('dev-log')
+
+    const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
+    expect(row?.status).toBe('FAILED')
+    expect(row?.lastError).toContain('not a recognized provider')
   })
 })
 

@@ -18,8 +18,6 @@
 import { useState, useCallback } from 'react'
 import { PageTransition } from '@/components/shared/ui'
 import { toast } from 'sonner'
-import { classSections } from '@/lib/mock/attendance'
-import { readIsDemoTenant } from '@/lib/store/demo-tenant'
 import { downloadCSVFile, safeFileName } from '@/lib/download-file'
 import { toCsv } from '@/lib/csv'
 import { AttendanceTabs, type AttendanceTab } from './attendance-tabs'
@@ -39,32 +37,21 @@ export function AttendanceModule() {
   // Brief §18: Export respects current tab + filter context.
   // QA-FIX-A: REAL CSV download of the Overview's class-wise summary table
   // (the exact rows ClassReport renders), respecting the class filter.
-  // attendance-overview-real — All-Classes rows come from the canonical
-  // Attendance table (session-cached hook; same fetch as the Overview tab).
-  const { data: overview } = useAttendanceOverview()
+  // Phase B: the export scope follows the classFilter — All-Classes rows
+  // are the canonical grade-group summaries; a specific class exports
+  // THAT class's real aggregate row (GET /api/attendance/overview?classId=
+  // — per-scope session cache, same fetch as the Overview tab). The demo
+  // classSections corpus is retired from the export path.
+  const { data: overview } = useAttendanceOverview(classFilter === 'all' ? undefined : classFilter)
   const handleExport = useCallback(() => {
     // Mirror ClassReport's row derivation (class-report.tsx).
     const statusFor = (pct: number) =>
       pct >= 95 ? 'Excellent' : pct >= 90 ? 'Good' : pct >= 85 ? 'Average' : 'Needs Attention'
     const rows: (string | number)[][] = []
-    if (classFilter === 'all') {
-      (overview?.byClass ?? []).slice(0, 10).forEach((r) => {
-        rows.push([r.class, r.students, r.present, r.absent, r.late, r.leave, r.rate, statusFor(Math.round(r.rate))])
-      })
-    } else {
-      // FINAL-GATE (EG-9F/R7) — per-class CSV rows derive from the demo-only
-      // classSections corpus; a real tenant exports the real (possibly
-      // empty) grade-group summary instead of a fabricated section row.
-      const section = readIsDemoTenant()
-        ? classSections.find((c) => c.id === classFilter)
-        : undefined
-      if (section) {
-        rows.push([
-          section.name, section.total, section.present, section.absent,
-          section.late, section.leave, section.rate, statusFor(Math.round(section.rate)),
-        ])
-      }
-    }
+    const summary = (overview?.byClass ?? []).slice(0, classFilter === 'all' ? 10 : 1)
+    summary.forEach((r) => {
+      rows.push([r.class, r.students, r.present, r.absent, r.late, r.leave, r.rate, statusFor(Math.round(r.rate))])
+    })
     const filename = safeFileName(
       `attendance-overview${classFilter === 'all' ? '' : `-${classFilter}`}`,
       'csv',
@@ -75,7 +62,7 @@ export function AttendanceModule() {
     )
     const scope = classFilter === 'all'
       ? 'All Classes'
-      : (readIsDemoTenant() ? classSections.find((c) => c.id === classFilter)?.name : undefined) ?? classFilter
+      : overview?.class?.name ?? classFilter
     toast.success('Attendance report exported', {
       description: `${filename} · ${rows.length} class summar${rows.length === 1 ? 'y' : 'ies'} · ${scope}`,
     })

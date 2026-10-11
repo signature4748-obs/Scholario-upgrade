@@ -27,6 +27,7 @@ import { create } from 'zustand'
 import { useEffect, useMemo } from 'react'
 import { useStudentsStore, useMyStudentRecord } from '@/lib/store/students-store'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+import { useCurrentUser } from '@/lib/store/current-user-store'
 
 /* ─── Types ────────────────────────────────────────────────────────── */
 
@@ -439,6 +440,18 @@ export function subjectSnapshotOf(
 
 /* ─── Composite reader — everything a Results surface needs ─────────── */
 
+/**
+ * B-fix — split the server's section-merged class label ("Grade 9 - A")
+ * back into className/section for consumers that render them apart. A
+ * label without a trailing section token ("Class 2") keeps its section
+ * empty. Never fabricates a default — unknown sections stay ''.
+ */
+function splitClassLabel(label: string): { className: string; section: string } {
+  const m = label.trim().match(/^(.+?)\s*[-\u2013\u2014]+\s*(\S{1,2})$/)
+  if (m) return { className: m[1].trim(), section: m[2] }
+  return { className: label.trim(), section: '' }
+}
+
 export interface LatestResultSnapshot {
   assessment: AssessmentDef
   result: AssessmentResult
@@ -475,8 +488,15 @@ export function useMyResults(studentId?: string) {
   const me = useMyStudentRecord()
   const resolvedId = studentId ?? me?.id ?? ''
   const student = useStudentsStore((s) => s.students.find((x) => x.id === resolvedId))
-  const className = student?.className ?? 'Class 2'
-  const section = student?.section ?? 'A'
+  // B-fix — class identity is SERVER-FIRST (me.student.classLabel from
+  // /api/auth/me, split back apart for consumers that need the pieces),
+  // the roster record only fills the gap, and the honest fallback is the
+  // EMPTY string — the fabricated STU-58 'Class 2'/'A' defaults are
+  // retired so a real tenant never scopes its results to a demo class.
+  const srvStudent = useCurrentUser((s) => s.me?.student)
+  const classFromServer = srvStudent?.classLabel ? splitClassLabel(srvStudent.classLabel) : null
+  const className = classFromServer?.className ?? student?.className ?? ''
+  const section = classFromServer?.section ?? student?.section ?? ''
 
   // 7-b — hydrate the REAL own rows from /api/results once per mount.
   useEffect(() => {
