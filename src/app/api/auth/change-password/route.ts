@@ -17,6 +17,17 @@ import { RATE_LIMITS, enforceRateLimitStrict } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, passwordInputSchema, newPasswordSchema } from '@/lib/security/validation'
 import { auditEvent } from '@/lib/security/audit'
 import { isCanonicalSchoolRole } from '@/lib/security/permissions'
+import { isSupabaseAuthEnabled, provisionProviderPassword, linkSchoolAuthUser } from '@/lib/auth/supabase'
+
+/** Cutover helper — guarded link (conflict-safe, never throws). */
+async function linkSchoolAuthUserSafe(userId: string, authUserId: string): Promise<boolean> {
+  try {
+    const link = await linkSchoolAuthUser(userId, authUserId)
+    return link.linked
+  } catch {
+    return false
+  }
+}
 
 export const runtime = 'nodejs'
 
@@ -143,6 +154,48 @@ export async function POST(req: NextRequest) {
         wasForced ? ' (forced first-password-change completed — credential bootstrap retired)' : ''
       }; ${revoked.count} other session(s) revoked; current session rotated`,
     }).catch(() => {})
+
+    // ── SUPABASE AUTH PHASE 1 — the staged-migration cutover (docs/
+    //    AUTH_ARCHITECTURE.md §7.3): when the user NATURALLY changes their
+    //    password, the new password is additionally provisioned to the
+    //    identity provider and the row is linked. No reset email is ever
+    //    forced; the custom login keeps working; a provider failure is
+    //    AUDITED (never surfaced as an app error — the app change is
+    //    already authoritative) and the account simply stays unlinked
+    //    until the next change or the exchange-link flow.
+    if (isSupabaseAuthEnabled()) {
+      const outcome = await provisionProviderPassword({
+        email: user.email,
+        newPassword: body.newPassword,
+        existingAuthUserId: dbUser.authUserId,
+      })
+      if (outcome.state === 'provisioned') {
+        const link = await linkSchoolAuthUserSafe(user.id, outcome.authUserId)
+        await auditEvent({
+          schoolId: user.schoolId ?? null,
+          userId: user.id,
+          action: 'AUTH_SUPABASE_PROVISIONED',
+          requestId,
+          detail: `Provider identity provisioned at natural password change (authUserId ${outcome.authUserId.slice(0, 8)}…); link=${link ? 'written' : 'skipped (conflict)'}`,
+        }).catch(() => {})
+      } else if (outcome.state === 'updated') {
+        await auditEvent({
+          schoolId: user.schoolId ?? null,
+          userId: user.id,
+          action: 'AUTH_SUPABASE_UPDATED',
+          requestId,
+          detail: 'Provider password updated at natural password change (linked account)',
+        }).catch(() => {})
+      } else {
+        await auditEvent({
+          schoolId: user.schoolId ?? null,
+          userId: user.id,
+          action: 'AUTH_SUPABASE_PROVISION_SKIPPED',
+          requestId,
+          detail: `Provider provisioning not applied: ${outcome.reason}`,
+        }).catch(() => {})
+      }
+    }
     if (rotatedToken) {
       await auditEvent({
         schoolId: user.schoolId ?? null,

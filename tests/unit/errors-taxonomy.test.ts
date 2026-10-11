@@ -75,6 +75,15 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     ADMISSION_NUMBER_COLLISION: 409,
     EMAIL_TAKEN: 409,
     CREDENTIAL_EXPIRED: 401,
+    // SUPABASE AUTH PHASE 1 — provider-identity exchange codes (stable,
+    // machine-readable; the login-door UX drives off these).
+    AUTH_PROVIDER_UNREACHABLE: 503,
+    SUPABASE_AUTH_UNCONFIGURED: 503,
+    NO_SCHOLARIO_ACCOUNT: 403,
+    LINK_PASSWORD_REQUIRED: 403,
+    PHONE_AMBIGUOUS: 403,
+    AUTH_LINK_CONFLICT: 403,
+    IDENTITY_UNVERIFIED: 403,
   }
 
   test('the table is exactly the documented taxonomy (no stray/missing codes)', () => {

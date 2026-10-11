@@ -78,6 +78,11 @@ const PLATFORM_API_PUBLIC = new Set<string>([
   '/api/platform/auth/google/status',
   '/api/platform/auth/google/start',
   '/api/platform/auth/google/callback',
+  // SUPABASE AUTH PHASE 1 — the platform provider-identity exchange +
+  // honest capability probe are pre-authentication surfaces (they issue
+  // nothing without a VERIFIED provider token + full login invariants).
+  '/api/platform/auth/supabase/status',
+  '/api/platform/auth/supabase/exchange',
   '/api/platform/announcements/public',
 ])
 // Support-session endpoints: authenticated by the SUPPORT token space.

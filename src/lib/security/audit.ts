@@ -117,6 +117,16 @@ export const AUDIT_ACTIONS = [
   // FEE-ADMISSIONS MVP — bootstrap credential expired at school-door
   // login (48h one-time credential lifecycle).
   'LOGIN_CREDENTIAL_EXPIRED',
+  // SUPABASE AUTH PHASE 1 — provider-identity exchange + linking audit
+  // trail (every exchange outcome, first-link events, and the
+  // password-change cutover outcomes are security-relevant).
+  'AUTH_SUPABASE_EXCHANGE_SUCCESS',
+  'AUTH_SUPABASE_EXCHANGE_FAILED',
+  'AUTH_SUPABASE_LINKED',
+  'AUTH_SUPABASE_LINK_FAILED',
+  'AUTH_SUPABASE_PROVISIONED',
+  'AUTH_SUPABASE_UPDATED',
+  'AUTH_SUPABASE_PROVISION_SKIPPED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

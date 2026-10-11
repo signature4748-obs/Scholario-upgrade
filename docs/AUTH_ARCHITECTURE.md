@@ -131,6 +131,12 @@ bearer is deliberately ignored (`src/middleware.ts`).
 
 ## 7. Future migration path (documented so the decision stays revisitable)
 
+> **2026-10-11 UPDATE — this path is now IMPLEMENTED as Phase 1** behind
+> the `SCHOLARIO_SUPABASE_AUTH` flag (default off), with the custom auth
+> remaining authoritative: see `docs/SUPABASE_AUTH.md` for the complete
+> contract, the live test evidence, and the rollout/rollback procedure.
+> The five steps below are implemented exactly as specified.
+
 If SCHOLARIO ever adopts Supabase Auth, the migration that respects the
 "no forced mass logout" rule is per-user, not big-bang:
 
