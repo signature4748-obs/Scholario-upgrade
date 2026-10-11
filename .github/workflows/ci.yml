@@ -39,14 +39,14 @@ concurrency:
   cancel-in-progress: true
 
 # Hard ceiling for the whole run (suite + e2e comfortably fit; flaky hangs die here).
-timeout-minutes: 50
-
 # Least privilege: CI only ever reads the repository.
 permissions:
   contents: read
 
 jobs:
   verify:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 50
     name: Typecheck · Lint · Migrations · Build · Tests
     runs-on: ubuntu-latest
 

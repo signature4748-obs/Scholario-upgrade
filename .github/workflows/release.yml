@@ -129,8 +129,6 @@ concurrency:
 
 # Hard ceiling for the whole chain (CI matrix ~20 min + migration ~2 min +
 # Vercel build + health poll ~15 min, with headroom for runner queues).
-timeout-minutes: 90
-
 # Least privilege: the pipeline only ever reads the repository.
 permissions:
   contents: read
@@ -140,6 +138,8 @@ jobs:
   # (identical gates to ci.yml.parked; job-local postgres is the only database
   # CI ever sees — no Supabase, no production env, no secrets at all.)
   ci:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 90
     name: CI — typecheck · lint · migrations · build · tests
     runs-on: ubuntu-latest
 
@@ -295,6 +295,8 @@ jobs:
   # decrypted values). Fails closed on CORE / RECOVERY gaps, warns on GOOGLE
   # (optional capability, degrades honestly off) unless strict_google.
   config-preflight:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 90
     name: Config pre-flight (Vercel env CONFIGURED/MISSING — BOTH planes)
     runs-on: ubuntu-latest
     environment: production
@@ -321,6 +323,8 @@ jobs:
 
   # ── 3. PRODUCTION DB MIGRATION — DATABASE FIRST ────────────────────────────
   migration-preflight:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 90
     name: Migration · pre-flight (read-only gates + before-state snapshot)
     needs: [ci, config-preflight]
     runs-on: ubuntu-latest
@@ -362,6 +366,8 @@ jobs:
           retention-days: 30
 
   migration-apply:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 90
     name: Migration · apply (transactional, true checksums)
     needs: migration-preflight
     if: ${{ inputs.migration_dry_run != true }}
@@ -389,6 +395,8 @@ jobs:
           # closes → the deployment never starts.
 
   migration-verify:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 90
     name: Migration · post-apply verification (A–G)
     needs: migration-apply
     runs-on: ubuntu-latest
@@ -424,6 +432,8 @@ jobs:
   # below → the gate CLOSES, the deploy job is skipped, and production stays
   # at its previously deployed, known-good commit.
   release-gate:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 90
     name: Release gate (DATABASE FIRST, APPLICATION SECOND)
     needs: [ci, config-preflight, migration-preflight, migration-apply, migration-verify]
     if: always()
@@ -489,6 +499,8 @@ jobs:
 
   # ── 5. DEPLOY THE APPLICATION — BOTH PLANES (only after the gate opened) ──
   deploy:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 90
     name: Deploy application (Vercel production — BOTH planes)
     needs: release-gate
     if: >-
@@ -537,6 +549,8 @@ jobs:
 
   # ── 6. POST-DEPLOYMENT VERIFICATION — BOTH PLANES (fail closed = STOP) ─────
   verify-deployment:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 90
     name: Verify deployment (SHA provenance + health — BOTH planes)
     needs: deploy
     runs-on: ubuntu-latest

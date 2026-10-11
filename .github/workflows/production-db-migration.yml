@@ -68,14 +68,14 @@ concurrency:
   group: production-db-migration
   cancel-in-progress: false
 
-timeout-minutes: 20
-
 # Least privilege: the pipeline only reads the repository.
 permissions:
   contents: read
 
 jobs:
   preflight:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 20
     name: Pre-flight (read-only gates + before-state snapshot)
     runs-on: ubuntu-latest
     environment: production
@@ -117,6 +117,8 @@ jobs:
           retention-days: 30
 
   apply:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 20
     name: Apply migrations (transactional, true checksums)
     needs: preflight
     if: ${{ !inputs.dry_run }}
@@ -146,6 +148,8 @@ jobs:
           # deployment can never be reported successful.
 
   verify:
+    # (promoted from the workflow-level key — GitHub rejects a top-level timeout-minutes)
+    timeout-minutes: 20
     name: Post-migration verification (A–F)
     needs: apply
     runs-on: ubuntu-latest
