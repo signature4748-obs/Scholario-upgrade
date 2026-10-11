@@ -13,6 +13,12 @@
 // never guessed). The table surfaces the login URL with copy
 // controls; copies always resolve relative URLs against the
 // current origin so the operator hands out a working link.
+//
+// P0-B (single source of truth): the row now carries the full
+// operator truth — demo/production marker (isDemo), the FOUNDING
+// principal's email + credential state, BOTH canonical doors with
+// copy AND open actions, and a toolbar Refresh. Data comes from the
+// authenticated server API only (no mock/seed arrays anywhere).
 // ============================================================
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
@@ -32,6 +38,9 @@ import {
   CalendarDays,
   Copy,
   Check,
+  ExternalLink,
+  Globe,
+  UserCog,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from '../platform-client'
 import { ProvisionWizard } from './provision-wizard'
@@ -55,7 +64,15 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
-// ── Types (API contract, worklog Task 6-1) ────────────────────────────────
+// ── Types (API contract, worklog Task 6-1 + P0-B additions) ───────────────
+
+interface PrincipalSummary {
+  email: string
+  name: string | null
+  status: string
+  credentialState: 'BOOTSTRAP_PENDING' | 'OWNED' | 'UNKNOWN'
+  lastLoginAt: string | null
+}
 
 interface SchoolRow {
   id: string
@@ -69,8 +86,12 @@ interface SchoolRow {
   board: string
   academicYear: string | null
   featureFlags: string
+  isDemo: boolean
   createdAt: string
   counts: { users: number; students: number; teachers: number; classes: number }
+  // The founding principal's access state (null only for hand-crafted
+  // data — the wizard always provisions one).
+  principal: PrincipalSummary | null
   // TWO-PROJECT TOPOLOGY — canonical doors (may be RELATIVE when
   // SCHOOL_APP_BASE_URL is unset; the unified deployment serves both
   // planes, so /s/<slug>/login on its own origin is correct).
@@ -121,7 +142,27 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-// ── Access copy controls (PHASE 10 — school access truth) ────────────────
+/** Demo/production marker — the classification truth (P0-B). */
+function DemoBadge({ isDemo }: { isDemo: boolean }) {
+  if (!isDemo) {
+    return (
+      <Badge variant="outline" className="normal-case border-slate-200 bg-white text-slate-500" title="Production tenant">
+        Production
+      </Badge>
+    )
+  }
+  return (
+    <Badge
+      variant="outline"
+      className="normal-case border-violet-200 bg-violet-50 text-violet-700"
+      title="Demo/showcase tenant (seed corpus or demo transform)"
+    >
+      Demo
+    </Badge>
+  )
+}
+
+// ── Access copy/open controls (PHASE 10 — school access truth) ────────────
 
 /** Resolve a possibly-relative plane URL to an absolute one (click-time only — window exists). */
 function absoluteUrl(url: string): string {
@@ -195,7 +236,67 @@ function CopyControl({
   )
 }
 
-// ── Onboarding wizard (provision-wizard.tsx) ──────────────────────────────────────────────────────
+/**
+ * Open-in-new-tab control for a canonical door. Relative URLs are
+ * resolved against the current origin at click time (the unified
+ * deployment serves both planes); absolute cross-plane URLs open as
+ * they are. stopPropagation keeps the row-click navigation intact.
+ */
+function OpenControl({
+  url,
+  label,
+  icon,
+  text,
+}: {
+  url: string
+  label: string
+  icon?: React.ReactNode
+  /** Optional visible text label (mobile cards). */
+  text?: string
+}) {
+  const onOpen = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    window.open(absoluteUrl(url), '_blank', 'noopener,noreferrer')
+  }
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      onKeyDown={(e) => e.stopPropagation()}
+      aria-label={label}
+      title={label}
+      className={
+        text
+          ? 'inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40'
+          : 'inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40'
+      }
+    >
+      {icon ?? <ExternalLink className="h-4 w-4" aria-hidden="true" />}
+      {text ? <span>{text}</span> : null}
+    </button>
+  )
+}
+
+/** The founding principal line: email + credential state hint. */
+function PrincipalLine({ principal }: { principal: PrincipalSummary | null }) {
+  if (!principal) {
+    return <p className="truncate text-[11px] text-slate-400">no principal on record</p>
+  }
+  return (
+    <p
+      className="flex min-w-0 items-center gap-1 truncate text-[11px] text-slate-500"
+      title={`Founding principal: ${principal.name ?? principal.email}${principal.lastLoginAt ? ` · last sign-in ${new Date(principal.lastLoginAt).toLocaleString()}` : ' · never signed in'}`}
+    >
+      <UserCog className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
+      <span className="truncate font-mono">{principal.email}</span>
+      {principal.credentialState === 'BOOTSTRAP_PENDING' && (
+        <span className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1 text-[10px] font-medium text-amber-700" title="One-time bootstrap credential not yet replaced by the principal">
+          bootstrap
+        </span>
+      )}
+    </p>
+  )
+}
 
 // ── Module ────────────────────────────────────────────────────────────────
 
@@ -313,11 +414,21 @@ export function SchoolsModule() {
             </SelectItem>
           </SelectContent>
         </Select>
-        <div className="sm:ml-auto">
+        <div className="flex items-center gap-2 sm:ml-auto">
+          {/* Refresh — re-fetches the live ledger (P0-B). */}
+          <Button
+            variant="outline"
+            onClick={() => void load()}
+            disabled={loading}
+            aria-label="Refresh schools list"
+            className="h-11 w-11 border-slate-200 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-800 focus-ring"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+          </Button>
           {canProvision && (
             <Button
               onClick={() => setProvisionOpen(true)}
-              className="h-11 w-full sm:w-auto bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
+              className="h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
               Add School
@@ -398,12 +509,13 @@ export function SchoolsModule() {
                     <TableHead className="text-slate-500 font-semibold">Status</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Plan</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Login URL</TableHead>
+                    <TableHead className="text-slate-500 font-semibold">Website</TableHead>
                     <TableHead className="text-slate-500 font-semibold text-right">Users</TableHead>
                     <TableHead className="text-slate-500 font-semibold text-right">Students</TableHead>
                     <TableHead className="text-slate-500 font-semibold text-right">Teachers</TableHead>
                     <TableHead className="text-slate-500 font-semibold">City</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Created</TableHead>
-                    <TableHead className="w-24" aria-label="Row actions" />
+                    <TableHead className="w-28" aria-label="Row actions" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -426,17 +538,21 @@ export function SchoolsModule() {
                         <p className="truncate font-mono text-[11px] text-slate-500">
                           {s.slug} · {s.code}
                         </p>
+                        <PrincipalLine principal={s.principal} />
                       </TableCell>
                       <TableCell>
-                        <StatusBadge status={s.status} />
+                        <div className="flex flex-col items-start gap-1">
+                          <StatusBadge status={s.status} />
+                          <DemoBadge isDemo={s.isDemo} />
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-700">
                           {s.plan}
                         </Badge>
                       </TableCell>
-                      <TableCell className="max-w-[13rem] py-3">
-                        <div className="flex min-w-0 items-center gap-1">
+                      <TableCell className="max-w-[12rem] py-3">
+                        <div className="flex min-w-0 items-center gap-0.5">
                           <p
                             className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500"
                             title={s.loginUrl}
@@ -447,6 +563,30 @@ export function SchoolsModule() {
                             value={s.loginUrl}
                             absolute
                             label={`Copy ${s.name} login URL`}
+                          />
+                          <OpenControl
+                            url={s.loginUrl}
+                            label={`Open ${s.name} login page in a new tab`}
+                          />
+                        </div>
+                      </TableCell>
+                      <TableCell className="max-w-[11rem] py-3">
+                        <div className="flex min-w-0 items-center gap-0.5">
+                          <p
+                            className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500"
+                            title={s.publicUrl}
+                          >
+                            {s.publicUrl}
+                          </p>
+                          <CopyControl
+                            value={s.publicUrl}
+                            absolute
+                            label={`Copy ${s.name} website preview URL`}
+                          />
+                          <OpenControl
+                            url={s.publicUrl}
+                            label={`Open ${s.name} public website in a new tab`}
+                            icon={<Globe className="h-4 w-4" aria-hidden="true" />}
                           />
                         </div>
                       </TableCell>
@@ -479,7 +619,7 @@ export function SchoolsModule() {
             <div className="sm:hidden divide-y divide-slate-200" aria-label="Schools">
               {data?.schools.map((s) => (
                 // The card is a div[role=button] (NOT a <button>) so the
-                // copy controls inside remain valid interactive elements;
+                // copy/open controls inside remain valid interactive elements;
                 // they stopPropagation to keep card = open detail only.
                 <motion.div
                   key={s.id}
@@ -503,8 +643,12 @@ export function SchoolsModule() {
                   <p className="mt-0.5 truncate font-mono text-[11px] text-slate-500">
                     {s.slug} · {s.code}
                   </p>
+                  <div className="mt-1">
+                    <PrincipalLine principal={s.principal} />
+                  </div>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <StatusBadge status={s.status} />
+                    <DemoBadge isDemo={s.isDemo} />
                     <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-700">
                       {s.plan}
                     </Badge>
@@ -531,14 +675,32 @@ export function SchoolsModule() {
                       {timeAgo(s.createdAt)}
                     </span>
                   </div>
-                  {/* Access actions — copy the canonical login URL (absolute)
-                      and the school code; never triggers card navigation. */}
+                  {/* Access actions — the canonical doors: copy AND open
+                      (login + website), plus the school code; never
+                      triggers card navigation. */}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <CopyControl
                       value={s.loginUrl}
                       absolute
                       label={`Copy ${s.name} login URL`}
                       text="Login URL"
+                    />
+                    <OpenControl
+                      url={s.loginUrl}
+                      label={`Open ${s.name} login page in a new tab`}
+                      text="Open Login"
+                    />
+                    <CopyControl
+                      value={s.publicUrl}
+                      absolute
+                      label={`Copy ${s.name} website preview URL`}
+                      text="Website URL"
+                    />
+                    <OpenControl
+                      url={s.publicUrl}
+                      label={`Open ${s.name} public website in a new tab`}
+                      icon={<Globe className="h-4 w-4" aria-hidden="true" />}
+                      text="Open Website"
                     />
                     <CopyControl value={s.code} label={`Copy ${s.name} school code`} text="Code" />
                   </div>

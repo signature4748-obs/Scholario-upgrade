@@ -31,6 +31,13 @@ const listQuerySchema = z.object({
  *
  * Permission: schools.read. This is a PLATFORM surface — a school
  * session can never reach it (disjoint token spaces).
+ *
+ * Each row also carries the access truth an operator needs without
+ * opening the record: the demo/production marker (isDemo) and the
+ * FOUNDING principal (earliest PRINCIPAL row — the same resolution rule
+ * as the detail dossier) with email/name/status, the bootstrap-credential
+ * state and last sign-in. Emails are visible to schools.read holders —
+ * the same audience the detail route already serves.
  */
 export async function GET(req: NextRequest) {
   return withPlatform({ permission: 'schools.read' }, async () => {
@@ -65,31 +72,81 @@ export async function GET(req: NextRequest) {
       db.school.count({ where }),
     ])
 
+    // Founding principal per school (earliest PRINCIPAL row) — one
+    // grouped query for the whole page. A school provisioned through
+    // the wizard ALWAYS has exactly one founding principal; a missing
+    // row (manually crafted data) is reported as null, never guessed.
+    const schoolIds = schools.map((s) => s.id)
+    const principals = schoolIds.length
+      ? await db.user.findMany({
+          where: { schoolId: { in: schoolIds }, role: 'PRINCIPAL' },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            schoolId: true,
+            email: true,
+            name: true,
+            status: true,
+            mustChangePassword: true,
+            passwordChangedAt: true,
+            lastLoginAt: true,
+          },
+        })
+      : []
+    const foundingBySchool = new Map<string, { email: string; name: string | null; status: string; mustChangePassword: boolean; passwordChangedAt: Date | null; lastLoginAt: Date | null }>()
+    for (const p of principals) {
+      // orderBy createdAt asc → the FIRST row seen per school is the
+      // founding principal; later principals are ignored here (the
+      // detail dossier is the full surface). (schoolId is typed
+      // nullable on User — the `in` filter above guarantees a value.)
+      const { schoolId, ...principalSummary } = p
+      if (schoolId && !foundingBySchool.has(schoolId)) foundingBySchool.set(schoolId, principalSummary)
+    }
+
     return {
       total,
       page,
       pageSize,
-      schools: schools.map((s) => ({
-        id: s.id,
-        name: s.name,
-        slug: s.slug,
-        code: s.code,
-        domain: s.domain,
-        city: s.city,
-        plan: s.plan,
-        status: s.status,
-        board: s.board,
-        academicYear: s.academicYear,
-        featureFlags: s.featureFlags,
-        createdAt: s.createdAt.toISOString(),
-        counts: s._count,
-        // TWO-PROJECT TOPOLOGY — the canonical cross-plane doors this
-        // row's tenant is reached through (SCHOOL_APP_BASE_URL on the
-        // platform project; relative fallback on the unified legacy
-        // deployment). Admins must never GUESS a school's URL.
-        loginUrl: schoolLoginUrl(s.slug),
-        publicUrl: schoolPublicUrl(s.slug),
-      })),
+      schools: schools.map((s) => {
+        const founding = foundingBySchool.get(s.id)
+        return {
+          id: s.id,
+          name: s.name,
+          slug: s.slug,
+          code: s.code,
+          domain: s.domain,
+          city: s.city,
+          plan: s.plan,
+          status: s.status,
+          board: s.board,
+          academicYear: s.academicYear,
+          featureFlags: s.featureFlags,
+          isDemo: s.isDemo,
+          createdAt: s.createdAt.toISOString(),
+          counts: s._count,
+          // The founding principal's access state (same vocabulary as
+          // the detail dossier — BOOTSTRAP_PENDING means the one-time
+          // credential has not been replaced yet).
+          principal: founding
+            ? {
+                email: founding.email,
+                name: founding.name,
+                status: founding.status,
+                credentialState: founding.mustChangePassword
+                  ? ('BOOTSTRAP_PENDING' as const)
+                  : founding.passwordChangedAt
+                    ? ('OWNED' as const)
+                    : ('UNKNOWN' as const),
+                lastLoginAt: founding.lastLoginAt?.toISOString() ?? null,
+              }
+            : null,
+          // TWO-PROJECT TOPOLOGY — the canonical cross-plane doors this
+          // row's tenant is reached through (SCHOOL_APP_BASE_URL on the
+          // platform project; relative fallback on the unified legacy
+          // deployment). Admins must never GUESS a school's URL.
+          loginUrl: schoolLoginUrl(s.slug),
+          publicUrl: schoolPublicUrl(s.slug),
+        }
+      }),
     }
   })
 }
