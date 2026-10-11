@@ -161,6 +161,15 @@ jobs:
       DATABASE_ENV: test
       REALTIME_MODE: disabled
       RATE_LIMIT_DB_SYNC: "on"
+      # TEST FIXTURES (2026-10-11 parity fix — never real secrets; the
+      # exact values the live security suites sign with — see
+      # .github/ci.yml.parked for the per-variable documentation).
+      GOOGLE_OAUTH_CLIENT_ID: "test-google-client-id"
+      GOOGLE_OAUTH_CLIENT_SECRET: "test-google-client-secret"
+      RAZORPAY_WEBHOOK_SECRET: "batch2-test-webhook-secret"
+      PAYMENTS_SANDBOX: "1"
+      PAYMENTS_SANDBOX_SECRET: "local-sandbox-secret"
+      PLATFORM_PAYMENT_WEBHOOK_SECRET: "platform-webhook-test-secret"
 
     steps:
       - name: Check out the exact release commit
@@ -243,6 +252,9 @@ jobs:
           bun prisma/seed-tenant-isolation.ts
           bun prisma/seed-website-cms.ts
           bun prisma/seed-salary.ts
+          # SaaS-HARDENING backfill (2026-10-11 parity fix — see
+          # .github/ci.yml.parked): subscription rows for every school.
+          bun prisma/backfill-subscriptions.ts
           # seed-platform re-run: seed-tenant-isolation plants the legacy
           # SUPER_ADMIN user AFTER the first pass — the ROOT3 corpus identity
           # the account-recovery acceptance suite requires.
@@ -254,6 +266,15 @@ jobs:
           for i in $(seq 1 60); do
             curl -sf http://localhost:3000/health/ready && break || sleep 5
           done
+          curl -sf http://localhost:3000/health/ready
+
+      # Warm the entry routes (2026-10-11 parity fix — first-request
+      # compile cost produced first-run flakes in live suites locally).
+      - name: Warm login doors (pre-compile route entries)
+        run: |
+          curl -sf -o /dev/null http://localhost:3000/platform/login
+          curl -sf -o /dev/null http://localhost:3000/login
+          curl -sf -o /dev/null http://localhost:3000/s/hawkings-prithvipur/login
           curl -sf http://localhost:3000/health/ready
 
       - name: Test suite (unit · integration · API · regression · security)
