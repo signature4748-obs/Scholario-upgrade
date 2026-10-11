@@ -62,6 +62,11 @@ export interface UserState {
   /** Only meaningful when the flag columns exist. */
   principals: number
   principalsFlagged: number | null
+  /** PRINCIPALs that never set their own password (passwordChangedAt IS NULL)
+   *  — every one of them must carry mustChangePassword = true; a principal
+   *  who completed the forced change legitimately clears the flag. */
+  principalsNeverSetOwnPassword: number | null
+  principalsNeverSetAndFlagged: number | null
   schoolPlaneNeverSetOwnPassword: number | null
   schoolPlaneNeverSetAndFlagged: number | null
   /** Rows violating the migration invariant (must be 0 after apply). */
@@ -348,6 +353,8 @@ export async function userState(columnsPresent: boolean): Promise<UserState> {
     schoolPlane: Number(schoolPlaneRow[0]?.n ?? 0),
     principals: byRole['PRINCIPAL'] ?? 0,
     principalsFlagged: null,
+    principalsNeverSetOwnPassword: null,
+    principalsNeverSetAndFlagged: null,
     schoolPlaneNeverSetOwnPassword: null,
     schoolPlaneNeverSetAndFlagged: null,
     schoolPlaneInvariantViolations: null,
@@ -357,6 +364,14 @@ export async function userState(columnsPresent: boolean): Promise<UserState> {
       `SELECT count(*)::int AS n FROM "User" WHERE role = 'PRINCIPAL' AND "mustChangePassword" = true`,
     )) as Array<{ n: number }>
     state.principalsFlagged = Number(flagged[0]?.n ?? 0)
+    const principalsNeverSet = (await mgmtQuery(
+      `SELECT count(*)::int AS n FROM "User" WHERE role = 'PRINCIPAL' AND "passwordChangedAt" IS NULL`,
+    )) as Array<{ n: number }>
+    state.principalsNeverSetOwnPassword = Number(principalsNeverSet[0]?.n ?? 0)
+    const principalsNeverSetFlagged = (await mgmtQuery(
+      `SELECT count(*)::int AS n FROM "User" WHERE role = 'PRINCIPAL' AND "passwordChangedAt" IS NULL AND "mustChangePassword" = true`,
+    )) as Array<{ n: number }>
+    state.principalsNeverSetAndFlagged = Number(principalsNeverSetFlagged[0]?.n ?? 0)
     const neverSet = (await mgmtQuery(
       `SELECT count(*)::int AS n FROM "User" WHERE "schoolId" IS NOT NULL AND role <> 'SUPER_ADMIN' AND "passwordChangedAt" IS NULL`,
     )) as Array<{ n: number }>

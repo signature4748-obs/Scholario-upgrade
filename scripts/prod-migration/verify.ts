@@ -13,8 +13,11 @@
  *                               exist.
  *   C. index verification    — all 24 pg_trgm search indexes and all 11
  *                               schoolId tenant indexes exist (exact names).
- *   D. credential migration  — every PRINCIPAL is flagged
- *                               mustChangePassword = true; every
+ *   D. credential migration  — every PRINCIPAL that never set its own
+ *                               password (passwordChangedAt IS NULL) is
+ *                               flagged mustChangePassword = true (a
+ *                               principal who completed the forced change
+ *                               legitimately clears the flag); every
  *                               school-plane account that never set its own
  *                               password (passwordChangedAt IS NULL) is
  *                               flagged; zero invariant violations. Password
@@ -153,10 +156,17 @@ async function main(): Promise<void> {
   )
 
   // D. Credential migration verification — flags only, never passwords.
+  // Invariant: every PRINCIPAL that never set its own password must be
+  // flagged. The unconditional "every PRINCIPAL flagged" form encoded the
+  // one-time credential-migration release window and contradicts the
+  // product's own forced-change flow (login → change → flag clears,
+  // passwordChangedAt set) — it false-positived the moment any principal
+  // legitimately completed a password change (observed 2026-10-11: 3/4 with
+  // zero real violations; counts-only evidence, values never read).
   const users = await userState(true)
-  if (users.principals !== users.principalsFlagged) {
+  if (users.principalsNeverSetOwnPassword !== users.principalsNeverSetAndFlagged) {
     problems.push(
-      `principals flagged ${users.principalsFlagged ?? 0}/${users.principals} — every PRINCIPAL must have mustChangePassword = true`,
+      `PRINCIPALs that never set their own password: ${users.principalsNeverSetAndFlagged ?? 0}/${users.principalsNeverSetOwnPassword ?? 0} flagged — every owner-provisioned PRINCIPAL must carry mustChangePassword = true`,
     )
   }
   if (users.schoolPlaneNeverSetOwnPassword !== users.schoolPlaneNeverSetAndFlagged) {
@@ -168,7 +178,7 @@ async function main(): Promise<void> {
     problems.push(`credential-migration invariant violations: ${users.schoolPlaneInvariantViolations} row(s)`)
   }
   console.log(
-    `  D. credentials      : principals flagged ${users.principalsFlagged}/${users.principals} ✓ · school-plane never-set-own-password flagged ${users.schoolPlaneNeverSetAndFlagged}/${users.schoolPlaneNeverSetOwnPassword} ✓ · invariant violations ${users.schoolPlaneInvariantViolations} (password values never read)`,
+    `  D. credentials      : principals never-set-own-password flagged ${users.principalsNeverSetAndFlagged}/${users.principalsNeverSetOwnPassword} ✓ · school-plane never-set-own-password flagged ${users.schoolPlaneNeverSetAndFlagged}/${users.schoolPlaneNeverSetOwnPassword} ✓ · invariant violations ${users.schoolPlaneInvariantViolations} (password values never read)`,
   )
 
   // E. Row-count comparison — no table may shrink.
