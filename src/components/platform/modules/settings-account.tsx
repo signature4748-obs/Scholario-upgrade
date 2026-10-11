@@ -5,8 +5,11 @@
 // ------------------------------------------------------------
 // ACCOUNT-RECOVERY (docs/PLATFORM_ACCOUNT_RECOVERY.md): the signed-in
 // admin's own authentication surface:
-//   · password self-service (the emailed reset flow — same pipeline
-//     as the login page's Forgot password?);
+//   · password self-service — IN-SESSION change (POST
+//     /api/platform/auth/change-password: current-password proof,
+//     policy-checked new password, other sessions revoked, current
+//     session rotated) plus the emailed reset link as the signed-OUT
+//     fallback (same pipeline as the login page's Forgot password?);
 //   · OPTIONAL Google identity: LINK (top-level OAuth redirect via
 //     /api/platform/auth/google/link/start — step-up gated server
 //     side) and UNLINK (POST, step-up gated, revokes sessions).
@@ -17,9 +20,11 @@
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { KeyRound, Link2, Unlink, ShieldCheck, Info } from 'lucide-react'
+import { KeyRound, Link2, Unlink, ShieldCheck, Info, Loader2, Check } from 'lucide-react'
 import { platformApi, usePlatformSession, type PlatformApiError } from '../platform-client'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Card,
   CardContent,
@@ -42,6 +47,53 @@ export function SettingsAccountCard() {
   const searchParams = useSearchParams()
   const [googleConfigured, setGoogleConfigured] = useState<boolean | null>(null)
   const [unlinking, setUnlinking] = useState(false)
+
+  // ── In-session password change (P0-A repair) ─────────────────────────
+  const [pwOpen, setPwOpen] = useState(false)
+  const [pwBusy, setPwBusy] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [pwError, setPwError] = useState<string | null>(null)
+
+  const resetPwForm = useCallback(() => {
+    setCurrentPassword('')
+    setNewPassword('')
+    setConfirmPassword('')
+    setPwError(null)
+  }, [])
+
+  const submitPasswordChange = useCallback(async () => {
+    if (pwBusy) return
+    setPwError(null)
+    if (newPassword !== confirmPassword) {
+      setPwError('New passwords do not match')
+      return
+    }
+    setPwBusy(true)
+    try {
+      const res = await platformApi<{ ok: boolean; otherSessionsSignedOut: number }>(
+        '/api/platform/auth/change-password',
+        {
+          method: 'POST',
+          body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+        },
+      )
+      toast.success(
+        res.otherSessionsSignedOut > 0
+          ? `Password changed — ${res.otherSessionsSignedOut} other session${res.otherSessionsSignedOut === 1 ? '' : 's'} signed out`
+          : 'Password changed',
+      )
+      setPwOpen(false)
+      resetPwForm()
+      await refresh()
+    } catch (e) {
+      const err = e as PlatformApiError
+      setPwError(err.error || 'Failed to change password')
+    } finally {
+      setPwBusy(false)
+    }
+  }, [pwBusy, currentPassword, newPassword, confirmPassword, resetPwForm, refresh])
 
   useEffect(() => {
     fetch('/api/platform/auth/google/status')
@@ -98,24 +150,134 @@ export function SettingsAccountCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Password */}
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-0.5 min-w-0">
-            <p className="text-sm font-medium text-slate-900">Password</p>
-            <p className="text-xs text-slate-500 truncate">
-              Signed in as {me?.admin.email ?? '—'}
-            </p>
-            <p className="text-xs text-slate-400">
-              Reset through the verified-email link (single-use, 30 minutes).
-            </p>
+        {/* Password — in-session self-service change (P0-A). The form
+            proves the CURRENT password (a stolen session cannot rotate
+            the credential), enforces the new-password policy, revokes
+            every other session and rotates this one. */}
+        <div className="space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-0.5 min-w-0">
+              <p className="text-sm font-medium text-slate-900">Password</p>
+              <p className="text-xs text-slate-500 truncate">
+                Signed in as {me?.admin.email ?? '—'}
+              </p>
+              <p className="text-xs text-slate-400">
+                Change it here while signed in; other devices are signed out and this
+                session is rotated. The emailed reset link remains the signed-out
+                fallback (single-use, 30 minutes).
+              </p>
+            </div>
+            {!pwOpen && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPwOpen(true)
+                  setPwError(null)
+                }}
+                className="h-11 px-4 shrink-0 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus-ring"
+              >
+                <KeyRound className="h-4 w-4" aria-hidden="true" />
+                Change password
+              </Button>
+            )}
           </div>
-          <a
-            href="/platform/forgot-password"
-            className="inline-flex items-center gap-2 h-11 px-4 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50 transition-colors focus-ring"
-          >
-            <KeyRound className="h-4 w-4" aria-hidden="true" />
-            Send reset link
-          </a>
+
+          {pwOpen && (
+            <form
+              className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void submitPasswordChange()
+              }}
+            >
+              <div className="grid gap-1.5">
+                <Label htmlFor="pw-current" className="text-xs font-semibold text-slate-700">
+                  Current password
+                </Label>
+                <Input
+                  id="pw-current"
+                  type="password"
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  required
+                  className="bg-white border-slate-200 h-11 focus-visible:ring-teal-500/40"
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="pw-new" className="text-xs font-semibold text-slate-700">
+                    New password
+                  </Label>
+                  <Input
+                    id="pw-new"
+                    type="password"
+                    autoComplete="new-password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    required
+                    minLength={8}
+                    className="bg-white border-slate-200 h-11 focus-visible:ring-teal-500/40"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="pw-confirm" className="text-xs font-semibold text-slate-700">
+                    Confirm new password
+                  </Label>
+                  <Input
+                    id="pw-confirm"
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    minLength={8}
+                    className="bg-white border-slate-200 h-11 focus-visible:ring-teal-500/40"
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                At least 8 characters with a letter and a digit. Every other signed-in
+                device is signed out; this session continues on a rotated token.
+              </p>
+              {pwError && (
+                <p className="text-xs text-red-600" role="alert">
+                  {pwError}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pwBusy}
+                  onClick={() => {
+                    setPwOpen(false)
+                    resetPwForm()
+                  }}
+                  className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={pwBusy || !currentPassword || !newPassword || !confirmPassword}
+                  className="h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
+                >
+                  {pwBusy ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      Changing…
+                    </>
+                  ) : (
+                    <>
+                      <Check className="h-4 w-4" aria-hidden="true" />
+                      Update password
+                    </>
+                  )}
+                </Button>
+              </div>
+            </form>
+          )}
         </div>
 
         {/* Google identity */}

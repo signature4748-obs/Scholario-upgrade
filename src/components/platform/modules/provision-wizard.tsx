@@ -596,7 +596,45 @@ export function ProvisionWizard({
                     className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
                   >
                     <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                    Open School
+                    Open Login
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {/* Website preview URL — the canonical public door (P0-B).
+                publicUrl comes from SCHOOL_APP_BASE_URL (absolute cross-plane
+                link) or the unified-deployment ?tenant= fallback; opening it
+                from the PLATFORM console must land on the SCHOOL website,
+                never on the console's own origin — so the button resolves
+                relative values against the current origin, same as copy. */}
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                <Globe2 className="h-3.5 w-3.5" aria-hidden="true" />
+                Website preview URL
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                The school's public website (tenant site). A custom domain only
+                becomes the door after DNS verification — until then this is the
+                canonical preview address.
+              </p>
+              <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <code
+                  className="min-w-0 flex-1 truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono text-sm text-slate-900"
+                  title={result.publicUrl}
+                >
+                  {result.publicUrl}
+                </code>
+                <div className="flex shrink-0 items-center gap-2">
+                  <CopyInlineButton value={result.publicUrl} absolute label="Copy website preview URL" />
+                  <a
+                    href={result.publicUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                    Open Website
                   </a>
                 </div>
               </div>
@@ -655,7 +693,15 @@ export function ProvisionWizard({
               </Button>
               <Button
                 variant="outline"
-                onClick={() => window.open(result.domain.previewUrl, '_blank', 'noopener')}
+                onClick={() =>
+                  window.open(
+                    result.publicUrl.startsWith('/')
+                      ? `${window.location.origin}${result.publicUrl}`
+                      : result.publicUrl,
+                    '_blank',
+                    'noopener',
+                  )
+                }
                 className="border-slate-300 bg-white text-slate-700 hover:bg-slate-100 h-10 focus-ring"
               >
                 <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
