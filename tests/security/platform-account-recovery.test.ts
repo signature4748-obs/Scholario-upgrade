@@ -962,10 +962,25 @@ describe('ACCOUNT-RECOVERY H · root recovery — dual-control (two-person rule)
     expect(res.status).toBe(409)
     const ticket = await db.platformRecoveryTicket.findUnique({ where: { id: ticketId } })
     expect(ticket!.executedAt).toBeNull()
-    const audit = await db.platformAuditLog.findFirst({
-      where: { action: 'platform.recovery.refused', targetId: root3Id },
-      orderBy: { createdAt: 'desc' },
-    })
+    // The refusal's audit row is written fire-and-forget by the route
+    // (auditEvent never blocks the response — see the refuse() helper in
+    // the confirm route). On a fast local DB the row usually lands before
+    // this check, but on CI the response can win the race (first CI run:
+    // `expect(audit).not.toBeNull()` received null while the row landed
+    // milliseconds later). Poll briefly for the row instead of asserting
+    // it synchronously — the ASSERTION is unchanged, only the observation
+    // now waits for the async write the product contract guarantees.
+    const findRefusedAudit = () =>
+      db.platformAuditLog.findFirst({
+        where: { action: 'platform.recovery.refused', targetId: root3Id },
+        orderBy: { createdAt: 'desc' },
+      })
+    let audit = null as Awaited<ReturnType<typeof findRefusedAudit>>
+    for (let i = 0; i < 30 && !audit; i++) {
+      audit = await findRefusedAudit()
+      if (audit) break
+      await new Promise((r) => setTimeout(r, 100))
+    }
     expect(audit).not.toBeNull()
   })
 

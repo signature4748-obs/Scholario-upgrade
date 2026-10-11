@@ -31,6 +31,13 @@ import { resetLoginBuckets } from '../helpers/login-buckets'
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const TEST_TIMEOUT = 45_000
 
+// Per-run spoofed client IP (suite convention — see platform-isolation,
+// pg-money-precision): the LOCKED-account login below expects an exact
+// 200; on a full single-process suite run the SHARED header-less login
+// budget (rl:login:ip:unknown, 8/15min) is what 429-shadowed suites in
+// the first CI run, so this suite claims its own IP budget instead.
+const RUN_IP = `10.242.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
+
 import { DEMO_STUDENT_EMAIL } from '../helpers/credentials'
 
 /** The corpus's LOCKED accounts (emails resolved from the DB, never guessed). */
@@ -121,7 +128,7 @@ describe('Phase 10 — account-level subscription lock (server-side)', () => {
   test('a LOCKED account still authenticates through the real login API', async () => {
     const res = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: lockedStudent.email, password: LOCKED_STUDENT_PASSWORD }),
     })
     expect(res.status).toBe(200)

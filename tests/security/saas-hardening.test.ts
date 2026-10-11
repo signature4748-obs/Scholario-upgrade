@@ -22,6 +22,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { createHmac, randomBytes } from 'crypto'
 
 import { db } from '../helpers/db'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 import { hashSessionToken } from '@/lib/auth'
 import { evaluateTenantEntitlement, isEntitlementExemptRoute } from '@/lib/entitlement/entitlement'
 import { recordPlatformPayment } from '@/lib/platform/billing'
@@ -30,6 +31,25 @@ import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const PW = TENANT_FIXTURE_PASSWORD
 const MARKER = `SH-${randomBytes(4).toString('hex')}`
+
+// Per-run spoofed client IP (tests/helpers convention: platform-isolation,
+// pg-money-precision, search-case …). WHY (first CI run): this suite's
+// login() previously sent NO x-forwarded-for, so every login consumed the
+// SHARED `rl:login:ip:unknown` budget (8/15min) together with every other
+// header-less login across the whole single-process suite run — on CI that
+// collective count crossed the limit exactly here and test 2's login came
+// back 429 (RATE_LIMITED). A dedicated per-run IP keeps the REAL login
+// door (assertions unchanged) while isolating the suite's budget.
+const RUN_IP = `10.245.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
+
+// Live tests ride the dev server: cold route compiles on a 2-core CI
+// runner can legitimately take seconds per first-hit route, and bun's 5s
+// default timed out the RESTRICTED flow in the first CI run. 45s matches
+// the live-suite convention; the 40s liveFetch retry budget below rides
+// out transient dev-server outage windows (ECONNRESET/ECONNREFUSED
+// bursts) while staying under the per-test ceiling.
+const T = 45_000
+const LIVE: LiveFetchOpts = { deadlineMs: 40_000 }
 
 let schoolA = { id: '', slug: '' }
 let schoolB = { id: '', slug: '' }
@@ -67,10 +87,13 @@ afterAll(async () => {
 })
 
 function as(token: string, apiPath: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${BASE}${apiPath}`, {
+  // liveFetch: transient dev-server outage windows (ECONNRESET/
+  // ECONNREFUSED during CI restart/compile bursts) must not fail honest
+  // assertions — see tests/helpers/live-http.ts.
+  return liveFetch(`${BASE}${apiPath}`, {
     ...init,
     headers: { ...(init?.headers ?? {}), authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-  })
+  }, LIVE)
 }
 
 async function json(r: Response): Promise<any> {
@@ -78,16 +101,16 @@ async function json(r: Response): Promise<any> {
 }
 
 async function login(email: string, password: string): Promise<{ status: number; body: any }> {
-  const res = await fetch(`${BASE}/api/auth/login`, {
+  const res = await liveFetch(`${BASE}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email, password }),
-  })
+  }, LIVE)
   return { status: res.status, body: await json(res) }
 }
 
 async function publicPayload(slug: string): Promise<any> {
-  const res = await fetch(`${BASE}/api/schools/public?slug=${encodeURIComponent(slug)}`)
+  const res = await liveFetch(`${BASE}/api/schools/public?slug=${encodeURIComponent(slug)}`, undefined, LIVE)
   const body = await json(res)
   return body?.data ?? body
 }
@@ -243,7 +266,7 @@ describe('SaaS-HARDENING · subscription must not block login (live)', () => {
     // 5 — School A is completely unaffected (its business APIs still work).
     const studentsA = await as(tokenA, '/api/students')
     expect(studentsA.status).toBe(200)
-  })
+  }, T)
 
   test('SUSPENDED (platform suspension): login still works, business locked', async () => {
     const school = await db.school.findUnique({ where: { id: schoolB.id }, select: { status: true } })
@@ -251,20 +274,28 @@ describe('SaaS-HARDENING · subscription must not block login (live)', () => {
     await db.school.update({ where: { id: schoolB.id }, data: { status: 'SUSPENDED' } })
     cleanup.push(() => db.school.update({ where: { id: schoolB.id }, data: { status: before } }))
 
-    const loginB = await login('principal.b@greenvalley.test', PW)
-    expect(loginB.status).toBe(200)
-    expect(loginB.body?.data?.entitlement?.state).toBe('SUSPENDED')
+    // State hygiene (suite discipline: a failing assertion must not leak
+    // state): the suspension flip is restored in a finally so the NEXT
+    // test (verified payment) runs against an operational tenant even if
+    // an assertion above throws — in the first CI run a 429-shadowed login
+    // aborted this test mid-flight and the leaked SUSPENDED status made
+    // the payment-restore test fail with a spurious 403.
+    try {
+      const loginB = await login('principal.b@greenvalley.test', PW)
+      expect(loginB.status).toBe(200)
+      expect(loginB.body?.data?.entitlement?.state).toBe('SUSPENDED')
 
-    const students = await as(tokenB, '/api/students')
-    expect(students.status).toBe(403)
-    const subStatus = await as(tokenB, '/api/subscription')
-    expect(subStatus.status).toBe(200)
-
-    // IMPORTANT: a platform suspension is NOT lifted by a payment — restore
-    // the lifecycle NOW so the next test (verified payment) runs against an
-    // operational tenant (the payment only clears subscription state).
-    await db.school.update({ where: { id: schoolB.id }, data: { status: before } })
-  })
+      const students = await as(tokenB, '/api/students')
+      expect(students.status).toBe(403)
+      const subStatus = await as(tokenB, '/api/subscription')
+      expect(subStatus.status).toBe(200)
+    } finally {
+      // IMPORTANT: a platform suspension is NOT lifted by a payment —
+      // restore the lifecycle NOW (the payment only clears subscription
+      // state).
+      await db.school.update({ where: { id: schoolB.id }, data: { status: before } })
+    }
+  }, T)
 
   test('RESTRICTED → verified payment → access restored automatically (the correct school only)', async () => {
     const subB = (await db.schoolSubscription.findUnique({ where: { schoolId: schoolB.id } }))!
@@ -324,7 +355,7 @@ describe('SaaS-HARDENING · subscription must not block login (live)', () => {
     expect(row?.verification).toBe('VERIFIED')
     expect(row?.schoolId).toBe(schoolB.id)
     expect(row?.statusAfter).toBe('ACTIVE')
-  })
+  }, T)
 })
 
 // ═════════════════════════════════════════════════════════════════════

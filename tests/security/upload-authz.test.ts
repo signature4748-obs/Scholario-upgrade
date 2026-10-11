@@ -48,6 +48,14 @@ import { resetLoginBuckets } from '../helpers/login-buckets'
 import { db } from '../helpers/db'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
+
+// Per-run spoofed client IP (suite convention — see platform-isolation,
+// pg-money-precision): this suite's 1 real + 5 forged-role login probes
+// previously consumed the SHARED rl:login:ip:unknown budget (8/15min)
+// together with every other header-less login of the single-process suite
+// run — exactly the budget the first CI run exhausted (a 429 there would
+// make the forged-role tests see 429 instead of the asserted 401).
+const RUN_IP = `10.241.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 const T = 30_000
 const PW = TENANT_FIXTURE_PASSWORD
 
@@ -98,7 +106,7 @@ async function login(email: string): Promise<string> {
   // (the shared loopback budget is 8 per 15 min).
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email, password: PW }),
   })
   if (res.status === 429) {
@@ -256,7 +264,7 @@ describe('GATE E · login door refuses non-canonical school roles', () => {
     test(`normal login with correct password for ${role} persona → 401, no session`, async () => {
       const res = await fetch(`${BASE}/api/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
         body: JSON.stringify({ email: forgedEmail(role), password: PW }),
       })
       expect(res.status).toBe(401)

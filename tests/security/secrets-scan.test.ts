@@ -1,6 +1,9 @@
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+
+import { REPO_ROOT } from '../helpers/repo-root'
 
 /**
  * Phase 1 — secrets hygiene test.
@@ -14,7 +17,11 @@ import { spawnSync } from 'node:child_process'
  */
 
 const git = (args: string[]): string => {
-  const r = spawnSync('git', args, { cwd: '/home/z/my-project', encoding: 'utf8' })
+  // REPO_ROOT is derived from this file's location (tests/security →
+  // repo root), so tracked-file enumeration works on ANY checkout path —
+  // the first CI run failed both hygiene tests because the hardcoded
+  // sandbox path /home/z/my-project does not exist on the runner.
+  const r = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' })
   return r.status === 0 ? r.stdout.toString() : ''
 }
 
@@ -57,7 +64,7 @@ describe('secret material scan (tracked files)', () => {
     if (skipContent.test(file)) continue
     let content: string
     try {
-      content = readFileSync(`/home/z/my-project/${file}`, 'utf8')
+      content = readFileSync(join(REPO_ROOT, file), 'utf8')
     } catch {
       continue
     }
@@ -82,7 +89,7 @@ describe('secret material scan (tracked files)', () => {
   })
 
   test('.env.example documents every environment variable the app reads', () => {
-    const template = readFileSync('/home/z/my-project/.env.example', 'utf8')
+    const template = readFileSync(join(REPO_ROOT, '.env.example'), 'utf8')
     for (const key of [
       'DATABASE_URL',
       'FILE_SIGNING_SECRET',

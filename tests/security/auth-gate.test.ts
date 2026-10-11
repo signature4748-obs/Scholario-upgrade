@@ -19,6 +19,7 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:tes
 
 import { randomBytes } from 'crypto'
 import { db } from '../helpers/db'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 import { resetLoginBuckets } from '../helpers/login-buckets'
 import { hashSessionToken, isDevSessionBearerEnabled, sessionCookieOptions } from '@/lib/auth'
 import {
@@ -29,7 +30,14 @@ import {
 import { totpAt } from '@/lib/platform/totp'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const T = 45_000
+// 60s per-test ceiling (CI first-run fix, 2026-10-11): the first CI
+// run lost AUTH-10/12/13/14 + the role-login matrix to a ~47s dev-server
+// outage window (ECONNRESET → ECONNREFUSED burst while the runner's dev
+// server restarted); the liveFetch retry budget (50s, below) rides out
+// such windows and the assertions themselves are untouched.
+const T = 60_000
+/** liveFetch retry budget — 50s wall clock, always under the 60s ceiling. */
+const LIVE: LiveFetchOpts = { deadlineMs: 50_000 }
 
 const HAWKINGS_PRINCIPAL = 'principal@hawkingshigh.edu'
 const HAWKINGS_PRINCIPAL_PASSWORD = process.env.SEED_SHOWCASE_PRINCIPAL_PASSWORD ?? 'principal123'
@@ -65,13 +73,18 @@ function erpCookieFrom(res: Response): { cookie: string; raw: string; token: str
   return { cookie: `erp_session=${token}`, raw, token }
 }
 
-/** School-plane login through the REAL front door. */
+/** School-plane login through the REAL front door. All live HTTP in this
+ * suite rides liveFetch (tests/helpers/live-http.ts): the first CI run
+ * lost AUTH-10/12/13/14 + the role-login matrix to a transient dev-server
+ * outage window (ECONNRESET → ECONNREFUSED burst while the runner's dev
+ * server restarted its render worker) — transport retries keep the
+ * assertions intact. */
 async function schoolLogin(email: string, password: string): Promise<{ res: Response; body: LoginEnvelope; cookie: ReturnType<typeof erpCookieFrom> }> {
-  const res = await fetch(`${BASE}/api/auth/login`, {
+  const res = await liveFetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password }),
-  })
+  }, LIVE)
   const body = (await res.json().catch(() => null)) as LoginEnvelope
   return { res, body, cookie: erpCookieFrom(res) }
 }
@@ -82,17 +95,17 @@ async function platformLogin(
   password: string,
   totpCode?: string,
 ): Promise<{ res: Response; body: LoginEnvelope; cookieRaw: string }> {
-  const res = await fetch(`${BASE}/api/platform/auth/login`, {
+  const res = await liveFetch(`${BASE}/api/platform/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password, totpCode }),
-  })
+  }, LIVE)
   const body = (await res.json().catch(() => null)) as LoginEnvelope
   return { res, body, cookieRaw: res.headers.get('set-cookie') ?? '' }
 }
 
 async function meWith(cookie: string): Promise<{ res: Response; body: { ok: boolean; code?: string; data?: { user?: { role?: string; email?: string; school?: { name?: string } } } } }> {
-  const res = await fetch(`${BASE}/api/auth/me`, { headers: { cookie } })
+  const res = await liveFetch(`${BASE}/api/auth/me`, { headers: { cookie } }, LIVE)
   const body = (await res.json().catch(() => null)) as { ok: boolean; code?: string; data?: { user?: { role?: string; email?: string; school?: { name?: string } } } }
   return { res, body }
 }
@@ -109,10 +122,22 @@ const probeSessions: string[] = []
  * login resets its own account bucket server-side; only the shared IP
  * budget accumulates across accounts). No disconnect: the db singleton is
  * process-wide shared.
+ *
+ * 2026-10-11 (CI first-run fix): 'rl:login:ip:unknown' added — on a
+ * PROXY-LESS dev server (CI: the tests talk to localhost:3000 directly,
+ * no x-forwarded-for) clientIpFromHeaders() resolves the login IP to
+ * 'unknown', so that is the bucket this suite's header-less logins
+ * actually consume; healing only 127.0.0.1/::1 healed keys that were
+ * never written. All three forms are healed (whichever a future proxy
+ * topology produces).
  */
 async function healIpBudget(): Promise<void> {
   await db.rateLimitBucket
-    .deleteMany({ where: { key: { in: ['rl:login:ip:127.0.0.1', 'rl:login:ip:::1'] } } })
+    .deleteMany({
+      where: {
+        key: { in: ['rl:login:ip:127.0.0.1', 'rl:login:ip:::1', 'rl:login:ip:unknown'] },
+      },
+    })
     .catch(() => {})
 }
 
@@ -220,7 +245,7 @@ describe('AUTH-03 tenant isolation', () => {
       // Forge every client-side tenant selector: the ?schoolId= query, a
       // foreign slug, and a foreign-tenant resource id. The server must
       // derive the tenant ONLY from the session row.
-      const forged = await fetch(`${BASE}/api/auth/me?schoolId=${'x'}&slug=green-valley`, {
+      const forged = await liveFetch(`${BASE}/api/auth/me?schoolId=${'x'}&slug=green-valley`, {
         headers: { cookie: cookie.cookie },
       })
       const me = (await forged.json()) as { data?: { user?: { school?: { slug?: string } } } }
@@ -249,7 +274,7 @@ describe('AUTH-03 tenant isolation', () => {
         },
       })
       try {
-        const cross = await fetch(`${BASE}/api/students/${probe.id}`, {
+        const cross = await liveFetch(`${BASE}/api/students/${probe.id}`, {
           headers: { cookie: cookie.cookie },
         })
         expect(cross.status).toBe(404)
@@ -295,7 +320,7 @@ describe('AUTH-05 logout', () => {
       const tokenHash = hashSessionToken(cookie.token)
       expect(await db.session.findUnique({ where: { tokenHash } })).toBeTruthy()
 
-      const out = await fetch(`${BASE}/api/auth/logout`, {
+      const out = await liveFetch(`${BASE}/api/auth/logout`, {
         method: 'POST',
         headers: { cookie: cookie.cookie },
       })
@@ -308,7 +333,7 @@ describe('AUTH-05 logout', () => {
       const me = await meWith(cookie.cookie)
       expect(me.res.status).toBe(401)
       expect(me.body.code).toBe('AUTH_REQUIRED')
-      const guarded = await fetch(`${BASE}/api/students`, { headers: { cookie: cookie.cookie } })
+      const guarded = await liveFetch(`${BASE}/api/students`, { headers: { cookie: cookie.cookie } })
       expect(guarded.status).toBe(401)
     },
     T,
@@ -376,17 +401,17 @@ describe('AUTH-08 platform admin TOTP', () => {
       expect(cookieRaw).toContain('HttpOnly')
       expect(cookieRaw).toContain('SameSite=lax')
       expect(cookieRaw).toContain('Path=/')
-      const me = await fetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookieRaw } })
+      const me = await liveFetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookieRaw } })
       const meBody = (await me.json()) as { ok: boolean; data?: { admin?: { email?: string } } }
       expect(me.status).toBe(200)
       expect(meBody.data?.admin?.email).toBe(PLATFORM_ROOT)
       // Clean up: sign out through the real route.
-      const out = await fetch(`${BASE}/api/platform/auth/logout`, {
+      const out = await liveFetch(`${BASE}/api/platform/auth/logout`, {
         method: 'POST',
         headers: { cookie: cookieRaw },
       })
       expect(out.status).toBe(200)
-      const meAfter = await fetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookieRaw } })
+      const meAfter = await liveFetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookieRaw } })
       expect(meAfter.status).toBe(401)
     },
     T,
@@ -417,12 +442,12 @@ describe('AUTH-09 platform TOTP stand-down', () => {
       expect(cookieRaw).toContain('HttpOnly')
       expect(await db.platformAdminSession.count()).toBe(before + 1)
       // Clean up: sign out through the real route; the session dies.
-      const out = await fetch(`${BASE}/api/platform/auth/logout`, {
+      const out = await liveFetch(`${BASE}/api/platform/auth/logout`, {
         method: 'POST',
         headers: { cookie: cookieRaw },
       })
       expect(out.status).toBe(200)
-      const meAfter = await fetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookieRaw } })
+      const meAfter = await liveFetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookieRaw } })
       expect(meAfter.status).toBe(401)
     },
     T,
@@ -431,7 +456,7 @@ describe('AUTH-09 platform TOTP stand-down', () => {
     'step-up surface refuses honestly: 403 MFA_NOT_ENABLED while the policy is off',
     async () => {
       const { cookieRaw } = await platformLogin(PLATFORM_ROOT, PLATFORM_ROOT_PASSWORD)
-      const res = await fetch(`${BASE}/api/platform/auth/step-up`, {
+      const res = await liveFetch(`${BASE}/api/platform/auth/step-up`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', cookie: cookieRaw },
         body: JSON.stringify({ code: '000000' }),
@@ -439,7 +464,7 @@ describe('AUTH-09 platform TOTP stand-down', () => {
       const body = (await res.json().catch(() => null)) as LoginEnvelope
       expect(res.status).toBe(403)
       expect(body.code).toBe('MFA_NOT_ENABLED')
-      await fetch(`${BASE}/api/platform/auth/logout`, {
+      await liveFetch(`${BASE}/api/platform/auth/logout`, {
         method: 'POST',
         headers: { cookie: cookieRaw },
       })
@@ -449,7 +474,7 @@ describe('AUTH-09 platform TOTP stand-down', () => {
   test(
     'demo-code surface refuses honestly: 403 MFA_NOT_ENABLED while the policy is off',
     async () => {
-      const res = await fetch(`${BASE}/api/platform/auth/demo-code`, {
+      const res = await liveFetch(`${BASE}/api/platform/auth/demo-code`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email: PLATFORM_ROOT }),
@@ -470,20 +495,20 @@ describe('AUTH-10 platform tenant isolation (plane separation)', () => {
       // School cookie → platform API: 401 (school identities can never
       // touch the control plane).
       const { cookie } = await schoolLogin(HAWKINGS_PRINCIPAL, HAWKINGS_PRINCIPAL_PASSWORD)
-      const asPlatform = await fetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookie.cookie } })
+      const asPlatform = await liveFetch(`${BASE}/api/platform/auth/me`, { headers: { cookie: cookie.cookie } })
       expect(asPlatform.status).toBe(401)
-      const asPlatformList = await fetch(`${BASE}/api/platform/schools`, { headers: { cookie: cookie.cookie } })
+      const asPlatformList = await liveFetch(`${BASE}/api/platform/schools`, { headers: { cookie: cookie.cookie } })
       expect(asPlatformList.status).toBe(401)
       await db.session.deleteMany({ where: { tokenHash: hashSessionToken(cookie.token) } })
 
       // Platform cookie → school API: 401 (the two credential spaces are
       // disjoint by construction).
       const { cookieRaw } = await platformLogin(PLATFORM_ROOT, PLATFORM_ROOT_PASSWORD, totpAt(PLATFORM_ROOT_TOTP_SECRET))
-      const asSchool = await fetch(`${BASE}/api/auth/me`, { headers: { cookie: cookieRaw } })
+      const asSchool = await liveFetch(`${BASE}/api/auth/me`, { headers: { cookie: cookieRaw } })
       expect(asSchool.status).toBe(401)
-      const asSchoolData = await fetch(`${BASE}/api/students`, { headers: { cookie: cookieRaw } })
+      const asSchoolData = await liveFetch(`${BASE}/api/students`, { headers: { cookie: cookieRaw } })
       expect(asSchoolData.status).toBe(401)
-      await fetch(`${BASE}/api/platform/auth/logout`, { method: 'POST', headers: { cookie: cookieRaw } })
+      await liveFetch(`${BASE}/api/platform/auth/logout`, { method: 'POST', headers: { cookie: cookieRaw } })
     },
     T,
   )
@@ -591,7 +616,7 @@ describe('AUTH-14 mobile/Safari session contract', () => {
       // Safari-compatible contract: the ONLY thing the server needs is the
       // cookie header. No localStorage token, no bearer, no client state —
       // a request carrying nothing but the cookie stays authenticated.
-      const me = await fetch(`${BASE}/api/auth/me`, {
+      const me = await liveFetch(`${BASE}/api/auth/me`, {
         headers: { cookie: cookie.cookie, 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari' },
       })
       expect(me.status).toBe(200)
@@ -630,7 +655,7 @@ describe('role login matrix (Phase 13)', () => {
         expect(me.body.data?.user?.role).toBe(m.role)
         expect(me.body.data?.user?.school?.name).toBe(m.school)
         // Logout → guarded surface is closed again.
-        await fetch(`${BASE}/api/auth/logout`, { method: 'POST', headers: { cookie: cookie.cookie } })
+        await liveFetch(`${BASE}/api/auth/logout`, { method: 'POST', headers: { cookie: cookie.cookie } })
         const after = await meWith(cookie.cookie)
         expect(after.res.status).toBe(401)
       },
@@ -641,7 +666,7 @@ describe('role login matrix (Phase 13)', () => {
     'cross-tenant attack: Green Valley principal cannot read a Hawkings student (404, no oracle)',
     async () => {
       const { cookie } = await schoolLogin(GV_PRINCIPAL, TENANT_FIXTURE_PASSWORD)
-      const probe = await fetch(`${BASE}/api/students/${hawkingsStudentId}`, {
+      const probe = await liveFetch(`${BASE}/api/students/${hawkingsStudentId}`, {
         headers: { cookie: cookie.cookie },
       })
       expect(probe.status).toBe(404)
@@ -671,7 +696,7 @@ describe('auth error envelope safety', () => {
   test(
     'malformed bodies are rejected without crashing the route',
     async () => {
-      const res = await fetch(`${BASE}/api/auth/login`, {
+      const res = await liveFetch(`${BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email: 'not-an-email', password: '', extra: 'field' }),

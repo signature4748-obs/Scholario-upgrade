@@ -37,9 +37,25 @@ import path from 'path'
 import { evaluateSchoolAccess, planAllows } from '@/lib/access-policy'
 import { hashSessionToken } from '@/lib/auth'
 import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const PW = TENANT_FIXTURE_PASSWORD
+
+// Per-run spoofed client IP (suite convention — see platform-isolation,
+// pg-money-precision). The two deliberate login POSTs below previously
+// consumed the SHARED rl:login:ip:unknown budget (8/15min) together with
+// every other header-less login of the single-process suite run; on a
+// full CI run that collective budget is what 429-shadowed later suites.
+const RUN_IP = `10.246.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
+// Live multi-surface tests on a 2-core CI runner: cold route compiles +
+// the branding flow's six sequential surfaces can legitimately exceed
+// bun's 5s default (the first CI run timed this describe's test out at
+// 30s on warm routes — bumped to 60 to absorb restart-window recovery).
+const T = 60_000
+// 50s liveFetch retry budget — under the branding flow's 60s ceiling; the
+// tests with inline 30s ceilings keep their own (tighter) binding budget.
+const LIVE: LiveFetchOpts = { deadlineMs: 50_000 }
 
 // ─── fixtures ──────────────────────────────────────────────────────────────
 
@@ -92,15 +108,18 @@ afterAll(async () => {
 // ─── helpers ───────────────────────────────────────────────────────────────
 
 function as(token: string, apiPath: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${BASE}${apiPath}`, {
+  // liveFetch: transient dev-server outage windows (ECONNRESET/
+  // ECONNREFUSED during CI restart bursts) must not fail honest
+  // assertions — see tests/helpers/live-http.ts.
+  return liveFetch(`${BASE}${apiPath}`, {
     ...init,
     headers: { ...(init?.headers ?? {}), authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-  })
+  }, LIVE)
 }
 
 /** Public website payload for an explicit slug. */
 async function publicPayload(slug: string): Promise<{ status: number; body: any }> {
-  const res = await fetch(`${BASE}/api/schools/public?slug=${encodeURIComponent(slug)}`)
+  const res = await liveFetch(`${BASE}/api/schools/public?slug=${encodeURIComponent(slug)}`, undefined, LIVE)
   const body = await res.json().catch(() => null)
   return { status: res.status, body }
 }
@@ -263,11 +282,11 @@ describe('PHASE 7.5 · gallery tenant-scoped + privacy-by-default media', () => 
     // upload a real image (magic-byte policy honored)
     const form = new FormData()
     form.append('file', new File([TINY_PNG], 'p75.png', { type: 'image/png' }))
-    const upRes = await fetch(`${BASE}/api/school/website/upload`, {
+    const upRes = await liveFetch(`${BASE}/api/school/website/upload`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tokenA}` },
       body: form,
-    })
+    }, LIVE)
     expect(upRes.status).toBe(200)
     const upBody = await upRes.json()
     expect(upBody.success).toBe(true)
@@ -287,7 +306,7 @@ describe('PHASE 7.5 · gallery tenant-scoped + privacy-by-default media', () => 
     // unpublished album → no public gallery entry, bytes 404
     const beforePublish = await publicPayload(schoolA.slug)
     expect(JSON.stringify(beforePublish.body)).not.toContain(GAL)
-    const mediaBefore = await fetch(`${BASE}/api/public/website/media/${fileId}`)
+    const mediaBefore = await liveFetch(`${BASE}/api/public/website/media/${fileId}`, undefined, LIVE)
     expect(mediaBefore.status).toBe(404)
 
     // publish → public for A only
@@ -304,7 +323,7 @@ describe('PHASE 7.5 · gallery tenant-scoped + privacy-by-default media', () => 
     expect(albumsB).not.toContain(`${GAL} album`)
     expect(JSON.stringify(pb.body)).not.toContain(fileId)
 
-    const mediaPub = await fetch(`${BASE}/api/public/website/media/${fileId}`)
+    const mediaPub = await liveFetch(`${BASE}/api/public/website/media/${fileId}`, undefined, LIVE)
     expect(mediaPub.status).toBe(200)
     expect(mediaPub.headers.get('content-type')).toContain('image/png')
 
@@ -314,7 +333,7 @@ describe('PHASE 7.5 · gallery tenant-scoped + privacy-by-default media', () => 
       body: JSON.stringify({ albumId: album.id, published: false }),
     })
     expect(unpubRes.status).toBe(200)
-    const mediaAfter = await fetch(`${BASE}/api/public/website/media/${fileId}`)
+    const mediaAfter = await liveFetch(`${BASE}/api/public/website/media/${fileId}`, undefined, LIVE)
     expect(mediaAfter.status).toBe(404)
   }, 30000)
 })
@@ -404,7 +423,7 @@ describe('PHASE 7.5 · client schoolId never switches tenant', () => {
 // ─────────────────────────────────────────────────────────────────────────
 describe('PHASE 7.5 · login surface exposes no platform plane', () => {
   test('public payload resolves NO school on the bare platform domain (no directory, no platform keys)', async () => {
-    const res = await fetch(`${BASE}/api/schools/public`)
+    const res = await liveFetch(`${BASE}/api/schools/public`, undefined, LIVE)
     const body = await res.json()
     // PRODUCT-DIRECTION RESET: the bare platform domain resolves no tenant
     // (the SCHOLARIO SaaS root) — strictly stronger than the old
@@ -417,11 +436,11 @@ describe('PHASE 7.5 · login surface exposes no platform plane', () => {
   }, 30000)
 
   test('the legacy superadmin identity cannot obtain a school session', async () => {
-    const res = await fetch(`${BASE}/api/auth/login`, {
+    const res = await liveFetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({ email: superadmin.email, password: PW }),
-    })
+    }, LIVE)
     const body = await res.json().catch(() => ({}))
     expect(res.status).toBeGreaterThanOrEqual(400) // rejected (suspended role row)
     expect(body.ok ?? body.success).not.toBe(true)
@@ -582,7 +601,7 @@ describe('PHASE 7.5 · branding flows to every surface + contrast gate', () => {
     expect(bad.status).toBe(400)
     const badBody = await bad.json()
     expect(String(badBody.error ?? '').toLowerCase()).toContain('contrast')
-  }, 30000)
+  }, T)
 })
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -636,11 +655,11 @@ describe('PHASE 7.5 · subscription access policy (domain layer)', () => {
       // user authenticates and receives the SUSPENDED entitlement (the
       // locked shell + business-API rejection is the enforcement). A 429
       // (login limiter on re-runs) is the only other acceptable verdict.
-      const loginRes = await fetch(`${BASE}/api/auth/login`, {
+      const loginRes = await liveFetch(`${BASE}/api/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
         body: JSON.stringify({ email: principalB.email, password: PW }),
-      })
+      }, LIVE)
       const loginBody = await loginRes.json().catch(() => ({}))
       if (loginRes.status === 429) {
         expect(loginRes.status).toBe(429)

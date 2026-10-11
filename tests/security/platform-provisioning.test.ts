@@ -44,6 +44,13 @@ const MARKER = randomBytes(4).toString('hex')
 
 const ROOT_EMAIL = 'admin@scholario.cloud'
 
+// Per-run spoofed client IP (suite convention — platform-isolation,
+// pg-money-precision …): the school/plane login probes below previously
+// consumed the SHARED rl:login:ip:unknown budget (8/15min) together with
+// every other header-less login of the single-process suite run; on a
+// full CI run that collective budget is what 429-shadowed later suites.
+const RUN_IP = `10.240.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
+
 let rootToken = ''
 
 const cleanup: Array<() => Promise<unknown>> = []
@@ -54,7 +61,7 @@ async function platformRootLogin(): Promise<string> {
   const code = mod.totpAt(PLATFORM_ROOT_TOTP_SECRET)
   const res = await fetch(`${BASE}/api/platform/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email: ROOT_EMAIL, password: PLATFORM_ROOT_PASSWORD, totpCode: code }),
   })
   const body = (await res.json()) as { ok: boolean; data?: { sessionToken?: string } }
@@ -114,7 +121,7 @@ async function activate(token: string, schoolId: string) {
 async function schoolLoginAttempt(email: string, password: string) {
   return fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email, password }),
   })
 }
