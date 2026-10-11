@@ -18,6 +18,7 @@ import { createTenantScopedStorage } from '@/lib/tenant/tenant-storage'
 import { useStudentsStore, type StudentPosition } from '@/lib/store/students-store'
 import { hasCapability, POSITION_DEFS, filterActivePositions, type StudentCapability } from '@/lib/student-positions'
 import { getActiveAcademicSessionId } from '@/lib/academic-session'
+import { makeDemoSeedApplier, readIsDemoTenant } from '@/lib/store/demo-tenant'
 
 // ─── Entities ────────────────────────────────────────────────────────
 
@@ -97,6 +98,11 @@ interface ClassResponsibilityState {
   issueReports: IssueReport[]
   responsibilityTasks: ResponsibilityTask[]
   teacherRequests: TeacherRequest[]
+  /** FINAL-GATE — set once the demo seed has been applied. */
+  demoSeeded?: boolean
+  /** FINAL-GATE — one-shot demo-tier seeder (applied by the app root only
+   *  for the sanctioned demo tenant; see the store tail). */
+  ensureDemoSeed: () => void
   // Student-side writes (authorization-checked).
   postClassUpdate: (input: {
     actorStudentId: string
@@ -170,8 +176,12 @@ const now = () => new Date().toISOString()
 // SD-3 — demo seed: staff-assigned responsibility tasks for the demo
 // Class Captain (STU-58). These are the SAME rows the My Class module
 // renders (one store, one truth); dates are computed relative to first
-// load so the demo never goes stale. Browsers with an existing persisted
-// blob keep whatever they had (persist wins — honest merge behaviour).
+// load so the demo never goes stale. B-fix (store-seed gating): the rows
+// are DEMO-TIER content — the store boots HONEST-EMPTY and the app root
+// applies them only to the sanctioned demo tenant (makeDemoSeedApplier,
+// pristine-guarded); a real production tenant never sees them, and
+// legacy persisted rows are evicted via
+// purgeSeedResponsibilityTasksForRealTenant().
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString()
 const SEED_RESPONSIBILITY_TASKS: ResponsibilityTask[] = [
   {
@@ -219,10 +229,13 @@ const SEED_RESPONSIBILITY_TASKS: ResponsibilityTask[] = [
 export const useClassResponsibilityStore = create<ClassResponsibilityState>()(
   persist(
     (set, get) => ({
+      // B-fix — HONEST-EMPTY initial state: the RT-SEED-* tasks above are
+      // demo-tier content applied ONLY via ensureDemoSeed (see store tail).
       classUpdates: [],
       issueReports: [],
-      responsibilityTasks: SEED_RESPONSIBILITY_TASKS,
+      responsibilityTasks: [],
       teacherRequests: [],
+      ensureDemoSeed: () => ensureClassResponsibilityDemoSeed(),
 
       postClassUpdate: ({ actorStudentId, title, body, category }) => {
         const student = useStudentsStore.getState().students.find((s) => s.id === actorStudentId)
@@ -406,4 +419,33 @@ export const useClassResponsibilityStore = create<ClassResponsibilityState>()(
 /** Display title for a holder's active positions (e.g. "Class Captain"). */
 function POSITION_TITLE(positions: StudentPosition[]): string {
   return positions.map((p) => POSITION_DEFS[p.key]?.title ?? p.key).join(' · ')
+}
+
+// ─── FINAL-GATE (B-fix) demo-tier seeder ────────────────────────────
+// Built lazily on first call (the store exists by then). Applies the
+// RT-SEED-* tasks at most once, never over non-pristine state — see
+// makeDemoSeedApplier guard rules. The app root (page.tsx) calls it ONLY
+// once the server-derived demo signal (readIsDemoTenant) is confirmed.
+let _ensureClassResponsibilityDemoSeed: (() => void) | null = null
+export function ensureClassResponsibilityDemoSeed(): void {
+  _ensureClassResponsibilityDemoSeed ??= makeDemoSeedApplier(useClassResponsibilityStore, {
+    responsibilityTasks: SEED_RESPONSIBILITY_TASKS,
+  })
+  _ensureClassResponsibilityDemoSeed()
+}
+
+/**
+ * B-fix — evict RT-SEED-* rows rehydrated from a pre-gate persisted
+ * namespace of a REAL (non-demo) tenant (the seeds used to ship as the
+ * initial state for everyone). User-created tasks are ALWAYS kept; only
+ * the known seed ids are stripped. No-op for the demo tenant.
+ */
+export function purgeSeedResponsibilityTasksForRealTenant(): void {
+  if (readIsDemoTenant()) return
+  const st = useClassResponsibilityStore.getState()
+  if (st.responsibilityTasks.some((t) => t.id.startsWith('RT-SEED-'))) {
+    useClassResponsibilityStore.setState({
+      responsibilityTasks: st.responsibilityTasks.filter((t) => !t.id.startsWith('RT-SEED-')),
+    })
+  }
 }

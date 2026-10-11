@@ -5,13 +5,12 @@
  *
  * Brief §11 (Phase 2): Live Class Snapshot behavior is context-aware:
  *   - All Classes selected → CLASS OVERVIEW (top 4-6 grade-group
- *     summaries, REAL data from GET /api/attendance/overview byClass —
- *     FINAL-GATE: previously this card fabricated per-class rates from the
- *     mock classSections store, contradicting the real Class-wise Report
- *     rendered on the same screen)
- *   - Specific class selected → LIVE CLASS SNAPSHOT for that class's
- *     roster (per-class roster workstream — still the seeded section
- *     store until a per-class roster API exists)
+ *     summaries, REAL data from GET /api/attendance/overview byClass)
+ *   - Specific class selected → LIVE CLASS SNAPSHOT for that class —
+ *     Phase B: the REAL per-student roster for the latest recorded date
+ *     (GET /api/attendance/overview?classId= — per-student statuses from
+ *     the canonical Attendance rows; the demo classSections corpus is
+ *     retired from this surface)
  *
  * Brief §12: snapshot shows real-time status counts at the top, then grid.
  */
@@ -20,14 +19,10 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { TrendingUp, UserX, CalendarCheck, UserCheck, ArrowRight } from 'lucide-react'
 import { GlassCard } from '@/components/shared/ui'
 import { Badge } from '@/components/ui/badge'
-import {
-  classSections,
-  type ClassSection,
-} from '@/lib/mock/attendance'
-import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { formatNumber } from '@/lib/format'
 import { ATTENDANCE_PALETTE } from './attendance-charts'
 import { STATUS_META } from './attendance-status'
+import type { AttendanceRosterEntry } from './use-attendance-overview'
 import type { ClassReportRow } from './class-report'
 
 /** attendance-overview-real — the three headline insight cards, derived at
@@ -38,6 +33,21 @@ export interface AttendanceInsightsData {
   best: { class: string; rate: number; students: number } | null
   needs: { class: string; rate: number; students: number } | null
   average: { rate: number; classes: number; students: number } | null
+}
+
+/** Phase B: the Live Class Snapshot's REAL data — the scoped class's
+ *  latest-recorded-day roster (from GET /api/attendance/overview?classId=). */
+export interface LiveRosterData {
+  className: string
+  teacher: string | null
+  /** The roster's date (latest recorded day; null = no rows at all). */
+  date: string | null
+  total: number
+  present: number
+  late: number
+  absent: number
+  leave: number
+  roster: AttendanceRosterEntry[]
 }
 
 const EMPTY_INSIGHT: { class: string; rate: number; students: number } = {
@@ -51,24 +61,23 @@ export function AttendanceInsights({
   insights,
   onViewAllClasses,
   schoolRows,
+  liveRoster,
 }: {
   classFilter: string
   /** REAL headline insights (see AttendanceInsightsData). */
   insights?: AttendanceInsightsData
   onViewAllClasses?: () => void
   /** REAL grade-group rows from GET /api/attendance/overview `byClass` —
-   *  drives the All-Classes overview card (FINAL-GATE: no mock rates). */
+   *  drives the All-Classes overview card. */
   schoolRows?: ClassReportRow[]
+  /** Phase B: REAL per-class roster data for the Live Class Snapshot. */
+  liveRoster?: LiveRosterData | null
 }) {
   // attendance-overview-real — derive the three cards from the canonical
   // overview; honest placeholders when a figure isn't available.
   const best = insights?.best ?? EMPTY_INSIGHT
   const needs = insights?.needs ?? EMPTY_INSIGHT
   const average = insights?.average ?? null
-  // PIH-4c (R7) — the per-class Live Class Snapshot's classSections
-  // corpus is DEMO-TIER only (same gate as the sibling tabs): a real
-  // tenant sees the honest "no roster available" empty state.
-  const isDemo = useIsDemoTenant()
   return (
     <>
       {/* Three compact insight cards (Brief §12 — Phase 1 preserved) */}
@@ -105,7 +114,7 @@ export function AttendanceInsights({
       {classFilter === 'all' ? (
         <ClassGroupOverview rows={schoolRows ?? []} onViewAll={onViewAllClasses} />
       ) : (
-        <LiveClassRoster section={isDemo ? (classSections.find((c) => c.id === classFilter) ?? null) : null} />
+        <LiveClassRoster data={liveRoster ?? null} />
       )}
     </>
   )
@@ -256,24 +265,32 @@ function ClassGroupOverview({
 
 /* ──────────────────────────────────────────────────────────
    LiveClassRoster — Brief §11: specific class selected → show
-   that class's full roster in a compact grid.
+   that class's roster for the LATEST RECORDED date.
+   Phase B: REAL per-student statuses from the canonical Attendance
+   rows (GET /api/attendance/overview?classId=) — names from
+   Student→User, roll numbers from the Student row.
    Brief §12: status counts at top, then student grid.
    ────────────────────────────────────────────────────────── */
-function LiveClassRoster({ section }: { section: ClassSection | null }) {
+function LiveClassRoster({ data }: { data: LiveRosterData | null }) {
   const reduce = useReducedMotion()
 
-  if (!section) {
+  if (!data || data.roster.length === 0) {
     return (
       <GlassCard className="p-3 sm:p-4 lg:p-5">
+        <h3 className="font-semibold text-sm flex items-center gap-2">
+          <UserCheck className="h-4 w-4 text-primary shrink-0" />
+          Live Class Snapshot{data ? ` — ${data.className}` : ''}
+        </h3>
         <p className="text-xs text-muted-foreground text-center py-8">
-          No roster available for this class.
+          No attendance has been recorded for this class yet — the roster
+          will appear here after the first marking.
         </p>
       </GlassCard>
     )
   }
 
-  const rate = section.total > 0
-    ? +((section.present / section.total) * 100).toFixed(1)
+  const rate = data.total > 0
+    ? +(((data.present + data.late) / data.total) * 100).toFixed(1)
     : 0
 
   return (
@@ -282,18 +299,18 @@ function LiveClassRoster({ section }: { section: ClassSection | null }) {
         <div className="min-w-0">
           <h3 className="font-semibold text-sm flex items-center gap-2">
             <UserCheck className="h-4 w-4 text-primary shrink-0" />
-            Live Class Snapshot — {section.name}
+            Live Class Snapshot — {data.className}
           </h3>
           <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
-            Today's roster · {section.total} students · {section.teacher} (Class Teacher)
+            {data.date ? `Recorded ${data.date}` : 'Latest recorded day'} · {data.roster.length} students · {data.teacher ? `${data.teacher} (Class Teacher)` : 'No class teacher assigned'}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-2 text-[10px]">
-            <StatusPill label="Present" count={section.present} status="present" />
-            <StatusPill label="Late" count={section.late} status="late" />
-            <StatusPill label="Absent" count={section.absent} status="absent" />
-            <StatusPill label="Leave" count={section.leave} status="leave" />
+            <StatusPill label="Present" count={data.present} status="present" />
+            <StatusPill label="Late" count={data.late} status="late" />
+            <StatusPill label="Absent" count={data.absent} status="absent" />
+            <StatusPill label="Leave" count={data.leave} status="leave" />
           </div>
           <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 font-semibold">
             {rate}% present
@@ -302,8 +319,10 @@ function LiveClassRoster({ section }: { section: ClassSection | null }) {
       </div>
 
       <div className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-9 gap-1.5 sm:gap-2">
-        {section.roster.map((s, i) => {
-          const meta = STATUS_META[s.status]
+        {data.roster.map((s, i) => {
+          // DB statuses are UPPERCASE ('PRESENT'…); STATUS_META is keyed
+          // lowercase — normalize with an honest fallback.
+          const meta = STATUS_META[s.status.toLowerCase() as keyof typeof STATUS_META] ?? STATUS_META.present
           return (
             <motion.div
               key={`${s.rollNo}-${i}`}

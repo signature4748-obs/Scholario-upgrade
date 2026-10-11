@@ -19,14 +19,13 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { FileSpreadsheet } from 'lucide-react'
 import { GlassCard } from '@/components/shared/ui'
-import { classSections } from '@/lib/mock/attendance'
-import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table'
 
-/** attendance-overview-real — school-wide per grade-group rows derived from
- *  GET /api/attendance/overview `byClass` (all-record rate + real counts).
- *  Passed by the parent (StudentWorkspace); the per-class branch below still
- *  reads classSections (per-class roster workstream). */
+/** attendance-overview-real — summary rows for the CURRENT scope (parent
+ *  passes them): All-Classes → per grade-group rows from
+ *  GET /api/attendance/overview `byClass`; a specific class → that
+ *  class's single REAL row from `?classId=` scope. Phase B: the demo
+ *  classSections corpus is retired from this table. */
 export interface ClassReportRow {
   class: string
   rate: number
@@ -37,43 +36,19 @@ export interface ClassReportRow {
   leave: number
 }
 
-export function ClassReport({ onExport: _onExport, classFilter = 'all', schoolRows }: {
+export function ClassReport({ onExport: _onExport, classFilter = 'all', rows: scopedRows }: {
   onExport?: () => void
   classFilter?: string
-  /** REAL grade-group rows for the All-Classes view (latest-record rates). */
-  schoolRows?: ClassReportRow[]
+  /** The current scope's REAL summary rows (parent-derived). */
+  rows?: ClassReportRow[]
 }) {
-  // FINAL-GATE (EG-9F/R7) — the per-class branch's classSections corpus is
-  // demo-only fabrication; a real tenant's per-class lookup yields no row
-  // (honest empty table). The All-Classes branch is REAL data (parent).
-  const isDemo = useIsDemoTenant()
-
-  // Build the rows based on classFilter
+  // Phase B: rows are ALWAYS real — grade-group rows (All-Classes) or the
+  // selected class's own row (scoped overview). No fabricated branch.
   let rows: ClassReportRow[]
   if (classFilter === 'all') {
-    // attendance-overview-real — school-wide grade-group summary from the
-    // canonical Attendance rows (first 10 groups, same footprint as before).
-    rows = (schoolRows ?? []).slice(0, 10).map((r) => ({
-      class: r.class,
-      rate: r.rate,
-      total: r.total,
-      present: r.present,
-      late: r.late,
-      absent: r.absent,
-      leave: r.leave,
-    }))
+    rows = (scopedRows ?? []).slice(0, 10)
   } else {
-    // Filter: show only the selected class section
-    const section = isDemo ? classSections.find((c) => c.id === classFilter) : undefined
-    rows = section ? [{
-      class: section.name,
-      rate: section.rate,
-      total: section.total,
-      present: section.present,
-      late: section.late,
-      absent: section.absent,
-      leave: section.leave,
-    }] : []
+    rows = (scopedRows ?? []).slice(0, 1)
   }
 
   return (
@@ -85,13 +60,12 @@ export function ClassReport({ onExport: _onExport, classFilter = 'all', schoolRo
             Class-wise Attendance Report
           </h3>
           <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
-            {/* FINAL-GATE label honesty: the All-Classes rows are per
-                grade-group rates over ALL recorded attendance rows (sorted
-                by grade) — not "today's" figures. The single-class branch
-                shows that section's snapshot. */}
+            {/* Phase B label honesty: All-Classes rows are per grade-group
+                rates over ALL recorded attendance rows (sorted by grade);
+                a specific class shows ITS real aggregate row. */}
             {classFilter === 'all'
               ? 'Grade-group rate · all recorded sessions · sorted by grade'
-              : 'Section snapshot · today’s roster'}
+              : 'Class aggregate · all recorded sessions · this class'}
           </p>
         </div>
       </div>

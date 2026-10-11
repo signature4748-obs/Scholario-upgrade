@@ -62,7 +62,11 @@ export function ProfileSection() {
     setPreview(null)
   }
 
-  const name = student?.name ?? me?.name ?? 'Student'
+  // B-fix — SERVER-FIRST identity priority (matches the sidebar):
+  // me.name / me.student.* are the DB truth; the roster record only
+  // fills the gaps while the session resolves.
+  const name = me?.name ?? student?.name ?? 'Student'
+  const srvStudent = me?.student
 
   return (
     <SectionCard icon={User} title="Profile" caption="Your photo and official student information">
@@ -88,7 +92,11 @@ export function ProfileSection() {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">{name}</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {student ? `${student.className}-${student.section} · Roll ${student.rollNo}` : me?.email}
+            {srvStudent?.classLabel
+              ? `${srvStudent.classLabel}${srvStudent.rollNo ? ` · Roll ${srvStudent.rollNo}` : ''}`
+              : student
+                ? `${student.className}-${student.section} · Roll ${student.rollNo}`
+                : me?.email}
           </p>
           <div className="flex flex-wrap items-center gap-2 mt-3">
             <input
@@ -152,13 +160,13 @@ export function ProfileSection() {
           <ManagedBadge />
         </div>
         <div className="divide-y divide-border/60">
-          <InfoRow label="Full name" value={student?.name ?? '—'} managed />
-          <InfoRow label="Admission number" value={student?.admissionNo ?? '—'} managed />
-          <InfoRow label="Class & section" value={student ? `${student.className} — ${student.section}` : '—'} managed />
-          <InfoRow label="Roll number" value={student?.rollNo ?? '—'} managed />
-          <InfoRow label="Date of birth" value={student?.dob ?? '—'} managed />
+          <InfoRow label="Full name" value={me?.name ?? student?.name ?? '—'} managed />
+          <InfoRow label="Admission number" value={srvStudent?.admissionNo ?? student?.admissionNo ?? '—'} managed />
+          <InfoRow label="Class & section" value={srvStudent?.classLabel ?? (student ? `${student.className} — ${student.section}` : '—')} managed />
+          <InfoRow label="Roll number" value={srvStudent?.rollNo ?? student?.rollNo ?? '—'} managed />
+          <InfoRow label="Date of birth" value={(srvStudent?.dob ?? student?.dob)?.slice(0, 10) ?? '—'} managed />
           <InfoRow label="House" value={student?.houseName ?? '—'} managed />
-          <InfoRow label="Guardian" value={student?.guardianName ?? '—'} managed />
+          <InfoRow label="Guardian" value={srvStudent?.guardianName ?? student?.guardianName ?? '—'} managed />
         </div>
         <p className="mt-4 flex items-start gap-2 text-[11px] text-muted-foreground leading-relaxed">
           <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary/70" aria-hidden />

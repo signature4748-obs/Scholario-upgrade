@@ -10,7 +10,7 @@ import { HOUSE_DEFS, SEED_SUBJECTS } from './constants'
 import { SS, SC } from './seed-data'
 import { SUBJECTS_BY_LEVEL } from './constants'
 import { idForCustomSubject, codeForName, type SubjectDef } from '@/lib/mock/academic'
-import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
+import { makeDemoSeedApplier, readIsDemoTenant } from '@/lib/store/demo-tenant'
 import {
   migrateLegacyScopedStore, createTenantScopedStorage,
 } from '@/lib/tenant/tenant-storage'
@@ -741,6 +741,12 @@ export const useStudentsStore = create<StudentsState>()(
       // session when an older persisted state predates it. The migration
       // runs ONCE per browser; afterwards awarding/ending positions persists
       // normally (spec §38 E2E stays intact).
+      // B-fix (store-seed gating) — the POS-SEED-2 restore is DEMO-TIER
+      // content (a fabricated STU-58 Class Captain): gated on the
+      // server-derived demo signal (readIsDemoTenant). Persist migrations
+      // run during store rehydration — before /api/auth/me resolves — so a
+      // real tenant can never pass this gate; demo continuity for pristine
+      // namespaces is covered by ensureStudentsDemoSeed (SEED_STUDENT_POSITIONS).
       version: 5,
       migrate: (persisted, version) => {
         const state = (persisted ?? {}) as Partial<StudentsState>
@@ -767,7 +773,7 @@ export const useStudentsStore = create<StudentsState>()(
           const positions = (state.studentPositions ?? []).map((p) =>
             p.sessionId ? p : { ...p, sessionId: SEED_SESSION_ID },
           )
-          if (!positions.some((p) => p.studentId === 'STU-58' && p.sessionId === SEED_SESSION_ID)) {
+          if (readIsDemoTenant() && !positions.some((p) => p.studentId === 'STU-58' && p.sessionId === SEED_SESSION_ID)) {
             positions.push({
               id: 'POS-SEED-2',
               studentId: 'STU-58',

@@ -28,6 +28,7 @@ import { Printer, X, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { getInitials } from '@/components/shared/avatar'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
 import type { StudentRecord } from '@/lib/store/students-store'
 import { useAcademicSession, SESSION_NOT_SET_LABEL } from '@/lib/academic-session'
@@ -61,10 +62,10 @@ export interface StudentIdCardProps {
   /** Root adds the print hook class (see globals.css @media print). */
   className?: string
   /** SD-3b — server-first enrollment overrides (session truth). When
-   *  present, class/roll/admission/dob/blood render from the DB session
-   *  instead of the seed record, keeping the card consistent with the
-   *  sidebar and profile. */
-  enrollment?: Pick<EnrollmentIdentity, 'classLabel' | 'rollNo' | 'admissionNo' | 'dob' | 'bloodGroup'>
+   *  present, name/class/roll/admission/dob/blood render from the DB
+   *  session instead of the seed record, keeping the card consistent
+   *  with the sidebar and profile. */
+  enrollment?: Pick<EnrollmentIdentity, 'name' | 'classLabel' | 'rollNo' | 'admissionNo' | 'dob' | 'bloodGroup'>
 }
 
 export function StudentIdCard({ student, className, enrollment }: StudentIdCardProps) {
@@ -94,7 +95,15 @@ export function StudentIdCard({ student, className, enrollment }: StudentIdCardP
   if (idCard?.showHouse && student.houseName) fields.push({ label: 'House', value: student.houseName })
   if (idCard?.showDob) fields.push({ label: 'Date of Birth', value: enrollment?.dob ?? student.dob, mono: true })
   if (idCard?.showBloodGroup) fields.push({ label: 'Blood Group', value: enrollment?.bloodGroup ?? student.bloodGroup })
-  fields.push({ label: 'Student ID', value: student.id, mono: true })
+  // B-fix — the institutional identifier is the DB admission number
+  // (the same canonical value the "Admission No" particular carries),
+  // NEVER the client store's row id: the seed record's "STU-58" is a
+  // client-side key that means nothing on a real tenant's card.
+  fields.push({ label: 'Student ID', value: enrollment?.admissionNo ?? student.admissionNo ?? student.id, mono: true })
+
+  // SD-3b — server-first identity for the printed name and photo frame.
+  const displayName = enrollment?.name ?? student.name
+  const displayInitials = getInitials(displayName) || '?'
 
   return (
     <div
@@ -145,10 +154,10 @@ export function StudentIdCard({ student, className, enrollment }: StudentIdCardP
             )}
             aria-label="Student photograph placeholder"
           >
-            {student.avatar}
+            {displayInitials}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="font-display text-lg font-bold leading-tight text-foreground">{student.name}</p>
+            <p className="font-display text-lg font-bold leading-tight text-foreground">{displayName}</p>
             <p className="mt-1 text-xs font-medium text-muted-foreground">
               {enrollment ? `${enrollment.classLabel} · Roll ${enrollment.rollNo}` : `${student.className}-${student.section} · Roll ${student.rollNo}`}
             </p>

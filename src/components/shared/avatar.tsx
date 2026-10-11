@@ -72,7 +72,12 @@ function hashString(str: string): number {
   return Math.abs(hash)
 }
 
-function getInitials(name: string): string {
+/**
+ * Shared initials derivation ("Aarav Sharma" → "AS") — the ONE rule every
+ * server-first identity surface (sidebar, profile, ID card) uses, so the
+ * initials can never disagree with the canonical session name.
+ */
+export function getInitials(name: string): string {
   return name
     .split(' ')
     .map((n) => n[0])
