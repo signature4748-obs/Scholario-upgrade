@@ -10,11 +10,14 @@ import { printIsolated } from '@/lib/print-isolate'
 import { computeFeeSnapshot } from '../../../FeeStructureStep/fee-snapshot'
 import { defaultFeeDataState } from '../../../FeeStructureStep/types'
 import type { AdmissionApplication } from '@/lib/store/admission-store'
-import type { IssuanceArtifacts } from './letter-data'
+import type { IssuanceArtifacts, ServerFeeStatement } from './letter-data'
 
 interface FeeReceiptTabProps {
   app: AdmissionApplication
   artifacts: IssuanceArtifacts
+  /** FEE-ADMISSIONS MVP — server-issued fee statement (immutable snapshot
+   * once enrolled; provisional quote before). Null → legacy pipeline. */
+  serverFees?: ServerFeeStatement | null
 }
 
 /**
@@ -22,13 +25,18 @@ interface FeeReceiptTabProps {
  * comes from the applicant's own fee snapshot (same pipeline as the Fee
  * step and the admission letter). No hardcoded figures, no invented
  * receipt numbers: the receipt number derives from the admission number.
+ *
+ * FEE-ADMISSIONS MVP: server-linked applications render the EXACT
+ * server-issued line items (one row per head with its quantity) — the
+ * persisted immutable snapshot once enrolled.
  */
-export function FeeReceiptTab({ app, artifacts }: FeeReceiptTabProps) {
+export function FeeReceiptTab({ app, artifacts, serverFees }: FeeReceiptTabProps) {
   const school = useSchoolProfile()
   const sheetRef = useRef<HTMLDivElement>(null)
   const { admissionNo } = artifacts
   const formData = app.formData
 
+  // ── LEGACY pipeline (no server link) — unchanged ───────────────────
   const feeState = { ...defaultFeeDataState, ...(app.feeData || {}) }
   const snap = computeFeeSnapshot(formData.className || '', feeState, {
     enableTransport: true,
@@ -40,18 +48,34 @@ export function FeeReceiptTab({ app, artifacts }: FeeReceiptTabProps) {
   const receiptNo = `REC-${new Date().getFullYear()}-${tail}`
   const today = new Date().toISOString().split('T')[0]
 
-  const rows: { label: string; amount: number }[] = [
-    { label: 'Registration Fee', amount: snap.registrationFee },
-    { label: 'Admission Fee (One-Time)', amount: snap.admissionFee },
-    { label: 'Annual Tuition Fee', amount: snap.tuitionFee },
-  ]
-  if (snap.examTotal > 0) rows.push({ label: 'Examination & Assessment', amount: snap.examTotal })
-  if (snap.booksTotal > 0) rows.push({ label: 'Textbooks & Course Material', amount: snap.booksTotal })
-  if (snap.uniformTotal > 0) rows.push({ label: 'Uniform', amount: snap.uniformTotal })
-  if (snap.activityKitTotal > 0) rows.push({ label: 'Activity Kit', amount: snap.activityKitTotal })
-  if (snap.transportTotal > 0) rows.push({ label: 'Transport Fee', amount: snap.transportTotal })
-  if (snap.hostelTotal > 0) rows.push({ label: 'Hostel Fee', amount: snap.hostelTotal })
-  if (snap.otherHeadsTotal > 0) rows.push({ label: 'Other Fee Heads', amount: snap.otherHeadsTotal })
+  const rows: { label: string; amount: number }[] = serverFees
+    ? serverFees.lineItems.map((li) => ({
+        label:
+          li.quantity > 1
+            ? `${li.name} (× ${li.quantity} @ ${formatINR(li.unitAmount)})`
+            : li.name,
+        amount: li.amount,
+      }))
+    : [
+        { label: 'Registration Fee', amount: snap.registrationFee },
+        { label: 'Admission Fee (One-Time)', amount: snap.admissionFee },
+        { label: 'Annual Tuition Fee', amount: snap.tuitionFee },
+      ].concat(
+        snap.examTotal > 0 ? [{ label: 'Examination & Assessment', amount: snap.examTotal }] : [],
+        snap.booksTotal > 0 ? [{ label: 'Textbooks & Course Material', amount: snap.booksTotal }] : [],
+        snap.uniformTotal > 0 ? [{ label: 'Uniform', amount: snap.uniformTotal }] : [],
+        snap.activityKitTotal > 0 ? [{ label: 'Activity Kit', amount: snap.activityKitTotal }] : [],
+        snap.transportTotal > 0 ? [{ label: 'Transport Fee', amount: snap.transportTotal }] : [],
+        snap.hostelTotal > 0 ? [{ label: 'Hostel Fee', amount: snap.hostelTotal }] : [],
+        snap.otherHeadsTotal > 0 ? [{ label: 'Other Fee Heads', amount: snap.otherHeadsTotal }] : [],
+      )
+
+  const gross = serverFees
+    ? serverFees.totalAmount + serverFees.discountAmount
+    : snap.grossFee
+  const discountAmount = serverFees ? serverFees.discountAmount : snap.discountAmount
+  const discountName = serverFees ? (serverFees.discountName ?? undefined) : snap.discountName
+  const net = serverFees ? serverFees.totalAmount : snap.netTotal
 
   return (
     <GlassCard ref={sheetRef} className="p-6 max-w-2xl mx-auto space-y-6 border">
@@ -59,6 +83,17 @@ export function FeeReceiptTab({ app, artifacts }: FeeReceiptTabProps) {
         <div>
           <h3 className="font-extrabold text-lg">Fee Receipt</h3>
           <p className="text-xs text-muted-foreground">{school.name}</p>
+          {serverFees?.kind === 'snapshot' && (
+            <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
+              Issued from the server&apos;s immutable fee snapshot
+              {serverFees.issuedAt ? ` · ${formatDate(serverFees.issuedAt)}` : ''}
+            </p>
+          )}
+          {serverFees?.kind === 'quote' && (
+            <p className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 mt-0.5">
+              Provisional — finalized from the immutable snapshot at enrolment
+            </p>
+          )}
         </div>
         <div className="text-right">
           <span className="text-xs font-mono font-bold block">Receipt No: {receiptNo}</span>
@@ -99,17 +134,17 @@ export function FeeReceiptTab({ app, artifacts }: FeeReceiptTabProps) {
           ))}
           <div className="flex justify-between p-2.5 bg-muted/40 font-bold">
             <span>Fee Subtotal</span>
-            <span className="font-mono">{formatINR(snap.grossFee)}</span>
+            <span className="font-mono">{formatINR(gross)}</span>
           </div>
-          {snap.discountAmount > 0 && (
+          {discountAmount > 0 && (
             <div className="flex justify-between p-2.5 text-emerald-600 font-semibold">
-              <span>Concession{snap.discountName ? ` — ${snap.discountName}` : ''}</span>
-              <span className="font-mono">- {formatINR(snap.discountAmount)}</span>
+              <span>Concession{discountName ? ` — ${discountName}` : ''}</span>
+              <span className="font-mono">- {formatINR(discountAmount)}</span>
             </div>
           )}
           <div className="flex justify-between font-extrabold text-sm p-2.5">
             <span>Net Payable</span>
-            <span className="font-mono text-emerald-700 dark:text-emerald-300">{formatINR(snap.netTotal)}</span>
+            <span className="font-mono text-emerald-700 dark:text-emerald-300">{formatINR(net)}</span>
           </div>
         </div>
       </div>

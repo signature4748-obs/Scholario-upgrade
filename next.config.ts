@@ -50,6 +50,12 @@ const nextConfig: NextConfig = {
       'motion',
       'date-fns',
     ],
+    // 2026-10-11 (build memory): `next build --webpack` on this route tree
+    // needs >3072MB V8 heap (the 4GB sandbox cgroup ABORTs the build worker
+    // — reproduced; CI's 7GB runners fit it). webpackMemoryOptimizations
+    // trades build speed for substantially lower build memory with identical
+    // output, keeping the canonical build runnable inside 4GB too.
+    webpackMemoryOptimizations: true,
     // Memory guidance for Turbopack runs (webpack mode ignores it; kept for
     // the times the project is booted without --webpack).
     turbopackMemoryLimit: 2200,
@@ -101,7 +107,16 @@ if (process.env.NODE_ENV !== "production" && lazyBackend) {
       ...config.watchOptions,
       ignored: ["**/node_modules/**", "**/.git/**", "**/db/**"],
     };
-    console.log("[memory-fix] lazyCompilation enabled (gateway-aware custom backend, port 3777)");
+    // 2026-10-11 (OOM hardening): full source maps are the single largest
+    // dev-compile memory consumer. Under the 4GB cgroup the accumulated
+    // map memory (multi-batch live security suites) pushed next-server to
+    // ~2.9-3.0GB RSS and the kernel OOM-killed it mid-suite, cascading
+    // connection-refused failures. 'eval' keeps module identity maps
+    // (cheap, string-keyed) at a fraction of the memory; stack traces
+    // still resolve to module ids in dev. Production builds are untouched
+    // (this block only runs when NODE_ENV !== 'production').
+    config.devtool = "eval";
+    console.log("[memory-fix] lazyCompilation enabled (gateway-aware custom backend, port 3777) + devtool=eval");
     return config;
   };
 }

@@ -12,6 +12,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { GlassCard } from '@/components/shared/ui'
 import type { FeeDataState } from '../../FeeStructureStep'
 import { FeeStructureStep } from '../../FeeStructureStep'
+import { ServerFeeStep } from './ServerFeeStep'
 import { PhotoStep as PhotoStepEditor } from './PhotoStep'
 import { StepperHeader, type WizardStep } from './StepperHeader'
 import { PostSubmitDuplicateModal } from './PostSubmitDuplicateModal'
@@ -46,6 +47,11 @@ export interface FormWizardProps {
   flags: ReturnType<typeof import('../lib/admission-utils').useAdmissionFeatureFlags>
   seatCapacity: ReturnType<typeof import('../lib/admission-utils').useSeatCapacity>
   initialFeeState: FeeDataState
+  /** FEE-ADMISSIONS MVP — render the server quote fee step instead of the
+   * local school-settings one while the flag is ON for the school. */
+  serverMode?: boolean
+  /** Server submission in flight (disables submit — TQA-14). */
+  submitting?: boolean
 }
 
 export function FormWizard({
@@ -66,6 +72,8 @@ export function FormWizard({
   flags,
   seatCapacity,
   initialFeeState,
+  serverMode = false,
+  submitting = false,
 }: FormWizardProps) {
   return (
     <>
@@ -102,14 +110,24 @@ export function FormWizard({
             {step === 4 && <ClassStep data={data} set={set} flags={flags} seatCapacity={seatCapacity} />}
             {step === 5 && <PreviousSchoolStep data={data} set={set} admissionType={data.admissionType} onSkip={onNext} />}
             {step === 6 && <TransportStep data={data} set={set} flags={flags} />}
-            {step === 7 && (
-              <FeeStructureStep
-                className={data.className}
-                feeState={data.feeState || initialFeeState}
-                onChangeFeeState={(newState) => set('feeState', newState)}
-                flags={flags}
-              />
-            )}
+            {step === 7 &&
+              (serverMode ? (
+                <ServerFeeStep
+                  className={data.className}
+                  section={data.section}
+                  classId={data.serverClassId}
+                  selections={data.serverFeeSelections}
+                  onClassIdResolved={(id) => set('serverClassId', id ?? '')}
+                  onChangeSelections={(sel) => set('serverFeeSelections', sel)}
+                />
+              ) : (
+                <FeeStructureStep
+                  className={data.className}
+                  feeState={data.feeState || initialFeeState}
+                  onChangeFeeState={(newState) => set('feeState', newState)}
+                  flags={flags}
+                />
+              ))}
             {step === 8 && (
               <PhotoStepEditor
                 photoDataUrl={data.photoDataUrl ?? null}
@@ -132,6 +150,8 @@ export function FormWizard({
         onBack={onBack}
         onNext={onNext}
         onSubmit={onSubmit}
+        submitDisabled={submitting}
+        submitLabel={submitting ? 'Submitting…' : 'Submit Application'}
       />
     </>
   )

@@ -79,6 +79,10 @@ Release-pipeline secrets live in the GitHub `production` environment, not
 Vercel: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`
 (`kbyknezedewvgrnqervj`), `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`,
 `VERCEL_ORG_ID`, `VERCEL_DEPLOY_HOOK_URL` (see `docs/RELEASE.md` §9).
+Batch 1 additions: `VERCEL_DEPLOY_HOOK_URL_SCHOOL` (second plane hook),
+`PRODUCTION_URL`, and deploy hooks `release-gate-platform` /
+`release-gate-school` (ref `main`) created on both plane projects. For the
+staging tier and why **previews are not staging**, see `docs/STAGING.md`.
 
 ### Target notes (production / preview / development)
 

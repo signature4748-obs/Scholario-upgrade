@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
 import { contentLengthExceedsUploadLimit } from '@/lib/security/upload'
+import { isCanonicalSchoolRole } from '@/lib/security/permissions'
 import {
   AVATAR_MAX_BYTES,
   AVATAR_MIME_TO_EXT,
@@ -19,10 +20,12 @@ export const runtime = 'nodejs'
 
 /**
  * POST /api/profile/avatar — upload (or replace) the CALLER's own profile
- * photo. Multipart form with a single `file` field. Any authenticated role
- * may set their own; nobody can set someone else's (the target is always
- * the session user). Validates MIME allowlist + magic bytes + 5MB cap;
- * replaces the previous file atomically-enough (write new, then remove old).
+ * photo. Multipart form with a single `file` field. Any authenticated
+ * CANONICAL school role (PRINCIPAL | TEACHER | STUDENT — Gate F identity
+ * invariant) may set their own; nobody can set someone else's (the target
+ * is always the session user). Validates MIME allowlist + magic bytes +
+ * 5MB cap; replaces the previous file atomically-enough (write new, then
+ * remove old).
  *
  * Phase 8A (8A-C9b): the bytes go to the PRIVATE 'school-media' bucket at
  * the deterministic path `avatars/<schoolId-or-'avatars'>/<fileName>`
@@ -35,6 +38,10 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
     if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
+    // GATE F — identity-surface canonical-role invariant, mirroring
+    // /api/auth/me: a non-canonical school-role session (PARENT, MANAGEMENT,
+    // ACCOUNTANT, DRIVER, SUPER_ADMIN, stray values) hydrates as logged-out.
+    if (!isCanonicalSchoolRole(user.role)) throw new Error('UNAUTHORIZED')
 
     // PIH-4c — EARLY size rejection BEFORE the multipart body is buffered:
     // an oversized Content-Length answers 413 (PAYLOAD_TOO_LARGE)
@@ -100,13 +107,17 @@ export async function POST(req: NextRequest) {
 /**
  * DELETE /api/profile/avatar — remove the caller's own photo (back to the
  * initials avatar everywhere). Only the session user's row/file is touched.
- * Phase 8A: the object is deleted from the PRIVATE 'school-media' bucket at
- * the same deterministic path (missing object = ok).
+ * Active canonical-role session required (Gate F — same invariant as POST
+ * and /api/auth/me). Phase 8A: the object is deleted from the PRIVATE
+ * 'school-media' bucket at the same deterministic path (missing object = ok).
  */
 export async function DELETE() {
   return api(async () => {
     const user = await getCurrentUser()
     if (!user) throw new Error('UNAUTHORIZED')
+    if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
+    // GATE F — identity-surface canonical-role invariant (mirrors /me).
+    if (!isCanonicalSchoolRole(user.role)) throw new Error('UNAUTHORIZED')
 
     const row = await db.user.findUnique({ where: { id: user.id }, select: { avatar: true } })
     if (row?.avatar && isSafeAvatarFileName(row.avatar)) {

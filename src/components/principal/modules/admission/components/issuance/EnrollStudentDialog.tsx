@@ -46,7 +46,8 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { PhoneInput } from '@/components/shared/smart-inputs'
-import type { AdmissionApplication } from '@/lib/store/admission-store'
+import { useAdmissionStore, type AdmissionApplication } from '@/lib/store/admission-store'
+import { serverEnrol } from '../../lib/server-admissions-client'
 
 export interface EnrollServerResult {
   /** Canonical DB Student row id — cross-referenced onto the admission record. */
@@ -80,6 +81,10 @@ interface CreatedStudent {
   admissionNo: string
   /** Present ONLY when the server generated the password (one-time). */
   tempPassword?: string
+  /** True when the server returned the ORIGINAL enrolment (idempotent
+   * replay) — the one-time credential is deliberately NOT re-exposed;
+   * recovery is the verified reset-credential flow. */
+  replay?: boolean
 }
 
 // ── form state ───────────────────────────────────────────────────────
@@ -182,6 +187,16 @@ export function EnrollStudentDialog({
   const [created, setCreated] = useState<CreatedStudent | null>(null)
   const [pwRevealed, setPwRevealed] = useState(false)
 
+  // SERVER-ISSUED workflow link (FEE-ADMISSIONS MVP): while present the
+  // enrolment goes through the ATOMIC server enrol endpoint instead of
+  // POST /api/students — one transaction allocates the ADM-NNNNNN number,
+  // creates the account + student + fee obligations + the IMMUTABLE fee
+  // snapshot, and transitions the application to ENROLLED. A replay of
+  // an already-enrolled application returns the original result and
+  // deliberately does NOT re-expose the one-time credential.
+  const serverLinked = !!app.serverApplicationId
+  const admissionStore = useAdmissionStore()
+
   // reference data from the server (loaded on every open)
   const [classes, setClasses] = useState<ClassOption[]>([])
   const [loadingRefData, setLoadingRefData] = useState(false)
@@ -195,13 +210,24 @@ export function EnrollStudentDialog({
 
   // ── pre-fill from the application's REAL collected data + load the
   //    server class registry on every open ─────────────────────────────
+  //    Deps are [open, app?.id, serverLinked] — NOT `app` itself: after
+  //    a successful enrolment the parent marks the record Completed and
+  //    stamps the server snapshot, which REPLACES the app object; re-
+  //    running this effect then would reset the dialog to the form step
+  //    and DESTROY the one-time credential slip before the operator can
+  //    hand it over. The form re-prefills on every dialog OPEN (and when
+  //    a different application is enrolled).
   useEffect(() => {
     if (!open) return
     const f = app.formData
     const genderMap: Record<string, string> = { Male: 'MALE', Female: 'FEMALE' }
     setForm({
       name: app.applicantName?.trim() || `${f.firstName} ${f.lastName}`.trim(),
-      email: (f.fatherEmail || f.motherEmail || '').trim(),
+      // LEGACY flow: the guardian contact email is a best-effort prefill
+      // the operator confirms. SERVER flow (H1-R2): the student's login
+      // email is an EXPLICIT decision — it is NEVER defaulted from a
+      // guardian contact address (globally unique, hard to change later).
+      email: serverLinked ? '' : (f.fatherEmail || f.motherEmail || '').trim(),
       classId: '',
       gender: genderMap[f.gender] ?? '',
       dob: f.dob || '',
@@ -241,7 +267,7 @@ export function EnrollStudentDialog({
     return () => {
       cancelled = true
     }
-  }, [open, app])
+  }, [open, app?.id, serverLinked])
 
   // ── reset on close (after the exit animation): the one-time credential
   //    and the form leave memory immediately afterwards ────────────────
@@ -288,7 +314,12 @@ export function EnrollStudentDialog({
     return Object.keys(errs).length === 0
   }
 
-  // ── submit → POST /api/students (the REAL server create) ───────────
+  // ── submit → the REAL server create ──────────────────────────────
+  //  LEGACY : POST /api/students (Students & Classes contract)
+  //  SERVER : POST /api/admissions/applications/[id]/enrol — the atomic
+  //           10-step transaction (admission number, account, fee
+  //           obligations, immutable snapshot, ENROLLED) with idempotent
+  //           replay semantics.
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (submitting) return
@@ -297,17 +328,67 @@ export function EnrollStudentDialog({
     setSubmitError(null)
 
     const email = form.email.trim().toLowerCase()
-    // EXACTLY the route's parsed fields; empty optionals are omitted so
-    // the server applies its own defaults (ADM-… admission number,
-    // generated one-time password). No fabricated defaults live here.
-    const body: Record<string, string> = { name: form.name.trim(), email }
-    if (form.classId) body.classId = form.classId
-    if (form.guardianName.trim()) body.guardianName = form.guardianName.trim()
-    if (form.guardianPhone.trim()) body.guardianPhone = form.guardianPhone.trim()
-    if (form.gender) body.gender = form.gender
-    if (form.dob) body.dob = form.dob
 
     try {
+      if (serverLinked) {
+        // ── SERVER-ISSUED enrolment (one atomic transaction) ──────────
+        const result = await serverEnrol(app.serverApplicationId!, {
+          loginEmail: email,
+          ...(form.classId ? { classId: form.classId } : {}),
+        })
+
+        // Persist the server-issued IMMUTABLE fee snapshot so the letter
+        // and receipt render the exact persisted amounts (never a client
+        // recomputation; later fee-structure edits cannot change them).
+        admissionStore.attachServerFeeSnapshot(app.id, {
+          totalAmount: result.feeSnapshot.totalAmount,
+          discountAmount: result.feeSnapshot.discountAmount,
+          discountName: result.feeSnapshot.discountName,
+          academicYear: result.feeSnapshot.academicYear,
+          lineItems: result.feeSnapshot.lineItems,
+        })
+        admissionStore.applyServerStatus(app.id, 'ENROLLED')
+
+        // ONE-TIME credential — memory only, rendered once in the slip
+        // below. On an idempotent replay the server deliberately omits
+        // it (recovery = the verified reset-credential flow).
+        setCreated({
+          name: result.student.name || form.name.trim(),
+          email: result.student.loginEmail || email,
+          admissionNo: result.admissionNo || '',
+          ...(result.tempPassword ? { tempPassword: result.tempPassword } : {}),
+          ...(result.idempotentReplay ? { replay: true } : {}),
+        })
+        setStep('credentials')
+
+        onEnrolled({
+          studentId: result.student.id,
+          admissionNo: result.admissionNo || '',
+        })
+
+        if (result.idempotentReplay) {
+          toast.info('Enrolment replayed — the original enrolment was returned unchanged', {
+            description: 'No duplicate records were created.',
+          })
+        } else {
+          toast.success(`${form.name.trim()} enrolled on the server`, {
+            description: `Account created · Login ID: ${email} · Admission No: ${result.admissionNo}`,
+          })
+        }
+        return
+      }
+
+      // ── LEGACY enrolment (POST /api/students) — unchanged ───────────
+      // EXACTLY the route's parsed fields; empty optionals are omitted so
+      // the server applies its own defaults (ADM-… admission number,
+      // generated one-time password). No fabricated defaults live here.
+      const body: Record<string, string> = { name: form.name.trim(), email }
+      if (form.classId) body.classId = form.classId
+      if (form.guardianName.trim()) body.guardianName = form.guardianName.trim()
+      if (form.guardianPhone.trim()) body.guardianPhone = form.guardianPhone.trim()
+      if (form.gender) body.gender = form.gender
+      if (form.dob) body.dob = form.dob
+
       const res = await fetch('/api/students', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -397,9 +478,9 @@ export function EnrollStudentDialog({
                 Enroll {app.applicantName || 'Applicant'}
               </DialogTitle>
               <DialogDescription className="text-xs leading-relaxed">
-                Create the student&apos;s account on the school server from the data collected on this
-                application. The login email and class are required; a one-time temporary password
-                is shown at the end — the student changes it at first sign-in.
+                {serverLinked
+ ? 'Create the student’s account through the atomic server enrolment — the admission number, portal account, fee obligations and the official fee snapshot are created in one transaction. The student’s own login email is required; a one-time temporary password is shown at the end.'
+ : 'Create the student’s account on the school server from the data collected on this application. The login email and class are required; a one-time temporary password is shown at the end — the student changes it at first sign-in.'}
               </DialogDescription>
             </DialogHeader>
 
@@ -441,7 +522,11 @@ export function EnrollStudentDialog({
                     inputMode="email"
                     value={form.email}
                     onChange={(e) => setF('email', e.target.value)}
-                    placeholder="Guardian email — becomes the login ID"
+                    placeholder={
+                      serverLinked
+                        ? "The student's own login email (must be unique)"
+                        : 'Guardian email — becomes the login ID'
+                    }
                     autoComplete="off"
                     required
                     aria-invalid={!!errors.email}
@@ -579,8 +664,9 @@ export function EnrollStudentDialog({
                 Student Enrolled — Account Created
               </DialogTitle>
               <DialogDescription className="text-xs">
-                {created?.name} was created on the school server and this admission is complete.
-                Hand over the sign-in details now.
+                {created?.replay
+                  ? `${created?.name} was already enrolled — the original enrolment was returned unchanged. No records were duplicated.`
+                  : `${created?.name} was created on the school server and this admission is complete. Hand over the sign-in details now.`}
               </DialogDescription>
             </DialogHeader>
 
@@ -650,7 +736,9 @@ export function EnrollStudentDialog({
                     </div>
                   ) : (
                     <div className="px-3.5 py-2.5 text-[11px] text-muted-foreground">
-                      No temporary password shown — the first password was set by the operator.
+                      {created?.replay
+                        ? 'The one-time password was shown when this enrolment first ran — it is never shown again. If it was lost, use “Reset one-time password” on the Credentials tab.'
+                        : 'No temporary password shown — the first password was set by the operator.'}
                     </div>
                   )}
                 </dl>

@@ -81,6 +81,26 @@ jobs:
       # Phase-8A rate-limit DB backend ON (its documented default) so the
       # login-rate-limit surfaces behave exactly as in dev/integration.
       RATE_LIMIT_DB_SYNC: "on"
+      # ── TEST FIXTURES (2026-10-11 parity fix — never real secrets) ──────
+      # The live security suites sign/expect these EXACT values; without
+      # them the suites fail contract tests (verified locally, root-caused
+      # from 185 cascade failures → green after parity):
+      #  · tests/security/platform-account-recovery.test.ts §H: the dev
+      #    server must run with FAKE GOOGLE_OAUTH_* values (OAuth route
+      #    contract: 302/PKCE/state-cookie; exchange always fails on the
+      #    fake client — GOOGLE_SIGNIN_FAILED, never a session).
+      #  · tests/security/fee-gateway.test.ts:71 signs Razorpay webhooks
+      #    with the literal below.
+      #  · tests/security/fee-gateway.test.ts:51 documents the sandbox
+      #    checkout contract (SandboxProvider, no network).
+      #  · tests/security/saas-hardening.test.ts:537 signs the platform
+      #    subscription webhook with PLATFORM_PAYMENT_WEBHOOK_SECRET.
+      GOOGLE_OAUTH_CLIENT_ID: "test-google-client-id"
+      GOOGLE_OAUTH_CLIENT_SECRET: "test-google-client-secret"
+      RAZORPAY_WEBHOOK_SECRET: "batch2-test-webhook-secret"
+      PAYMENTS_SANDBOX: "1"
+      PAYMENTS_SANDBOX_SECRET: "local-sandbox-secret"
+      PLATFORM_PAYMENT_WEBHOOK_SECRET: "platform-webhook-test-secret"
 
     steps:
       # 1. Shallow checkout — CI needs the working tree, not history.
@@ -167,10 +187,16 @@ jobs:
 
       # 9. Gate 4 — the canonical production build (standalone server).
       #    No DB connection is needed; memory headroom for next build.
+      #    SCHOLARIO_PLANE (2026-10-11 parity fix): the two-plane gate
+      #    (src/lib plane config) fails-closed in production mode when
+      #    the plane is unset — the build worker ABORTS during page-data
+      #    collection without it (reproduced locally). CI builds the
+      #    platform plane; the Vercel runtime env selects plane behavior.
       - name: Production build (standalone)
         run: bun run build
         env:
           NODE_OPTIONS: --max-old-space-size=3072
+          SCHOLARIO_PLANE: platform
 
       # 10. Canonical seed corpus into the CI postgres (guards pass under
       #     DATABASE_ENV=test; all credentials come from
@@ -197,6 +223,12 @@ jobs:
           bun prisma/seed-tenant-isolation.ts
           bun prisma/seed-website-cms.ts
           bun prisma/seed-salary.ts
+          # SaaS-HARDENING backfill (2026-10-11 parity fix): the live
+          # subscription-lock/saas-hardening suites require a
+          # SchoolSubscription row for EVERY school (incl. the tenant-
+          # isolation fixtures seeded above); this idempotent backfill
+          # creates the missing rows with honest defaults.
+          bun prisma/backfill-subscriptions.ts
           # seed-platform RE-RUN (required, not cosmetic): the first pass
           # migrates the legacy SUPER_ADMIN User to PlatformAdmin BEFORE
           # seed-tenant-isolation plants tenant.superadmin@hawkings.test —
@@ -215,6 +247,18 @@ jobs:
           for i in $(seq 1 60); do
             curl -sf http://localhost:3000/health/ready && break || sleep 5
           done
+          curl -sf http://localhost:3000/health/ready
+
+      # 11b. Warm the entry routes (2026-10-11 parity fix): the first cold
+      #      request per route pays the webpack-compile cost, which
+      #      produced first-run flakes in the live suites locally
+      #      (timeouts/aborted fetches on cold compiles). Compiling the
+      #      login doors before the suites keeps first-run timing honest.
+      - name: Warm login doors (pre-compile route entries)
+        run: |
+          curl -sf -o /dev/null http://localhost:3000/platform/login
+          curl -sf -o /dev/null http://localhost:3000/login
+          curl -sf -o /dev/null http://localhost:3000/s/hawkings-prithvipur/login
           curl -sf http://localhost:3000/health/ready
 
       # 12. Gates 5-8 — unit + integration + API + regression + security.

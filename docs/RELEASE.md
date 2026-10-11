@@ -16,15 +16,26 @@
 PR ─► tests (CI, pull_request) ─► merge to main
    ─► RELEASE workflow (on the exact release commit):
         1. ci                 full test matrix (job-local postgres ONLY)
-        2. config-preflight   Vercel env CONFIGURED / MISSING (read-only)
+        2. config-preflight   Vercel env CONFIGURED / MISSING (read-only) —
+                             BOTH active planes checked independently
         3. migration          PRODUCTION DB FIRST — preflight → apply →
-                             verify A–G (fail-closed)
+                             verify A–G (fail-closed; Stage F requires BOTH
+                             planes healthy)
         4. release-gate       all green? else deployment is SKIPPED and
                              production stays at its known-good commit
-        5. deploy             Vercel production deploy hook (AFTER the DB
-                             has the new schema — APPLICATION SECOND)
-        6. verify-deployment  release-SHA provenance + /health/ready
+        5. deploy             Vercel production deploy hooks for BOTH planes
+                             — scholario-platform AND scholario-app (AFTER
+                             the DB has the new schema — APPLICATION SECOND)
+        6. verify-deployment  release-SHA provenance + /health/ready on BOTH
+                             planes, each project verified independently
 ```
+
+**Two-plane release contract:** the active production topology is exactly
+`scholario-platform` (control plane) + `scholario-app` (school plane). A
+release deploys BOTH planes and verifies BOTH planes — a release that is
+live on only one plane is **not released**. The deprecated
+`scholario-production` (unified legacy) is never a deploy target, never a
+default health URL, and never a verification surface in this pipeline.
 
 Current state of the triggers (see §9 Enablement):
 
@@ -47,10 +58,11 @@ system.
    matrix locally: `bunx tsc --noEmit` · `bun run lint` · `bun run test` ·
    `bun run test:e2e`.
 2. **Config pre-flight** (read-only against Vercel; never reads values —
-   names + target metadata only):
+   names + target metadata only; checks BOTH active planes):
 
    ```bash
-   VERCEL_TOKEN=… VERCEL_PROJECT_ID=scholario-production \
+   VERCEL_TOKEN=… VERCEL_PROJECT_ID=scholario-platform \
+     VERCEL_PROJECT_ID_SCHOOL=scholario-app \
      bun scripts/prod-release/config-preflight.ts          # report + gate
    # add --warn-only for a pre-release report, --strict to also fail on
    # missing GOOGLE_* (otherwise Google degrades honestly off)
@@ -109,10 +121,13 @@ SUPABASE_ACCESS_TOKEN=… SUPABASE_PROJECT_REF=kbyknezedewvgrnqervj \
 Sections: **A** migration status (applied / 0 pending, true checksums) ·
 **B** expected schema objects · **C** indexes (24 trgm + 11 schoolId) ·
 **D** credential flags (counts only, never values) · **E** row-count
-comparison vs the snapshot (no table may shrink) · **F** production
-`/health/ready` · **G** account-recovery objects: `PlatformAdmin.google{Sub,
-Email,LinkedAt}`, `PlatformPasswordReset` + `PlatformRecoveryTicket` tables,
-6 indexes, `googleSub`/`tokenHash` UNIQUE, FK present, admin-state stability
+comparison vs the snapshot (no table may shrink) · **F** production health
+on **BOTH active planes** — `scholario-platform` AND `scholario-app`
+`/health/ready` must each answer 200 `database:ok`; either plane unhealthy =
+verification FAILS (the deprecated `scholario-production` is never probed) ·
+**G** account-recovery objects: `PlatformAdmin.google{Sub, Email, LinkedAt}`,
+`PlatformPasswordReset` + `PlatformRecoveryTicket` tables, 6 indexes,
+`googleSub`/`tokenHash` UNIQUE, FK present, admin-state stability
 (additive-only proof — existing admin passwords untouched).
 
 **Release gate** (workflow job `release-gate`): deployment proceeds only when
@@ -123,7 +138,7 @@ stays at its previously deployed, known-good commit. A closed gate is a red
 run, never silent. `migration_dry_run: true` rehearses everything with zero
 writes (gate closes green, nothing deploys).
 
-## 5. Application deployment (second)
+## 5. Application deployment (second — BOTH planes)
 
 - **Dispatch mode (today):** after the gate is green, promote manually —
   push the release commit to `main` (Vercel git integration deploys it), or
@@ -131,27 +146,50 @@ writes (gate closes green, nothing deploys).
   release SHA to already be `origin/main` HEAD — the workflow asserts it).
 - **Push mode (target):** with the Vercel deploy-hook switch made (§9), a
   push to `main` fires the whole chain automatically and the workflow itself
-  triggers the production deploy hook after the gate opens.
-- The deploy hook URL is a secret (`VERCEL_DEPLOY_HOOK_URL`); it is never
-  echoed. The hook responds 200 and Vercel builds `main` HEAD.
+  triggers both production deploy hooks after the gate opens.
+- The deploy stage fires **both** hooks via one script:
+
+  ```bash
+  VERCEL_DEPLOY_HOOK_URL=… VERCEL_DEPLOY_HOOK_URL_SCHOOL=… \
+    bun scripts/prod-release/trigger-deploy-hooks.ts
+  ```
+
+  Both hook URLs are secrets (`VERCEL_DEPLOY_HOOK_URL` = platform plane,
+  `VERCEL_DEPLOY_HOOK_URL_SCHOOL` = school plane); they are never echoed —
+  they only travel inside the script's fetch calls. The script is
+  fail-closed: either hook missing or rejected (non-200 after retries) =
+  RED run, never a one-plane release. Each hook responds 200 and Vercel
+  builds `main` HEAD for that plane's project. If one hook fails after the
+  other succeeded, the run is still RED and the verify-deployment stage
+  (SHA provenance + health on BOTH planes) is the backstop that cannot pass
+  on a partial deploy — re-run the deploy stage after fixing the cause.
 
 ## 6. Post-deployment checks
 
-The workflow's final job proves, fail-closed:
+The workflow's final job proves, fail-closed, **on each active plane
+independently**:
 
 ```bash
-VERCEL_TOKEN=… VERCEL_PROJECT_ID=scholario-production \
+VERCEL_TOKEN=… VERCEL_PROJECT_ID=scholario-platform \
+  VERCEL_PROJECT_ID_SCHOOL=scholario-app \
   bun scripts/prod-release/verify-deployment.ts --sha <release-sha> \
-  --url https://scholario-production.vercel.app --timeout-seconds 900
+    --url https://scholario-platform.vercel.app \
+    --url-school https://scholario-app-virid.vercel.app --timeout-seconds 900
 ```
 
-- the latest READY production deployment's git SHA **equals the release SHA**
-  (no SHA metadata = UNKNOWN = STOP), and
-- `/health/ready` answers 200 with `"database":"ok"`.
+For BOTH `scholario-platform` and `scholario-app`:
 
-Then by hand (5 minutes, the operator smoke):
+- that project's latest READY production deployment's git SHA **equals the
+  release SHA** (no SHA metadata = UNKNOWN = STOP), and
+- that plane's `/health/ready` answers 200 with `"database":"ok"`.
 
-1. `GET /` → 200 (landing), `GET /platform/login` → 200.
+A release live on only one plane fails here.
+
+Then by hand (5 minutes, the operator smoke — per plane):
+
+1. Platform plane: `GET /platform/login` → 200; school plane: a school door
+   `GET /s/<slug>/login` → 200; `GET /health/ready` → 200 `database:ok` on
+   both planes.
 2. Platform root login (password) → console renders; `/api/platform/auth/me` OK.
 3. `POST /api/platform/auth/forgot-password` for a known admin → 200 generic
    body; the reset email arrives (Resend dashboard log).
@@ -205,22 +243,59 @@ All of the above are server-only variables — never `NEXT_PUBLIC_*`.
 
 ## 9. One-time enablement (owner, in this order)
 
-1. **GitHub environment `production`** — already provisioned:
-   `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`. Add:
-   `VERCEL_TOKEN`, `VERCEL_PROJECT_ID` (`scholario-production`),
-   `VERCEL_ORG_ID` (team scope, if any), and later
-   `VERCEL_DEPLOY_HOOK_URL`. (Repo → Settings → Environments → production →
-   Add secret.)
+> **Status after Batch 1 (2026-10-10):** step 1 is DONE (all Vercel
+> secrets provisioned via the API, encrypted, values never printed —
+> `VERCEL_PROJECT_ID` points at the active `scholario-platform` plane and
+> `VERCEL_PROJECT_ID_SCHOOL` at `scholario-app`, both plane deploy-hook
+> URLs stored); the deploy hooks of step 3 are
+> CREATED (`release-gate-platform` / `release-gate-school`, ref `main`).
+> The remaining owner actions are step 2 (workflow un-park — the push
+> token carries `repo` scope only, re-verified Batch 1) and the two
+> toggles of step 3 (skip-auto-deploy is NOT exposed by the Vercel REST
+> API — verified against the live project model; it must be flipped in
+> the dashboard). **The GitHub `production` environment's
+> `SUPABASE_ACCESS_TOKEN` is INVALID (Management API 401 — re-verified
+> Batch 1)**: replace it with a valid token or the migration stages can
+> never run. Safe-path evidence from Batch 1: `config-preflight` GREEN
+> against `scholario-platform`; `verify-deployment` GREEN against the live
+> `3ae3c854` deployment; migration `preflight` fails loud on the invalid
+> token with zero writes; the full 18-migration chain + 18/18 true
+> checksums verified on disposable PostgreSQL (docs/STAGING.md §3).
+>
+> **Batch 2 addendum (two-plane wiring, 2026-10-10):** the release chain now
+> deploys and verifies BOTH active planes end-to-end — `config-preflight`
+> checks both projects' env (a missing school-plane CORE/RECOVERY var fails
+> the release), the deploy stage fires both deploy hooks via
+> `scripts/prod-release/trigger-deploy-hooks.ts` (fail-closed on either
+> hook), `verify-deployment` proves each plane's own SHA provenance + its
+> own production health URL, and migration verification Stage F requires
+> both planes healthy. The deprecated `scholario-production` is never a
+> target anywhere. Focused two-plane behavior tests live in
+> `tests/regression/release-two-plane.test.ts` (missing school-plane
+> configuration · SHA mismatch on either plane · unhealthy endpoint on
+> either plane · one hook failing · dry-run/no-deploy).
+
+1. **GitHub environment `production`** — provisioned:
+   `SUPABASE_PROJECT_REF`, `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`
+   (`scholario-platform`), `VERCEL_PROJECT_ID_SCHOOL` (`scholario-app`),
+   `VERCEL_ORG_ID`, `VERCEL_DEPLOY_HOOK_URL`,
+   `VERCEL_DEPLOY_HOOK_URL_SCHOOL`, `PRODUCTION_URL` (and, optionally,
+   `PRODUCTION_URL_SCHOOL`).
+   ⚠ `SUPABASE_ACCESS_TOKEN` exists but is INVALID — replace it (owner).
 2. **Enable the workflows** (the push token lacks `workflow` scope — use the
    GitHub web UI or a workflow-scoped PAT; 60 seconds each): create
    `.github/workflows/release.yml`, `ci.yml`, `production-db-migration.yml`
-   from the parked files' exact content.
+   from the parked files' exact content. (The release-candidate branch
+   `release/fee-admissions-rc1` carries them parked for review.)
 3. **Vercel deploy-hook switch** (before un-commenting `on: push` in
-   release.yml): Vercel → Project → Settings → Git → disable auto-deploy for
-   production; create a Deploy Hook → store its URL as the
-   `VERCEL_DEPLOY_HOOK_URL` secret; then un-comment the `push: branches:
-   [main]` trigger in release.yml. From that point a main push can
-   physically never deploy before the migration is green.
+   release.yml): Vercel → each plane project → Settings → Git → disable
+   auto-deploy for production; the Deploy Hooks are already created and
+   stored as the `VERCEL_DEPLOY_HOOK_URL` (platform) /
+   `VERCEL_DEPLOY_HOOK_URL_SCHOOL` (school) secrets; then un-comment the
+   `push: branches: [main]` trigger in release.yml. From that point a main
+   push can physically never deploy before the migration is green. The
+   skip-auto-deploy toggle is dashboard-only (not in the REST project
+   model — verified).
 4. Until step 3, keep using dispatch mode (§5) — Vercel still auto-deploys
    main pushes directly.
 

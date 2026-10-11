@@ -1,9 +1,12 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
+import { AppError } from '@/lib/security/errors'
 import { getTenantPaymentProvider } from '@/lib/payments/tenant-gateway'
 import { normalizeMethod } from '@/lib/payments/methods'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
+import { outstandingForOrder } from '@/lib/fee-workflow'
+import { formatINRServer } from '@/lib/money'
 
 export const runtime = 'nodejs'
 
@@ -14,20 +17,29 @@ export const runtime = 'nodejs'
 /// Security model:
 ///   · The student is resolved from the SESSION — body schoolId /
 ///     studentId are never trusted (ignored entirely).
-///   · The receipt number is minted SERVER-side: RCP-<year>-<seq> where
-///     seq = (# FeeTransaction rows for this school whose receiptNo
-///     starts with `RCP-<year>-`) + 1, zero-padded to 4 digits.
+///   · BATCH2-B2: the requested amount is bounded by the student's REAL
+///     outstanding obligation, computed SERVER-SIDE from the fee ledger
+///     (open fees only). amount > outstanding → 409; outstanding = 0 →
+///     409. The client can never pick an arbitrary order amount.
+///   · BATCH2-B4: NO receipt number is minted or persisted at order
+///     creation — receipts belong to SETTLEMENT (PIH-4b). The PENDING
+///     row carries receiptNo: null; the settling writer (checkout verify
+///     after signature verification, or the gateway webhook after the
+///     amount-agreement gate) mints the canonical SCH-YYYY-NNNNNN number
+///     inside its settlement transaction. The response keeps the
+///     `receiptNo` key (null until settlement) for contract
+///     compatibility.
 ///   · The row is created in 'PENDING' state. Only a later server-side
 ///     signature verification (POST /verify) can flip it to SUCCESS —
 ///     the client can NEVER declare success itself.
 ///
 /// Body:
-///   { amount: number (rupees, 1..500000),
+///   { amount: number (rupees, 1..500000, ≤ outstanding),
 ///     method?: 'UPI' | 'Card' | 'Net Banking',
 ///     feeHead?: string, purpose?: string }
 ///
 /// Returns:
-///   { orderId, receiptNo, amountPaise, currency, mode, keyId?,
+///   { orderId, receiptNo: null, amountPaise, currency, mode, keyId?,
 ///     sandbox?: { paymentId, signature } }
 ///
 /// Sandbox mode additionally mints the signed confirmation server-side
@@ -63,25 +75,40 @@ export async function POST(req: NextRequest) {
       const feeHeadName = body?.feeHead ? String(body.feeHead).slice(0, 120) : null
       const _purpose = body?.purpose ? String(body.purpose).slice(0, 200) : null
 
+      // ── BATCH2-B2: server-side obligation gate (amount tampering) ──
+      // The requested amount is bounded by what the student actually
+      // owes (open fees only) — computed from the fee ledger, never from
+      // the client's claim. Partial payments stay allowed.
+      const obligation = await outstandingForOrder(db, {
+        schoolId,
+        studentId: dbStudent.id,
+      })
+      if (obligation.outstanding <= 0) {
+        throw new AppError('CONFLICT', {
+          publicMessage: 'You have no outstanding fee balance to pay.',
+          internalDetail: `student/payments/order: no open fee for student ${dbStudent.id} in tenant ${schoolId}`,
+        })
+      }
+      if (amount > obligation.outstanding) {
+        throw new AppError('CONFLICT', {
+          publicMessage: `Amount exceeds your outstanding fee balance (₹${formatINRServer(obligation.outstanding)}). Partial payments are allowed — overpayments are not.`,
+          internalDetail: `student/payments/order: amount ${amount} > outstanding ${formatINRServer(obligation.outstanding)} for student ${dbStudent.id}`,
+        })
+      }
+
       // ── Resolve the payment provider (§3B: tenant-scoped) ────────
       const provider = await getTenantPaymentProvider(schoolId)
       if (!provider) throw new Error('ONLINE_PAYMENTS_UNAVAILABLE')
 
-      // ── Mint the receipt number server-side ────────────────────────
-      const year = new Date().getFullYear()
-      const priorCount = await db.feeTransaction.count({
-        where: { schoolId, receiptNo: { startsWith: `RCP-${year}-` } },
-      })
-      // Phase 3: the count+1 scheme is retained (format preserved); the
-      // (schoolId, receiptNo) DB unique now backstops the residual race —
-      // a P2002 collision is retried ONCE with a deterministic suffix.
-      const baseReceiptNo = `RCP-${year}-${String(priorCount + 1).padStart(4, '0')}`
-
       // ── Create the gateway order ──────────────────────────────────
+      // BATCH2-B4: the gateway's free-text `receipt` field carries a
+      // non-receipt ORDER reference (matching is by gatewayOrderId) — the
+      // canonical SCH- receipt is minted at settlement by the settling
+      // writer, never here.
       const amountPaise = Math.round(amount * 100)
       const order = await provider.createOrder({
         amountPaise,
-        receipt: baseReceiptNo,
+        receipt: `order-ref-${dbStudent.id.slice(0, 12)}-${Date.now()}`,
         notes: {
           studentId: dbStudent.id,
           studentName: user.name,
@@ -92,54 +119,25 @@ export async function POST(req: NextRequest) {
       })
 
       // ── Persist the PENDING FeeTransaction ─────────────────────────
-      // Phase 3: receipt-mint race guard — if the (schoolId, receiptNo)
-      // DB unique rejects the minted number (a concurrent order took the
-      // same slot), retry ONCE with a deterministic suffix. The gateway
-      // order's receipt metadata may then differ cosmetically from the
-      // persisted receiptNo — matching is by gatewayOrderId, never by
-      // receipt.
-      let receiptNo = baseReceiptNo
-      let txn
-      try {
-        txn = await db.feeTransaction.create({
-          data: {
-            schoolId,
-            studentId: dbStudent.id,
-            studentName: user.name,
-            className: dbStudent.class?.name ?? '',
-            feeHeadName,
-            amount,
-            method,
-            status: 'PENDING',
-            gatewayName: provider.name,
-            gatewayOrderId: order.orderId,
-            receiptNo,
-            reconciliationStatus: 'pending',
-            note: 'Order created by student self-service checkout',
-          },
-        })
-      } catch (e) {
-        const err = e as { code?: string }
-        if (err?.code !== 'P2002') throw e
-        receiptNo = `${baseReceiptNo}-2`
-        txn = await db.feeTransaction.create({
-          data: {
-            schoolId,
-            studentId: dbStudent.id,
-            studentName: user.name,
-            className: dbStudent.class?.name ?? '',
-            feeHeadName,
-            amount,
-            method,
-            status: 'PENDING',
-            gatewayName: provider.name,
-            gatewayOrderId: order.orderId,
-            receiptNo,
-            reconciliationStatus: 'pending',
-            note: 'Order created by student self-service checkout',
-          },
-        })
-      }
+      // BATCH2-B4: receiptNo is null — receipts belong to settlement.
+      // Matching to the gateway order is by gatewayOrderId (unique).
+      const txn = await db.feeTransaction.create({
+        data: {
+          schoolId,
+          studentId: dbStudent.id,
+          studentName: user.name,
+          className: dbStudent.class?.name ?? '',
+          feeHeadName,
+          amount,
+          method,
+          status: 'PENDING',
+          gatewayName: provider.name,
+          gatewayOrderId: order.orderId,
+          receiptNo: null,
+          reconciliationStatus: 'pending',
+          note: 'Order created by student self-service checkout',
+        },
+      })
 
       // ── Sandbox: mint the signed confirmation server-side ─────────
       let sandbox: { paymentId: string; signature: string } | undefined
@@ -150,7 +148,7 @@ export async function POST(req: NextRequest) {
 
       return {
         orderId: order.orderId,
-        receiptNo,
+        receiptNo: null,
         amountPaise,
         currency: order.currency,
         mode: order.mode,

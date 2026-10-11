@@ -6,10 +6,15 @@ import { Button } from '@/components/ui/button'
 import { printIsolated } from '@/lib/print-isolate'
 import { useSchoolProfile } from '@/lib/school-profile'
 import type { IssuanceArtifacts } from './letter-data'
+import { CredentialResetCard } from './CredentialResetCard'
 
 interface CredentialsTabProps {
   artifacts: IssuanceArtifacts
   guardianEmail?: string | null
+  /** FEE-ADMISSIONS MVP — the enrolled student's server id (present only
+   * after a server enrolment completed); enables the verified lost-
+   * credential reset flow. */
+  studentId?: string | null
 }
 
 /**
@@ -23,7 +28,7 @@ interface CredentialsTabProps {
  * surfaces the platform-created one-time password exactly once. It
  * prints cleanly on its own.
  */
-export function CredentialsTab({ artifacts, guardianEmail }: CredentialsTabProps) {
+export function CredentialsTab({ artifacts, guardianEmail, studentId }: CredentialsTabProps) {
   const sheetRef = useRef<HTMLDivElement>(null)
   const school = useSchoolProfile()
 
@@ -121,6 +126,10 @@ export function CredentialsTab({ artifacts, guardianEmail }: CredentialsTabProps
           Print Sheet
         </Button>
       </div>
+
+      {/* FEE-ADMISSIONS MVP — the verified lost-credential recovery flow
+          for a server-enrolled student (one-time expiring credential). */}
+      {studentId && <CredentialResetCard studentId={studentId} />}
     </div>
   )
 }

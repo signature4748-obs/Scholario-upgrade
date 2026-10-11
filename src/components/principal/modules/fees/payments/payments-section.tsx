@@ -133,8 +133,10 @@ export function PaymentsSection({ data, onCollect, onOpenTransactions }: Props) 
       <RecentPayments data={data} onOpenTransactions={onOpenTransactions} />
 
       {/* 3 — Cash Verification (compact table; renders its own all-clear
-          slim row when nothing is pending) */}
-      <FeesVerificationQueue data={data} />
+          slim row when nothing is pending). BATCH2-B5: the queue is the
+          canonical GET /api/fees/verification payload — same server rows
+          the Payment Verification workspace above renders. */}
+      <FeesVerificationQueue />
 
       {/* 4 — Additional Collections — ALWAYS LAST (lifecycle-aware:
           creation + payment status per collection; forms link optionally) */}

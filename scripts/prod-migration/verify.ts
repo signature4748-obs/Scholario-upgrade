@@ -23,8 +23,15 @@
  *                               (no unexpected deletions); _prisma_migrations
  *                               grew by exactly the number of applied
  *                               migrations; user counts unchanged.
- *   F. production health     — GET /health/ready answers 200 with
- *                               database:ok (the deployment stayed healthy).
+ *   F. production health     — BOTH active production planes answer
+ *                               /health/ready 200 with database:ok (the
+ *                               deployments stayed healthy). TWO-PLANE
+ *                               CONTRACT: the active topology is
+ *                               `scholario-platform` + `scholario-app`; the
+ *                               deprecated `scholario-production` is NEVER
+ *                               probed. One unhealthy plane = verification
+ *                               FAILS (fail-closed — a migration is only
+ *                               "verified" when both planes are healthy).
  *   G. account recovery      — 20261005060000 created EXACTLY the expected
  *                               objects (PlatformAdmin.google{Sub,Email,
  *                               LinkedAt}, PlatformPasswordReset with UNIQUE
@@ -36,7 +43,12 @@
  * Usage:
  *   SUPABASE_ACCESS_TOKEN=… SUPABASE_PROJECT_REF=… \
  *     bun scripts/prod-migration/verify.ts --snapshot snapshot.json \
- *       [--health-url https://scholario-production.vercel.app/health/ready]
+ *       [--health-url https://scholario-platform.vercel.app/health/ready] \
+ *       [--health-url-school https://scholario-app-virid.vercel.app/health/ready]
+ *
+ * Health URLs default to the two ACTIVE planes (lib.ts
+ * ACTIVE_PRODUCTION_HEALTH_URLS). --health-url overrides the platform plane
+ * only; --health-url-school the school plane only; both are always probed.
  */
 import { readFileSync } from 'node:fs'
 import {
@@ -50,7 +62,7 @@ import {
   indexDefinitions,
   mgmtQuery,
   migrationHistoryGate,
-  productionHealth,
+  planesHealthGate,
   requireEnv,
   SCHOOLID_INDEXES,
   Snapshot,
@@ -82,8 +94,11 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Snapshot
-  const healthUrl =
-    argValue('--health-url') ?? 'https://scholario-production.vercel.app/health/ready'
+  // Stage F probes BOTH active planes (defaults from lib.ts). --health-url
+  // overrides the platform plane only, --health-url-school the school plane
+  // only — the deprecated scholario-production is never a default target.
+  const healthPlatformUrl = argValue('--health-url')
+  const healthSchoolUrl = argValue('--health-url-school')
 
   console.log('[prod-migration:verify] ═══ POST-MIGRATION VERIFICATION (read-only) ═══')
   console.log(`  project ref : ${ref}`)
@@ -196,12 +211,15 @@ async function main(): Promise<void> {
     `  E. row counts       : ${Object.keys(afterCounts).length} tables · decreases 0 ✓ · ${increases.length ? 'increases: ' + increases.join(', ') : 'no organic growth'} · users ${users.total} (stable ✓)`,
   )
 
-  // F. Production health — the deployment must have stayed healthy.
-  const health = await productionHealth(healthUrl)
-  if (!health.ok) {
-    problems.push(`production health probe failed (HTTP ${health.status}): ${health.body}`)
-  }
-  console.log(`  F. production health: ${health.ok ? 'ready, database ok ✓' : 'FAILED ✖ ' + health.body}`)
+  // F. Production health — BOTH active planes must have stayed healthy.
+  // Fail-closed two-plane contract: one unhealthy plane = verification FAIL.
+  const healthGate = await planesHealthGate({
+    platform: healthPlatformUrl,
+    school: healthSchoolUrl,
+  })
+  problems.push(...healthGate.problems)
+  console.log('  F. production health: BOTH active planes required —')
+  for (const line of healthGate.reportLines) console.log(`     ${line}`)
 
   // G. Account-recovery schema — 20261005060000 must have created EXACTLY
   //    the expected objects: PlatformAdmin.google{Sub,Email,LinkedAt} +

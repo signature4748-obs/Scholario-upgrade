@@ -26,6 +26,12 @@ import {
   type FormData,
 } from '../constants'
 import { getDocumentCompletion, getCollectedDocuments } from './documents'
+import { useAdmissionsConfig } from './use-admissions-config'
+import {
+  submitServerApplication,
+  serverDecide,
+  type QuoteSelections,
+} from './server-admissions-client'
 import type { FeeDataState } from '../../FeeStructureStep'
 
 export function useAdmissionWizard() {
@@ -33,6 +39,7 @@ export function useAdmissionWizard() {
   const flags = useAdmissionFeatureFlags()
   const dupConfig = useDuplicateDetectionConfig()
   const documentPolicy = useAdmissionDocumentPolicy()
+  const admissionsConfig = useAdmissionsConfig()
 
   const [viewMode, setViewMode] = useState<'list' | 'form'>('list')
   const [step, setStep] = useState(1)
@@ -146,16 +153,84 @@ export function useAdmissionWizard() {
   // Duplicate detection runs ONLY on final submit (not while filling)
   const [postSubmitDup, setPostSubmitDup] = useState<DuplicateMatch | null>(null)
   const [pendingSubmitData, setPendingSubmitData] = useState<{ formData: Partial<FormData>; feeState: Partial<FeeDataState> } | null>(null)
+  // Server-mode submission state: in-flight guard + the submission's
+  // idempotency key (generated ONCE per submission session so a network
+  // retry after a lost response replays the SAME key → the server
+  // returns the existing application instead of a duplicate).
+  const [submitting, setSubmitting] = useState(false)
+  const clientRequestIdRef = useRef<string | null>(null)
 
-  const finalizeSubmission = (formDataPartial: Partial<FormData>, feeDataPartial: Partial<FeeDataState>) => {
+  const finalizeSubmission = async (formDataPartial: Partial<FormData>, feeDataPartial: Partial<FeeDataState>) => {
+    if (submitting) return
     // When editing an existing application (draft resume / correction
     // resubmission), the submission UPDATES that record in place — it keeps
     // its admission number, audit trail and identity. Only a brand-new
     // application gets a fresh record id.
     const appId =
       editingAppIdRef.current || `APP-${Date.now().toString().slice(-6)}`
-    const submittedId = admissionStore.createOrUpdateDraft(formDataPartial, feeDataPartial, appId)
-    admissionStore.submitApplication(submittedId)
+
+    const serverMode = admissionsConfig.serverMode
+    const existingRecord = admissionStore.applications.find((a) => a.id === appId)
+
+    if (serverMode) {
+      setSubmitting(true)
+      try {
+        if (existingRecord?.serverApplicationId) {
+          // ── RESUBMIT after a request-correction: the server machine is
+          // SUBMITTED (returned by the principal) and the corrected form
+          // data re-fingerprints the payload (SUBMITTED → UNDER_REVIEW).
+          await serverDecide(existingRecord.serverApplicationId, 'resubmit', {
+            formData: formDataPartial as Record<string, unknown>,
+          })
+          const submittedId = admissionStore.createOrUpdateDraft(formDataPartial, feeDataPartial, appId)
+          admissionStore.submitApplication(submittedId)
+          admissionStore.applyServerStatus(submittedId, 'UNDER_REVIEW')
+        } else {
+          // ── NEW server application: submit with the idempotency key.
+          // Same key + same payload (a retry after a lost response)
+          // replays the existing application; a different payload with
+          // the same key is rejected server-side (409) — never a silent
+          // overwrite.
+          if (!clientRequestIdRef.current) {
+            clientRequestIdRef.current = crypto.randomUUID()
+          }
+          const feeSelections: QuoteSelections | undefined = formDataPartial.serverFeeSelections
+          const res = await submitServerApplication({
+            clientRequestId: clientRequestIdRef.current,
+            formData: formDataPartial as Record<string, unknown>,
+            ...(feeSelections && Object.keys(feeSelections).length ? { feeSelections } : {}),
+            ...(formDataPartial.serverClassId ? { classId: formDataPartial.serverClassId } : {}),
+            ...(formDataPartial.section ? { section: formDataPartial.section } : {}),
+          })
+          const submittedId = admissionStore.createOrUpdateDraft(formDataPartial, feeDataPartial, appId)
+          admissionStore.submitApplication(submittedId)
+          admissionStore.linkServerApplication(submittedId, {
+            serverApplicationId: res.application.id,
+            serverStatus: res.application.status,
+            serverClassId: formDataPartial.serverClassId ?? null,
+            ...(feeSelections ? { serverFeeSelections: feeSelections } : {}),
+          })
+          if (res.idempotentReplay) {
+            toast.info('Submission replayed — the original application was returned unchanged.')
+          }
+        }
+      } catch (err) {
+        // Fail-closed: the server record is the authority for the new
+        // workflow — when the submission fails, NO local record is
+        // created (no half-linked state, no silent local-only fallback).
+        toast.error('Application not submitted', {
+          description:
+            err instanceof Error ? err.message : 'The school server rejected the submission.',
+        })
+        setSubmitting(false)
+        return
+      }
+      setSubmitting(false)
+    } else {
+      // Legacy client-only workflow — byte-for-byte unchanged.
+      const submittedId = admissionStore.createOrUpdateDraft(formDataPartial, feeDataPartial, appId)
+      admissionStore.submitApplication(submittedId)
+    }
 
     toast.success('Application submitted', {
       description: `${data.firstName} ${data.lastName}'s application is now in the review queue.`,
@@ -163,6 +238,7 @@ export function useAdmissionWizard() {
 
     setPostSubmitDup(null)
     setPendingSubmitData(null)
+    clientRequestIdRef.current = null
     beginEdit(null)
     draftIdRef.current = null
     setData(createBlankData())
@@ -171,6 +247,7 @@ export function useAdmissionWizard() {
   }
 
   const handleSubmit = () => {
+    if (submitting) return
     // Document completion gate: every document the school has marked
     // REQUIRED must be collected (marked received) before submission.
     // Optional documents never block; a school with no required
@@ -204,13 +281,13 @@ export function useAdmissionWizard() {
         return
       }
     }
-    finalizeSubmission(formDataPartial, feeDataPartial)
+    void finalizeSubmission(formDataPartial, feeDataPartial)
   }
 
   const handleContinueAnyway = () => {
     if (pendingSubmitData) {
       toast.success('Principal override logged', { description: 'Submission proceeding despite duplicate warning.' })
-      finalizeSubmission(pendingSubmitData.formData, pendingSubmitData.feeState)
+      void finalizeSubmission(pendingSubmitData.formData, pendingSubmitData.feeState)
     }
   }
 
@@ -223,6 +300,13 @@ export function useAdmissionWizard() {
   // Auto-save draft on browser close / tab switch — no Save Draft button needed.
   // If the principal exits midway, the application is silently saved as a Draft
   // and can be resumed later. Drafts do NOT appear in Pending Review.
+  // FIX (fee-admissions E2E): the visibilitychange listener was never
+  // removed in the cleanup — after the effect re-ran (every keystroke),
+  // every STALE closure stayed subscribed, so a later tab-hide saved the
+  // wizard's OLD data as a stray duplicate draft (observed live: a stale
+  // draft got resumed instead of the returned-for-correction application
+  // and produced a DUPLICATE server application). The cleanup now removes
+  // BOTH listeners; each effect run owns exactly its own handlers.
   const draftIdRef = useRef<string | null>(null)
   useEffect(() => {
     if (viewMode !== 'form') return
@@ -238,13 +322,15 @@ export function useAdmissionWizard() {
       admissionStore.createOrUpdateDraft({ ...data }, data.feeState || {}, id)
     }
 
-    const handler = () => saveDraft()
-    window.addEventListener('beforeunload', handler)
-    document.addEventListener('visibilitychange', () => {
+    const unloadHandler = () => saveDraft()
+    const visibilityHandler = () => {
       if (document.visibilityState === 'hidden') saveDraft()
-    })
+    }
+    window.addEventListener('beforeunload', unloadHandler)
+    document.addEventListener('visibilitychange', visibilityHandler)
     return () => {
-      window.removeEventListener('beforeunload', handler)
+      window.removeEventListener('beforeunload', unloadHandler)
+      document.removeEventListener('visibilitychange', visibilityHandler)
     }
   }, [viewMode, data, admissionStore])
 
@@ -270,5 +356,7 @@ export function useAdmissionWizard() {
     handleContinueAnyway,
     handleCancelSubmission,
     admissionStore,
+    admissionsConfig,
+    submitting,
   }
 }

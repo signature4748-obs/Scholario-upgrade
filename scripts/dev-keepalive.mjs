@@ -48,7 +48,39 @@ async function launchDev() {
       cwd: process.cwd(),
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, DATABASE_URL: PG_URL, NODE_OPTIONS: '--max-old-space-size=2200' },
+      // 1700MB heap cap (2026-10-11): 2200 let the dev server grow to
+      // ~3.0GB RSS under live-suite route-compilation load and the kernel
+      // OOM-killed it mid-suite (4GB cgroup), cascading ~180 connection
+      // failures across tests/security. 1700 keeps server+tests+PG inside
+      // the budget; V8 GCs harder instead of dying.
+      env: {
+        ...process.env,
+        DATABASE_URL: PG_URL,
+        NODE_OPTIONS: '--max-old-space-size=1700',
+        // TEST FIXTURES (never real secrets — the exact values the live
+        // security suites document and sign with):
+        //  · tests/security/platform-account-recovery.test.ts §H requires
+        //    the dev server to run with FAKE GOOGLE_OAUTH_* values so the
+        //    OAuth route contract (302/PKCE/state cookie) is exercisable.
+        //  · tests/security/fee-gateway.test.ts:71 signs webhooks with the
+        //    literal 'batch2-test-webhook-secret'; the server must verify
+        //    with the same value.
+        GOOGLE_OAUTH_CLIENT_ID: 'test-google-client-id',
+        GOOGLE_OAUTH_CLIENT_SECRET: 'test-google-client-secret',
+        RAZORPAY_WEBHOOK_SECRET: 'batch2-test-webhook-secret',
+        //  · tests/security/fee-gateway.test.ts:51 documents the B4 sandbox
+        //    checkout contract: PAYMENTS_SANDBOX=1 + a local secret enables
+        //    the in-process SandboxProvider (no network, HMAC-verified) so
+        //    student checkout / verify / refund flows are exercisable.
+        PAYMENTS_SANDBOX: '1',
+        PAYMENTS_SANDBOX_SECRET: 'local-sandbox-secret',
+        //  · tests/security/saas-hardening.test.ts:537 signs the platform
+        //    subscription webhook with PLATFORM_PAYMENT_WEBHOOK_SECRET from
+        //    the TEST process; the server route (webhooks/platform-
+        //    subscription/route.ts:49) verifies with the same env — both
+        //    sides must carry the same fixture value.
+        PLATFORM_PAYMENT_WEBHOOK_SECRET: 'platform-webhook-test-secret',
+      },
     },
   )
   child.unref()

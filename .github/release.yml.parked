@@ -12,10 +12,13 @@
 #               4. release-gate      — every stage green, else the deployment
 #                                      job is SKIPPED and production stays at
 #                                      its previously deployed known-good commit
-#               5. deploy            — Vercel production deploy hook (AFTER
-#                                      the database has the schema the app
-#                                      needs: APPLICATION SECOND)
+#               5. deploy            — Vercel production deploy hooks for BOTH
+#                                      active planes (AFTER the database has
+#                                      the schema the app needs: APPLICATION
+#                                      SECOND)
 #               6. verify-deployment — release-SHA provenance + /health/ready
+#                                      on BOTH planes, each verified
+#                                      independently
 #
 # DATABASE FIRST, APPLICATION SECOND — never the other way around. A failed,
 # skipped, cancelled or otherwise non-green migration can never reach the
@@ -43,11 +46,30 @@
 #   VERCEL_TOKEN            read-only-capable token for the env listing
 #                           (config-preflight) and deployment SHA checks
 #                           (verify-deployment). Never sent anywhere else.
-#   VERCEL_PROJECT_ID       scholario-production (id or name).
+#   VERCEL_PROJECT_ID       scholario-platform — the CONTROL plane project
+#                           (id or name).
+#   VERCEL_PROJECT_ID_SCHOOL
+#                           scholario-app — the SCHOOL plane project
+#                           (id or name). REQUIRED: both active planes are
+#                           verified independently.
 #   VERCEL_ORG_ID           team scope (optional — omit for user scope).
-#   VERCEL_DEPLOY_HOOK_URL  the production Deploy Hook URL (deploy job only).
-#   PRODUCTION_URL          optional override (default
-#                           https://scholario-production.vercel.app).
+#   VERCEL_DEPLOY_HOOK_URL  the platform plane's production Deploy Hook URL
+#                           (deploy job only).
+#   VERCEL_DEPLOY_HOOK_URL_SCHOOL
+#                           the school plane's production Deploy Hook URL
+#                           (deploy job only). BOTH hooks fire on every
+#                           release; one missing = STOP.
+#   PRODUCTION_URL          optional platform override (default
+#                           https://scholario-platform.vercel.app).
+#   PRODUCTION_URL_SCHOOL   optional school override (default
+#                           https://scholario-app-virid.vercel.app).
+#
+# TWO-PLANE CONTRACT: the active production topology is scholario-platform +
+# scholario-app — BOTH are deployed (two hooks) and BOTH are verified
+# (each project's own SHA provenance + its own production health URL) on
+# every release. The deprecated scholario-production (unified legacy) is
+# NEVER a deploy target here and is never verified as one. A release that is
+# only live on ONE plane is NOT released.
 #
 # WHY PARKED: identical constraint as ci.yml.parked /
 # production-db-migration.yml.parked — GitHub accepts commits that create or
@@ -139,6 +161,15 @@ jobs:
       DATABASE_ENV: test
       REALTIME_MODE: disabled
       RATE_LIMIT_DB_SYNC: "on"
+      # TEST FIXTURES (2026-10-11 parity fix — never real secrets; the
+      # exact values the live security suites sign with — see
+      # .github/ci.yml.parked for the per-variable documentation).
+      GOOGLE_OAUTH_CLIENT_ID: "test-google-client-id"
+      GOOGLE_OAUTH_CLIENT_SECRET: "test-google-client-secret"
+      RAZORPAY_WEBHOOK_SECRET: "batch2-test-webhook-secret"
+      PAYMENTS_SANDBOX: "1"
+      PAYMENTS_SANDBOX_SECRET: "local-sandbox-secret"
+      PLATFORM_PAYMENT_WEBHOOK_SECRET: "platform-webhook-test-secret"
 
     steps:
       - name: Check out the exact release commit
@@ -208,6 +239,9 @@ jobs:
         run: bun run build
         env:
           NODE_OPTIONS: --max-old-space-size=3072
+          # 2026-10-11 parity fix: two-plane gate fails-closed in production
+          # builds without SCHOLARIO_PLANE (see .github/ci.yml.parked).
+          SCHOLARIO_PLANE: platform
 
       - name: Seeds — canonical corpus (idempotent, guarded)
         run: |
@@ -221,6 +255,9 @@ jobs:
           bun prisma/seed-tenant-isolation.ts
           bun prisma/seed-website-cms.ts
           bun prisma/seed-salary.ts
+          # SaaS-HARDENING backfill (2026-10-11 parity fix — see
+          # .github/ci.yml.parked): subscription rows for every school.
+          bun prisma/backfill-subscriptions.ts
           # seed-platform re-run: seed-tenant-isolation plants the legacy
           # SUPER_ADMIN user AFTER the first pass — the ROOT3 corpus identity
           # the account-recovery acceptance suite requires.
@@ -232,6 +269,15 @@ jobs:
           for i in $(seq 1 60); do
             curl -sf http://localhost:3000/health/ready && break || sleep 5
           done
+          curl -sf http://localhost:3000/health/ready
+
+      # Warm the entry routes (2026-10-11 parity fix — first-request
+      # compile cost produced first-run flakes in live suites locally).
+      - name: Warm login doors (pre-compile route entries)
+        run: |
+          curl -sf -o /dev/null http://localhost:3000/platform/login
+          curl -sf -o /dev/null http://localhost:3000/login
+          curl -sf -o /dev/null http://localhost:3000/s/hawkings-prithvipur/login
           curl -sf http://localhost:3000/health/ready
 
       - name: Test suite (unit · integration · API · regression · security)
@@ -249,7 +295,7 @@ jobs:
   # decrypted values). Fails closed on CORE / RECOVERY gaps, warns on GOOGLE
   # (optional capability, degrades honestly off) unless strict_google.
   config-preflight:
-    name: Config pre-flight (Vercel env CONFIGURED/MISSING)
+    name: Config pre-flight (Vercel env CONFIGURED/MISSING — BOTH planes)
     runs-on: ubuntu-latest
     environment: production
 
@@ -263,10 +309,13 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       # Zero-dependency script (node builtins only) — no install needed.
-      - name: Config pre-flight
+      # Verifies BOTH active planes: a school plane missing CORE/RECOVERY
+      # variables fails the release (fail-closed).
+      - name: Config pre-flight (both planes)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_PROJECT_ID_SCHOOL: ${{ secrets.VERCEL_PROJECT_ID_SCHOOL }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
         run: bun scripts/prod-release/config-preflight.ts ${{ inputs.strict_google && '--strict' || '' }}
 
@@ -438,9 +487,9 @@ jobs:
             exit 1
           fi
 
-  # ── 5. DEPLOY THE APPLICATION (only after the gate opened) ─────────────────
+  # ── 5. DEPLOY THE APPLICATION — BOTH PLANES (only after the gate opened) ──
   deploy:
-    name: Deploy application (Vercel production)
+    name: Deploy application (Vercel production — BOTH planes)
     needs: release-gate
     if: >-
       needs.release-gate.outputs.deployable == 'true' &&
@@ -455,6 +504,9 @@ jobs:
           fetch-depth: 1
           persist-credentials: true
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
       # Deploy hooks build origin/main HEAD — assert the release commit IS
       # main HEAD so the deployed SHA can never silently drift from the
       # verified one (push mode: trivially true; dispatch mode: the operator
@@ -466,34 +518,26 @@ jobs:
           echo "release commit : ${GITHUB_SHA}"
           echo "origin/main    : ${MAIN_SHA:-<no main ref>}"
           if [ "${MAIN_SHA}" != "${GITHUB_SHA}" ]; then
-            echo "::error::Refusing to deploy: the deploy hook builds origin/main HEAD, but the release commit differs. Push the release commit to main first, then re-run (push mode fires this workflow automatically)."
+            echo "::error::Refusing to deploy: the deploy hooks build origin/main HEAD, but the release commit differs. Push the release commit to main first, then re-run (push mode fires this workflow automatically)."
             exit 1
           fi
 
-      # The hook URL is a secret: it is never echoed, never logged — it only
-      # travels inside this curl invocation. Response bodies are clipped.
-      - name: Trigger the Vercel production deploy hook
+      # TWO-PLANE DEPLOY: scripts/prod-release/trigger-deploy-hooks.ts fires
+      # BOTH production deploy hooks (platform VERCEL_DEPLOY_HOOK_URL +
+      # school VERCEL_DEPLOY_HOOK_URL_SCHOOL) fail-closed — either hook
+      # missing or rejected = RED run, never a one-plane release. The hook
+      # URLs are secrets: they are never echoed, never logged — they only
+      # travel inside the script's fetch calls (the script clips response
+      # bodies before printing).
+      - name: Trigger the Vercel production deploy hooks (both planes)
         env:
           VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
-        shell: bash
-        run: |
-          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
-            echo "::error::Secret VERCEL_DEPLOY_HOOK_URL is not provisioned in the 'production' GitHub environment (Vercel → Settings → Git → Deploy Hook)."
-            exit 1
-          fi
-          HTTP_CODE="$(curl -sS -o /tmp/hook-response.json -w '%{http_code}' \
-            -X POST "$VERCEL_DEPLOY_HOOK_URL" --max-time 30 || echo 000)"
-          echo "deploy hook responded HTTP ${HTTP_CODE}"
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Vercel deploy hook rejected the trigger:"
-            head -c 200 /tmp/hook-response.json || true
-            exit 1
-          fi
-          echo "Vercel production build started for ${GITHUB_SHA} (the database schema it needs is already migrated + verified)."
+          VERCEL_DEPLOY_HOOK_URL_SCHOOL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL_SCHOOL }}
+        run: bun scripts/prod-release/trigger-deploy-hooks.ts
 
-  # ── 6. POST-DEPLOYMENT VERIFICATION (fail closed = STOP, never a shrug) ────
+  # ── 6. POST-DEPLOYMENT VERIFICATION — BOTH PLANES (fail closed = STOP) ─────
   verify-deployment:
-    name: Verify deployment (SHA provenance + production health)
+    name: Verify deployment (SHA provenance + health — BOTH planes)
     needs: deploy
     runs-on: ubuntu-latest
     environment: production
@@ -507,25 +551,31 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
-      - name: Verify the release is live and healthy
+      # Verifies BOTH active planes independently: each project's latest
+      # READY production deployment must be built from EXACTLY ${GITHUB_SHA}
+      # (UNKNOWN provenance = STOP) and each plane's own /health/ready must
+      # answer 200 with "database":"ok". A release live on only one plane
+      # fails here.
+      - name: Verify the release is live and healthy on both planes
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_PROJECT_ID_SCHOOL: ${{ secrets.VERCEL_PROJECT_ID_SCHOOL }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          PRODUCTION_URL_SCHOOL: ${{ secrets.PRODUCTION_URL_SCHOOL }}
         run: |
           ARGS=(--sha "${GITHUB_SHA}" --timeout-seconds 900)
           if [ -n "$PRODUCTION_URL" ]; then ARGS+=(--url "$PRODUCTION_URL"); fi
+          if [ -n "$PRODUCTION_URL_SCHOOL" ]; then ARGS+=(--url-school "$PRODUCTION_URL_SCHOOL"); fi
           bun scripts/prod-release/verify-deployment.ts "${ARGS[@]}"
-          # Proves (a) the latest READY production deployment was built from
-          # exactly ${GITHUB_SHA} (UNKNOWN provenance = STOP) and (b)
-          # /health/ready answers 200 with "database":"ok".
 
       - name: Release summary
         if: always()
         run: |
           {
-            echo "## Production release — ${{ job.status }}"
+            echo "## Production release (two-plane) — ${{ job.status }}"
             echo "release commit: \`${GITHUB_SHA}\`"
+            echo "planes: scholario-platform + scholario-app — deployed via both deploy hooks, verified per plane (SHA provenance + /health/ready)"
             echo "order enforced: ci ${{ needs.ci.result }} · config ${{ needs.config-preflight.result }} · migration pre-flight ${{ needs.migration-preflight.result }} · apply ${{ needs.migration-apply.result }} · verify ${{ needs.migration-verify.result }} · gate ${{ needs.release-gate.result }} · deploy ${{ needs.deploy.result }} · final verification ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"

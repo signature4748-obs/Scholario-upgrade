@@ -19,7 +19,14 @@
  * document flow, and the page itself scrolling inside the AppShell
  * content area. No sticky bar, no internal scroll container.
  *
- * All numbers derive from the canonical useFeeData() hook.
+ * BATCH2-B5 — server-truth wiring: Overview / Transactions / Student
+ * Accounts fetch their figures from the canonical API routes
+ * (/api/dashboard, /api/fees, /api/fees/transactions,
+ * /api/fees/verification, /api/fees/defaulters) — the client fee-store
+ * remains ONLY where out-of-scope surfaces still consume it (the
+ * Payments tab's store-backed widgets + the collect-payment dialogs'
+ * write paths). The Payments tab badge counts the server verification
+ * queue (stats.pendingCount), not the client store.
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react'
@@ -27,6 +34,9 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs, type SegmentedTab } from '../shared/segmented-tabs'
 import { useFeeData, CURRENT_ACADEMIC_YEAR } from '@/lib/store/fee-store'
+// BATCH2-B5 — the Payments tab badge reads the canonical verification
+// queue stats (server), same endpoint the Payments workspace renders.
+import { useServerResource, type VerificationPayload } from './use-fee-server-data'
 import { useFocusStore } from '@/lib/store/focus-store'
 // Session for the fee analytics year filter — the identity cascade's
 // academic year (server session) with the fee ledger's canonical year as
@@ -59,6 +69,9 @@ export function FeesShell({ onNavigate: _onNavigate }: { onNavigate?: (moduleKey
   const [preselectStudentId, setPreselectStudentId] = useState<string | undefined>(undefined)
   const [feeFocusStudent, setFeeFocusStudent] = useState<{ name: string; ts: number } | null>(null)
   const profile = useSchoolProfile()
+  // Out-of-scope store consumers (Payments tab widgets + collect dialogs)
+  // still use the client fee-store; the three B5 screens fetch server data
+  // themselves (see the section components).
   const data = useFeeData(profile.academicYear || CURRENT_ACADEMIC_YEAR)
 
   // Deep-link: command palette fee results jump to the Student Accounts tab
@@ -89,8 +102,11 @@ export function FeesShell({ onNavigate: _onNavigate }: { onNavigate?: (moduleKey
   }, [focus?.ts])
 
   // Live verification count for the Payments tab badge — the Principal's
-  // actionable queue (cash collections awaiting verification).
-  const pendingVerification = data.analytics.pendingCashRequests
+  // actionable queue (collections awaiting verification). BATCH2-B5: the
+  // SERVER queue's pending count (stats.pendingCount) — the same numbers
+  // the Payments workspace renders, never the client store's seeds.
+  const verification = useServerResource<VerificationPayload>('/api/fees/verification')
+  const pendingVerification = verification.data?.stats.pendingCount ?? 0
 
   // SaaS-STAGE-2A (Task 7-b) — tenant-aware sub-feature gates for the tab
   // list. Overview / Payments / Student Accounts are ALWAYS present (core
@@ -186,12 +202,12 @@ export function FeesShell({ onNavigate: _onNavigate }: { onNavigate?: (moduleKey
             transition={{ duration: 0.2 }}
             className="max-w-7xl mx-auto"
           >
-            {tab === 'overview' && <FeesOverviewSection data={data} onNavigate={setTab} />}
-            {tab === 'accounts' && <FeesStudentAccountsSection data={data} onCollect={(id) => openCollect(id)} focusStudent={feeFocusStudent} />}
+            {tab === 'overview' && <FeesOverviewSection onNavigate={setTab} academicYear={profile.academicYear || CURRENT_ACADEMIC_YEAR} />}
+            {tab === 'accounts' && <FeesStudentAccountsSection onCollect={(id) => openCollect(id)} focusStudent={feeFocusStudent} />}
             {tab === 'structures' && <FeesStructuresSection />}
             {tab === 'payments' && <PaymentsSection data={data} onCollect={() => openCollect()} onOpenTransactions={() => setTab('transactions')} />}
             {tab === 'outreach' && <FeesDefaultersSection />}
-            {tab === 'transactions' && <FeesTransactionsSection data={data} />}
+            {tab === 'transactions' && <FeesTransactionsSection />}
             {tab === 'settings' && <FeesSettingsSection />}
           </motion.div>
         </AnimatePresence>
