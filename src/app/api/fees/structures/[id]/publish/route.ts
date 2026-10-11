@@ -3,6 +3,7 @@ import { db, trackedTransaction } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
 import { num } from '@/lib/money'
+import { requireSchoolAcademicYear } from '@/lib/admissions/academic-year'
 
 export const runtime = 'nodejs'
 
@@ -39,16 +40,26 @@ export async function POST(
         throw new Error(`Only draft or scheduled structures can be published (got ${structure.status})`)
       }
 
+      // FEE-ADMISSIONS MVP — the school's canonical academic year is
+      // REQUIRED at publish (fail-closed 409 SESSION_NOT_SET; never a
+      // default year). The structure and its immutable version snapshot
+      // both carry it; the quote engine only serves structures whose
+      // year matches.
+      const academicYear = await requireSchoolAcademicYear(schoolId)
+
       const now = new Date()
 
       try {
         const promoted = await trackedTransaction('fee-structure-publish', async (tx) => {
           // Archive any existing 'current' for the same classId.
-          const existing = await tx.feeStructure
-            .findUnique({
-              where: { schoolId_classId_status: { schoolId, classId: structure.classId, status: 'current' } },
-            })
-            .catch(() => null)
+          // FEE-ADMISSIONS MVP — the legacy compound unique
+          // (schoolId,classId,status) was replaced by partial unique
+          // indexes (current/scheduled only); per-status lookups are
+          // findFirst + status filter.
+          const existing = await tx.feeStructure.findFirst({
+            where: { schoolId, classId: structure.classId, status: 'current' },
+            select: { id: true },
+          })
           if (existing && existing.id !== structure.id) {
             await tx.feeStructure.update({
               where: { id: existing.id },
@@ -68,6 +79,7 @@ export async function POST(
             data: {
               status: 'current',
               version: newVersion,
+              academicYear,
               publishedAt: now,
               effectiveFrom: structure.effectiveFrom ?? now,
             },
@@ -85,6 +97,7 @@ export async function POST(
             classId: promoted.classId,
             className: promoted.className,
             classLevel: promoted.classLevel,
+            academicYear,
             version: newVersion,
             heads: promoted.heads.map((h) => ({
               id: h.id,
@@ -94,6 +107,7 @@ export async function POST(
               amount: num(h.amount),
               frequency: h.frequency,
               mandatory: h.mandatory,
+              kind: h.kind,
               active: h.active,
               sortOrder: h.sortOrder,
             })),
@@ -105,6 +119,7 @@ export async function POST(
               schoolId,
               structureId: promoted.id,
               version: newVersion,
+              academicYear,
               snapshot,
               publishedBy: user.id,
               notes: `Published by ${user.email}`,

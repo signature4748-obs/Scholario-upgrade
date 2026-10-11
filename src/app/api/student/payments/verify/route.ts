@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError, newRequestId } from '@/lib/security/errors'
-import { applyPaymentToLedger, resolveFeeIdForTxn } from '@/lib/fee-workflow'
+import { applyPaymentToLedger, resolveFeeIdForTxn, mintReceiptNo } from '@/lib/fee-workflow'
 import { getTenantPaymentProvider } from '@/lib/payments/tenant-gateway'
 import { paymentMethodFor, prettyMethod } from '@/lib/payments/methods'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
@@ -174,13 +174,30 @@ export async function POST(req: NextRequest) {
             reconciledAt: paidAt,
             reconciledBy: `${provider.name}-checkout-verify`,
             reconciliationNote: 'Verified by server-side checkout signature check',
-            note: `Paid online via ${provider.name} checkout · receipt ${txn.receiptNo}`,
           },
         })
         if (transition.count === 0) {
           return { raced: true as const, txn: await tx.feeTransaction.findUnique({ where: { id: txn.id } }) }
         }
-        const updated = await tx.feeTransaction.findUnique({ where: { id: txn.id } })
+
+        // ── 4a2. BATCH2-B4 — the settling writer mints the receipt ────
+        // Receipts belong to SETTLEMENT (PIH-4b): the order row carried
+        // receiptNo null; the canonical SCH-YYYY-NNNNNN number is minted
+        // HERE, inside the settlement transaction, on the SAME logical
+        // transition that flips status → SUCCESS. mintReceiptNo's
+        // per-school advisory lock serialises concurrent settlers (the
+        // webhook mints through the same lock); the (schoolId, receiptNo)
+        // DB unique backstops the residual race. A row already settled by
+        // another writer kept ITS receipt — the raced branch above never
+        // reaches this mint.
+        const receiptNo = await mintReceiptNo(txn.schoolId, tx)
+        const updated = await tx.feeTransaction.update({
+          where: { id: txn.id },
+          data: {
+            receiptNo,
+            note: `Paid online via ${provider.name} checkout · receipt ${receiptNo}`,
+          },
+        })
 
         // Resolve the student's Fee row (Phase 3 targeting improvement,
         // documented): the txn's own feeId, else an exact feeHeadName title
@@ -222,7 +239,7 @@ export async function POST(req: NextRequest) {
           data: {
             schoolId: txn.schoolId,
             title: 'Fee payment received',
-            message: `${ctx.user.name} paid ₹${num(txn.amount)} via ${prettyMethod(txn.method)} · Receipt ${txn.receiptNo}`,
+            message: `${ctx.user.name} paid ₹${num(txn.amount)} via ${prettyMethod(txn.method)} · Receipt ${receiptNo}`,
             audience: 'STAFF',
             priority: 'NORMAL',
             senderId: ctx.user.id,
@@ -259,7 +276,7 @@ export async function POST(req: NextRequest) {
               paymentId,
               amount: num(txn.amount),
               method: txn.method,
-              receiptNo: txn.receiptNo,
+              receiptNo: updatedTxn.txn?.receiptNo ?? null,
             }),
             status: 'processed',
             schoolId: txn.schoolId,
@@ -277,11 +294,11 @@ export async function POST(req: NextRequest) {
         userId: ctx.user.id,
         action: 'PAYMENT_VERIFIED',
         requestId,
-        detail: `FeeTransaction ${txn.id} verified · receipt ${txn.receiptNo} · ₹${num(txn.amount)}`,
+        detail: `FeeTransaction ${txn.id} verified · receipt ${updatedTxn.txn?.receiptNo ?? 'pending'} · ₹${num(txn.amount)}`,
       }).catch(() => {})
 
       return {
-        receiptNo: txn.receiptNo,
+        receiptNo: updatedTxn.txn?.receiptNo ?? null,
         amount: num(txn.amount),
         method: prettyMethod(txn.method),
         status: 'SUCCESS' as const,

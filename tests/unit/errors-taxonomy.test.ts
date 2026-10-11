@@ -64,6 +64,17 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     ROOM_CONFLICT: 409,
     TEACHER_CONFLICT: 409,
     CLASS_CONFLICT: 409,
+    // FEE-ADMISSIONS MVP — stable machine-readable 409 codes for the
+    // server-issued admissions workflow (distinct failure causes,
+    // deterministic client behavior; see src/lib/security/errors.ts).
+    FEE_CONFIGURATION_REQUIRED: 409,
+    SESSION_NOT_SET: 409,
+    IDEMPOTENCY_KEY_REUSED: 409,
+    INVALID_STATE: 409,
+    ADMISSION_SEQUENCE_EXHAUSTED: 409,
+    ADMISSION_NUMBER_COLLISION: 409,
+    EMAIL_TAKEN: 409,
+    CREDENTIAL_EXPIRED: 401,
   }
 
   test('the table is exactly the documented taxonomy (no stray/missing codes)', () => {

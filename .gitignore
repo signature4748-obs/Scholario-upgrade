@@ -103,3 +103,4 @@ worklog.md
 # removed from tracking in the same cleanup.
 /tqa/
 w12.jar
+mini-services/*/service.log

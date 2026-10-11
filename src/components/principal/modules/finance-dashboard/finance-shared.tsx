@@ -160,6 +160,36 @@ export function FinanceEmptyState({ icon, title, description, action }: { icon: 
   )
 }
 
+// ─── BATCH2-B5 — honest unavailability primitives ────────────────────
+// Scholario's server ledger covers FEE REVENUE only. There is no expense
+// / bank / asset ledger model yet, so those statement lines render as
+// visually-distinct muted "not available" surfaces instead of fabricated
+// ₹ figures. Used by Statements, Overview and Reports.
+
+/** One muted statement row: label + "requires … — not available" chip. */
+export function UnavailableLine({ label, note = 'requires expense ledger' }: { label: string; note?: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5 border-b border-border/30 last:border-0 opacity-60">
+      <p className="text-[11px] font-medium truncate text-muted-foreground">{label}</p>
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold whitespace-nowrap bg-muted text-muted-foreground ring-1 ring-border shrink-0"
+        title={`${note} — not available`}
+      >
+        {note} — not available
+      </span>
+    </div>
+  )
+}
+
+/** Full-width muted note explaining an unavailable section. */
+export function UnavailableNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2.5" role="note">
+      <p className="text-[10px] leading-relaxed text-muted-foreground">{children}</p>
+    </div>
+  )
+}
+
 // ─── Reduced motion styles ───────────────────────────────────────────
 
 export const FINANCE_GLOBAL_STYLES = `

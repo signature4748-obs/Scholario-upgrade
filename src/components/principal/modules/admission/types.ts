@@ -152,5 +152,18 @@ export interface AdmissionFormData {
     confidence: number
   } | null
   feeState?: FeeDataState
+  /**
+   * FEE-ADMISSIONS MVP — server-mode wizard state (only used while the
+   * admissionsServerIssuance flag is ON for the school). The matched
+   * server Class id and the server-side fee selections produced by the
+   * ServerFeeStep (published-structure heads). Both ride the normal
+   * FormData persistence so drafts/resubmissions keep them.
+   */
+  serverClassId?: string
+  serverFeeSelections?: {
+    optionalHeadIds?: string[]
+    quantities?: Record<string, number>
+    discountCode?: string
+  }
   waiver?: WaiverInfo
 }

@@ -4,59 +4,50 @@
  * FeesVerificationQueue — the cash-verification workflow, embedded in the
  * Payments operations page (ONE benchmark Panel: "Cash Verification").
  *
- * FINAL UI (spec §3): Cash Verification follows the SAME compact UI
- * language as Recent Payments / Transactions — a clean list/table workflow,
- * NOT oversized cards. ONE unified table carries BOTH verification
- * channels:
- *   • transaction rows ('Under Verification' — teacher collections,
- *     self-submitted manual transfers) → compact Verify / Reject actions;
- *   • legacy cash-request rows (Pending / Collected by Teacher /
- *     Clarification Requested) → Approve / Reject / Request-clarification.
- * Each row scans: student · class · amount · method · collector/source ·
- * date · reference · status · actions — exactly the Transactions table
- * recipe (sticky muted header, 11px uppercase columns, py-2.5 rows,
- * hover:bg-muted/30, responsive column hiding).
+ * BATCH2-B5 — SERVER TRUTH: the queue IS the canonical
+ * GET /api/fees/verification payload (the same FeeTransaction rows the
+ * Payment Verification workspace above it renders — ONE canonical queue,
+ * one ledger). The client fee-store's parallel "cash request" channel
+ * (Pending Principal Acceptance / Collected by Teacher / Clarification
+ * Requested) had NO server model behind it — it is GONE; every row and
+ * every rupee now comes from the server, and decisions land through
+ * POST /api/fees/verification:
  *
- * Confirm modals keep the full impact preview — approve surfaces the
- * Before → After balance tiles — before the Principal commits.
+ *   · Verify  → one DB transaction: unique SCH- receipt minted, student
+ *               ledger applied, collector notified (server-side).
+ *   · Reject  → mandatory reason (REJECT_REASONS catalog); the ledger is
+ *               never touched, the collector is notified with the reason.
  *
- * Panel chrome: subtitle carries live counts chips (amber pending · violet
- * clarification) + awaiting amount; when nothing is pending anywhere
- * (analytics.pendingVerification + pendingCashRequests === 0) a slim all-clear
- * row replaces the table ("No pending verifications" + emerald Check chip).
- * The Recently Resolved audit collapses into a <details> inside the same panel.
+ * ONE unified table in the SAME compact Transactions UI language
+ * (sticky muted header, 11px uppercase columns, py-2.5 rows,
+ * hover:bg-muted/30, responsive column hiding): student · class ·
+ * amount · method · collector/source · date · reference · status ·
+ * actions. Loading / error-with-retry / all-clear / empty states — no
+ * fabricated numbers.
  *
- * Business logic is UNCHANGED from the original approvals implementation:
- *   - Approve  → creates verified transaction + audit record + receipt +
- *                updates the student account
- *   - Reject   → mandatory reason (REJECT_REASONS catalog below) → audit
- *                record (no transaction posted)
- *   - Clarify  → message → audit record, moves to "Clarification Requested"
- * Safety preserved: duplicate approval blocked, mandatory reject reason,
- * loading states, immutable audit entries.
  * Gateway-confirmed payments NEVER appear here — the gateway itself
  * confirmed them, so they are recorded Paid automatically.
  */
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Check, X, AlertCircle, MessageSquare, Loader2, History, ChevronDown, ArrowRight, Banknote,
+  Check, X, AlertCircle, Loader2, History, ChevronDown, ArrowRight, RefreshCw, AlertTriangle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-} from '@/components/ui/dialog'
-import { Textarea } from '@/components/ui/textarea'
-import { useFeeData, useFeeStore, type CashRequest, type FeeTransaction } from '@/lib/store/fee-store'
+import { api, type ApiError } from '@/lib/exams/api-client'
 import { formatINR, formatDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Panel } from '../shared/panel'
-import { FeeEmptyState, FeeStatusBadge, ModeIcon, modeAccent, paymentStatusLabel, TxnDateTime, DateTimeText, SourceChip } from './fees-shared'
+import { FeeStatusBadge, ModeIcon, modeAccent } from './fees-shared'
+import {
+  useServerResource, serverMethodToMode, txnStatusToDisplay,
+  type VerificationPayload, type VerificationTxn, type ServerFeeRow,
+} from './use-fee-server-data'
 import { toast } from 'sonner'
 import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
 
-// Rejection reasons (structured list + "Other" with custom text) — catalog UNCHANGED.
+// Rejection reasons (structured list + "Other" with custom text).
 const REJECT_REASONS = [
   'Incorrect amount',
   'Incorrect student',
@@ -66,134 +57,76 @@ const REJECT_REASONS = [
   'Other',
 ] as const
 
-// Queue chip mapping (spec): Pending Principal Acceptance → amber 'Pending',
-// Collected by Teacher → sky, Clarification Requested → violet.
-function queueChip(status: CashRequest['status']): { label: string; tone: string } {
-  switch (status) {
-    case 'Pending Principal Acceptance':
-      return { label: 'Pending', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
-    case 'Collected by Teacher':
-      return { label: 'Collected', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
-    case 'Clarification Requested':
-      return { label: 'Clarification', tone: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' }
-    default:
-      return { label: status, tone: '' }
-  }
-}
-
-function QueueStatusChip({ status }: { status: CashRequest['status'] }) {
-  const { label, tone } = queueChip(status)
-  return (
-    <span
-      title={status}
-      className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap', tone)}
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-      {label}
-    </span>
-  )
-}
-
-/** Who recorded the payment awaiting verification — SaaS-STAGE-1 keeps ONE
- *  source vocabulary everywhere (shared SourceChip); this helper is kept
- *  for confirmation-modal copy. */
-function _collectorLabel(role: FeeTransaction['collectorRole'], collectedBy: string): string {
-  if (role === 'teacher') return `Teacher · ${collectedBy}`
-  if (role === 'class_teacher') return `Class Teacher · ${collectedBy}`
-  if (role === 'self') return 'Student self-service'
-  return `Office · ${collectedBy}`
-}
-
-export function FeesVerificationQueue({ data }: { data: ReturnType<typeof useFeeData> }) {
-  const { cashRequests, accounts, analytics, transactions } = data
-  const approveCashRequest = useFeeStore((s) => s.approveCashRequest)
-  const rejectCashRequest = useFeeStore((s) => s.rejectCashRequest)
-  const requestClarification = useFeeStore((s) => s.requestClarification)
-  const approveDirectCashTxn = useFeeStore((s) => s.approveDirectCashTxn)
-  const rejectDirectCashTxn = useFeeStore((s) => s.rejectDirectCashTxn)
+export function FeesVerificationQueue() {
+  // ── the canonical server queue ────────────────────────────────────
+  const queue = useServerResource<VerificationPayload>('/api/fees/verification')
+  const pending = queue.data?.pending ?? []
+  const recent = queue.data?.recent ?? []
+  const stats = queue.data?.stats
 
   // Modal state
-  const [approvingReq, setApprovingReq] = useState<CashRequest | null>(null)
-  const [rejectingReq, setRejectingReq] = useState<CashRequest | null>(null)
-  const [clarifyReq, setClarifyReq] = useState<CashRequest | null>(null)
+  const [approvingTxn, setApprovingTxn] = useState<VerificationTxn | null>(null)
+  const [rejectingTxn, setRejectingTxn] = useState<VerificationTxn | null>(null)
   const [rejectReason, setRejectReason] = useState<string>('')
   const [rejectNote, setRejectNote] = useState<string>('')
-  const [clarifyMessage, setClarifyMessage] = useState<string>('')
-  const [actionLoading, setActionLoading] = useState(false)
+  const [busyTxnId, setBusyTxnId] = useState<string | null>(null)
 
-  // DIRECT cash entries — cash recorded straight into the ledger (student
-  // self-service / application payments) that still awaits verification.
-  const directPending = transactions.filter((t) => t.status === 'Under Verification').slice(0, 8)
-  const [rejectingDirect, setRejectingDirect] = useState<FeeTransaction | null>(null)
-  const [rejectingDirectReason, setRejectingDirectReason] = useState('')
+  // The student's CURRENT outstanding for the approve modal's impact
+  // preview — server fee rows for that student (GET /api/fees?studentId=).
+  const outstandingRes = useServerResource<ServerFeeRow[]>(
+    approvingTxn?.studentId ? `/api/fees?studentId=${approvingTxn.studentId}` : null,
+  )
+  const currentOutstanding = useMemo(
+    () => (outstandingRes.data ?? []).reduce((s, f) => s + Math.max(0, f.amount - f.paid), 0),
+    [outstandingRes.data],
+  )
 
-  const pending = cashRequests.filter((r) => r.status === 'Pending Principal Acceptance' || r.status === 'Collected by Teacher' || r.status === 'Clarification Requested')
-  const resolved = cashRequests.filter((r) => r.status === 'Confirmed by Principal' || r.status === 'Rejected')
-
-  const pendingAcceptanceCount = pending.filter((r) => r.status !== 'Clarification Requested').length
-  const clarificationCount = pending.filter((r) => r.status === 'Clarification Requested').length
-
-  // The ONE queue = transaction-level verifications + the teacher cash-request
-  // queue — subtitle counts reflect BOTH channels (spec §3: single workflow).
-  const queueCount = pending.length + directPending.length
-  const pendingAmount =
-    pending.reduce((s, r) => s + r.amount, 0) +
-    directPending.reduce((s, t) => s + t.amount, 0)
-
-  // Slim all-clear condition (spec §6): nothing pending across BOTH channels
-  // — transaction-level verifications AND the teacher cash-request queue.
-  const combinedZero = analytics.pendingVerification + analytics.pendingCashRequests === 0
-
-  // Compute the student's current outstanding for the approve modal
-  const getStudentOutstanding = (studentId: string): number => {
-    const acct = accounts.find((a) => a.studentId === studentId)
-    return acct?.outstanding ?? 0
+  // ── server actions (POST /api/fees/verification) ───────────────────
+  const act = async (txn: VerificationTxn, body: Record<string, unknown>, okTitle: string) => {
+    setBusyTxnId(txn.id)
+    try {
+      await api('/api/fees/verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txnId: txn.id, ...body }),
+      })
+      toast.success(okTitle, {
+        description: `${txn.studentName ?? 'Student'} · ${formatINR(txn.amount)}${body.action === 'verify' ? ' — receipt issued, ledger updated' : ' — the collector has been notified'}`,
+      })
+      queue.reload()
+      return true
+    } catch (e) {
+      const msg = e && typeof e === 'object' && 'message' in e ? (e as ApiError).message : 'Action failed — please retry.'
+      toast.error('Could not complete the action', { description: msg })
+      return false
+    } finally {
+      setBusyTxnId(null)
+    }
   }
 
-  const handleApprove = () => {
-    if (!approvingReq) return
-    setActionLoading(true)
-    approveCashRequest(approvingReq.id, 'Principal')
-    toast.success('Payment approved successfully', {
-      description: `Receipt issued for ${approvingReq.studentName}. Transaction posted to ledger.`,
-    })
-    setActionLoading(false)
-    setApprovingReq(null)
+  const handleApprove = async () => {
+    if (!approvingTxn) return
+    const ok = await act(approvingTxn, { action: 'verify' }, 'Payment verified')
+    if (ok) setApprovingTxn(null)
   }
 
-  const handleReject = () => {
-    if (!rejectingReq) return
+  const handleReject = async () => {
+    if (!rejectingTxn) return
     const reason = rejectReason === 'Other' ? rejectNote : rejectReason
     if (!reason.trim()) {
       toast.error('Reason required', { description: 'Please select or enter a rejection reason.' })
       return
     }
-    setActionLoading(true)
-    rejectCashRequest(rejectingReq.id, 'Principal', reason)
-    toast.error('Cash request rejected', {
-      description: `${rejectingReq.studentName} — ${reason}. Teacher will be notified.`,
-    })
-    setActionLoading(false)
-    setRejectingReq(null)
-    setRejectReason('')
-    setRejectNote('')
+    const ok = await act(rejectingTxn, { action: 'reject', reason: reason.trim() }, 'Payment rejected')
+    if (ok) {
+      setRejectingTxn(null)
+      setRejectReason('')
+      setRejectNote('')
+    }
   }
 
-  const handleClarify = () => {
-    if (!clarifyReq) return
-    if (!clarifyMessage.trim()) {
-      toast.error('Message required', { description: 'Please enter a clarification message.' })
-      return
-    }
-    setActionLoading(true)
-    requestClarification(clarifyReq.id, 'Principal', clarifyMessage)
-    toast.info('Clarification requested', {
-      description: `${clarifyReq.studentName} — awaiting teacher response.`,
-    })
-    setActionLoading(false)
-    setClarifyReq(null)
-    setClarifyMessage('')
-  }
+  const queueCount = pending.length
+  const pendingAmount = pending.reduce((s, t) => s + t.amount, 0)
 
   return (
     <>
@@ -202,54 +135,75 @@ export function FeesVerificationQueue({ data }: { data: ReturnType<typeof useFee
         title="Cash Verification"
         subtitle={
           <span className="mt-1 flex flex-wrap items-center gap-1.5">
-            {(pendingAcceptanceCount > 0 || directPending.length > 0) && (
+            {queueCount > 0 && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300">
                 {queueCount} pending
               </span>
             )}
-            {clarificationCount > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-500/10 text-violet-700 dark:text-violet-300">
-                {clarificationCount} clarification{clarificationCount === 1 ? '' : 's'}
-              </span>
-            )}
-            {pending.length > 0 && (
+            {queueCount > 0 && (
               <span className="text-[10px] text-muted-foreground tabular-nums">
                 {formatINR(pendingAmount, true)} awaiting
               </span>
             )}
-            {pending.length === 0 && directPending.length === 0 && !combinedZero && (
-              <span className="text-[10px] text-muted-foreground">No cash collections in the queue</span>
+            {stats && stats.verifiedThisMonth > 0 && (
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                · {formatINR(stats.verifiedThisMonth, true)} verified this month
+              </span>
             )}
+            <button
+              type="button"
+              onClick={queue.reload}
+              aria-label="Refresh verification queue"
+              title="Refresh"
+              className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <RefreshCw className="h-3 w-3" aria-hidden />
+            </button>
           </span>
         }
         bodyClassName="p-0"
       >
-        {pending.length === 0 && directPending.length === 0 ? (
-          combinedZero ? (
-            /* Slim all-clear row (spec) — every verification channel empty */
-            <div className="flex items-center gap-2.5 px-4 py-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600" aria-hidden>
-                <Check className="h-3.5 w-3.5" />
-              </span>
-              <p className="text-xs text-muted-foreground">No pending verifications</p>
-            </div>
-          ) : (
-            /* Queue locally empty but other verifications exist (e.g. online
-               payments under review) — keep the fuller empty state */
-            <div className="px-4 pb-4">
-              <FeeEmptyState
-                icon={<Check className="h-6 w-6" />}
-                title="All caught up"
-                description="No cash collections are waiting for your verification."
-              />
-            </div>
-          )
+        {queue.loading ? (
+          /* Loading skeleton — the Transactions table recipe */
+          <div className="space-y-1 p-3" aria-busy="true" aria-label="Loading verification queue">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3 py-2.5">
+                <div className="h-3 w-32 animate-pulse rounded bg-muted/60" />
+                <div className="h-3 w-16 animate-pulse rounded bg-muted/50" />
+                <div className="ml-auto h-3 w-14 animate-pulse rounded bg-muted/50" />
+                <div className="h-3 w-14 animate-pulse rounded bg-muted/50" />
+              </div>
+            ))}
+          </div>
+        ) : queue.error && queue.data === null ? (
+          /* Error — honest, retryable */
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-6">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" aria-hidden />
+            <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+              <span className="font-semibold text-foreground">Verification queue unavailable.</span> {queue.error}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-[11px] gap-1.5"
+              onClick={queue.reload}
+            >
+              <RefreshCw className="h-3 w-3" aria-hidden /> Retry
+            </Button>
+          </div>
+        ) : pending.length === 0 ? (
+          /* Slim all-clear row — the server queue is empty */
+          <div className="flex items-center gap-2.5 px-4 py-3">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600" aria-hidden>
+              <Check className="h-3.5 w-3.5" />
+            </span>
+            <p className="text-xs text-muted-foreground">No pending verifications</p>
+          </div>
         ) : (
-          /* ONE compact verification table — the Transactions UI language
-             (spec §3: clean list/table workflow, NO oversized cards).
-             Both verification channels render as the same row anatomy:
+          /* ONE compact verification table — the Transactions UI language:
              student · class · amount · method · source · date · reference ·
-             status · actions; only the actions differ per channel. */
+             status · actions. Every row is a canonical FeeTransaction. */
           <div className="overflow-x-auto">
             <table className="w-full text-xs border-separate border-spacing-0">
               <thead className="sticky top-0 z-10">
@@ -270,118 +224,65 @@ export function FeesVerificationQueue({ data }: { data: ReturnType<typeof useFee
                     collections + self-submitted manual transfers. Verify posts
                     the SAME record as successful; reject preserves the reason
                     on it. No second payment copy is ever created. */}
-                {directPending.map((t) => (
-                  <tr key={t.id} className="border-t border-border/30 hover:bg-muted/30 transition-colors">
-                    <td className="px-3 py-2.5">
-                      <p className="font-medium leading-tight">{t.studentName}</p>
-                      <p className="text-[10px] text-muted-foreground font-mono mt-0.5">{t.admissionNo} · {t.feeHead}</p>
-                    </td>
-                    <td className="px-3 py-2.5 text-muted-foreground hidden lg:table-cell">{t.className}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums font-medium whitespace-nowrap">{formatINR(t.amount)}</td>
-                    <td className="px-3 py-2.5 text-center hidden sm:table-cell">
-                      <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ring-1', modeAccent(t.mode))}>
-                        <ModeIcon mode={t.mode} className="h-2.5 w-2.5" />
-                        {t.mode}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 hidden md:table-cell">
-                      {/* Operational source (SaaS-STAGE-1): shared chip vocabulary */}
-                      <SourceChip role={t.collectorRole} collectedBy={t.collectedBy} maxW="max-w-[130px]" />
-                    </td>
-                    <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap hidden lg:table-cell"><TxnDateTime transaction={t} /></td>
-                    <td className="px-3 py-2.5 font-mono text-[10px] text-muted-foreground hidden 2xl:table-cell">{t.referenceNo ?? '—'}</td>
-                    <td className="px-3 py-2.5 text-center">
-                      <FeeStatusBadge status={paymentStatusLabel(t.status, 'principal')} />
-                    </td>
-                    <td className="pl-3 pr-4 py-2.5 text-right">
-                      <div className="inline-flex items-center justify-end gap-1.5">
-                        <Button
-                          size="sm" variant="outline"
-                          className="h-7 text-[10px] gap-1 border-rose-500/30 text-rose-600 hover:bg-rose-500/10 hover:text-rose-600"
-                          aria-label={`Reject ${t.studentName}'s payment`}
-                          title="Reject"
-                          onClick={() => { setRejectingDirect(t); setRejectingDirectReason('') }}
-                        >
-                          <X className="h-3 w-3" /> <span className="hidden 2xl:inline">Reject</span>
-                        </Button>
-                        <Button
-                          size="sm"
-                          className="h-7 text-[10px] gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                          aria-label={`Verify ${t.studentName}'s payment`}
-                          title="Verify"
-                          onClick={() => {
-                            const r = approveDirectCashTxn(t.id, 'Principal')
-                            if (r.success) toast.success('Cash verified', { description: `${t.receiptNo} posted as successful for ${t.studentName}.` })
-                            else toast.error('Could not verify', { description: r.error })
-                          }}
-                        >
-                          <Check className="h-3 w-3" /> <span className="hidden 2xl:inline">Verify</span>
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {/* Teacher cash-request queue — same row anatomy; decisions
-                    run through the confirmation modals below. */}
-                {pending.map((r) => {
-                  const isPending = r.status === 'Pending Principal Acceptance' || r.status === 'Collected by Teacher'
-                  const isClarification = r.status === 'Clarification Requested'
-                  const actionable = isPending || isClarification
+                {pending.map((t) => {
+                  const mode = serverMethodToMode(t.method)
                   return (
-                    <tr key={r.id} className="border-t border-border/30 hover:bg-muted/30 transition-colors">
+                    <motion.tr
+                      key={t.id}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: busyTxnId === t.id ? 0.5 : 1 }}
+                      exit={{ opacity: 0 }}
+                      className="border-t border-border/30 hover:bg-muted/30 transition-colors"
+                    >
                       <td className="px-3 py-2.5">
-                        <p className="font-medium leading-tight">{r.studentName}</p>
-                        <p className="text-[10px] text-muted-foreground font-mono mt-0.5">{r.admissionNo} · {r.feeHead}</p>
+                        <p className="font-medium leading-tight">{t.studentName ?? 'Student'}</p>
+                        <p className="text-[10px] text-muted-foreground font-mono mt-0.5">{t.feeHeadName ?? '—'}</p>
                       </td>
-                      <td className="px-3 py-2.5 text-muted-foreground hidden lg:table-cell">{r.className}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums font-medium whitespace-nowrap">{formatINR(r.amount)}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground hidden lg:table-cell">{t.className ?? '—'}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-medium whitespace-nowrap">{formatINR(t.amount)}</td>
                       <td className="px-3 py-2.5 text-center hidden sm:table-cell">
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ring-1 bg-rose-500/10 text-rose-600 dark:text-rose-400 ring-rose-500/20">
-                          <Banknote className="h-2.5 w-2.5" />
-                          Cash
+                        <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ring-1', modeAccent(mode))}>
+                          <ModeIcon mode={mode} className="h-2.5 w-2.5" />
+                          {mode}
                         </span>
                       </td>
                       <td className="px-3 py-2.5 hidden md:table-cell">
-                        <SourceChip role="teacher" collectedBy={r.collectedBy} maxW="max-w-[130px]" />
+                        <p className="text-[10px] text-muted-foreground truncate max-w-[130px]" title={t.collectedBy ?? undefined}>
+                          {t.collectedBy ?? 'School record'}
+                        </p>
                       </td>
-                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap hidden lg:table-cell"><DateTimeText date={r.collectedAt} instant={r.collectedAt.includes('T') ? r.collectedAt : null} /></td>
-                      <td className="px-3 py-2.5 font-mono text-[10px] text-muted-foreground hidden 2xl:table-cell">{r.referenceNo ?? '—'}</td>
-                      <td className="px-3 py-2.5 text-center"><QueueStatusChip status={r.status} /></td>
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap hidden lg:table-cell">
+                        {formatDate(t.collectedAt ?? t.createdAt)}
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-[10px] text-muted-foreground hidden 2xl:table-cell">{t.referenceNumber ?? '—'}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        <FeeStatusBadge status={txnStatusToDisplay(t.status)} />
+                      </td>
                       <td className="pl-3 pr-4 py-2.5 text-right">
                         <div className="inline-flex items-center justify-end gap-1.5">
                           <Button
-                            size="sm" variant="ghost"
-                            className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:bg-muted"
-                            aria-label={`Request clarification from ${r.collectedBy} about ${r.studentName}'s payment`}
-                            title="Request Clarification"
-                            onClick={() => { setClarifyReq(r); setClarifyMessage('') }}
-                            disabled={!actionable}
-                          >
-                            <MessageSquare className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
                             size="sm" variant="outline"
                             className="h-7 text-[10px] gap-1 border-rose-500/30 text-rose-600 hover:bg-rose-500/10 hover:text-rose-600"
-                            aria-label={`Reject ${r.studentName}'s cash collection`}
+                            aria-label={`Reject ${t.studentName ?? 'student'}'s payment`}
                             title="Reject"
-                            onClick={() => { setRejectingReq(r); setRejectReason(''); setRejectNote('') }}
-                            disabled={!actionable}
+                            disabled={busyTxnId === t.id}
+                            onClick={() => { setRejectingTxn(t); setRejectReason(''); setRejectNote('') }}
                           >
                             <X className="h-3 w-3" /> <span className="hidden 2xl:inline">Reject</span>
                           </Button>
                           <Button
                             size="sm"
                             className="h-7 text-[10px] gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                            aria-label={`Approve ${r.studentName}'s cash collection`}
-                            title="Approve"
-                            onClick={() => setApprovingReq(r)}
-                            disabled={!actionable}
+                            aria-label={`Verify ${t.studentName ?? 'student'}'s payment`}
+                            title="Verify"
+                            disabled={busyTxnId === t.id}
+                            onClick={() => { setApprovingTxn(t) }}
                           >
-                            <Check className="h-3 w-3" /> <span className="hidden 2xl:inline">Approve</span>
+                            {busyTxnId === t.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} <span className="hidden 2xl:inline">Verify</span>
                           </Button>
                         </div>
                       </td>
-                    </tr>
+                    </motion.tr>
                   )
                 })}
               </tbody>
@@ -390,134 +291,96 @@ export function FeesVerificationQueue({ data }: { data: ReturnType<typeof useFee
         )}
 
         {/* ── Recently resolved — collapsed audit inside the same panel ── */}
-        {resolved.length > 0 && (
+        {recent.length > 0 && (
           <details className="border-t border-border/60">
             <summary className="flex items-center justify-between gap-2 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden px-4 py-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/30">
               <span className="inline-flex items-center gap-1.5">
                 <History className="h-3 w-3" aria-hidden />
-                Recently resolved ({resolved.length})
+                Recently resolved ({recent.length})
               </span>
               <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
             </summary>
             <div className="divide-y divide-border border-t border-border/50 px-4">
-              {resolved.map((r) => (
-                <div key={r.id} className="flex items-center gap-2.5 py-2">
-                  <span className={cn(
-                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-md ring-1',
-                    r.status === 'Confirmed by Principal' ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/20' : 'bg-rose-500/10 text-rose-600 ring-rose-500/20',
-                  )}>
-                    {r.status === 'Confirmed by Principal' ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium truncate">
-                      {r.studentName} · <span className="text-muted-foreground font-mono text-[10px]">{r.admissionNo}</span>
-                    </p>
-                    <p className="text-[9px] text-muted-foreground truncate">
-                      {r.collectedBy} · {formatDate(r.submittedAt)}
-                      {r.reason && <span className="text-amber-600 italic"> — "{r.reason}"</span>}
-                    </p>
+              {recent.map((r) => {
+                const resolved = r.status === 'SUCCESS'
+                return (
+                  <div key={r.id} className="flex items-center gap-2.5 py-2">
+                    <span className={cn(
+                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-md ring-1',
+                      resolved ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/20' : 'bg-rose-500/10 text-rose-600 ring-rose-500/20',
+                    )}>
+                      {resolved ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium truncate">
+                        {r.studentName ?? 'Student'} · <span className="text-muted-foreground font-mono text-[10px]">{r.receiptNo ?? '—'}</span>
+                      </p>
+                      <p className="text-[9px] text-muted-foreground truncate">
+                        {r.collectedBy ?? 'School record'} · {formatDate(r.verifiedAt ?? r.rejectedAt ?? r.createdAt)}
+                        {r.rejectionReason && <span className="text-amber-600 italic"> — "{r.rejectionReason}"</span>}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-xs font-bold tabular-nums">{formatINR(r.amount, true)}</p>
+                      <FeeStatusBadge status={txnStatusToDisplay(r.status)} />
+                    </div>
                   </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-xs font-bold tabular-nums">{formatINR(r.amount, true)}</p>
-                    <FeeStatusBadge status={r.status} />
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </details>
         )}
       </Panel>
 
-      {/* ── Confirmation modals (business logic unchanged) ───────────── */}
+      {/* ── Confirmation modals (server actions) ───────────────────── */}
       <AnimatePresence>
-        {approvingReq && (
+        {approvingTxn && (
           <ApproveModal
-            req={approvingReq}
-            currentOutstanding={getStudentOutstanding(approvingReq.studentId)}
-            loading={actionLoading}
-            onClose={() => setApprovingReq(null)}
-            onConfirm={handleApprove}
+            txn={approvingTxn}
+            currentOutstanding={
+              approvingTxn.studentId == null ||
+              outstandingRes.loading ||
+              (outstandingRes.error !== null && outstandingRes.data === null)
+                ? null
+                : currentOutstanding
+            }
+            loading={busyTxnId === approvingTxn.id}
+            onClose={() => setApprovingTxn(null)}
+            onConfirm={() => void handleApprove()}
           />
         )}
       </AnimatePresence>
 
       <AnimatePresence>
-        {rejectingReq && (
+        {rejectingTxn && (
           <RejectModal
-            req={rejectingReq}
+            txn={rejectingTxn}
             reason={rejectReason}
             setReason={setRejectReason}
             note={rejectNote}
             setNote={setRejectNote}
-            loading={actionLoading}
-            onClose={() => setRejectingReq(null)}
-            onConfirm={handleReject}
+            loading={!!rejectingTxn && busyTxnId === rejectingTxn.id}
+            onClose={() => setRejectingTxn(null)}
+            onConfirm={() => void handleReject()}
           />
         )}
       </AnimatePresence>
-
-      <AnimatePresence>
-        {clarifyReq && (
-          <ClarifyModal
-            req={clarifyReq}
-            message={clarifyMessage}
-            setMessage={setClarifyMessage}
-            loading={actionLoading}
-            onClose={() => setClarifyReq(null)}
-            onConfirm={handleClarify}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* ── Direct cash reject (mandatory reason, no money recorded) ── */}
-      <Dialog open={!!rejectingDirect} onOpenChange={(o) => !o && setRejectingDirect(null)}>
-        <DialogContent className="max-w-sm z-[70]">
-          <DialogHeader>
-            <DialogTitle className="text-sm">Reject direct cash entry</DialogTitle>
-            <DialogDescription className="text-xs">
-              {rejectingDirect && `${rejectingDirect.studentName} · ${formatINR(rejectingDirect.amount, true)} · ${rejectingDirect.receiptNo}. Nothing has been posted; the entry becomes Failed with your reason on record.`}
-            </DialogDescription>
-          </DialogHeader>
-          <Textarea
-            className="min-h-[64px] text-xs"
-            placeholder="Reason (required) — shown in the audit trail"
-            value={rejectingDirectReason}
-            onChange={(e) => setRejectingDirectReason(e.target.value)}
-          />
-          <DialogFooter>
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setRejectingDirect(null)}>Cancel</Button>
-            <Button
-              size="sm"
-              className="h-8 text-xs"
-              disabled={!rejectingDirectReason.trim()}
-              onClick={() => {
-                if (!rejectingDirect) return
-                const r = rejectDirectCashTxn(rejectingDirect.id, 'Principal', rejectingDirectReason.trim())
-                if (r.success) toast.error('Direct cash rejected', { description: `${rejectingDirect.receiptNo} — ${rejectingDirectReason.trim()}` })
-                else toast.error('Could not reject', { description: r.error })
-                setRejectingDirect(null)
-              }}
-            >
-              Reject entry
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   )
 }
 
 // ─── Approve Modal ──────────────────────────────────────────────────
 
-function ApproveModal({ req, currentOutstanding, loading, onClose, onConfirm }: {
-  req: CashRequest
-  currentOutstanding: number
+function ApproveModal({ txn, currentOutstanding, loading, onClose, onConfirm }: {
+  txn: VerificationTxn
+  /** null while the student's server fee rows load — the tiles show "…". */
+  currentOutstanding: number | null
   loading: boolean
   onClose: () => void
   onConfirm: () => void
 }) {
   useDismissOnEscape(onClose)
-  const balanceAfter = Math.max(0, currentOutstanding - req.amount)
+  const balanceAfter = currentOutstanding !== null ? Math.max(0, currentOutstanding - txn.amount) : null
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -525,7 +388,7 @@ function ApproveModal({ req, currentOutstanding, loading, onClose, onConfirm }: 
       exit={{ opacity: 0 }}
       role="dialog"
       aria-modal="true"
-      aria-label="Approve cash payment"
+      aria-label="Verify cash payment"
       className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={onClose}
     >
@@ -539,53 +402,59 @@ function ApproveModal({ req, currentOutstanding, loading, onClose, onConfirm }: 
         <div className="px-4 py-3 border-b border-border">
           <h3 className="text-sm font-bold flex items-center gap-2">
             <Check className="h-4 w-4 text-emerald-600" />
-            Approve Cash Payment?
+            Verify Payment?
           </h3>
         </div>
         <div className="p-4 space-y-2">
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Student</span>
-            <span className="font-medium">{req.studentName}</span>
+            <span className="font-medium">{txn.studentName ?? 'Student'}</span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Class</span>
-            <span className="font-medium">{req.className}</span>
+            <span className="font-medium">{txn.className ?? '—'}</span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Fee Head</span>
-            <span className="font-medium">{req.feeHead}</span>
+            <span className="font-medium">{txn.feeHeadName ?? '—'}</span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Amount Submitted</span>
-            <span className="font-bold tabular-nums text-emerald-600">{formatINR(req.amount, true)}</span>
+            <span className="font-bold tabular-nums text-emerald-600">{formatINR(txn.amount, true)}</span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Collected By</span>
-            <span className="font-medium">{req.collectedBy}</span>
+            <span className="font-medium">{txn.collectedBy ?? 'School record'}</span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Collected At</span>
-            <span className="font-medium">{formatDate(req.collectedAt)}</span>
+            <span className="font-medium">{formatDate(txn.collectedAt ?? txn.createdAt)}</span>
           </div>
 
-          {/* Balance impact — Before → After tiny tile pair (benchmark recipe) */}
+          {/* Balance impact — Before → After tiles from the student's LIVE
+              server fee rows (loading shows "…" — never a guess). */}
           <div className="pt-2 mt-2 border-t border-border/40">
             <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-2">
               <div className="rounded-lg bg-muted/40 px-2.5 py-1.5">
                 <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">Before</p>
-                <p className="text-sm font-bold tabular-nums text-rose-600 mt-0.5">{formatINR(currentOutstanding, true)}</p>
+                <p className="text-sm font-bold tabular-nums text-rose-600 mt-0.5">
+                  {currentOutstanding !== null ? formatINR(currentOutstanding, true) : '…'}
+                </p>
               </div>
               <ArrowRight className="self-center h-3.5 w-3.5 text-muted-foreground" aria-hidden />
               <div className="rounded-lg bg-emerald-500/10 px-2.5 py-1.5">
                 <p className="text-[9px] uppercase font-semibold tracking-wider text-muted-foreground">After</p>
-                <p className="text-sm font-bold tabular-nums text-emerald-600 mt-0.5">{formatINR(balanceAfter, true)}</p>
+                <p className="text-sm font-bold tabular-nums text-emerald-600 mt-0.5">
+                  {balanceAfter !== null ? formatINR(balanceAfter, true) : '…'}
+                </p>
               </div>
             </div>
           </div>
 
           <div className="rounded-md bg-emerald-500/5 border border-emerald-500/20 p-2 mt-2">
             <p className="text-[10px] text-emerald-700 dark:text-emerald-300">
-              This will approve the cash collection, generate a receipt, post the transaction, update the student's fee account, reduce outstanding dues, and create an audit entry.
+              Verifying mints the official SCH- receipt inside one server transaction, posts the
+              payment to the student's fee ledger, reduces the outstanding dues and notifies the collector.
             </p>
           </div>
         </div>
@@ -593,7 +462,7 @@ function ApproveModal({ req, currentOutstanding, loading, onClose, onConfirm }: 
           <Button variant="outline" size="sm" className="h-8 text-xs" onClick={onClose} disabled={loading}>Cancel</Button>
           <Button size="sm" className="h-8 text-xs gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={onConfirm} disabled={loading}>
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-            {loading ? 'Approving...' : 'Approve & Issue Receipt'}
+            {loading ? 'Verifying…' : 'Verify & Issue Receipt'}
           </Button>
         </div>
       </motion.div>
@@ -603,8 +472,8 @@ function ApproveModal({ req, currentOutstanding, loading, onClose, onConfirm }: 
 
 // ─── Reject Modal ───────────────────────────────────────────────────
 
-function RejectModal({ req, reason, setReason, note, setNote, loading, onClose, onConfirm }: {
-  req: CashRequest
+function RejectModal({ txn, reason, setReason, note, setNote, loading, onClose, onConfirm }: {
+  txn: VerificationTxn
   reason: string
   setReason: (v: string) => void
   note: string
@@ -621,7 +490,7 @@ function RejectModal({ req, reason, setReason, note, setNote, loading, onClose, 
       exit={{ opacity: 0 }}
       role="dialog"
       aria-modal="true"
-      aria-label="Reject cash payment"
+      aria-label="Reject payment"
       className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={onClose}
     >
@@ -635,9 +504,9 @@ function RejectModal({ req, reason, setReason, note, setNote, loading, onClose, 
         <div className="px-4 py-3 border-b border-border">
           <h3 className="text-sm font-bold flex items-center gap-2">
             <AlertCircle className="h-4 w-4 text-rose-600" />
-            Reject Cash Payment
+            Reject Payment
           </h3>
-          <p className="text-[11px] text-muted-foreground mt-0.5">{req.studentName} · {formatINR(req.amount, true)}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">{txn.studentName ?? 'Student'} · {formatINR(txn.amount, true)}</p>
         </div>
         <div className="p-4 space-y-3">
           <div>
@@ -672,20 +541,10 @@ function RejectModal({ req, reason, setReason, note, setNote, loading, onClose, 
               />
             </div>
           )}
-          <div>
-            <label className="text-[10px] text-muted-foreground uppercase font-semibold tracking-wider" htmlFor="cash-reject-note">Additional Note (optional)</label>
-            <textarea
-              id="cash-reject-note"
-              value={note && reason !== 'Other' ? note : ''}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Add any additional context…"
-              rows={2}
-              className="w-full text-xs rounded-md border border-border bg-background px-2 py-1.5 mt-1.5 resize-none focus:outline-none focus:ring-2 focus:ring-rose-500/30"
-            />
-          </div>
           <div className="rounded-md bg-rose-500/5 border border-rose-500/20 p-2">
             <p className="text-[10px] text-rose-700 dark:text-rose-300">
-              No transaction will be posted. No receipt will be issued. Student balance will NOT change. The collector will be notified with the reason.
+              No transaction will be posted. No receipt will be issued. The student's ledger is never
+              touched. The collector will be notified with the reason.
             </p>
           </div>
         </div>
@@ -693,72 +552,7 @@ function RejectModal({ req, reason, setReason, note, setNote, loading, onClose, 
           <Button variant="outline" size="sm" className="h-8 text-xs" onClick={onClose} disabled={loading}>Cancel</Button>
           <Button size="sm" className="h-8 text-xs gap-1.5 bg-rose-600 hover:bg-rose-700 text-white" onClick={onConfirm} disabled={loading || !reason}>
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-            {loading ? 'Rejecting...' : 'Reject Payment'}
-          </Button>
-        </div>
-      </motion.div>
-    </motion.div>
-  )
-}
-
-// ─── Clarify Modal ──────────────────────────────────────────────────
-
-function ClarifyModal({ req, message, setMessage, loading, onClose, onConfirm }: {
-  req: CashRequest
-  message: string
-  setMessage: (v: string) => void
-  loading: boolean
-  onClose: () => void
-  onConfirm: () => void
-}) {
-  useDismissOnEscape(onClose)
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Request clarification"
-      className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-card border border-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-4 py-3 border-b border-border">
-          <h3 className="text-sm font-bold flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-amber-600" />
-            Request Clarification
-          </h3>
-          <p className="text-[11px] text-muted-foreground mt-0.5">{req.studentName} · {formatINR(req.amount, true)}</p>
-        </div>
-        <div className="p-4 space-y-2">
-          <label className="text-[10px] text-muted-foreground uppercase font-semibold tracking-wider" htmlFor="cash-clarify-message">Message to Collector <span className="text-rose-600">*</span></label>
-          <textarea
-            id="cash-clarify-message"
-            autoFocus
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="e.g. Please upload the original deposit slip and confirm the amount collected."
-            rows={3}
-            className="w-full text-xs rounded-md border border-border bg-background px-2 py-1.5 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-          />
-          <div className="rounded-md bg-amber-500/5 border border-amber-500/20 p-2">
-            <p className="text-[10px] text-amber-700 dark:text-amber-300">
-              The collector will be notified. The request will move to "Clarification Requested" status until the teacher responds.
-            </p>
-          </div>
-        </div>
-        <div className="px-4 py-3 border-t border-border flex items-center justify-end gap-2">
-          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={onClose} disabled={loading}>Cancel</Button>
-          <Button size="sm" className="h-8 text-xs gap-1.5 bg-amber-600 hover:bg-amber-700 text-white" onClick={onConfirm} disabled={loading}>
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
-            {loading ? 'Sending...' : 'Send Clarification'}
+            {loading ? 'Rejecting…' : 'Reject Payment'}
           </Button>
         </div>
       </motion.div>

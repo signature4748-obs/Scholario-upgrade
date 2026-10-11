@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { getCurrentUser, getCurrentSession } from '@/lib/auth'
 import { api } from '@/lib/api'
+import { isCanonicalSchoolRole } from '@/lib/security/permissions'
 
 export const runtime = 'nodejs'
 
@@ -8,6 +9,8 @@ export const runtime = 'nodejs'
  * DELETE /api/auth/sessions/[id] — sign out ONE other session.
  * Ownership enforced server-side: the row must belong to the caller AND
  * must not be the current session (current signs out via /api/auth/logout).
+ * A foreign/nonexistent id answers the SAME 404 (no existence leak).
+ * Active canonical-role session required (Gate F — mirrors /api/auth/me).
  */
 export async function DELETE(
   _req: Request,
@@ -18,6 +21,10 @@ export async function DELETE(
     if (!user) throw new Error('UNAUTHORIZED')
     // Task 4-d (fix #9) — mirror withUser semantics (ACTIVE accounts only).
     if (user.status !== 'ACTIVE') throw new Error('UNAUTHORIZED')
+    // GATE F — identity-surface canonical-role invariant, mirroring
+    // /api/auth/me: a non-canonical school-role session hydrates as
+    // logged-out (PRINCIPAL | TEACHER | STUDENT only).
+    if (!isCanonicalSchoolRole(user.role)) throw new Error('UNAUTHORIZED')
 
     const { id } = await params
     const current = await getCurrentSession()

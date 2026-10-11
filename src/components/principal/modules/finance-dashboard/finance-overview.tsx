@@ -3,65 +3,70 @@
 /**
  * FinanceOverviewSection — the Principal's MONEY CONSOLE.
  *
- * Rebuilt around one principle: every headline number must reconcile with
- * the module the Principal actually operates. Fees figures come from the
- * live fee store (Fee Management parity), payroll figures from the live
- * salary store (Salary & Payroll parity), and only the bank/reserve
- * snapshot comes from the books. No CFO ratios, no decorative sparklines,
- * no mock activity rows — those live in Statements / Reports where the
- * management committee and auditors need them.
+ * BATCH2-B5 — HONEST MONEY: every fee figure flows from the SERVER
+ * (GET /api/dashboard school aggregates + the live dues summary from
+ * GET /api/fees/defaulters?summary=1; recent collections from
+ * GET /api/fees/transactions). The fabricated books from
+ * src/lib/mock/finance-dashboard.ts (cash-in-bank, reserves, expense
+ * breakdown, vendor/utility obligations) are GONE — those surfaces now
+ * render honest "requires expense ledger — not available" states.
+ * Payroll figures come from the Salary & Payroll module's store (its own
+ * workspace's ledger — labelled as such, out of B5's fee scope).
  *
- * Layout (mirrors the Fee/Salary Overview anatomy):
- *   1. Four KPI cards — the Principal's four money questions:
- *      Fees Collected · Fees Outstanding · Payroll this month · Cash in Bank
- *   2. LEFT (2/3): "Collections vs Payroll" open chart — REAL monthly
- *      money-in (fee collections) vs money-out (confirmed salary) for the
- *      session, trimmed at the current month. RIGHT (1/3): This Month —
- *      in / out / net + session collection progress + reserve line.
- *   3. Needs Attention (2/3, unified live feed from both stores, every
- *      row actionable) + Coming Up (1/3, scheduled obligations).
- *   4. Where Money Goes (1/3, annual expense bars) + Recent Money
- *      Movement (2/3, REAL fee collections + confirmed salary payments
- *      merged, newest first).
+ * Layout (kept):
+ *   1. Four KPI cards — Fees Collected · Fees Outstanding · Payroll this
+ *      month · Cash in Bank (honest: not available — no bank ledger)
+ *   2. LEFT: "Collections vs Payroll" chart (server fee collections in;
+ *      salary-store payroll out). RIGHT: This Month snapshot.
+ *   3. Needs Attention (operational feed) + Coming Up (payroll live,
+ *      other obligations honestly unavailable).
+ *   4. Where Money Goes (honest unavailable) + Recent Money Movement
+ *      (server fee collections + recorded salary payments).
  *   5. Deep links into Fee Management and Salary & Payroll.
  */
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import {
   Wallet, CheckCircle2, AlertCircle, Landmark, Users, ArrowRight,
-  ArrowUpRight, ArrowDownRight, ShieldCheck, CalendarClock, Receipt,
+  ArrowUpRight, ArrowDownRight, ShieldCheck, CalendarClock, Receipt, Info,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  useFinanceData, useFinanceAttention,
-  type FinanceAttentionItem, formatINRCompact,
+  useFinanceAttention,
+  type FinanceAttentionItem,
 } from '@/lib/store/finance-store'
-import { useFeeData, CURRENT_ACADEMIC_YEAR } from '@/lib/store/fee-store'
+import { useDuesSummaryStore, selectLiveDues } from '@/lib/store/dues-summary-store'
 import { useSalaryData, CURRENT_SESSION, sessionOfPeriod } from '@/lib/store/salary-store'
-// PHASE 8B — salary figures are the canonical server payroll: payable =
-// the sum of configured monthly salaries; "paid" = the sum of RECORDED
-// payment amounts (status RECORDED, month 'YYYY-MM').
 import { formatINR } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { CHART_PALETTE } from '@/components/shared/premium-charts'
-import { FinancePanel, FinanceStat, FinanceEmptyState, severityAccent } from './finance-shared'
+import { FinancePanel, FinanceStat, FinanceEmptyState, severityAccent, UnavailableLine, UnavailableNote } from './finance-shared'
 import { SummaryCard, SummaryCardGrid } from '../shared/summary-card'
 import { OpenChartSection } from '../shared/open-chart-section'
-import { InVsOutChart, HorizontalBars, ProgressBar } from './finance-charts'
+import { InVsOutChart, ProgressBar } from './finance-charts'
+import { useServerResource, monthKeyToLabel, type SchoolDashboardPayload, type ServerFeeTxn } from '../fees/use-fee-server-data'
 import { toast } from 'sonner'
 
 interface Props {
-  data: ReturnType<typeof useFinanceData>
   onNavigate: (tab: 'overview' | 'statements' | 'reports' | 'settings') => void
   /** Cross-module jump (AppShell nav keys — 'fees', 'salary'). */
   onModuleNavigate?: (moduleKey: string) => void
 }
 
-export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: Props) {
-  const attention = useFinanceAttention()
-  const feeData = useFeeData(CURRENT_ACADEMIC_YEAR)
+export function FinanceOverviewSection({ onNavigate, onModuleNavigate }: Props) {
+  // ── server truth (B5) ──────────────────────────────────────────────
+  const dashboard = useServerResource<SchoolDashboardPayload>('/api/dashboard')
+  const recentTxns = useServerResource<ServerFeeTxn[]>('/api/fees/transactions?status=SUCCESS&limit=8')
+  const dues = useDuesSummaryStore(selectLiveDues)
+  const ensureDues = useDuesSummaryStore((s) => s.ensure)
+  useEffect(() => { void ensureDues() }, [ensureDues])
+
+  // Payroll — the Salary & Payroll module's own ledger (out of B5's fee
+  // scope; labelled wherever it renders).
   const salaryData = useSalaryData()
+
+  const attention = useFinanceAttention()
 
   const jumpTo = (moduleKey: string, label: string) => {
     if (onModuleNavigate) onModuleNavigate(moduleKey)
@@ -74,48 +79,57 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
     else if (item.module) jumpTo(item.module, item.cta)
   }
 
-  const { analytics } = feeData
+  const stats = dashboard.data?.stats
+  const totalCollected = stats?.feesPaid
+  const totalExpected = stats?.feesTotal
+  const collectionRate = totalExpected && totalExpected > 0 && totalCollected !== undefined
+    ? Math.round((totalCollected / totalExpected) * 1000) / 10
+    : 0
+  const totalOutstanding =
+    dues?.totalOutstanding ??
+    (totalExpected !== undefined && totalCollected !== undefined ? Math.max(0, totalExpected - totalCollected) : undefined)
+  const studentsWithDues = dues?.defaulterCount ?? 0
+
   const { currentMonth, monthLabel } = salaryData
   const payrollBalance = currentMonth.payable - currentMonth.recorded
 
-  // ── REAL monthly series: fees in (collections) vs salary out (confirmed
-  //    payments this session), month-aligned, trimmed at the current month.
-  //    Joined on FY month INDEX (Apr=0 … Mar=11), never on locale-formatted
-  //    labels — Chrome's ICU returns "Sept" while our display series uses
-  //    "Sep", which silently dropped September payroll from the chart and
-  //    broke the trim-to-current-month slice.
+  // ── REAL monthly series: fees in (server SUCCESS-payment sums, from
+  //    /api/dashboard trend) vs salary out (payroll module's RECORDED
+  //    payments), joined on the server's YYYY-MM month keys.
   const inVsOut = useMemo(() => {
-    const fyIndexOf = (calendarMonth: number) => (calendarMonth - 3 + 12) % 12
-    const outByIdx = new Map<number, number>()
+    const outByMonth = new Map<string, number>()
     for (const p of salaryData.payments) {
       if (p.status !== 'RECORDED') continue
       if (sessionOfPeriod(p.month) !== CURRENT_SESSION.id) continue
-      const m = Number(p.month.split('-')[1])
-      if (!Number.isFinite(m)) continue
-      const idx = fyIndexOf(m - 1)
-      outByIdx.set(idx, (outByIdx.get(idx) ?? 0) + p.amount)
+      outByMonth.set(p.month, (outByMonth.get(p.month) ?? 0) + p.amount)
     }
-    const months = analytics.monthly // display series Apr→Dec = FY indices 0–8
-    const nowIdx = fyIndexOf(new Date().getMonth())
-    const visible = nowIdx < months.length ? months.slice(0, nowIdx + 1) : months
-    // Slice always starts at FY index 0, so array position === FY index.
-    return visible.map((m, i) => ({ month: m.month, in: m.collected, out: outByIdx.get(i) ?? 0 }))
-  }, [analytics.monthly, salaryData.payments])
+    return (dashboard.data?.trend ?? []).map((m) => ({
+      month: monthKeyToLabel(m.month),
+      in: m.amount,
+      out: outByMonth.get(m.month) ?? 0,
+    }))
+  }, [dashboard.data, salaryData.payments])
   const chartHasData = inVsOut.some((m) => m.in > 0 || m.out > 0)
 
-  // ── Recent money movement — REAL entries only: fee collections +
-  //    confirmed salary payments, merged, newest first.
+  // This month's fee collections — the server trend bucket for the
+  // current calendar month.
+  const nowMonthKey = new Date().toISOString().slice(0, 7)
+  const monthFeeIn = useMemo(
+    () => (dashboard.data?.trend ?? []).find((m) => m.month === nowMonthKey)?.amount ?? 0,
+    [dashboard.data, nowMonthKey],
+  )
+
+  // ── Recent money movement — REAL entries only: server fee collections
+  //    + recorded salary payments, merged, newest first.
   const recentMovement = useMemo(() => {
-    const feeRows = analytics.recentCollections
-      .filter((t) => t.status === 'Success')
-      .map((t) => ({
-        id: `fee-${t.id}`,
-        kind: 'in' as const,
-        title: `${t.studentName}${t.className ? ` · ${t.className}` : ''}`,
-        sub: `Fee${t.feeHead ? ` — ${t.feeHead}` : ''} · ${t.mode}`,
-        date: t.date,
-        amount: t.amount,
-      }))
+    const feeRows = (recentTxns.data ?? []).map((t) => ({
+      id: `fee-${t.id}`,
+      kind: 'in' as const,
+      title: `${t.studentName ?? 'Student'}${t.className ? ` · ${t.className}` : ''}`,
+      sub: `Fee${t.feeHeadName ? ` — ${t.feeHeadName}` : ''} · server ledger`,
+      date: t.createdAt,
+      amount: t.amount,
+    }))
     const salaryRows = salaryData.payments
       .filter((p) => p.status === 'RECORDED')
       .sort((a, b) => b.paidOn.localeCompare(a.paidOn))
@@ -131,25 +145,21 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
     return [...feeRows, ...salaryRows]
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 8)
-  }, [analytics.recentCollections, salaryData.payments, salaryData.teachers])
+  }, [recentTxns.data, salaryData.payments, salaryData.teachers])
 
-  // Annual expense picture (P&L baseline; salaries line is live payroll).
-  const expenseBars = data.expenseBreakdown.slice(0, 6).map((e) => ({
-    label: e.name, value: e.value, color: e.color,
-  }))
-
-  const netThisMonth = analytics.monthCollection - currentMonth.recorded
+  const netThisMonth = monthFeeIn - currentMonth.recorded
 
   return (
     <div className="space-y-4">
-      {/* 1 — KPI cards: the Principal's four money questions. Every figure
-          reconciles with the module that owns it. */}
+      {/* 1 — KPI cards: the Principal's four money questions. Fee figures
+          reconcile with the server ledger; payroll with the payroll
+          module; Cash in Bank is honestly unavailable. */}
       <SummaryCardGrid columns={4}>
         <SummaryCard
           icon={<CheckCircle2 className="h-4 w-4" />}
           label="Fees Collected"
-          value={formatINR(analytics.totalCollected, true)}
-          sub={`${analytics.collectionRate}% of ${formatINR(analytics.totalExpected, true)} expected`}
+          value={totalCollected !== undefined ? formatINR(totalCollected, true) : '—'}
+          sub={stats ? `${collectionRate}% of ${formatINR(totalExpected ?? 0, true)} billed · server ledger` : 'loading…'}
           tone="emerald"
           delay={0}
           onClick={() => jumpTo('fees', 'Fee Management')}
@@ -157,8 +167,8 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
         <SummaryCard
           icon={<AlertCircle className="h-4 w-4" />}
           label="Fees Outstanding"
-          value={formatINR(analytics.totalOutstanding, true)}
-          sub={`${analytics.pendingCount} students · ${analytics.overdueCount} overdue`}
+          value={totalOutstanding !== undefined ? formatINR(totalOutstanding, true) : '—'}
+          sub={`${studentsWithDues} student${studentsWithDues === 1 ? '' : 's'} with dues · server aggregation`}
           tone="rose"
           delay={0.05}
           onClick={() => jumpTo('fees', 'Fee Management')}
@@ -176,24 +186,32 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
           delay={0.1}
           onClick={() => jumpTo('salary', 'Salary & Payroll')}
         />
+        {/* Honest unavailable KPI — no bank/ledger model exists. */}
         <SummaryCard
           icon={<Landmark className="h-4 w-4" />}
           label="Cash in Bank"
-          value={formatINRCompact(data.cashAvailable)}
-          sub={`Illustrative · ${data.reserveCoverage} months reserve estimate`}
-          tone="violet"
+          value={
+            <span
+              className="inline-flex items-center gap-1.5 text-base text-muted-foreground"
+              title="requires bank/ledger model — not available"
+            >
+              <Info className="h-4 w-4" aria-hidden /> not available
+            </span>
+          }
+          sub="no bank/ledger model recorded yet"
+          tone="slate"
           delay={0.15}
           onClick={() => onNavigate('statements')}
         />
       </SummaryCardGrid>
 
-      {/* 2 — ONE composed row. LEFT: the session's real money flow.
-          RIGHT: this month's movement snapshot. */}
+      {/* 2 — ONE composed row. LEFT: the real money flow. RIGHT: this
+          month's movement snapshot. */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <div className="lg:col-span-2 min-w-0">
           <OpenChartSection
             title="Collections vs Payroll"
-            subtitle={`${CURRENT_SESSION.label.replace('Session ', '')} · money in from fees vs salary paid · real ledger`}
+            subtitle={`${CURRENT_SESSION.label.replace('Session ', '')} · money in from fees (server) vs salary paid (payroll module)`}
             className="min-w-0"
             action={
               <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
@@ -206,7 +224,9 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
               </div>
             }
           >
-            {chartHasData ? (
+            {dashboard.loading ? (
+              <div className="h-[190px] w-full animate-pulse rounded-lg bg-muted/40" aria-busy="true" aria-label="Loading collections trend" />
+            ) : chartHasData ? (
               <InVsOutChart
                 data={inVsOut}
                 height={190}
@@ -223,13 +243,12 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
           </OpenChartSection>
         </div>
 
-        {/* Label honesty: the two series use DIFFERENT windows — fees are a
-            rolling 30-day collection total (fee-store monthCollection), payroll
-            is the current calendar month's confirmed total. State both. */}
-        <FinancePanel title="This Month" subtitle="fees: last 30 days · payroll: this month">
+        {/* This month — fees in (server, this calendar month) vs salary
+            out (payroll module, this month). Both windows stated. */}
+        <FinancePanel title="This Month" subtitle="fees: server calendar month · payroll: this month">
           <div className="space-y-3">
             <div className="grid grid-cols-3 gap-2">
-              <FinanceStat label="Money In" value={`+${formatINR(analytics.monthCollection, true)}`} accent="emerald" />
+              <FinanceStat label="Money In" value={`+${formatINR(monthFeeIn, true)}`} accent="emerald" />
               <FinanceStat label="Salary Out" value={`-${formatINR(currentMonth.recorded, true)}`} accent="rose" />
               <FinanceStat
                 label="Net"
@@ -240,23 +259,17 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
             <div className="rounded-lg border border-border/50 bg-muted/20 px-2.5 py-2">
               <div className="flex items-center justify-between text-[10px] mb-1.5">
                 <span className="text-muted-foreground font-medium">Session collection</span>
-                <span className="font-bold tabular-nums">{analytics.collectionRate}% <span className="text-muted-foreground font-normal">/ 85% target</span></span>
+                <span className="font-bold tabular-nums">{collectionRate}% <span className="text-muted-foreground font-normal">/ 85% target</span></span>
               </div>
-              <ProgressBar value={analytics.collectionRate} max={100} />
+              <ProgressBar value={collectionRate} max={100} />
             </div>
-            <div className="flex items-center justify-between text-[10px] px-0.5">
-              <span className="text-muted-foreground flex items-center gap-1">
-                {/* Illustrative — reserve coverage derives from the projected
-                    balance sheet (see Cash in Bank KPI + Statements banner). */}
-                <Landmark className="h-3 w-3" /> Bank covers {data.reserveCoverage} months of costs · illustrative
-              </span>
-              <button
-                onClick={() => onNavigate('statements')}
-                className="text-primary font-semibold hover:underline shrink-0"
-              >
-                Statements →
-              </button>
-            </div>
+            {/* Bank/reserve figures do not exist — honest note instead of
+                the old fabricated months-of-cover line. */}
+            <UnavailableNote>
+              <strong className="font-semibold text-foreground">Bank &amp; reserve position:</strong> not
+              available — the platform records no bank balance or expense ledger, so months-of-cover
+              cannot be computed honestly.
+            </UnavailableNote>
           </div>
         </FinancePanel>
       </div>
@@ -305,51 +318,69 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
           )}
         </FinancePanel>
 
-        {/* Only the payroll line is live (unpaid portion or forward monthly
-            payroll); vendor/utility/loan lines are projected amounts from the
-            illustrative books — the total is therefore an estimate too. */}
-        <FinancePanel title="Coming Up" subtitle="scheduled obligations · only payroll is live">
+        {/* Coming Up — only the payroll line is live; vendor/utility/loan
+            obligations have no ledger, so they render honestly muted. */}
+        <FinancePanel title="Coming Up" subtitle="scheduled obligations · only payroll is recorded">
           <div className="space-y-1">
-            {data.upcomingObligations.map((o) => (
-              <div key={o.id} className="flex items-center justify-between rounded-md hover:bg-muted/30 px-1.5 py-1.5 transition-colors">
-                <div className="min-w-0 flex items-center gap-2">
-                  <CalendarClock className={cn('h-3.5 w-3.5 shrink-0', o.severity === 'warning' ? 'text-amber-600' : 'text-muted-foreground')} />
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-medium truncate">{o.title}</p>
-                    <p className="text-[9px] text-muted-foreground">{o.due}</p>
-                  </div>
+            <div className="flex items-center justify-between rounded-md hover:bg-muted/30 px-1.5 py-1.5 transition-colors">
+              <div className="min-w-0 flex items-center gap-2">
+                <CalendarClock className={cn('h-3.5 w-3.5 shrink-0', payrollBalance > 0 ? 'text-amber-600' : 'text-muted-foreground')} />
+                <div className="min-w-0">
+                  <p className="text-[11px] font-medium truncate">
+                    Payroll{payrollBalance > 0 ? ' — unpaid portion' : ` · ${monthLabel}`}
+                  </p>
+                  <p className="text-[9px] text-muted-foreground">end of month · payroll module</p>
                 </div>
-                <span className={cn('text-[11px] font-bold tabular-nums shrink-0', o.severity === 'warning' ? 'text-amber-600' : 'text-foreground')}>
-                  {formatINR(o.amount, true)}
-                </span>
               </div>
-            ))}
+              <span className={cn('text-[11px] font-bold tabular-nums shrink-0', payrollBalance > 0 ? 'text-amber-600' : 'text-foreground')}>
+                {formatINR(payrollBalance > 0 ? payrollBalance : currentMonth.payable, true)}
+              </span>
+            </div>
+            <UnavailableLine label="Utilities" />
+            <UnavailableLine label="Vendor payments" />
+            <UnavailableLine label="Loan repayment" note="no loan ledger" />
           </div>
           <div className="flex items-center justify-between border-t border-border/50 mt-2 pt-2 px-1.5">
-            <p className="text-[10px] text-muted-foreground">Total due this month</p>
+            <p className="text-[10px] text-muted-foreground">Total recorded this month</p>
             <p className="text-xs font-bold tabular-nums">
-              {formatINR(data.upcomingObligations.reduce((s, o) => s + o.amount, 0), true)}
+              {formatINR(payrollBalance > 0 ? payrollBalance : currentMonth.payable, true)}
+              <span className="ml-1 text-[9px] font-semibold text-muted-foreground">payroll only</span>
             </p>
           </div>
         </FinancePanel>
       </div>
 
-      {/* 4 — Where money goes + real recent movement. */}
+      {/* 4 — Where money goes (honestly unavailable) + real recent movement. */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <FinancePanel
           title="Where Money Goes"
-          subtitle="annual operating spend · payroll line live (annualized), other lines illustrative"
+          subtitle="annual operating spend · requires an expense ledger"
           action={<Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1" onClick={() => onNavigate('reports')}>Reports <ArrowRight className="h-3 w-3" /></Button>}
         >
-          <HorizontalBars data={expenseBars} formatValue={(n) => formatINR(n, true)} />
+          <UnavailableNote>
+            <strong className="font-semibold text-foreground">Not available.</strong> The platform records
+            fee revenue only — salaries, utilities, vendors and maintenance have no expense ledger yet,
+            so no spend breakdown can be shown honestly. Payroll figures live in the Salary &amp; Payroll
+            module&apos;s own workspace.
+          </UnavailableNote>
         </FinancePanel>
 
         <FinancePanel
           className="lg:col-span-2"
           title="Recent Money Movement"
-          subtitle="live from fees and payroll"
+          subtitle="fee collections (server) and salary payments (payroll module)"
         >
-          {recentMovement.length === 0 ? (
+          {recentTxns.loading && recentMovement.length === 0 ? (
+            <div className="space-y-2" aria-busy="true" aria-label="Loading recent movement">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2.5 py-2">
+                  <div className="h-7 w-7 animate-pulse rounded-md bg-muted/60" />
+                  <div className="h-3 w-40 animate-pulse rounded bg-muted/50" />
+                  <div className="ml-auto h-3 w-16 animate-pulse rounded bg-muted/50" />
+                </div>
+              ))}
+            </div>
+          ) : recentMovement.length === 0 ? (
             <FinanceEmptyState icon={<Receipt className="h-5 w-5" />} title="No activity yet" description="Fee collections and salary payments will appear here." />
           ) : (
             <div className="divide-y divide-border/50 -mx-1 px-1 max-h-[300px] overflow-y-auto custom-scrollbar">
@@ -400,7 +431,7 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
               <div className="min-w-0">
                 <p className="text-xs font-semibold">Fee Management</p>
                 <p className="text-[10px] text-muted-foreground truncate">
-                  {formatINRCompact(analytics.totalCollected)} collected · {analytics.collectionRate}% of session
+                  {totalCollected !== undefined ? `${formatINR(totalCollected, true)} collected · ${collectionRate}% of billed` : 'loading server ledger…'}
                 </p>
               </div>
             </div>
@@ -421,7 +452,7 @@ export function FinanceOverviewSection({ data, onNavigate, onModuleNavigate }: P
                 <p className="text-xs font-semibold">Salary &amp; Payroll</p>
                 <p className="text-[10px] text-muted-foreground truncate">
                   {payrollBalance > 0
-                    ? <><span className="text-amber-600 font-semibold">{formatINRCompact(payrollBalance)}</span> to record · {monthLabel}</>
+                    ? <><span className="text-amber-600 font-semibold">{formatINR(payrollBalance, true)}</span> to record · {monthLabel}</>
                     : <>{monthLabel} payroll clear · {currentMonth.recordedCount} payments</>}
                 </p>
               </div>

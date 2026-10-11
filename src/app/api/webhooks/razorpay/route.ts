@@ -7,7 +7,7 @@ import { auditRateLimit } from '@/lib/security/audit'
 import { log } from '@/lib/observability/logger'
 import { runWithContext } from '@/lib/observability/context'
 import { sanitizeRequestId, newRequestId } from '@/lib/observability/http'
-import { rupeesFromPaise } from '@/lib/money'
+import { rupeesFromPaise, dec } from '@/lib/money'
 import { webhookSecretCandidates } from '@/lib/payments/tenant-gateway'
 
 /**
@@ -21,6 +21,18 @@ import { webhookSecretCandidates } from '@/lib/payments/tenant-gateway'
  *   3. Uses `timingSafeEqual` to prevent timing-attack signature forgery.
  *   4. Returns 400 if the signature is missing or doesn't match.
  *
+ * BATCH2-B3 — amount agreement + authorized≠captured:
+ *   · A valid signature proves the EVENT is genuine — not that the MONEY
+ *     matches the ledger. `payment.captured` events settle ONLY when the
+ *     gateway-reported paise amount equals the persisted txn amount
+ *     EXACTLY and the currency is INR; a mismatch marks the txn
+ *     reconciliationStatus 'exception' and NEVER creates a SUCCESS
+ *     payment or credits the ledger (fail-closed, operator triage).
+ *   · `payment.authorized` does NOT settle: authorized funds have not
+ *     been captured. The FeeTransaction stays PENDING; the event is
+ *     recorded for audit. Settlement happens only on payment.captured
+ *     (after the agreement gate) or the server-side checkout verify.
+ *
  * Idempotency (DB-persisted, Phase 9):
  *   1. Razorpay may retry a webhook up to 5 times if we don't ack quickly.
  *   2. Each event carries `event_id` (header) / `meta.event_id` (body).
@@ -30,7 +42,7 @@ import { webhookSecretCandidates } from '@/lib/payments/tenant-gateway'
  *   4. This survives server restarts — unlike the previous in-memory Set.
  *
  * Auto-reconciliation (Phase 9):
- *   1. On `payment.captured` / `payment.authorized`:
+ *   1. On `payment.captured` (ONLY — see the BATCH2-B3 note above):
  *      - Look up the FeeTransaction by `gatewayOrderId` (the order_id the
  *        gateway sent us — created by /api/fees/orders).
  *      - Update its status → SUCCESS, set gatewayPaymentId + signature,
@@ -246,6 +258,7 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
   const gatewayPaymentId = payment?.id
   const orderId = payment?.order_id
   const amountPaise: number | undefined = payment?.amount
+  const currency: string | undefined = payment?.currency
   const status: string | undefined = payment?.status
   const notes: Record<string, string> | undefined = payment?.notes
 
@@ -309,7 +322,7 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
   let processingError: string | null = null
 
   try {
-    if (eventType === 'payment.captured' || eventType === 'payment.authorized') {
+    if (eventType === 'payment.captured') {
       // Look up the FeeTransaction by gatewayOrderId (the order_id from /api/fees/orders).
       if (!orderId) throw new Error('payment.captured missing order_id')
       const txn = await db.feeTransaction.findUnique({ where: { gatewayOrderId: orderId } })
@@ -317,6 +330,38 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
         // Order wasn't created by /api/fees/orders — log + still ack 200 so
         // the gateway doesn't retry. This is a real anomaly to investigate.
         throw new Error(`No FeeTransaction found for gatewayOrderId ${orderId}`)
+      }
+
+      // ── BATCH2-B3: AMOUNT + CURRENCY AGREEMENT GATE (fail-closed) ──
+      // The signature proves the EVENT came from the gateway — it says
+      // nothing about WHAT was paid. Before this gate, a valid-signature
+      // `payment.captured` for the WRONG amount (partial capture, a
+      // different currency, an amount-tampered order) would settle the
+      // FULL persisted txn.amount into the ledger. The gateway's paise
+      // amount must equal the ledger's expectation EXACTLY, and the
+      // currency must be INR (the ledger's only currency). A mismatch is
+      // an EXCEPTION, never a settlement: the txn keeps its current
+      // state, the WebhookEvent row records the error, the gateway is
+      // acked (it did its job) — a human triages the divergence.
+      const expectedPaise = dec(txn.amount).times(100).toNumber()
+      const amountDisagrees =
+        !Number.isSafeInteger(amountPaise) ||
+        (amountPaise as number) <= 0 ||
+        (amountPaise as number) !== expectedPaise
+      const currencyDisagrees = currency !== undefined && currency !== 'INR'
+      if (amountDisagrees || currencyDisagrees) {
+        const detail = `gateway reports ${Number.isSafeInteger(amountPaise) ? amountPaise : 'an invalid'} paise (${currency ?? 'no currency'}) but the ledger order expects ${expectedPaise} paise INR`
+        await db.feeTransaction.update({
+          where: { id: txn.id },
+          data: {
+            reconciliationStatus: 'exception',
+            reconciliationNote: `AMOUNT MISMATCH — ${detail} (event ${eventId}) — NOT settled, operator triage required`,
+            reconciledAt: new Date(),
+            reconciledBy: 'razorpay-webhook',
+          },
+        })
+        matchedTransactionId = txn.id
+        throw new Error(`amount agreement failed for order ${orderId}: ${detail} — settlement refused`)
       }
 
       // Phase 3 (CRITICAL): the SUCCESS transition and the LEDGER
@@ -434,6 +479,32 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
       }
 
       console.log(`[webhooks/razorpay] reconciled txn ${txn.id} for order ${orderId} (ledger key ${ledgerKey})`)
+    } else if (eventType === 'payment.authorized') {
+      // ── BATCH2-B3: authorized ≠ captured ──────────────────────────
+      // `payment.authorized` means the instrument was authorized — the
+      // funds have NOT been captured. Settling here would credit the
+      // ledger (Fee.paid / Payment mirror) with money that can still
+      // fail capture. The FeeTransaction stays PENDING; settlement
+      // happens ONLY on `payment.captured` (this route, after the amount
+      // agreement gate) or the server-side checkout verify. The event is
+      // still persisted (the WebhookEvent row above) so the operator can
+      // see the authorization in the audit trail.
+      if (orderId) {
+        const txn = await db.feeTransaction.findUnique({
+          where: { gatewayOrderId: orderId },
+          select: { id: true, status: true },
+        })
+        if (txn) {
+          matchedTransactionId = txn.id
+          log('info', 'webhook_payment_authorized_not_settled', {
+            channel: 'webhook',
+            eventId,
+            orderId,
+            txnId: txn.id,
+            txnStatus: txn.status,
+          })
+        }
+      }
     } else if (eventType === 'payment.failed') {
       if (orderId) {
         const txn = await db.feeTransaction.findUnique({ where: { gatewayOrderId: orderId } })

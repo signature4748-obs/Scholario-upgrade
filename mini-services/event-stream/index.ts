@@ -173,10 +173,21 @@ async function ensureConnected(): Promise<boolean> {
     db = null
   }
   try {
+    // 2026-10-11 fix: the service hardcoded Supabase-pooler TLS, which made
+    // every local-dev connection fail ("server does not support SSL") and
+    // silently killed the poll loop + the 10-min RateLimitBucket sweep.
+    // Negotiate honestly: TLS only for non-loopback hosts (Supabase pooler
+    // in production deployments), plaintext for the local cluster.
+    const url = new URL(DATABASE_URL)
+    const isLoopback =
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname === '::1' ||
+      url.hostname === '[::1]'
     const client = new Client({
       connectionString: DATABASE_URL,
       // Supabase pooler TLS — certificate chain is not pinned locally
-      ssl: { rejectUnauthorized: false },
+      ssl: isLoopback ? false : { rejectUnauthorized: false },
     })
     client.on('error', (e) => {
       log(`[event-stream] pg client error: ${(e as Error).message}`)

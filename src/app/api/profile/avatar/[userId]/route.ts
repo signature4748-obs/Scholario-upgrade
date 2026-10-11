@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server'
 import { AppError } from '@/lib/security/errors'
 import { storageDownload } from '@/lib/storage/supabase'
 import { avatarLocation, AVATAR_EXT_TO_MIME, isSafeAvatarFileName } from '@/lib/avatar'
+import { isCanonicalSchoolRole } from '@/lib/security/permissions'
 
 export const runtime = 'nodejs'
 
@@ -12,9 +13,19 @@ export const runtime = 'nodejs'
  *
  * Visibility: the photo at <img src> is fetched with the viewer's cookie,
  * so this route can authenticate per-request. A viewer may see a user's
- * avatar when they ARE that user, share the school, or are the platform
- * super admin — the same trust boundary the rest of the ERP uses for
- * cross-role identity surfaces. Never public, never cached cross-user.
+ * avatar when they ARE that user or share the school — the same trust
+ * boundary the rest of the ERP uses for cross-role identity surfaces.
+ * Never public, never cached cross-user.
+ *
+ * GATE F — the viewer must hold an ACTIVE CANONICAL school session
+ * (PRINCIPAL | TEACHER | STUDENT), mirroring /api/auth/me: non-canonical
+ * role sessions (PARENT, MANAGEMENT, ACCOUNTANT, DRIVER, SUPER_ADMIN,
+ * stray values) hydrate as logged-out BEFORE any target lookup, so a
+ * forged session learns nothing about which users exist. The historical
+ * unreachable `viewer.role === 'SUPER_ADMIN'` cross-school grant is
+ * removed — platform identities never hold school sessions (login door +
+ * withUser + /me all refuse them), so the branch could never fire and
+ * only served to blur the canonical invariant.
  *
  * Phase 8A (8A-C9b): the bytes are read from the PRIVATE 'school-media'
  * bucket at the deterministic `avatars/<schoolId-or-'avatars'>/<fileName>`
@@ -29,6 +40,13 @@ export async function GET(
   try {
     const viewer = await getCurrentUser()
     if (!viewer) return unauthorized()
+    // GATE F — identity-surface invariant, mirroring /api/auth/me: ACTIVE
+    // canonical school role required. Checked BEFORE the target lookup so
+    // a non-canonical/forged session receives a bare 401 and learns
+    // nothing about which users exist.
+    if (viewer.status !== 'ACTIVE' || !isCanonicalSchoolRole(viewer.role)) {
+      return unauthorized()
+    }
 
     const { userId } = await params
     const target = await db.user.findUnique({
@@ -39,7 +57,6 @@ export async function GET(
 
     const allowed =
       viewer.id === target.id ||
-      viewer.role === 'SUPER_ADMIN' ||
       (target.schoolId !== null && viewer.schoolId === target.schoolId)
     if (!allowed) return forbidden()
 

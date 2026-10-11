@@ -62,6 +62,11 @@ export interface UserState {
   /** Only meaningful when the flag columns exist. */
   principals: number
   principalsFlagged: number | null
+  /** PRINCIPALs that never set their own password (passwordChangedAt IS NULL)
+   *  — every one of them must carry mustChangePassword = true; a principal
+   *  who completed the forced change legitimately clears the flag. */
+  principalsNeverSetOwnPassword: number | null
+  principalsNeverSetAndFlagged: number | null
   schoolPlaneNeverSetOwnPassword: number | null
   schoolPlaneNeverSetAndFlagged: number | null
   /** Rows violating the migration invariant (must be 0 after apply). */
@@ -348,6 +353,8 @@ export async function userState(columnsPresent: boolean): Promise<UserState> {
     schoolPlane: Number(schoolPlaneRow[0]?.n ?? 0),
     principals: byRole['PRINCIPAL'] ?? 0,
     principalsFlagged: null,
+    principalsNeverSetOwnPassword: null,
+    principalsNeverSetAndFlagged: null,
     schoolPlaneNeverSetOwnPassword: null,
     schoolPlaneNeverSetAndFlagged: null,
     schoolPlaneInvariantViolations: null,
@@ -357,6 +364,14 @@ export async function userState(columnsPresent: boolean): Promise<UserState> {
       `SELECT count(*)::int AS n FROM "User" WHERE role = 'PRINCIPAL' AND "mustChangePassword" = true`,
     )) as Array<{ n: number }>
     state.principalsFlagged = Number(flagged[0]?.n ?? 0)
+    const principalsNeverSet = (await mgmtQuery(
+      `SELECT count(*)::int AS n FROM "User" WHERE role = 'PRINCIPAL' AND "passwordChangedAt" IS NULL`,
+    )) as Array<{ n: number }>
+    state.principalsNeverSetOwnPassword = Number(principalsNeverSet[0]?.n ?? 0)
+    const principalsNeverSetFlagged = (await mgmtQuery(
+      `SELECT count(*)::int AS n FROM "User" WHERE role = 'PRINCIPAL' AND "passwordChangedAt" IS NULL AND "mustChangePassword" = true`,
+    )) as Array<{ n: number }>
+    state.principalsNeverSetAndFlagged = Number(principalsNeverSetFlagged[0]?.n ?? 0)
     const neverSet = (await mgmtQuery(
       `SELECT count(*)::int AS n FROM "User" WHERE "schoolId" IS NOT NULL AND role <> 'SUPER_ADMIN' AND "passwordChangedAt" IS NULL`,
     )) as Array<{ n: number }>
@@ -416,6 +431,61 @@ export async function productionHealth(url: string): Promise<{ ok: boolean; stat
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * The ACTIVE production topology — exactly two Vercel projects (the
+ * two-plane release contract). The deprecated `scholario-production`
+ * (unified legacy plane) is NOT a release surface and is never probed by
+ * migration verification: a migration is only "verified" when BOTH active
+ * planes are healthy on their own production health URLs.
+ */
+export const ACTIVE_PRODUCTION_HEALTH_URLS = {
+  platform: 'https://scholario-platform.vercel.app/health/ready',
+  school: 'https://scholario-app-virid.vercel.app/health/ready',
+} as const
+
+export type PlaneKey = 'platform' | 'school'
+
+export interface PlaneHealthResult {
+  plane: PlaneKey
+  url: string
+  ok: boolean
+  status: number
+  body: string
+}
+
+/**
+ * TWO-PLANE HEALTH GATE (Stage F of scripts/prod-migration/verify.ts, and the
+ * migration pipeline's post-apply contract): probes BOTH active planes and
+ * fails closed when EITHER is unhealthy. Callers may override the per-plane
+ * URL (the workflow never does — production uses the defaults above).
+ */
+export async function planesHealthGate(urls: {
+  platform?: string
+  school?: string
+}): Promise<{ results: PlaneHealthResult[]; problems: string[]; reportLines: string[] }> {
+  const resolved: Record<PlaneKey, string> = {
+    platform: urls.platform ?? ACTIVE_PRODUCTION_HEALTH_URLS.platform,
+    school: urls.school ?? ACTIVE_PRODUCTION_HEALTH_URLS.school,
+  }
+  const results: PlaneHealthResult[] = []
+  for (const plane of ['platform', 'school'] as const) {
+    const h = await productionHealth(resolved[plane])
+    results.push({ plane, url: resolved[plane], ok: h.ok, status: h.status, body: h.body })
+  }
+  const problems: string[] = []
+  const reportLines: string[] = []
+  for (const r of results) {
+    if (r.ok) {
+      reportLines.push(`${r.plane} plane ${r.url} — ready, database ok ✓`)
+    } else {
+      const detail = r.status === 0 ? r.body : `HTTP ${r.status}: ${r.body}`
+      reportLines.push(`${r.plane} plane ${r.url} — FAILED ✖ ${detail}`)
+      problems.push(`[${r.plane} plane] production health probe failed — ${detail}`)
+    }
+  }
+  return { results, problems, reportLines }
 }
 
 /** HEAD commit of this checkout (provenance logging only). */

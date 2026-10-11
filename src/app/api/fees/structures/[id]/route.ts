@@ -4,6 +4,7 @@ import { db, trackedTransaction } from '@/lib/db'
 import { withAuthz } from '@/lib/security/authz'
 import { AppError } from '@/lib/security/errors'
 import { num } from '@/lib/money'
+import { feeHeadInputSchema, resolveHeadKind } from '@/lib/fees/head-kind'
 
 export const runtime = 'nodejs'
 
@@ -95,6 +96,19 @@ export async function PATCH(
         })
       }
 
+      // FEE-ADMISSIONS MVP — kind/mandatory invariant (same truth table
+      // as the DB CHECK; absent kind derives from mandatory).
+      const resolvedKinds = heads.map((h) => {
+        const parsed = feeHeadInputSchema.safeParse(h)
+        if (!parsed.success) {
+          throw new AppError('INVALID_INPUT', {
+            publicMessage: 'Each fee head must have a name and an amount between 0 and 500000',
+            internalDetail: 'structures PATCH: head validation failed',
+          })
+        }
+        return resolveHeadKind(parsed.data)
+      })
+
       // ── 3-c fix: atomic head replacement + structure update ─────────
       const updated = await trackedTransaction('fee-structure-update', async (tx) => {
         await tx.feeHead.deleteMany({ where: { structureId: id } })
@@ -109,7 +123,8 @@ export async function PATCH(
               category: String(h.category || 'Other'),
               amount: parsedHeadAmounts[i].data,
               frequency: String(h.frequency || 'Monthly'),
-              mandatory: h.mandatory !== false,
+              mandatory: resolvedKinds[i].mandatory,
+              kind: resolvedKinds[i].kind,
               active: h.active !== false,
               sortOrder: i,
             },

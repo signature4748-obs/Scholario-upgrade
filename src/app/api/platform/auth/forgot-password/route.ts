@@ -7,7 +7,6 @@ import {
   RATE_LIMITS,
   checkRateLimitStrict,
   clientIpFromHeaders,
-  loginAccountKey,
 } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, emailSchema } from '@/lib/security/validation'
 import { platformAuditEvent } from '@/lib/platform/audit'
@@ -54,7 +53,7 @@ export async function POST(req: NextRequest) {
       })
     }
     const accountVerdict = await checkRateLimitStrict(
-      `rl:pf-forgot:acct:${loginAccountKey(email)}`,
+      `rl:pf-forgot:acct:${email.trim().toLowerCase()}`,
       RATE_LIMITS.platformForgotPasswordAccount,
     )
     if (!accountVerdict.allowed) {

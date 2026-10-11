@@ -3,11 +3,13 @@
 /**
  * FinanceDashboardModule — Principal's School Financial Control Center.
  *
- * Thin re-export of FinanceShell which orchestrates the 3-tab workspace:
- *   Overview · Statements · Reports
+ * Thin re-export of FinanceShell which orchestrates the tab workspace:
+ *   Overview · Statements · Reports · Settings
  *
- * All numbers derive from canonical Fee Management + Salary & Payroll + P&L
- * data via useFinanceData() — single source of truth.
+ * BATCH2-B5 — figures come from the server fee ledger (/api/dashboard,
+ * /api/fees/*) plus the Salary & Payroll module's own payroll numbers;
+ * every expense/asset/liability line honestly states it requires an
+ * expense ledger. No fabricated statements remain.
  */
 
 export { FinanceShell as FinanceDashboardModule } from './finance-shell'

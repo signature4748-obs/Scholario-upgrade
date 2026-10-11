@@ -5,9 +5,12 @@ import {
   sanitizeDisplayFilename,
   validateUploadBytes,
   readImageDimensions,
+  isTeacherMediaAdminRole,
+  TEACHER_MEDIA_ADMIN_ROLES,
   ADMISSION_UPLOAD_POLICY,
   TEACHER_UPLOAD_POLICY,
 } from '@/lib/security/upload'
+import { CANONICAL_SCHOOL_ROLES } from '@/lib/security/permissions'
 
 const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
@@ -109,5 +112,42 @@ describe('display-filename sanitization (metadata echo only)', () => {
     expect(sanitizeDisplayFilename('x'.repeat(500)).length).toBeLessThanOrEqual(120)
     expect(sanitizeDisplayFilename('')).toBe('file')
     expect(sanitizeDisplayFilename(null)).toBe('file')
+  })
+})
+
+describe('teacher-media administrative role guard (Gate E — canonical school-role invariant)', () => {
+  test('PRINCIPAL is the only authorized role', () => {
+    expect(isTeacherMediaAdminRole('PRINCIPAL')).toBe(true)
+  })
+  test('canonical non-admin school roles are denied', () => {
+    expect(isTeacherMediaAdminRole('TEACHER')).toBe(false)
+    expect(isTeacherMediaAdminRole('STUDENT')).toBe(false)
+  })
+  test('legacy/non-canonical vocabulary is fail-closed (Gate D finding A1)', () => {
+    for (const role of ['MANAGEMENT', 'ACCOUNTANT', 'DRIVER', 'PARENT', 'SUPER_ADMIN']) {
+      expect(isTeacherMediaAdminRole(role)).toBe(false)
+    }
+  })
+  test('stray / spoofed / mistyped values fail closed', () => {
+    for (const role of [
+      '',
+      'principal',
+      'Principal',
+      'PRINCIPAL ',
+      'PRINCIPALS',
+      'STAFF',
+      'PRINCIPAL\u0000',
+      null,
+      undefined,
+      0,
+    ]) {
+      expect(isTeacherMediaAdminRole(role as unknown as string)).toBe(false)
+    }
+  })
+  test('the admin allowlist is a subset of the canonical school roles (defense-in-depth contract)', () => {
+    expect(TEACHER_MEDIA_ADMIN_ROLES).toContain('PRINCIPAL')
+    for (const role of TEACHER_MEDIA_ADMIN_ROLES) {
+      expect((CANONICAL_SCHOOL_ROLES as readonly string[]).includes(role)).toBe(true)
+    }
   })
 })

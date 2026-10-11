@@ -4,7 +4,7 @@ import { db } from '@/lib/db'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { verifyFileToken } from '@/lib/security/file-signing'
-import { isValidStoredFileId, TEACHER_UPLOAD_POLICY } from '@/lib/security/upload'
+import { isValidStoredFileId, isTeacherMediaAdminRole, TEACHER_UPLOAD_POLICY } from '@/lib/security/upload'
 import { auditEvent } from '@/lib/security/audit'
 import {
   storedObjectLocation,
@@ -22,19 +22,22 @@ export const runtime = 'nodejs'
  *
  * Phase 1 hardening (baseline B-6 remediation — these handlers were
  * ANONYMOUS):
- *   - GET requires EITHER an authenticated staff session (PRINCIPAL /
- *     MANAGEMENT) OR a short-lived HMAC-signed URL token minted by
+ *   - GET requires EITHER an authenticated PRINCIPAL session (the
+ *     administrative role of the teacher-onboarding module — enforced
+ *     through the shared canonical-role guard isTeacherMediaAdminRole,
+ *     Gate E: every non-canonical role value, MANAGEMENT included, is
+ *     fail-closed) OR a short-lived HMAC-signed URL token minted by
  *     POST /api/teachers/upload/access. Teacher photos and signatures are
  *     PII — no anonymous reads.
- *   - DELETE requires an authenticated PRINCIPAL / MANAGEMENT session and
- *     is rate-limited + audited.
+ *   - DELETE requires an authenticated PRINCIPAL session (same
+ *     canonical-role guard) and is rate-limited + audited.
  *   - fileId stays an opaque server-minted id (traversal-proof regex).
  *
  * Phase 2 (3-c audit V5/V10) — UploadedFile OWNERSHIP REGISTRY:
  *   · GET (session path): when the file is REGISTERED, it must belong to
  *     the caller's school — a foreign-school row is a fail-safe 404 (it
  *     "does not exist"). UNREGISTERED (legacy, pre-registry) files keep
- *     the Phase-1 behavior: any school's PRINCIPAL/MANAGEMENT may read.
+ *     the Phase-1 behavior: any school's PRINCIPAL may read.
  *   · GET via a VALID SIGNED TOKEN stays allowed regardless of the
  *     registry — the token is an unguessable server-minted HMAC bound to
  *     this exact fileId (backward compatibility for links minted before
@@ -75,9 +78,11 @@ async function authorizeFileRead(
     return { verdict: 'allow', row: await registryRow(fileId) }
   }
 
-  // Path 2 — session (cookie or dev Bearer): PRINCIPAL / MANAGEMENT.
+  // Path 2 — session (cookie or dev Bearer): PRINCIPAL only (Gate E
+  // canonical-role guard — fail-closed for TEACHER/STUDENT and every
+  // non-canonical role value, MANAGEMENT included).
   const user = await getCurrentUser()
-  if (user && user.status === 'ACTIVE' && (user.role === 'PRINCIPAL' || user.role === 'MANAGEMENT')) {
+  if (user && user.status === 'ACTIVE' && isTeacherMediaAdminRole(user.role)) {
     if (user.schoolId) {
       // 3-c V5/V10: prefer the registry when a row exists.
       const row = await registryRow(fileId)
@@ -170,7 +175,7 @@ export async function DELETE(
   }
 
   const user = await getCurrentUser()
-  if (!user || user.status !== 'ACTIVE' || (user.role !== 'PRINCIPAL' && user.role !== 'MANAGEMENT')) {
+  if (!user || user.status !== 'ACTIVE' || !isTeacherMediaAdminRole(user.role)) {
     return NextResponse.json(
       { success: false, error: 'Authentication required to remove this file.' },
       { status: 401 },

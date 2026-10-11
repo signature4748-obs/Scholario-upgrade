@@ -72,7 +72,7 @@ Legacy `#platform` / `#superadmin` deep links on `/` redirect to `/platform` (fu
 28 endpoints, every one behind the platform authorization pipeline (see §4):
 
 - **auth**: `POST login` (MFA, anti-enumeration, dual rate-limit buckets) · `POST logout` · `POST logout-all` · `POST step-up` (TOTP re-verification) · `GET me` (console bootstrap + device list) · `POST demo-code` (dev preview only; production 404; serves only `isDemo` admins; returns a 30-second code, never the secret)
-- **schools**: `GET list` (q/status/page + counts) · `POST provision` (PENDING + founding principal) · `GET/[id]` dossier · `PATCH/[id]` metadata · `POST activate` · `POST suspend` (step-up + reason ≥10) · `POST reactivate` · `PATCH plan` (billing permission + step-up) · `PATCH feature-flags` · `DELETE/[id]` (step-up + typed exact-name confirmation) · `POST access` (support session)
+- **schools**: `GET list` (q/status/page + counts) · `POST provision` (PENDING + founding principal) · `GET/[id]` dossier · `PATCH/[id]` metadata · `POST activate` · `POST suspend` (step-up + reason ≥10) · `POST reactivate` · `PATCH plan` (billing permission + step-up) · `PATCH feature-flags` · `GET/PATCH admissions-issuance` (Batch 1/WS-C — see §11) · `DELETE/[id]` (step-up + typed exact-name confirmation) · `POST access` (support session)
 - **overview / health**: stats dashboard + system health (DB latency, counts, memory, recent auth failures)
 - **audit**: `GET` with q/action/school/admin filters + pagination
 - **announcements**: `GET/POST/DELETE` (manage) + `GET public` (rate-limited anonymous endpoint that powers the school login banner)
@@ -161,3 +161,37 @@ Production enrollment: `POST /api/platform/admins` generates a **random** TOTP s
 - `tests/security/platform-isolation.test.ts` — 45 live-HTTP tests covering the full Phase-6 isolation matrix (all four school roles × platform routes; multi-school management incl. provision→activate→suspend→delete; cross-tenant platform attempts; school-session↔platform-session disjointness incl. forged-cookie probes; MFA; step-up; rate limits; support-session read-only/expiry/revocation; session lifecycle).
 - Browser E2E (agent-browser): MFA login → console → schools → school detail → suspend (step-up gate dialog → TOTP → suspended) → reactivate → Access School → oversight banner + countdown → exit; school login shows the platform announcement and **no Super Admin anywhere**; zero horizontal overflow at 320px on every platform surface; 401-redirect to `/platform/login` after credential clear.
 - Gates at close: `tsc --noEmit` 0 errors · eslint 0 errors · **423/423 tests + 5/5 e2e green**.
+
+## 11. Admissions server-issuance control (Batch 1 / Workstream C)
+
+`GET/PATCH /api/platform/schools/[id]/admissions-issuance` — the audited
+control surface for the `admissionsServerIssuance` fail-closed financial
+feature flag (FEE-ADMISSIONS MVP). **Deliberately NOT part of
+`PATCH feature-flags`**: that route's vocabulary is the fail-open module
+availability set (`FLAGGABLE_MODULES`); this flag is a different class
+(absent = OFF, step-up required, readiness reporting, dedicated audit
+action).
+
+- **GET** (`schools.read`): `{ enabled, source: school|platform|default,
+  readiness }` where readiness = academic year set? + published
+  (current/scheduled) fee structures count + `ready` boolean. Honest at all
+  times — the operator sees exactly what is missing.
+- **PATCH** (`schools.manage` + step-up): body `{ enabled: boolean }` (strict
+  zod — anything else is 422). Writes ONLY the selected school's override
+  (other `featureFlags` keys preserved verbatim, other schools untouched).
+  One `platform.school.admissions_issuance_updated` PlatformAuditLog row per
+  success: actor, school, previous → new, readiness summary, IP, timestamp.
+  Never any credential or personal data in the row.
+- **Console UI**: school detail → Plan & Modules tab → "Admissions —
+  server-issued workflow" card (state + source line, readiness checklist,
+  switch). Enabling an UNREADY school opens an explicit "Enable an
+  unconfigured workflow?" confirmation — the workflow itself stays
+  fail-closed at runtime (`FEE_CONFIGURATION_REQUIRED` / `SESSION_NOT_SET`)
+  until the school is configured.
+- **Tests**: `tests/security/platform-admissions-issuance.test.ts` — 18
+  live-HTTP tests: fail-closed default, honest readiness (year/fee),
+  404/401 boundaries (incl. school-session disjointness), limited-admin
+  403 (GET allowed, PATCH forbidden, no audit), enable/disable transitions
+  with audit-row assertions, cross-school isolation, downstream
+  `/api/admissions/config` effect, strict input validation, unready-enable
+  audit, absent-key round-trip.

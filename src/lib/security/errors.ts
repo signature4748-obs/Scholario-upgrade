@@ -106,6 +106,17 @@ export type AppErrorCode =
   | 'ROOM_CONFLICT'
   | 'TEACHER_CONFLICT'
   | 'CLASS_CONFLICT'
+  // FEE-ADMISSIONS MVP — stable machine-readable 409 codes (same
+  // semantics as the timetable conflict codes: distinct failure causes,
+  // deterministic client behavior).
+  | 'FEE_CONFIGURATION_REQUIRED' // 409 — no applicable published fee structure (fail-closed quote)
+  | 'SESSION_NOT_SET' // 409 — school has no canonical academic year configured
+  | 'IDEMPOTENCY_KEY_REUSED' // 409 — same clientRequestId with a different payload
+  | 'INVALID_STATE' // 409 — illegal admission state transition (incl. terminal REJECTED)
+  | 'ADMISSION_SEQUENCE_EXHAUSTED' // 409 — ADM-NNNNNN sequence hit 999999
+  | 'ADMISSION_NUMBER_COLLISION' // 409 — bounded collision-retry loop failed
+  | 'EMAIL_TAKEN' // 409 — login email already exists (User.email global unique)
+  | 'CREDENTIAL_EXPIRED' // 401 — bootstrap credential expired; request a new one
   // deprecated aliases (legacy typed throws; classify to themselves)
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
@@ -156,6 +167,14 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   ROOM_CONFLICT: 409,
   TEACHER_CONFLICT: 409,
   CLASS_CONFLICT: 409,
+  FEE_CONFIGURATION_REQUIRED: 409,
+  SESSION_NOT_SET: 409,
+  IDEMPOTENCY_KEY_REUSED: 409,
+  INVALID_STATE: 409,
+  ADMISSION_SEQUENCE_EXHAUSTED: 409,
+  ADMISSION_NUMBER_COLLISION: 409,
+  EMAIL_TAKEN: 409,
+  CREDENTIAL_EXPIRED: 401,
   DATABASE_FAILURE: 500,
   INTERNAL_ERROR: 500,
   EXTERNAL_SERVICE_FAILURE: 503,
@@ -188,6 +207,20 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   TEACHER_CONFLICT:
     'That teacher is already booked at this day and period. Resolve the overlap before publishing.',
   CLASS_CONFLICT: 'That class already has a slot at this day and period. Resolve the overlap before publishing.',
+  FEE_CONFIGURATION_REQUIRED:
+    'No published fee structure applies to this class and academic year. Publish a fee structure before issuing admission fees.',
+  SESSION_NOT_SET:
+    "Your school's academic year is not configured. Set it in Settings before using server-issued admissions.",
+  IDEMPOTENCY_KEY_REUSED:
+    'This submission reference was already used for a different application.',
+  INVALID_STATE: 'This action is not allowed for the application in its current state.',
+  ADMISSION_SEQUENCE_EXHAUSTED:
+    'Admission numbers are exhausted for this school (maximum ADM-999999). Contact support.',
+  ADMISSION_NUMBER_COLLISION:
+    'Could not allocate a free admission number. Please retry; if it persists, contact support.',
+  EMAIL_TAKEN: 'This email address is already in use.',
+  CREDENTIAL_EXPIRED:
+    'This sign-in credential has expired. Ask your school office to issue a new one.',
   DATABASE_FAILURE: 'Internal server error',
   INTERNAL_ERROR: 'Internal server error',
   EXTERNAL_SERVICE_FAILURE: 'An external service is temporarily unavailable',

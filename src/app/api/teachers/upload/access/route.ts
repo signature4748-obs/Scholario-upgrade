@@ -21,8 +21,11 @@ export const runtime = 'nodejs'
  * tenant, so the MINT is now ownership-checked against the UploadedFile
  * registry: the file must be REGISTERED and belong to the CALLER's
  * school. An unregistered (legacy pre-registry) file is refused — we
- * cannot prove ownership, so we never sign a URL for it. (Access remains
- * PRINCIPAL / MANAGEMENT, rate-limited, every grant audited.)
+ * cannot prove ownership, so we never sign a URL for it. Access is
+ * PRINCIPAL-only (Gate E): the withUser canonical gate already refuses
+ * every non-canonical role before the allowlist is consulted — the
+ * allowlist now declares exactly the enforced contract, with no dead
+ * legacy entries. Rate-limited; every grant is audited.
  */
 export async function POST(req: NextRequest) {
   const requestId = newRequestId()
@@ -66,6 +69,6 @@ export async function POST(req: NextRequest) {
 
       return { url, expiresAt: new Date(expiresAt).toISOString() }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { roles: ['PRINCIPAL'] },
   )
 }

@@ -3,171 +3,166 @@
 /**
  * FeesTransactionsSection — serious financial transaction table.
  *
+ * BATCH2-B5 — SERVER TRUTH: the ledger rows come from
+ * GET /api/fees/transactions (the canonical FeeTransaction table — the
+ * same rows the verification queue, receipts and webhook settlements
+ * read), never the client fee-store. Amounts, statuses, receipts and
+ * settlement references are exactly what the server recorded.
+ *
  * - KPI cards in the shared Overview SummaryCard language (SaaS-STAGE-1):
  *   Transactions · Total Collected · Avg. Transaction
- * - Filters: search, class, mode, status, fee head, type, SOURCE
- *   (Office / Teacher / Class Teacher / Student — operational source;
- *   gateway is a channel, never a source). Desktop = inline selects via
- *   the shared FilterToolbar; tablet/mobile = ONE compact Filters button
- *   opening the filter sheet (reusable pattern for the whole app).
- * - Row actions: View, Print, Download (with tooltips) — no redundant Reprint
+ * - Filters: search, class, mode, status, fee head, SOURCE
+ *   (Office / Teacher / Class Teacher / Online — operational source;
+ *   gateway is a channel, never a source).
+ * - Row actions: View (canonical receipt document served by
+ *   GET /api/fees/receipts/[txnId]) and Print (same document, print
+ *   dialog auto-opens — File → Save as PDF is the export path).
  * - Row click: opens a slide-from-right Transaction Detail Drawer showing
- *   student info, fee info, payment info, gateway info (if available),
- *   offline info, balance before/after, receipt actions, and audit info.
- *
- * Phase 4 fixes (FEE-SETTINGS-TXN):
- *   - Summary metrics count ONLY successful transactions for amounts
- *     (Total Amount / Avg. Transaction). The Transactions count shows the
- *     success vs other split so the operator sees settled vs pending.
- *   - Export generates a real CSV from the filtered rows.
- *   - Detail drawer wired to real FeeTransaction fields (incl. gateway,
- *     settlement, reconciliation, refund fields).
- *
- * SaaS-STAGE-1 receipt consolidation: ONE canonical A5/A4 dual-copy
- * receipt engine (fee-receipt-a5.tsx) — the legacy thermal renderer and
- * the '80mm' paper option are retired.
+ *   student info, fee info, payment info, gateway + settlement info (if
+ *   available), rejection info, and the linked fee's live outstanding
+ *   balance (from GET /api/fees?studentId=).
+ * - Loading / error-with-retry / empty states for every surface.
  */
 
-import { useState, useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useMemo, useState } from 'react'
 import {
   Download, Printer, Eye,
   Receipt as ReceiptIcon, User, Calendar,
   CreditCard, Landmark, ArrowRightLeft, ShieldCheck, AlertCircle,
-  FileText, Banknote, Smartphone, Wallet,
-  ArrowUpRight, ReceiptText, IndianRupee,
+  FileText, Banknote,
+  ArrowUpRight, ReceiptText, IndianRupee, RefreshCw, AlertTriangle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from '@/components/ui/sheet'
 import {
-  useFeeData, useFeeStore, txnCategory, collectorSourceLabel,
-  type FeeTransaction, type PaymentMode, type PaymentStatus, type TransactionCategory,
-} from '@/lib/store/fee-store'
-import { useApplicationsStore } from '@/lib/store/applications-store'
+  useServerResource, serverMethodToMode, txnStatusToDisplay,
+  type ServerFeeTxn, type ServerFeeRow,
+} from './use-fee-server-data'
+import type { CollectorRole } from '@/lib/store/fee-store'
 import { formatINR, formatDate, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { SummaryCard, SummaryCardGrid } from '../shared/summary-card'
 import { FilterToolbar } from '../shared/filter-toolbar'
-import { FeePanel, FeeEmptyState, ModeIcon, modeAccent, FeeStatusBadge, TxnDateTime, SourceChip, txnSourceKey } from './fees-shared'
-import { FeeReceiptA5Preview, printReceiptA5, downloadReceiptA5 } from './fee-receipt-a5'
+import { FeePanel, FeeEmptyState, ModeIcon, modeAccent, FeeStatusBadge, DateTimeText, SourceChip } from './fees-shared'
+import { FeeReceiptViewer } from '@/components/shared/fee-collection/receipt-viewer'
+import { methodLabel, sourceLabel, txnDateTime } from '@/components/shared/fee-collection/txn-meta'
 import { toast } from 'sonner'
 import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
 
-// ─── Financial type badge (Core Fee / Examination Fee / Additional) ────
+// ─── source vocabulary (server FeeTransaction.source) ────────────────
 
-const TXN_TYPE_META: Record<TransactionCategory, { label: string; className: string }> = {
-  CORE: { label: 'Core Fee', className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20' },
-  EXAMINATION: { label: 'Exam Fee', className: 'bg-orange-500/10 text-orange-700 dark:text-orange-300 ring-1 ring-orange-500/20' },
-  ADDITIONAL: { label: 'Additional', className: 'bg-violet-500/10 text-violet-700 dark:text-violet-300 ring-1 ring-violet-500/20' },
+const SOURCE_LABELS: Record<string, string> = {
+  CLASS_TEACHER: 'Class Teacher',
+  PRINCIPAL: 'Office (Principal)',
+  SCHOOL_OFFICE: 'Office',
+  ONLINE: 'Online',
+  BANK_TRANSFER: 'Bank Transfer',
 }
 
-// Category dot tones used where the Type column merges into the Fee Head
-// cell (spec §7): Core = emerald, Examination = cyan, Additional = violet.
-const TXN_TYPE_DOT: Record<TransactionCategory, { label: string; dot: string }> = {
-  CORE: { label: 'Core Fee', dot: 'bg-emerald-500' },
-  EXAMINATION: { label: 'Examination Fee', dot: 'bg-cyan-500' },
-  ADDITIONAL: { label: 'Additional Charge', dot: 'bg-violet-500' },
+/** Server source → the shared SourceChip role vocabulary ('principal'
+ *  renders as Office). */
+function sourceRoleOf(source: string | null): CollectorRole {
+  switch (source) {
+    case 'CLASS_TEACHER': return 'class_teacher'
+    case 'ONLINE': return 'self'
+    default: return 'principal'
+  }
 }
 
-export function TransactionTypeBadge({ category, className }: { category: TransactionCategory; className?: string }) {
-  const meta = TXN_TYPE_META[category] ?? TXN_TYPE_META.CORE
-  return (
-    <span className={cn('inline-flex px-1.5 py-0.5 rounded-full text-[9px] font-semibold whitespace-nowrap', meta.className, className)}>
-      {meta.label}
-    </span>
-  )
-}
-
-export function txnCategoryLabel(category: TransactionCategory): string {
-  return (TXN_TYPE_META[category] ?? TXN_TYPE_META.CORE).label
+/** Filter facet value for a row's operational source. */
+function sourceKeyOf(source: string | null): string {
+  switch (source) {
+    case 'CLASS_TEACHER': return 'class_teacher'
+    case 'ONLINE': return 'self'
+    default: return 'office'
+  }
 }
 
 interface Props {
-  data: ReturnType<typeof useFeeData>
   onCollect?: () => void
 }
 
-// Mobile-only source facet label mapping (kept beside the table).
+// Source facet options — the server's operational source vocabulary
+// (Office / Class Teacher / Online student self-service).
 const SOURCE_OPTIONS = [
   { value: 'all', label: 'All Sources' },
   { value: 'office', label: 'Office' },
-  { value: 'teacher', label: 'Teacher' },
   { value: 'class_teacher', label: 'Class Teacher' },
-  { value: 'self', label: 'Student self-service' },
+  { value: 'self', label: 'Online / Student' },
 ]
 
-export function FeesTransactionsSection({ data }: Props) {
-  const { transactions, accounts } = data
-  const receiptSettings = useFeeStore((s) => s.receiptSettings)
-  const applications = useApplicationsStore((s) => s.applications)
-  // APPS-FIN-LINK-1 — application-bound payments resolve to their form title
-  // so the ledger (and the detail drawer) show WHICH application a payment
-  // belongs to. Rows whose application no longer resolves render unchanged.
-  const appTitleById = useMemo(
-    () => new Map(applications.map((a) => [a.id, a.title])) as Map<string, string>,
-    [applications],
-  )
+// Status filter options — server statuses mapped to the display vocabulary.
+const STATUS_OPTIONS = [
+  { value: 'all', label: 'All Status' },
+  { value: 'SUCCESS', label: 'Success' },
+  { value: 'PENDING', label: 'Pending' },
+  { value: 'UNDER_VERIFICATION', label: 'Under Verification' },
+  { value: 'REJECTED', label: 'Rejected' },
+  { value: 'FAILED', label: 'Failed' },
+  { value: 'REFUNDED', label: 'Refunded' },
+]
+
+// Mode filter options — server method vocabulary.
+const MODE_OPTIONS = [
+  { value: 'all', label: 'All Modes' },
+  { value: 'CASH', label: 'Cash' },
+  { value: 'UPI', label: 'UPI' },
+  { value: 'CARD', label: 'Card' },
+  { value: 'NET_BANKING', label: 'Net Banking' },
+  { value: 'BANK_TRANSFER', label: 'Bank Transfer' },
+]
+
+export function FeesTransactionsSection({ onCollect: _onCollect }: Props) {
+  // ── the canonical server ledger ────────────────────────────────────
+  const ledger = useServerResource<ServerFeeTxn[]>('/api/fees/transactions?limit=200')
+  const transactions = useMemo(() => ledger.data ?? [], [ledger.data])
 
   const [search, setSearch] = useState('')
-  const [modeFilter, setModeFilter] = useState<'all' | PaymentMode>('all')
-  const [statusFilter, setStatusFilter] = useState<'all' | PaymentStatus>('all')
+  const [modeFilter, setModeFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [classFilter, setClassFilter] = useState('all')
   const [feeHeadFilter, setFeeHeadFilter] = useState('all')
-  // FINANCIAL TYPE filter — Core Fee / Examination Fee / Additional Charge.
-  const [typeFilter, setTypeFilter] = useState<'all' | TransactionCategory>('all')
   // OPERATIONAL SOURCE filter (SaaS-STAGE-1) — Office / Teacher /
-  // Class Teacher / Student self-service. Gateway is a channel, not a source.
+  // Class Teacher / Online. Gateway is a channel, not a source.
   const [sourceFilter, setSourceFilter] = useState('all')
-  const [viewReceipt, setViewReceipt] = useState<FeeTransaction | null>(null)
 
-  // Escape closes the receipt preview modal (backdrop click already does).
-  useDismissOnEscape(() => setViewReceipt(null), !!viewReceipt)
+  // Canonical receipt document (GET /api/fees/receipts/[txnId]).
+  const [receiptTxn, setReceiptTxn] = useState<ServerFeeTxn | null>(null)
+  const [receiptAutoPrint, setReceiptAutoPrint] = useState(false)
+  useDismissOnEscape(() => setReceiptTxn(null), !!receiptTxn)
 
-  // Canonical A5/A4 receipt engine only (thermal consolidated away).
-  const doPrint = (t: FeeTransaction) => {
-    printReceiptA5(t, receiptSettings)
-    useFeeStore.getState().markReceiptHandled(t.id, 'Principal')
-    toast.success('Print dialog opened')
-  }
-  const doDownload = (t: FeeTransaction) => {
-    downloadReceiptA5(t, receiptSettings)
-    useFeeStore.getState().markReceiptHandled(t.id, 'Principal')
-    toast.success('Receipt downloaded', { description: `${t.receiptNo}.html` })
-  }
-  const [detailTxn, setDetailTxn] = useState<FeeTransaction | null>(null)
+  const [detailTxn, setDetailTxn] = useState<ServerFeeTxn | null>(null)
 
   const classes = useMemo(() => {
-    const set = new Set(transactions.map((t) => t.className))
+    const set = new Set(transactions.map((t) => t.className).filter((c): c is string => !!c))
     return Array.from(set).sort()
   }, [transactions])
   const feeHeads = useMemo(() => {
-    const set = new Set(transactions.map((t) => t.feeHead))
+    const set = new Set(transactions.map((t) => t.feeHeadName).filter((h): h is string => !!h))
     return Array.from(set).sort()
   }, [transactions])
 
   const filtered = useMemo(() => {
     return transactions.filter((t) => {
       const q = search.toLowerCase().trim()
-      if (q && !t.studentName.toLowerCase().includes(q) && !t.receiptNo.toLowerCase().includes(q) && !t.id.toLowerCase().includes(q) && !t.admissionNo.toLowerCase().includes(q)) return false
-      if (modeFilter !== 'all' && t.mode !== modeFilter) return false
+      if (q && !(t.studentName ?? '').toLowerCase().includes(q) && !(t.receiptNo ?? '').toLowerCase().includes(q) && !t.id.toLowerCase().includes(q)) return false
+      if (modeFilter !== 'all' && t.method !== modeFilter) return false
       if (statusFilter !== 'all' && t.status !== statusFilter) return false
       if (classFilter !== 'all' && t.className !== classFilter) return false
-      if (feeHeadFilter !== 'all' && t.feeHead !== feeHeadFilter) return false
-      if (typeFilter !== 'all' && txnCategory(t) !== typeFilter) return false
-      if (sourceFilter !== 'all' && txnSourceKey(t) !== sourceFilter) return false
+      if (feeHeadFilter !== 'all' && t.feeHeadName !== feeHeadFilter) return false
+      if (sourceFilter !== 'all' && sourceKeyOf(t.source) !== sourceFilter) return false
       return true
     })
-  }, [transactions, search, modeFilter, statusFilter, classFilter, feeHeadFilter, typeFilter, sourceFilter])
+  }, [transactions, search, modeFilter, statusFilter, classFilter, feeHeadFilter, sourceFilter])
 
-  // ─── Summary metrics (FIX) ────────────────────────────────────────
-  // Only count transactions with status === 'Success' for amount totals.
+  // ─── Summary metrics ────────────────────────────────────────────────
+  // Only count transactions with status === 'SUCCESS' for amount totals.
   // The Total count reflects ALL rows matching the current filters, and
-  // the Success count shows how many of those have settled — so the
-  // operator sees pending/failed volume separately.
+  // the Success count shows how many of those have settled.
   const successFiltered = useMemo(
-    () => filtered.filter((t) => t.status === 'Success'),
+    () => filtered.filter((t) => t.status === 'SUCCESS'),
     [filtered],
   )
   const totalAmount = successFiltered.reduce((s, t) => s + t.amount, 0)
@@ -175,12 +170,11 @@ export function FeesTransactionsSection({ data }: Props) {
   const totalCount = filtered.length
   const avgAmount = successCount > 0 ? Math.round(totalAmount / successCount) : 0
 
-  const activeFiltersCount = (modeFilter !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + (classFilter !== 'all' ? 1 : 0) + (feeHeadFilter !== 'all' ? 1 : 0) + (typeFilter !== 'all' ? 1 : 0) + (sourceFilter !== 'all' ? 1 : 0)
+  const activeFiltersCount = (modeFilter !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + (classFilter !== 'all' ? 1 : 0) + (feeHeadFilter !== 'all' ? 1 : 0) + (sourceFilter !== 'all' ? 1 : 0)
 
-  // Reset ghost in the toolbar — same fields the old collapsible panel's
-  // "Clear Filters" button cleared (search text intentionally untouched).
+  // Reset ghost in the toolbar.
   const handleResetFilters = () => {
-    setModeFilter('all'); setStatusFilter('all'); setClassFilter('all'); setFeeHeadFilter('all'); setTypeFilter('all'); setSourceFilter('all')
+    setModeFilter('all'); setStatusFilter('all'); setClassFilter('all'); setFeeHeadFilter('all'); setSourceFilter('all')
   }
 
   const handleExport = () => {
@@ -188,13 +182,13 @@ export function FeesTransactionsSection({ data }: Props) {
       toast.info('Nothing to export', { description: 'No transactions match the current filters.' })
       return
     }
-    const headers = ['Receipt No', 'Transaction ID', 'Student', 'Admission No', 'Class', 'Fee Head', 'Type', 'Amount', 'Mode', 'Source', 'Status', 'Date', 'Collected By', 'Verified By', 'Reference No', 'Gateway', 'Gateway Payment ID', 'Settlement ID', 'UTR', 'Academic Year']
+    const headers = ['Receipt No', 'Transaction ID', 'Student', 'Class', 'Fee Head', 'Amount', 'Mode', 'Source', 'Status', 'Recorded At', 'Collected By', 'Verified By', 'Reference No', 'Gateway', 'Gateway Payment ID', 'Settlement Payout', 'Reconciliation']
     const rows = filtered.map((t) => [
-      t.receiptNo, t.id, t.studentName, t.admissionNo, t.className, t.feeHead,
-      txnCategoryLabel(txnCategory(t)),
-      String(t.amount), t.mode, collectorSourceLabel(t.collectorRole), t.status, t.date, t.collectedBy,
-      t.verifiedBy ?? '', t.referenceNo ?? '',
-      t.gateway ?? '', t.gatewayPaymentId ?? '', t.settlementId ?? '', t.utr ?? '', t.academicYear,
+      t.receiptNo ?? '', t.id, t.studentName ?? '', t.className ?? '', t.feeHeadName ?? '',
+      String(t.amount), methodLabel(t.method), sourceLabel(t.source), txnStatusToDisplay(t.status),
+      t.createdAt, t.collectedByName ?? '',
+      t.verifiedByName ?? '', t.referenceNumber ?? '',
+      t.gatewayName ?? '', t.gatewayPaymentId ?? '', t.settlement?.payoutId ?? '', t.reconciliationStatus,
     ])
     const csv = [headers, ...rows]
       .map((r) => r.map((c) => {
@@ -215,22 +209,42 @@ export function FeesTransactionsSection({ data }: Props) {
     toast.success('Export downloaded', { description: `${filtered.length} transaction(s) exported to CSV.` })
   }
 
+  const openReceipt = (t: ServerFeeTxn, autoPrint: boolean) => {
+    setReceiptAutoPrint(autoPrint)
+    setReceiptTxn(t)
+  }
+
   return (
     <div className="space-y-4">
-      {/* KPI cards — the shared Overview SummaryCard language (SaaS-STAGE-1):
-          amounts from Success only; the Transactions card carries the
-          success vs other split as its sub line. */}
+      {/* 0 — hard error surface with retry */}
+      {ledger.error && ledger.data === null && (
+        <div
+          className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-4 py-3"
+          role="alert"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+          <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+            <span className="font-semibold text-foreground">Transaction ledger unavailable.</span> {ledger.error}
+          </p>
+          <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1.5" onClick={ledger.reload}>
+            <RefreshCw className="h-3 w-3" aria-hidden /> Retry
+          </Button>
+        </div>
+      )}
+
+      {/* KPI cards — amounts from server rows, Success only; the
+          Transactions card carries the success vs other split. */}
       <SummaryCardGrid columns={3}>
         <SummaryCard
           label="Transactions"
-          value={totalCount}
+          value={ledger.loading ? '—' : totalCount}
           tone="slate"
           icon={<ReceiptText className="h-4 w-4" />}
-          sub={`${successCount} successful · ${totalCount - successCount} other`}
+          sub={ledger.loading ? 'loading…' : `${successCount} successful · ${totalCount - successCount} other`}
         />
         <SummaryCard
           label="Total Collected"
-          value={formatINR(totalAmount, true)}
+          value={ledger.loading ? '—' : formatINR(totalAmount, true)}
           tone="emerald"
           icon={<IndianRupee className="h-4 w-4" />}
           sub="successful only · across filtered rows"
@@ -238,7 +252,7 @@ export function FeesTransactionsSection({ data }: Props) {
         />
         <SummaryCard
           label="Avg. Transaction"
-          value={formatINR(avgAmount, true)}
+          value={ledger.loading ? '—' : formatINR(avgAmount, true)}
           tone="teal"
           icon={<ArrowUpRight className="h-4 w-4" />}
           sub="per successful payment"
@@ -246,9 +260,9 @@ export function FeesTransactionsSection({ data }: Props) {
         />
       </SummaryCardGrid>
 
-      {/* Toolbar — shared responsive FilterToolbar (SaaS-STAGE-1):
-          desktop = search + Class/Mode/Status/Fee Head/Type/Source inline;
-          tablet/mobile = ONE compact Filters button → filter sheet. */}
+      {/* Toolbar — shared responsive FilterToolbar: desktop = search +
+          Class/Mode/Status/Fee Head/Source inline; tablet/mobile = ONE
+          compact Filters button → filter sheet. */}
       <FilterToolbar
         search={search}
         onSearchChange={setSearch}
@@ -257,10 +271,9 @@ export function FeesTransactionsSection({ data }: Props) {
         onReset={handleResetFilters}
         filters={[
           { id: 'class', label: 'Class', value: classFilter, onChange: setClassFilter, placeholder: 'All Classes', options: [{ value: 'all', label: 'All Classes' }, ...classes.map((c) => ({ value: c, label: c }))] },
-          { id: 'mode', label: 'Mode', value: modeFilter, onChange: (v) => setModeFilter(v as 'all' | PaymentMode), placeholder: 'All Modes', options: [{ value: 'all', label: 'All Modes' }, { value: 'UPI', label: 'UPI' }, { value: 'Card', label: 'Card' }, { value: 'Net Banking', label: 'Net Banking' }, { value: 'Cash', label: 'Cash' }, { value: 'Cheque', label: 'Cheque' }, { value: 'Bank Transfer', label: 'Bank Transfer' }] },
-          { id: 'status', label: 'Status', value: statusFilter, onChange: (v) => setStatusFilter(v as 'all' | PaymentStatus), placeholder: 'All Status', options: [{ value: 'all', label: 'All Status' }, { value: 'Success', label: 'Success' }, { value: 'Pending', label: 'Pending' }, { value: 'Under Verification', label: 'Under Verification' }, { value: 'Failed', label: 'Failed' }, { value: 'Refunded', label: 'Refunded' }] },
+          { id: 'mode', label: 'Mode', value: modeFilter, onChange: setModeFilter, placeholder: 'All Modes', options: MODE_OPTIONS },
+          { id: 'status', label: 'Status', value: statusFilter, onChange: setStatusFilter, placeholder: 'All Status', options: STATUS_OPTIONS },
           { id: 'head', label: 'Fee Head', value: feeHeadFilter, onChange: setFeeHeadFilter, placeholder: 'All Heads', options: [{ value: 'all', label: 'All Heads' }, ...feeHeads.map((h) => ({ value: h, label: h }))] },
-          { id: 'type', label: 'Type', value: typeFilter, onChange: (v) => setTypeFilter(v as 'all' | TransactionCategory), placeholder: 'All Types', options: [{ value: 'all', label: 'All Types' }, { value: 'CORE', label: 'Core Fee' }, { value: 'EXAMINATION', label: 'Examination Fee' }, { value: 'ADDITIONAL', label: 'Additional Charge' }] },
           { id: 'source', label: 'Source', value: sourceFilter, onChange: setSourceFilter, placeholder: 'All Sources', options: SOURCE_OPTIONS },
         ]}
         actions={
@@ -271,142 +284,122 @@ export function FeesTransactionsSection({ data }: Props) {
       />
 
       {/* Transactions table — module ledger recipe: flush p-0 body inside the
-          rounded-xl bordered panel; SOLID sticky header row (opaque bg so
-          scrolled rows never bleed through — the old muted/40 translucent
-          tint let the first row show through the header); py-2.5 text-xs
+          rounded-xl bordered panel; SOLID sticky header row; py-2.5 text-xs
           cells; hover:bg-muted/30 rows */}
       <FeePanel bodyClassName="p-0">
-        <div className="overflow-x-auto max-h-[36rem]">
-          <table className="w-full text-xs border-separate border-spacing-0">
-            <thead className="sticky top-0 z-10">
-              <tr className="h-10 bg-muted shadow-[inset_0_-1px_0_0_hsl(var(--border))]">
-                <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Receipt</th>
-                <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Student</th>
-                <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden lg:table-cell">Class</th>
-                <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden md:table-cell">Fee Head</th>
-                <th className="text-right px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Amount</th>
-                <th className="text-center px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden sm:table-cell">Mode</th>
-                <th className="text-center px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden xl:table-cell">Source</th>
-                <th className="text-center px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Status</th>
-                <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden lg:table-cell">Date</th>
-                <th className="text-center px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((t) => {
-                const dotMeta = TXN_TYPE_DOT[txnCategory(t)] ?? TXN_TYPE_DOT.CORE
-                return (
-                  <tr
-                    key={t.id}
-                    className="border-t border-border/30 hover:bg-muted/30 cursor-pointer transition-colors"
-                    onClick={() => setDetailTxn(t)}
-                  >
-                    <td className="px-3 py-2.5 font-mono text-[10px] text-muted-foreground whitespace-nowrap">{t.receiptNo}</td>
-                    <td className="px-3 py-2.5 text-xs">
-                      <p className="font-medium">{t.studentName}</p>
-                      <p className="text-[10px] text-muted-foreground font-mono">{t.admissionNo}</p>
-                    </td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{t.className}</td>
-                    {/* Fee Head + merged category chip (Type column removed): tiny
-                        colored dot — Core emerald / Exam cyan / Additional violet */}
-                    <td className="px-3 py-2.5 text-xs hidden md:table-cell max-w-[220px]">
-                      <span className="inline-flex items-center gap-1.5 min-w-0 max-w-full" title={`${dotMeta.label} · ${t.feeHead}`}>
-                        <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotMeta.dot)} aria-hidden />
-                        <span className="truncate text-muted-foreground">{t.feeHead}</span>
-                      </span>
-                      {t.applicationId && appTitleById.get(t.applicationId) && (
-                        <span
-                          className="block truncate text-[10px] text-muted-foreground/75 mt-px pl-3"
-                          title={`Payment linked to application: ${appTitleById.get(t.applicationId)}`}
-                        >
-                          <span aria-hidden>↳ </span>{appTitleById.get(t.applicationId)}
+        {ledger.loading ? (
+          <div className="space-y-1 p-3" aria-busy="true" aria-label="Loading transactions">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3 py-2.5">
+                <div className="h-3 w-24 animate-pulse rounded bg-muted/60" />
+                <div className="h-3 w-32 animate-pulse rounded bg-muted/60" />
+                <div className="ml-auto h-3 w-16 animate-pulse rounded bg-muted/50" />
+                <div className="h-3 w-14 animate-pulse rounded bg-muted/50" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="overflow-x-auto max-h-[36rem]">
+            <table className="w-full text-xs border-separate border-spacing-0">
+              <thead className="sticky top-0 z-10">
+                <tr className="h-10 bg-muted shadow-[inset_0_-1px_0_0_hsl(var(--border))]">
+                  <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Receipt</th>
+                  <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Student</th>
+                  <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden lg:table-cell">Class</th>
+                  <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden md:table-cell">Fee Head</th>
+                  <th className="text-right px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Amount</th>
+                  <th className="text-center px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden sm:table-cell">Mode</th>
+                  <th className="text-center px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden xl:table-cell">Source</th>
+                  <th className="text-center px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Status</th>
+                  <th className="text-left px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted hidden lg:table-cell">Date</th>
+                  <th className="text-center px-3 text-[11px] uppercase tracking-wider font-medium text-muted-foreground whitespace-nowrap bg-muted">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((t) => {
+                  const mode = serverMethodToMode(t.method)
+                  return (
+                    <tr
+                      key={t.id}
+                      className="border-t border-border/30 hover:bg-muted/30 cursor-pointer transition-colors"
+                      onClick={() => setDetailTxn(t)}
+                    >
+                      <td className="px-3 py-2.5 font-mono text-[10px] text-muted-foreground whitespace-nowrap">{t.receiptNo ?? '—'}</td>
+                      <td className="px-3 py-2.5 text-xs">
+                        <p className="font-medium">{t.studentName ?? '—'}</p>
+                        <p className="text-[10px] text-muted-foreground font-mono">{t.feeHeadName ?? '—'}</p>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">{t.className ?? '—'}</td>
+                      {/* Fee Head with the settlement payout reference when the
+                          money moved through a gateway payout batch. */}
+                      <td className="px-3 py-2.5 text-xs hidden md:table-cell max-w-[220px]">
+                        <span className="block truncate text-muted-foreground" title={t.feeHeadName ?? ''}>{t.feeHeadName ?? '—'}</span>
+                        {t.settlement?.payoutId && (
+                          <span className="block truncate text-[10px] text-muted-foreground/75 mt-px" title={`Gateway payout ${t.settlement.payoutId} · ${t.settlement.status}`}>
+                            <span aria-hidden>↳ </span>payout {t.settlement.payoutId}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-medium whitespace-nowrap">{formatINR(t.amount)}</td>
+                      <td className="px-3 py-2.5 text-center hidden sm:table-cell">
+                        <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ring-1', modeAccent(mode))}>
+                          <ModeIcon mode={mode} className="h-2.5 w-2.5" />
+                          {mode}
                         </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums font-medium whitespace-nowrap">{formatINR(t.amount)}</td>
-                    <td className="px-3 py-2.5 text-center hidden sm:table-cell">
-                      <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ring-1', modeAccent(t.mode))}>
-                        <ModeIcon mode={t.mode} className="h-2.5 w-2.5" />
-                        {t.mode}
-                      </span>
-                    </td>
-                    {/* Operational source (SaaS-STAGE-1): Office / Teacher /
-                        Class Teacher / Student — never the gateway channel. */}
-                    <td className="px-3 py-2.5 text-center hidden xl:table-cell">
-                      <SourceChip role={t.collectorRole} collectedBy={t.collectedBy} maxW="max-w-[120px]" />
-                    </td>
-                    <td className="px-3 py-2.5 text-center"><FeeStatusBadge status={t.status} /></td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell whitespace-nowrap"><TxnDateTime transaction={t} /></td>
-                    <td className="px-3 py-2.5 text-center">
-                      <div
-                        className="inline-flex items-center gap-0.5"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button onClick={() => setDetailTxn(t)} className="inline-flex items-center justify-center h-6 w-6 rounded text-primary hover:bg-primary/10 transition-colors" title="View details" aria-label={`View details of ${t.receiptNo}`}>
-                          <Eye className="h-3 w-3" />
-                        </button>
-                        <button onClick={() => doPrint(t)} className="inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors" title="Print receipt" aria-label={`Print receipt ${t.receiptNo}`}>
-                          <Printer className="h-3 w-3" />
-                        </button>
-                        <button onClick={() => doDownload(t)} className="inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors" title="Download receipt" aria-label={`Download receipt ${t.receiptNo}`}>
-                          <Download className="h-3 w-3" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-              {filtered.length === 0 && (
-                <tr><td colSpan={10} className="py-12"><FeeEmptyState icon={<ReceiptIcon className="h-6 w-6" />} title="No transactions match your filters" description="Try adjusting the search or filter criteria." /></td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                      </td>
+                      {/* Operational source (SaaS-STAGE-1): shared chip vocabulary */}
+                      <td className="px-3 py-2.5 text-center hidden xl:table-cell">
+                        <SourceChip role={sourceRoleOf(t.source)} collectedBy={t.collectedByName ?? undefined} maxW="max-w-[120px]" />
+                      </td>
+                      <td className="px-3 py-2.5 text-center"><FeeStatusBadge status={txnStatusToDisplay(t.status)} /></td>
+                      <td className="px-3 py-2.5 text-xs text-muted-foreground hidden lg:table-cell whitespace-nowrap">
+                        <DateTimeText date={t.createdAt} instant={t.createdAt} />
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <div
+                          className="inline-flex items-center gap-0.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button onClick={() => setDetailTxn(t)} className="inline-flex items-center justify-center h-6 w-6 rounded text-primary hover:bg-primary/10 transition-colors" title="View details" aria-label={`View details of ${t.receiptNo ?? t.id}`}>
+                            <Eye className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => openReceipt(t, true)}
+                            disabled={!t.receiptNo}
+                            className="inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title={t.receiptNo ? 'View / print receipt' : 'No receipt issued'} aria-label={`Print receipt ${t.receiptNo ?? ''}`}
+                          >
+                            <Printer className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+                {filtered.length === 0 && (
+                  <tr><td colSpan={10} className="py-12"><FeeEmptyState icon={<ReceiptIcon className="h-6 w-6" />} title={transactions.length === 0 ? 'No transactions recorded yet' : 'No transactions match your filters'} description={transactions.length === 0 ? 'Payments recorded through any counter appear here as the school ledger.' : 'Try adjusting the search or filter criteria.'} /></td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </FeePanel>
 
-      {/* Receipt preview modal */}
-      <AnimatePresence>
-        {viewReceipt && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Receipt ${viewReceipt.receiptNo} preview`}
-            className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setViewReceipt(null)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-card border border-border rounded-xl p-4 max-h-[90vh] overflow-y-auto w-[min(56rem,calc(100vw-2rem))]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* THE canonical A5/A4 dual-copy receipt (thermal consolidated away) */}
-              <FeeReceiptA5Preview
-                transaction={viewReceipt}
-                settings={receiptSettings}
-                onClose={() => setViewReceipt(null)}
-                onPrint={() => doPrint(viewReceipt)}
-                onDownload={() => doDownload(viewReceipt)}
-              />
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Canonical receipt document — GET /api/fees/receipts/[txnId];
+          the SAME receipt the verification workspace and teacher surfaces
+          render. Print (and File → Save as PDF) through the viewer. */}
+      <FeeReceiptViewer
+        txnId={receiptTxn ? receiptTxn.id : null}
+        open={!!receiptTxn}
+        onOpenChange={(o) => { if (!o) setReceiptTxn(null) }}
+        autoPrint={receiptAutoPrint}
+      />
 
       {/* Transaction detail drawer (slide-from-right) */}
       <TransactionDetailDrawer
         txn={detailTxn}
-        accounts={accounts}
-        receiptSettings={receiptSettings}
-        applicationTitle={detailTxn?.applicationId ? appTitleById.get(detailTxn.applicationId) : undefined}
         onClose={() => setDetailTxn(null)}
-        onViewReceipt={(t) => setViewReceipt(t)}
-        onPrint={doPrint}
-        onDownload={doDownload}
+        onViewReceipt={(t) => openReceipt(t, false)}
+        onPrint={(t) => openReceipt(t, true)}
       />
     </div>
   )
@@ -415,37 +408,25 @@ export function FeesTransactionsSection({ data }: Props) {
 // ─── Transaction Detail Drawer ──────────────────────────────────────
 
 interface DrawerProps {
-  txn: FeeTransaction | null
-  accounts: ReturnType<typeof useFeeData>['accounts']
-  receiptSettings: ReturnType<typeof useFeeStore.getState>['receiptSettings']
-  /** Resolved application title when this payment is bound to an
-   *  Applications & Forms submission (undefined otherwise). */
-  applicationTitle?: string
+  txn: ServerFeeTxn | null
   onClose: () => void
-  onViewReceipt: (t: FeeTransaction) => void
-  onPrint: (t: FeeTransaction) => void
-  onDownload: (t: FeeTransaction) => void
+  onViewReceipt: (t: ServerFeeTxn) => void
+  onPrint: (t: ServerFeeTxn) => void
 }
 
-function TransactionDetailDrawer({ txn, accounts, receiptSettings: _receiptSettings, applicationTitle, onClose, onViewReceipt, onPrint, onDownload }: DrawerProps) {
+function TransactionDetailDrawer({ txn, onClose, onViewReceipt, onPrint }: DrawerProps) {
+  // Live fee position for the linked student — GET /api/fees?studentId=
+  // (server truth for the outstanding balance line). Plain derivation —
+  // no memo needed for a .find over the fetched rows.
+  const feeRows = useServerResource<ServerFeeRow[]>(txn?.studentId ? `/api/fees?studentId=${txn.studentId}` : null)
+  const linkedFee = txn?.feeId
+    ? (feeRows.data ?? []).find((f) => f.id === txn.feeId) ?? null
+    : null
+
   if (!txn) return null
 
-  // Look up the student account + ledger to compute balance before/after.
-  const account = accounts.find((a) => a.studentId === txn.studentId)
-  let balanceBefore: number | null = null
-  let balanceAfter: number | null = null
-  if (account) {
-    const idx = account.ledger.findIndex((e) => e.id === `LED-${txn.studentId}-${txn.id}`)
-    if (idx >= 0) {
-      balanceAfter = account.ledger[idx].balance
-      balanceBefore = idx > 0 ? account.ledger[idx - 1].balance : 0
-    }
-  }
-
-  const isOnline = txn.paymentSource === 'online' || txn.paymentSource === 'gateway' || !!txn.gateway
-  const hasGateway = !!txn.gateway || !!txn.gatewayPaymentId || !!txn.gatewayOrderId || !!txn.settlementId
-  const isOffline = txn.paymentSource === 'offline' || ['Cash', 'Cheque', 'Bank Transfer'].includes(txn.mode)
-  const isRefunded = txn.status === 'Refunded' || !!txn.refundedAmount
+  const hasGateway = !!txn.gatewayName || !!txn.gatewayPaymentId || !!txn.gatewayOrderId || !!txn.settlement
+  const isRejected = txn.status === 'REJECTED'
 
   return (
     <Sheet open={!!txn} onOpenChange={(o) => { if (!o) onClose() }}>
@@ -459,7 +440,7 @@ function TransactionDetailDrawer({ txn, accounts, receiptSettings: _receiptSetti
             Transaction Detail
           </SheetTitle>
           <SheetDescription className="text-[11px]">
-            {txn.receiptNo} · {txn.id}
+            {txn.receiptNo ?? 'No receipt issued'} · {txn.id}
           </SheetDescription>
         </SheetHeader>
 
@@ -468,19 +449,19 @@ function TransactionDetailDrawer({ txn, accounts, receiptSettings: _receiptSetti
           {/* Status banner */}
           <div className={cn(
             'rounded-lg border px-3 py-2 flex items-center justify-between',
-            txn.status === 'Success' && 'bg-emerald-500/[0.04] border-emerald-500/20',
-            txn.status === 'Pending' && 'bg-amber-500/[0.04] border-amber-500/20',
-            txn.status === 'Under Verification' && 'bg-sky-500/[0.04] border-sky-500/20',
-            txn.status === 'Failed' && 'bg-rose-500/[0.04] border-rose-500/20',
-            txn.status === 'Refunded' && 'bg-violet-500/[0.04] border-violet-500/20',
+            txn.status === 'SUCCESS' && 'bg-emerald-500/[0.04] border-emerald-500/20',
+            txn.status === 'PENDING' && 'bg-amber-500/[0.04] border-amber-500/20',
+            txn.status === 'UNDER_VERIFICATION' && 'bg-sky-500/[0.04] border-sky-500/20',
+            (txn.status === 'FAILED' || txn.status === 'REJECTED') && 'bg-rose-500/[0.04] border-rose-500/20',
+            txn.status === 'REFUNDED' && 'bg-violet-500/[0.04] border-violet-500/20',
           )}>
             <div>
               <p className="text-[10px] uppercase text-muted-foreground font-semibold tracking-wider">Status</p>
-              <p className="text-base font-bold mt-0.5">{txn.status}</p>
+              <p className="text-base font-bold mt-0.5">{txnStatusToDisplay(txn.status)}</p>
             </div>
             <div className="text-right">
               <p className="text-[10px] uppercase text-muted-foreground font-semibold tracking-wider">Amount</p>
-              <p className={cn('text-xl font-bold tabular-nums mt-0.5', txn.status === 'Success' ? 'text-emerald-600' : txn.status === 'Failed' ? 'text-rose-600' : '')}>
+              <p className={cn('text-xl font-bold tabular-nums mt-0.5', txn.status === 'SUCCESS' ? 'text-emerald-600' : (txn.status === 'FAILED' || txn.status === 'REJECTED') ? 'text-rose-600' : '')}>
                 {formatINR(txn.amount)}
               </p>
             </div>
@@ -488,27 +469,18 @@ function TransactionDetailDrawer({ txn, accounts, receiptSettings: _receiptSetti
 
           {/* Student info */}
           <DetailSection icon={<User className="h-3.5 w-3.5" />} title="Student Information">
-            <DetailRow label="Student Name" value={txn.studentName} />
-            <DetailRow label="Admission No" value={txn.admissionNo} mono />
-            <DetailRow label="Class" value={txn.className} />
-            {account && <DetailRow label="Roll No" value={account.rollNo || '—'} />}
-            {account && <DetailRow label="Guardian" value={`${account.guardianName} · ${account.guardianPhone}`} />}
+            <DetailRow label="Student Name" value={txn.studentName ?? '—'} />
+            <DetailRow label="Class" value={txn.className ?? '—'} />
           </DetailSection>
 
           {/* Fee info */}
           <DetailSection icon={<FileText className="h-3.5 w-3.5" />} title="Fee Information">
-            <DetailRow
-              label="Type"
-              value={<TransactionTypeBadge category={txnCategory(txn)} />}
-            />
-            <DetailRow label="Fee Head / Charge" value={txn.feeHead} />
-            {applicationTitle && <DetailRow label="Linked Application" value={applicationTitle} />}
-            <DetailRow label="Purpose" value={txn.purpose} />
-            <DetailRow label="Academic Year" value={txn.academicYear} />
-            {account && (
+            <DetailRow label="Fee Head" value={txn.feeHeadName ?? '—'} />
+            {linkedFee && (
               <>
-                <DetailRow label="Net Payable" value={formatINR(account.netPayable)} />
-                <DetailRow label="Outstanding" value={formatINR(account.outstanding)} />
+                <DetailRow label="Fee Billed" value={formatINR(linkedFee.amount)} />
+                <DetailRow label="Fee Paid (now)" value={formatINR(linkedFee.paid)} accent="emerald" />
+                <DetailRow label="Fee Outstanding (now)" value={formatINR(Math.max(0, linkedFee.amount - linkedFee.paid))} accent="rose" />
               </>
             )}
           </DetailSection>
@@ -518,134 +490,125 @@ function TransactionDetailDrawer({ txn, accounts, receiptSettings: _receiptSetti
             <DetailRow
               label="Mode"
               value={
-                <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ring-1', modeAccent(txn.mode))}>
-                  <ModeIcon mode={txn.mode} className="h-2.5 w-2.5" />
-                  {txn.mode}
+                <span className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ring-1', modeAccent(serverMethodToMode(txn.method)))}>
+                  <ModeIcon mode={serverMethodToMode(txn.method)} className="h-2.5 w-2.5" />
+                  {methodLabel(txn.method)}
                 </span>
               }
             />
-            <DetailRow label="Status" value={<FeeStatusBadge status={txn.status} />} />
-            <DetailRow label="Receipt No" value={txn.receiptNo} mono />
+            <DetailRow label="Receipt No" value={txn.receiptNo ?? '—'} mono />
             <DetailRow label="Transaction ID" value={txn.id} mono />
-            <DetailRow label="Date / Time" value={`${formatDate(txn.date)} ${txn.verifiedAt ? `· verified ${formatRelativeTime(txn.verifiedAt)}` : ''}`} />
-            {txn.referenceNo && <DetailRow label="Reference No" value={txn.referenceNo} mono />}
-            {txn.meta?.bankName && <DetailRow label="Bank" value={txn.meta.bankName} />}
-            {txn.meta?.chequeNumber && <DetailRow label="Cheque No" value={`${txn.meta.chequeNumber}${txn.meta.chequeDate ? ` · ${formatDate(txn.meta.chequeDate)}` : ''}`} mono />}
-            {txn.meta?.cardLast4 && <DetailRow label="Card Last 4" value={`**** ${txn.meta.cardLast4}`} mono />}
-            {txn.meta?.upiId && <DetailRow label="UPI ID" value={txn.meta.upiId} mono />}
-            {txn.meta?.neftUtr && <DetailRow label="NEFT UTR" value={txn.meta.neftUtr} mono />}
+            <DetailRow label="Recorded" value={txnDateTime(txn.createdAt)} />
+            {txn.collectedAt && <DetailRow label="Collected At" value={txnDateTime(txn.collectedAt)} />}
+            {txn.verifiedAt && <DetailRow label="Verified At" value={`${formatDate(txn.verifiedAt)} · ${formatRelativeTime(txn.verifiedAt)}`} />}
+            {txn.referenceNumber && <DetailRow label="Reference No" value={txn.referenceNumber} mono />}
+            {txn.note && <DetailRow label="Note" value={txn.note} />}
           </DetailSection>
 
           {/* Gateway info (only if applicable) */}
           {hasGateway && (
             <DetailSection icon={<Landmark className="h-3.5 w-3.5" />} title="Gateway Information">
-              {txn.gateway && <DetailRow label="Gateway" value={<span className="capitalize">{txn.gateway}</span>} />}
+              {txn.gatewayName && <DetailRow label="Gateway" value={<span className="capitalize">{txn.gatewayName}</span>} />}
               {txn.gatewayPaymentId && <DetailRow label="Gateway Payment ID" value={txn.gatewayPaymentId} mono />}
               {txn.gatewayOrderId && <DetailRow label="Gateway Order ID" value={txn.gatewayOrderId} mono />}
-              {txn.settlementId && <DetailRow label="Settlement ID" value={txn.settlementId} mono />}
-              {txn.settlementStatus && (
+              {txn.settlement && (
                 <DetailRow
-                  label="Settlement Status"
+                  label="Settlement"
                   value={
                     <span className={cn(
                       'inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-semibold capitalize',
-                      txn.settlementStatus === 'settled' && 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-                      txn.settlementStatus === 'pending' && 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
-                      txn.settlementStatus === 'failed' && 'bg-rose-500/10 text-rose-700 dark:text-rose-300',
-                      txn.settlementStatus === 'reversed' && 'bg-sky-500/10 text-sky-700 dark:text-sky-300',
+                      txn.settlement.status === 'settled' && 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+                      txn.settlement.status === 'pending' && 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
+                      txn.settlement.status === 'failed' && 'bg-rose-500/10 text-rose-700 dark:text-rose-300',
+                      txn.settlement.status === 'reversed' && 'bg-sky-500/10 text-sky-700 dark:text-sky-300',
                     )}>
-                      {txn.settlementStatus}
+                      {txn.settlement.status}
                     </span>
                   }
                 />
               )}
-              {txn.utr && <DetailRow label="UTR" value={txn.utr} mono />}
-              {txn.gatewayFee !== undefined && <DetailRow label="Gateway Fee" value={formatINR(txn.gatewayFee)} accent="rose" />}
-              {txn.taxOnFee !== undefined && <DetailRow label="Tax on Fee" value={formatINR(txn.taxOnFee)} accent="rose" />}
-              {txn.netAmount !== undefined && <DetailRow label="Net Amount" value={formatINR(txn.netAmount)} accent="emerald" />}
-              {txn.reconciliationStatus && (
-                <DetailRow
-                  label="Reconciliation"
-                  value={
-                    <span className={cn(
-                      'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold capitalize',
-                      txn.reconciliationStatus === 'reconciled' && 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-                      txn.reconciliationStatus === 'pending' && 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
-                      txn.reconciliationStatus === 'unreconciled' && 'bg-muted text-muted-foreground',
-                      txn.reconciliationStatus === 'exception' && 'bg-rose-500/10 text-rose-700 dark:text-rose-300',
-                    )}>
-                      <ArrowRightLeft className="h-2.5 w-2.5" />
-                      {txn.reconciliationStatus}
-                    </span>
-                  }
-                />
-              )}
+              <DetailRow
+                label="Reconciliation"
+                value={
+                  <span className={cn(
+                    'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold capitalize',
+                    txn.reconciliationStatus === 'reconciled' && 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+                    txn.reconciliationStatus === 'pending' && 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
+                    txn.reconciliationStatus === 'unreconciled' && 'bg-muted text-muted-foreground',
+                    txn.reconciliationStatus === 'exception' && 'bg-rose-500/10 text-rose-700 dark:text-rose-300',
+                  )}>
+                    <ArrowRightLeft className="h-2.5 w-2.5" />
+                    {txn.reconciliationStatus}
+                  </span>
+                }
+              />
             </DetailSection>
           )}
 
-          {/* Refund info (if applicable) */}
-          {isRefunded && (
-            <DetailSection icon={<AlertCircle className="h-3.5 w-3.5" />} title="Refund Information">
-              {txn.refundedAmount !== undefined && <DetailRow label="Refunded Amount" value={formatINR(txn.refundedAmount)} accent="rose" />}
-              {txn.refundReason && <DetailRow label="Reason" value={txn.refundReason} />}
+          {/* Rejection info (if applicable) */}
+          {isRejected && (
+            <DetailSection icon={<AlertCircle className="h-3.5 w-3.5" />} title="Rejection">
+              {txn.rejectedByName && <DetailRow label="Rejected By" value={txn.rejectedByName} />}
+              {txn.rejectedAt && <DetailRow label="Rejected At" value={txnDateTime(txn.rejectedAt)} />}
+              <DetailRow label="Reason" value={txn.rejectionReason ?? '—'} />
             </DetailSection>
           )}
 
-          {/* Offline info (if applicable) */}
-          {isOffline && (
-            <DetailSection icon={<Banknote className="h-3.5 w-3.5" />} title="Offline Collection">
-              <DetailRow label="Collected By" value={txn.collectedBy} />
+          {/* Offline info (when collected in person) */}
+          {txn.collectedByName && (
+            <DetailSection icon={<Banknote className="h-3.5 w-3.5" />} title="Collection">
+              <DetailRow label="Collected By" value={txn.collectedByName} />
+              <DetailRow label="Operational Source" value={SOURCE_LABELS[txn.source ?? ''] ?? txn.source ?? 'School Office'} />
               <DetailRow
                 label="Verification"
                 value={
-                  txn.verifiedBy
-                    ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"><ShieldCheck className="h-2.5 w-2.5" /> Verified by {txn.verifiedBy}</span>
+                  txn.verifiedByName
+                    ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"><ShieldCheck className="h-2.5 w-2.5" /> Verified by {txn.verifiedByName}</span>
                     : <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300">Pending verification</span>
                 }
               />
-              {txn.verifiedAt && <DetailRow label="Verified At" value={`${formatDate(txn.verifiedAt)} · ${formatRelativeTime(txn.verifiedAt)}`} />}
-            </DetailSection>
-          )}
-
-          {/* Online collection info (if applicable) */}
-          {isOnline && !hasGateway && (
-            <DetailSection icon={<Smartphone className="h-3.5 w-3.5" />} title="Online Collection">
-              <DetailRow label="Collected By" value={txn.collectedBy} />
-              <DetailRow label="Source" value={<span className="capitalize">{txn.paymentSource ?? 'online'}</span>} />
-            </DetailSection>
-          )}
-
-          {/* Balance before / after (if computable from the student ledger) */}
-          {balanceAfter !== null && (
-            <DetailSection icon={<Wallet className="h-3.5 w-3.5" />} title="Account Balance Impact">
-              <DetailRow label="Balance Before" value={balanceBefore !== null ? formatINR(Math.max(0, balanceBefore)) : '—'} />
-              <DetailRow label="Payment Applied" value={`− ${formatINR(txn.amount)}`} accent="emerald" />
-              <DetailRow label="Balance After" value={formatINR(Math.max(0, balanceAfter))} />
             </DetailSection>
           )}
 
           {/* Audit info */}
           <DetailSection icon={<Calendar className="h-3.5 w-3.5" />} title="Audit Information">
-            <DetailRow label="Recorded On" value={formatDate(txn.date)} />
-            <DetailRow label="Collected By" value={txn.collectedBy} />
-            {txn.verifiedBy && <DetailRow label="Verified By" value={txn.verifiedBy} />}
+            <DetailRow label="Recorded On" value={txnDateTime(txn.createdAt)} />
+            <DetailRow label="Collected By" value={txn.collectedByName ?? '—'} />
+            {txn.verifiedByName && <DetailRow label="Verified By" value={txn.verifiedByName} />}
             {txn.verifiedAt && <DetailRow label="Verified At" value={`${formatDate(txn.verifiedAt)} · ${formatRelativeTime(txn.verifiedAt)}`} />}
-            <DetailRow label="Academic Year" value={txn.academicYear} />
           </DetailSection>
         </div>
 
-        {/* Footer actions */}
+        {/* Footer actions — the canonical receipt document; Print also
+            covers download via File → Save as PDF. */}
         <div className="border-t border-border bg-card px-4 py-3 flex items-center gap-2 flex-wrap">
-          <Button size="sm" className="gap-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => onViewReceipt(txn)}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1"
+            disabled={!txn.receiptNo}
+            onClick={() => onViewReceipt(txn)}
+          >
             <Eye className="h-3.5 w-3.5" /> View Receipt
           </Button>
-          <Button size="sm" variant="outline" className="gap-1" onClick={() => onPrint(txn)}>
-            <Printer className="h-3.5 w-3.5" /> Print
+          <Button
+            size="sm"
+            className="gap-1 bg-emerald-600 hover:bg-emerald-700"
+            disabled={!txn.receiptNo}
+            onClick={() => onPrint(txn)}
+          >
+            <Printer className="h-3.5 w-3.5" /> Print / Save PDF
           </Button>
-          <Button size="sm" variant="outline" className="gap-1" onClick={() => onDownload(txn)}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1"
+            disabled={!txn.receiptNo}
+            onClick={() => onPrint(txn)}
+          >
             <Download className="h-3.5 w-3.5" /> Download
           </Button>
-          </div>
+        </div>
       </SheetContent>
     </Sheet>
   )

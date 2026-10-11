@@ -104,6 +104,30 @@ export async function POST(req: NextRequest) {
       })
     }
 
+    // ── FEE-ADMISSIONS MVP — expiring bootstrap credentials ────────────
+    // An account that has NOT yet established its own password
+    // (mustChangePassword) authenticates with a server-provisioned
+    // one-time bootstrap credential. That credential EXPIRES
+    // (credentialExpiresAt, 48h default). Login with an expired
+    // bootstrap credential is refused with CREDENTIAL_EXPIRED — the
+    // verified recovery is the principal-plane reissue
+    // (POST /api/students/[id]/reset-credential). Accounts that already
+    // set their own password are unaffected (expiry is bootstrap-only).
+    if (user.mustChangePassword && user.credentialExpiresAt && user.credentialExpiresAt.getTime() < Date.now()) {
+      await auditEvent({
+        schoolId: user.schoolId ?? null,
+        userId: user.id,
+        action: 'LOGIN_CREDENTIAL_EXPIRED',
+        actorLabel: body.email,
+        ip,
+        requestId,
+        detail: 'Bootstrap credential expired — refused; recovery via principal reset flow',
+      }).catch(() => {})
+      throw new AppError('CREDENTIAL_EXPIRED', {
+        internalDetail: 'login: bootstrap credential expired',
+      })
+    }
+
     // ── PHASE 6 — platform/school boundary hardening ──────────────────
     // 1. The school authentication system NEVER issues a session for a
     //    platform identity. Legacy User rows with role SUPER_ADMIN are

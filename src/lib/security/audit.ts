@@ -49,6 +49,10 @@ export const AUDIT_ACTIONS = [
   'ACCOUNT_ACTIVATED',
   'PLATFORM_SETTING_CHANGE',
   'PAYMENT_VERIFIED',
+  // BATCH2-B4 — canonical fee-ledger refund (POST /api/fees/transactions/
+  // [id]/refund): a settled payment was reversed through the ledger with
+  // an audit trail; joins the canonical vocabulary.
+  'FEE_TRANSACTION_REFUNDED',
   'FILE_UPLOADED',
   'FILE_DELETED',
   'FILE_ACCESS_GRANTED',
@@ -101,6 +105,18 @@ export const AUDIT_ACTIONS = [
   'WEBSITE_NOTICE_PUBLISHED',
   'WEBSITE_NOTICE_UNPUBLISHED',
   'WEBSITE_ADMISSIONS_UPDATED',
+  // FEE-ADMISSIONS MVP — server-issued admissions lifecycle + credential
+  // events (school-scoped; the application event trail is the domain
+  // record, these are the security-plane mirrors).
+  'ADMISSION_SUBMITTED',
+  'ADMISSION_DRAFT',
+  'ADMISSION_UNDER_REVIEW',
+  'ADMISSION_ENROLLED',
+  'ADMISSION_REJECTED',
+  'CREDENTIAL_RESET',
+  // FEE-ADMISSIONS MVP — bootstrap credential expired at school-door
+  // login (48h one-time credential lifecycle).
+  'LOGIN_CREDENTIAL_EXPIRED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

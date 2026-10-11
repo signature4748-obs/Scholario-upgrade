@@ -597,7 +597,15 @@ describe('ACCOUNT-RECOVERY H · reset-password (consume + revoke + audit)', () =
     expect(JSON.parse(audit!.metadata!)).toMatchObject({ revokedSessions: expect.any(Number) })
 
     // New password logs in (password login path intact).
-    const relogin = await platformLoginHttp(PROBE_EMAIL, NEW_PASSWORD, `10.245.${MARKER.length % 250}.9`)
+    // Random octets (was `MARKER.length % 250` — a CONSTANT 10, so every
+    // local re-run of this file within 15 minutes shared the ONE login
+    // per-IP bucket 10.245.10.9 and the relogin 429'd on run 2+; CI never
+    // saw it — one run per fresh state. Same contract as RUN_IP/SAFETY_IP).
+    const relogin = await platformLoginHttp(
+      PROBE_EMAIL,
+      NEW_PASSWORD,
+      `10.245.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`,
+    )
     expect(relogin.status).toBe(200)
   })
 

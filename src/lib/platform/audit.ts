@@ -15,7 +15,8 @@
  *   platform.logout | platform.logout_all | platform.session.revoked
  *   platform.step_up.granted | platform.step_up.failed
  *   platform.school.provisioned | activated | suspended | reactivated |
- *     updated | plan_changed | feature_flags_updated | deleted
+ *     updated | plan_changed | feature_flags_updated |
+ *     admissions_issuance_updated | deleted
  *   platform.support_session.created | revoked | expired
  *   platform.school_session.revoked
  *   platform.announcement.published | deleted

@@ -1,3 +1,5 @@
+import { isCanonicalSchoolRole } from './permissions'
+
 /**
  * Central file-upload policy (Phase 1 — item 5).
  *
@@ -93,6 +95,36 @@ export const WEBSITE_UPLOAD_POLICY = {
   maxBytes: 4 * 1024 * 1024,
   dir: 'website',
 } as const
+
+/**
+ * GATE E — teacher-onboarding media authorization (the canonical
+ * school-role invariant for the /api/teachers/upload family).
+ *
+ * The teacher photo/signature pipeline is an ADMINISTRATIVE surface of
+ * the teacher-onboarding module: the ONLY authorized role is PRINCIPAL
+ * — one of the three canonical school roles. Fail-closed for every
+ * other value, exactly like withUser's canonical gate:
+ *   · canonical-but-non-admin roles (TEACHER, STUDENT) → denied;
+ *   · legacy vocabulary that may never authenticate (MANAGEMENT,
+ *     ACCOUNTANT, DRIVER, PARENT, SUPER_ADMIN) → denied — the raw
+ *     getCurrentUser() handlers in this family do not pass through
+ *     withUser, so this guard is what keeps a directly-minted
+ *     legacy-role session out (Gate D finding A1);
+ *   · stray / future values → denied.
+ *
+ * The conjunction is deliberate defense-in-depth: the role must be
+ * canonical AND in the admin allowlist, so a stray allowlist entry can
+ * never resurrect a non-canonical grant.
+ */
+export const TEACHER_MEDIA_ADMIN_ROLES = ['PRINCIPAL'] as const
+
+/** Fail-closed administrative-role check for the teacher-media family. */
+export function isTeacherMediaAdminRole(role: string): boolean {
+  return (
+    isCanonicalSchoolRole(role) &&
+    (TEACHER_MEDIA_ADMIN_ROLES as readonly string[]).includes(role)
+  )
+}
 
 /**
  * PIH-4c — EARLY oversized-body rejection.

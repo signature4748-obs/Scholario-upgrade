@@ -412,6 +412,18 @@ describe('§37 · STEP 2 — principal builds the school through real APIs', () 
   }, T)
 
   test('fees — catalogue → structure → publish → student fee → payment', async () => {
+    // The fee-admissions MVP made structure PUBLISH fail-closed without
+    // the school's academic year (H1-R2: 409 SESSION_NOT_SET, never a
+    // fabricated year). The REAL division of responsibility: the platform
+    // operator sets the tenant's session (PATCH is the school-plane's
+    // only year write path), the principal builds the fee structures
+    // within it. This step mirrors that ordering exactly.
+    const setYear = await platform(`/api/platform/schools/${schoolId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ academicYear: '2026-2027' }),
+    })
+    expect(setYear.status).toBe(200)
+
     const cat = await as('/api/fees/catalogue', {
       method: 'POST',
       body: JSON.stringify({ name: FEE_HEAD_NAME, amount: 12000, category: 'TUITION', frequency: 'ANNUAL' }),
