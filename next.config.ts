@@ -50,6 +50,12 @@ const nextConfig: NextConfig = {
       'motion',
       'date-fns',
     ],
+    // 2026-10-11 (build memory): `next build --webpack` on this route tree
+    // needs >3072MB V8 heap (the 4GB sandbox cgroup ABORTs the build worker
+    // — reproduced; CI's 7GB runners fit it). webpackMemoryOptimizations
+    // trades build speed for substantially lower build memory with identical
+    // output, keeping the canonical build runnable inside 4GB too.
+    webpackMemoryOptimizations: true,
     // Memory guidance for Turbopack runs (webpack mode ignores it; kept for
     // the times the project is booted without --webpack).
     turbopackMemoryLimit: 2200,

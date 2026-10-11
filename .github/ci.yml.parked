@@ -187,10 +187,16 @@ jobs:
 
       # 9. Gate 4 — the canonical production build (standalone server).
       #    No DB connection is needed; memory headroom for next build.
+      #    SCHOLARIO_PLANE (2026-10-11 parity fix): the two-plane gate
+      #    (src/lib plane config) fails-closed in production mode when
+      #    the plane is unset — the build worker ABORTS during page-data
+      #    collection without it (reproduced locally). CI builds the
+      #    platform plane; the Vercel runtime env selects plane behavior.
       - name: Production build (standalone)
         run: bun run build
         env:
           NODE_OPTIONS: --max-old-space-size=3072
+          SCHOLARIO_PLANE: platform
 
       # 10. Canonical seed corpus into the CI postgres (guards pass under
       #     DATABASE_ENV=test; all credentials come from
