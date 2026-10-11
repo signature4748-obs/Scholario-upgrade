@@ -37,6 +37,7 @@ import { Cloud, Lock, AlertTriangle, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { savePlatformToken } from '@/lib/platform-session-token'
+import { SupabaseAuthCard } from '@/components/auth/supabase-auth-card'
 import { AuthFailure, authFailureRefLine, classifyAuthFetchError } from '@/lib/auth-failure'
 import { toast } from 'sonner'
 
@@ -79,6 +80,17 @@ export default function PlatformLoginPage() {
     const code = searchParams.get('error')
     if (code) setGoogleError(GOOGLE_ERROR_MESSAGES[code] ?? 'Sign-in failed. Please try again.')
   }, [searchParams])
+
+  /* SUPABASE AUTH PHASE 1 — provider-identity success on the platform
+     plane: the server exchange returned the SAME contract as the
+     platform login (admin identity, permissions, expiry), so the
+     post-login transition is identical to `submit`'s success branch. */
+  const handleProviderAuthed = (data: { sessionToken?: string }) => {
+    if (data.sessionToken) savePlatformToken(data.sessionToken)
+    toast.success('Signed in to the control plane')
+    const next = searchParams.get('next')
+    router.replace(next && next.startsWith('/platform') ? next : '/platform')
+  }
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -337,6 +349,13 @@ export default function PlatformLoginPage() {
                 minutes. Every attempt is audited.
               </p>
             </form>
+
+            {/* SUPABASE AUTH PHASE 1 — provider-identity card for the
+                platform plane (renders nothing while the flag is down;
+                the server exchange enforces the FULL platform login
+                invariants incl. TOTP policy and the school/platform
+                boundary). */}
+            <SupabaseAuthCard plane="platform" onAuthed={handleProviderAuthed} accent="#0d9488" />
           </motion.section>
         </div>
       </main>

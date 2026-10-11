@@ -236,6 +236,18 @@ model User {
   /// /api/auth/change-password (null = never; the migration's
   /// mustChangePassword input).
   passwordChangedAt DateTime?
+  /// SUPABASE AUTH PHASE 1 — provider identity pointer (docs/AUTH_ARCHITECTURE.md
+  /// §7 staged adoption): the Supabase Auth (GoTrue) user id this account is
+  /// linked to, NULL while the account still authenticates with the custom
+  /// scrypt path only. The Postgres row stays the application identity of
+  /// record FOREVER — this is a pointer, never the join key of record, and it
+  /// is written only through the server-side linking flows (verified Supabase
+  /// identity + proof of the existing Scholario password, or the natural
+  /// password-change cutover). Unique: one provider identity maps to at most
+  /// one school-plane account.
+  authUserId String? @unique
+  /// When the provider link was established (audit marker).
+  authLinkedAt DateTime?
   /// FEE-ADMISSIONS MVP — expiry for server-provisioned bootstrap
   /// credentials (mustChangePassword accounts). While set and in the
   /// future, the account may authenticate with the bootstrap credential
@@ -2731,6 +2743,13 @@ model PlatformAdmin {
   /// googleSub, so sign-in never breaks on an email change).
   googleEmail    String?
   googleLinkedAt DateTime?
+  /// SUPABASE AUTH PHASE 1 — provider identity pointer (same staged-adoption
+  /// contract as User.authUserId, on the PLATFORM credential store: the two
+  /// identity planes keep disjoint linking state). NULL while the admin
+  /// authenticates with the custom scrypt path only; written only through the
+  /// server-side linking flows. Unique per plane.
+  authUserId   String?  @unique
+  authLinkedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -117,6 +117,16 @@ export type AppErrorCode =
   | 'ADMISSION_NUMBER_COLLISION' // 409 — bounded collision-retry loop failed
   | 'EMAIL_TAKEN' // 409 — login email already exists (User.email global unique)
   | 'CREDENTIAL_EXPIRED' // 401 — bootstrap credential expired; request a new one
+  // SUPABASE AUTH PHASE 1 — provider-identity exchange codes (stable,
+  // machine-readable; the client drives its linking/verification UX from
+  // these — see src/app/api/auth/supabase/exchange/route.ts).
+  | 'AUTH_PROVIDER_UNREACHABLE' // 503 — the identity provider could not be reached
+  | 'SUPABASE_AUTH_UNCONFIGURED' // 503 — server env missing (never a client error)
+  | 'NO_SCHOLARIO_ACCOUNT' // 403 — verified provider identity, but no school/platform account maps to it yet
+  | 'LINK_PASSWORD_REQUIRED' // 403 — first-link: prove account ownership with the current Scholario password
+  | 'PHONE_AMBIGUOUS' // 403 — verified phone matches multiple accounts (household numbers); use email
+  | 'AUTH_LINK_CONFLICT' // 403 — the account or provider identity is already linked elsewhere
+  | 'IDENTITY_UNVERIFIED' // 403 — the provider email/phone is not verified yet; verify first
   // deprecated aliases (legacy typed throws; classify to themselves)
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
@@ -186,6 +196,13 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   FEATURE_DISABLED: 403,
   SUBSCRIPTION_REQUIRED: 403,
   PASSWORD_CHANGE_REQUIRED: 403,
+  AUTH_PROVIDER_UNREACHABLE: 503,
+  SUPABASE_AUTH_UNCONFIGURED: 503,
+  NO_SCHOLARIO_ACCOUNT: 403,
+  LINK_PASSWORD_REQUIRED: 403,
+  PHONE_AMBIGUOUS: 403,
+  AUTH_LINK_CONFLICT: 403,
+  IDENTITY_UNVERIFIED: 403,
 }
 
 const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
@@ -234,6 +251,17 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   STEP_UP_REQUIRED: 'This action requires recent multi-factor verification',
   SCHOOL_SUSPENDED: "Your school's Scholario access is currently suspended",
   FEATURE_DISABLED: 'This module is currently disabled',
+  AUTH_PROVIDER_UNREACHABLE: 'The sign-in provider is temporarily unreachable. Please try again.',
+  SUPABASE_AUTH_UNCONFIGURED: 'The sign-in provider is not configured on the server',
+  NO_SCHOLARIO_ACCOUNT:
+    'Your identity is verified, but no Scholario account is associated with it yet. Ask your school administrator for access.',
+  LINK_PASSWORD_REQUIRED:
+    'To connect this sign-in method, confirm your current Scholario password once.',
+  PHONE_AMBIGUOUS:
+    'This phone number is shared by multiple accounts. Sign in with your email instead.',
+  AUTH_LINK_CONFLICT:
+    'This account or sign-in method is already connected to a different identity. Contact support if this is unexpected.',
+  IDENTITY_UNVERIFIED: 'Verify your email address or phone number first, then try again.',
 }
 
 /** Heuristics that mark an error message as UNSAFE for client exposure. */

@@ -7,6 +7,7 @@ import { Eye, EyeOff, Info, AlertTriangle } from 'lucide-react'
 import { useAuth, type Role } from '@/lib/store/auth-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
 import { saveSessionToken } from '@/lib/auth-session-token'
+import { SupabaseAuthCard } from '@/components/auth/supabase-auth-card'
 import {
   AuthFailure,
   authFailureFromEnvelope,
@@ -284,6 +285,45 @@ export function LoginPage({
     }
   }
 
+  /* SUPABASE AUTH PHASE 1 — provider-identity success. The exchange
+     endpoint returned the SAME contract as /api/auth/login (the server
+     applied every login invariant), so this handler is the EXACT
+     post-fetch success logic of handleLogin, extracted verbatim: the
+     server-resolved role drives the panel, the dev bearer token is
+     persisted before mount, and the special shells (locked/
+     must-change) hydrate before the panel mounts. */
+  const handleProviderAuthed = (data: {
+    id?: string
+    email?: string
+    name?: string
+    role?: string
+    sessionToken?: string
+    subscriptionStatus?: string
+    mustChangePassword?: boolean
+    entitlement?: { businessAllowed?: boolean }
+  }) => {
+    startAuth()
+    setPhase('loading')
+    const serverRole = data.role?.toLowerCase()
+    const role: Role =
+      serverRole === 'principal' || serverRole === 'teacher' || serverRole === 'student'
+        ? serverRole
+        : 'principal'
+    if (data.sessionToken) saveSessionToken(data.sessionToken)
+    if (
+      (data.subscriptionStatus && data.subscriptionStatus !== 'ACTIVE') ||
+      data.entitlement?.businessAllowed === false ||
+      data.mustChangePassword === true
+    ) {
+      void useCurrentUser.getState().refresh().catch(() => undefined)
+    }
+    login(role, {
+      ...(data.id ? { id: data.id } : {}),
+      ...(data.name ? { name: data.name } : {}),
+      ...(data.email ? { email: data.email } : {}),
+    })
+  }
+
   return (
     <div
       style={loginBrandStyle(school.primaryColor)}
@@ -321,6 +361,13 @@ export function LoginPage({
               }}
               onLogin={() => handleLogin()}
               onForgotPassword={() => setForgotOpen(true)}
+              providerCard={
+                <SupabaseAuthCard
+                  plane="school"
+                  onAuthed={handleProviderAuthed}
+                  accent={school.primaryColor || '#0f766e'}
+                />
+              }
             />
           </motion.main>
         ) : (
@@ -518,6 +565,10 @@ interface RightPaneProps {
   onPasswordChange: (v: string) => void
   onLogin: () => void
   onForgotPassword: () => void
+  /** SUPABASE AUTH PHASE 1 — optional provider-identity card (renders
+   *  nothing when the feature flag is down). Injected as a node so the
+   *  card owns its own state and this pane stays form-only. */
+  providerCard?: React.ReactNode
 }
 
 function RightPane({
@@ -530,6 +581,7 @@ function RightPane({
   onPasswordChange,
   onLogin,
   onForgotPassword,
+  providerCard,
 }: RightPaneProps) {
   const [passwordVisible, setPasswordVisible] = useState(false)
   return (
@@ -712,6 +764,11 @@ function RightPane({
             </button>
           </form>
         </motion.div>
+
+        {/* SUPABASE AUTH PHASE 1 — the provider-identity card (null when
+            the flag is down or the provider env is absent; the status
+            probe decides — honest off). */}
+        {providerCard}
       </div>
     </section>
   )
