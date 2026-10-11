@@ -14,8 +14,9 @@
  *   4. state sync    — email.bounced / .complained / .failed flip the
  *                      EmailDelivery row (matched by providerMessageId)
  *                      to BOUNCED / COMPLAINED / FAILED with a human
- *                      lastError; email.delivered records evidence only
- *                      and leaves the send-side row untouched
+ *                      lastError; email.delivered is DELIVERY
+ *                      EVIDENCE — a QUEUED/PENDING row becomes SENT;
+ *                      an already-SENT row is untouched (idempotent)
  *   5. non-activating— unknown event types are recorded + acknowledged
  *                      (processed:false), never an error
  *
@@ -77,12 +78,12 @@ function signedEvent(name: string, type: string, data: Record<string, unknown>, 
 }
 
 /** An EmailDelivery row in this suite's namespace (cleaned in afterAll). */
-async function deliveryRow(name: string): Promise<string> {
+async function deliveryRow(name: string, status: 'SENT' | 'QUEUED' | 'PENDING' = 'SENT'): Promise<string> {
   const row = await db.emailDelivery.create({
     data: {
       template: 'admission-enquiry-received',
       recipient: `rw-${MARKER}-${name}@example.test`,
-      status: 'SENT',
+      status,
       attempts: 1,
       providerMessageId: msgId(name),
       dedupeKey: dk(name),
@@ -190,14 +191,47 @@ describe.skipIf(!SECRET)('RESEND-WEBHOOK · signed lifecycle', () => {
     expect(row?.lastError).toContain('suppressed address')
   })
 
-  test('email.delivered → recorded evidence only; SENT row untouched', async () => {
+  test('email.delivered (QUEUED row) → SENT — the delivery evidence upgrade', async () => {
+    // Provider 2xx wrote QUEUED (accepted, unconfirmed); the delivered
+    // event is the ONLY thing that upgrades it to SENT.
+    const id = await deliveryRow('delivered-queued', 'QUEUED')
+    const res = await signedEvent('delivered-queued', 'email.delivered', {
+      id: msgId('delivered-queued'),
+      to: [`rw-${MARKER}-delivered-queued@example.test`],
+    })
+    expect(res.status).toBe(200)
+    expect(res.body?.processed).toBe(true)
+    expect(res.body?.matched).toBe(1)
+
+    const row = await db.emailDelivery.findUnique({ where: { id } })
+    expect(row?.status).toBe('SENT')
+    expect(row?.lastError).toBeNull()
+    expect(row?.providerMessageId).toBe(msgId('delivered-queued'))
+  })
+
+  test('email.delivered (PENDING row — crashed mid-send) → SENT', async () => {
+    // A send that died between provider acceptance and the row write:
+    // provider evidence still upgrades it honestly.
+    const id = await deliveryRow('delivered-pending', 'PENDING')
+    const res = await signedEvent('delivered-pending', 'email.delivered', {
+      id: msgId('delivered-pending'),
+    })
+    expect(res.status).toBe(200)
+    expect(res.body?.matched).toBe(1)
+
+    const row = await db.emailDelivery.findUnique({ where: { id } })
+    expect(row?.status).toBe('SENT')
+  })
+
+  test('email.delivered (already-SENT row) → acknowledged, row untouched (idempotent)', async () => {
     const id = await deliveryRow('delivered')
     const res = await signedEvent('delivered', 'email.delivered', {
       id: msgId('delivered'),
       to: [`rw-${MARKER}-delivered@example.test`],
     })
     expect(res.status).toBe(200)
-    expect(res.body?.processed).toBe(false) // non-activating
+    expect(res.body?.processed).toBe(true)
+    expect(res.body?.matched).toBe(0) // SENT rows are never re-flipped
 
     const row = await db.emailDelivery.findUnique({ where: { id } })
     expect(row?.status).toBe('SENT') // exactly as the pipeline wrote it

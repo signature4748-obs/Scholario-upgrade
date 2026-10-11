@@ -4,7 +4,7 @@
 // The single server-side entry point for transactional email:
 //
 //   await sendEmail({ to, template, props, schoolId?, dedupeKey?, requestId? })
-//     → { status: 'sent'|'skipped'|'failed', transport, attempts, messageId?, deliveryId? }
+//     → { status: 'sent'|'queued'|'skipped'|'failed', transport, attempts, messageId?, deliveryId? }
 //
 // NEVER THROWS — every outcome (including DB and render failures) is
 // a value. Call sites must not fail because email infrastructure
@@ -13,22 +13,43 @@
 // FLOW (mission §7):
 //   a) recipient validated (zod emailSchema, normalized trim+lowercase);
 //      invalid → warn log + FAILED row (lastError 'invalid recipient')
-//   b) dedupe: a SENT row with the same dedupeKey → 'skipped' (idempotency)
+//   b) dedupe: a SENT or QUEUED row with the same dedupeKey → 'skipped'
+//      (idempotency — an ACCEPTED email is never re-sent)
 //   c) upsert the PENDING EmailDelivery row (create if absent; FAILED
-//      rows reset to PENDING — retries allowed; SENT rows NEVER touched)
+//      rows reset to PENDING — retries allowed; SENT/QUEUED rows
+//      NEVER touched)
 //   d) render (unknown template / bad props → FAILED row + failed result)
-//   e) RESEND_API_KEY set → POST https://api.resend.com/emails with a
-//      5s AbortController timeout; retries ONLY on 429/5xx/network,
-//      backoff 250ms/1000ms (bounded, awaited); 4xx (non-429) = permanent
-//   f) RESEND_API_KEY absent → DEV TRANSPORT: structured 'email_dev_delivery'
-//      log line + row SENT with providerMessageId 'dev-log' (the log IS
-//      the delivery — dedupe works in dev; production sends activate
-//      automatically the moment the key is configured)
+//   e) provider dispatch (providers/ — adapter per provider):
+//        resend    → POST https://api.resend.com/emails, 5s timeout,
+//                    retries ONLY on 429/5xx/network, backoff
+//                    250ms/1000ms (bounded, awaited); 4xx (non-429)
+//                    = permanent, classified (403 testing-restriction
+//                    is NOT an auth error — see provider-errors.ts)
+//        gmail-smtp→ smtp.gmail.com:465 TLS via nodemailer (lazy
+//                    import), 10s/15s timeouts, same retry policy
+//                    (auth failures permanent, network retryable)
+//        dev-log   → structured 'email_dev_delivery' log line; the log
+//                    IS the delivery
+//      Provider acceptance (2xx / SMTP 250) → status QUEUED — the
+//      message is in the provider's queue, NOT confirmed delivered.
+//      SENT requires delivery EVIDENCE: the Resend webhook's
+//      email.delivered event (see api/webhooks/resend) or the dev-log
+//      transport. An email is NEVER reported as delivered when it was
+//      merely queued or rejected.
+//   f) provider selection: EMAIL_PROVIDER env override ('resend' |
+//      'gmail-smtp' | 'dev-log'); default 'auto' → resend when
+//      RESEND_API_KEY is set, else gmail-smtp when GMAIL_SMTP_USER +
+//      GMAIL_SMTP_APP_PASSWORD are set, else dev-log. An explicit
+//      override without its credentials fails LOUDLY (every send →
+//      FAILED with a [provider-config] class) — never a silent
+//      fallback.
 //   g) every transport attempt logs 'email_attempt' {template, transport,
-//      attempt, status}; failure details NEVER contain the API key —
-//      request headers are never logged, and the structured logger's
-//      redact() would mask any 'authorization' key anyway
-//   h) final row update (SENT/FAILED + attempts + lastError ≤500 chars)
+//      attempt, status, errorClass?}; failure details NEVER contain
+//      the API key or SMTP password — request headers are never
+//      logged, and the structured logger's redact() would mask any
+//      'authorization' key anyway
+//   h) final row update (QUEUED/SENT/FAILED + attempts + lastError ≤500
+//      chars, prefixed with a machine-parseable [error-class] tag)
 //      wrapped in try/catch — DB failures log, never throw
 //
 // CORRELATION: sendEmail opens a minimal request scope (requestId +
@@ -37,11 +58,11 @@
 // authoritative (the logger drops explicit schoolId/requestId caller
 // fields by anti-spoofing design — the context is the channel).
 //
-// SERVER-ONLY: this module reads RESEND_API_KEY and carries PII
-// payloads. The window guard below fails fast if a bundler ever pulls
-// it into a browser bundle (the `server-only` package is deliberately
-// NOT imported so bun-run scripts/tests can use the module — same
-// pattern as src/lib/storage/supabase.ts).
+// SERVER-ONLY: this module reads RESEND_API_KEY / GMAIL_SMTP_* and
+// carries PII payloads. The window guard below fails fast if a bundler
+// ever pulls it into a browser bundle (the `server-only` package is
+// deliberately NOT imported so bun-run scripts/tests can use the
+// module — same pattern as src/lib/storage/supabase.ts).
 // ============================================================
 
 import { db } from '@/lib/db'
@@ -50,26 +71,29 @@ import { getRequestContext, runWithContext } from '@/lib/observability/context'
 import { newRequestId } from '@/lib/security/errors'
 import { emailSchema } from '@/lib/security/validation'
 import { renderTemplate } from './templates'
+import { gmailSmtpConfig, gmailSmtpConfigured, createNodemailerSendMail, gmailSmtpAttempt } from './providers/gmail-smtp'
+import { resendAttempt } from './providers/resend'
+import { formatProviderError } from './provider-errors'
 import type {
   EmailBranding,
   EmailInput,
+  EmailProviderId,
   EmailResult,
   EmailTransportStatus,
   RenderedEmail,
+  ResolvedProvider,
   SendEmailOptions,
 } from './types'
 
 if (typeof window !== 'undefined') {
   throw new Error(
-    'src/lib/email/index.ts is server-side only (it holds the RESEND_API_KEY transport and email payloads). ' +
+    'src/lib/email/index.ts is server-side only (it holds provider credentials and email payloads). ' +
       'Remove any Client Component import.',
   )
 }
 
 // ─── transport configuration ────────────────────────────────────────────
 
-const RESEND_ENDPOINT = 'https://api.resend.com/emails'
-const RESEND_TIMEOUT_MS = 5_000
 const DEFAULT_MAX_ATTEMPTS = 3
 /** Bounded backoff after attempt 1 / attempt 2 (later attempts reuse 1000ms). */
 const RETRY_BACKOFF_MS = [250, 1000]
@@ -89,11 +113,57 @@ function resendApiKey(): string | null {
   return key.length > 0 ? key : null
 }
 
-function currentTransport(): 'resend' | 'dev-log' {
-  return resendApiKey() !== null ? 'resend' : 'dev-log'
+/**
+ * Resolve the active provider (Phase A). EMAIL_PROVIDER explicitly
+ * pins the provider ('resend' | 'gmail-smtp' | 'dev-log'); 'auto' (or
+ * unset) detects credentials: resend key → gmail creds → dev-log.
+ * An explicit pin without credentials is a LOUD misconfiguration —
+ * every send fails with a [provider-config] class instead of a
+ * silent fallback.
+ */
+export function resolveProvider(): ResolvedProvider {
+  const requested = (process.env.EMAIL_PROVIDER ?? '').trim().toLowerCase()
+  if (requested && requested !== 'auto') {
+    if (requested === 'resend') {
+      if (resendApiKey() === null) {
+        return {
+          id: 'resend',
+          selection: 'explicit',
+          configured: false,
+          configError: 'EMAIL_PROVIDER=resend but RESEND_API_KEY is not set',
+        }
+      }
+      return { id: 'resend', selection: 'explicit', configured: true }
+    }
+    if (requested === 'gmail-smtp') {
+      if (!gmailSmtpConfigured()) {
+        return {
+          id: 'gmail-smtp',
+          selection: 'explicit',
+          configured: false,
+          configError:
+            'EMAIL_PROVIDER=gmail-smtp but GMAIL_SMTP_USER / GMAIL_SMTP_APP_PASSWORD are not fully set (a 16-char Google App Password is required)',
+        }
+      }
+      return { id: 'gmail-smtp', selection: 'explicit', configured: true }
+    }
+    if (requested === 'dev-log') {
+      return { id: 'dev-log', selection: 'explicit', configured: true }
+    }
+    return {
+      id: 'dev-log',
+      selection: 'explicit',
+      configured: false,
+      configError: `EMAIL_PROVIDER='${requested}' is not a recognized provider (resend | gmail-smtp | dev-log | auto)`,
+    }
+  }
+  // auto: credential detection, Resend first (production default).
+  if (resendApiKey() !== null) return { id: 'resend', selection: 'auto', configured: true }
+  if (gmailSmtpConfigured()) return { id: 'gmail-smtp', selection: 'auto', configured: true }
+  return { id: 'dev-log', selection: 'auto', configured: true }
 }
 
-/** Diagnostics: is production email configured? */
+/** Diagnostics: is production email configured? (back-compat surface) */
 export function getEmailTransportStatus(): EmailTransportStatus {
   return { resendConfigured: resendApiKey() !== null }
 }
@@ -149,11 +219,18 @@ async function resolveBranding(schoolId?: string): Promise<EmailBranding> {
 
 // ─── EmailDelivery row lifecycle (all failures logged, never thrown) ────
 
-type UpsertKind = 'created' | 'reset' | 'sent-protected' | 'unavailable'
+type UpsertKind = 'created' | 'reset' | 'accepted-protected' | 'unavailable'
 
 interface UpsertOutcome {
   kind: UpsertKind
   deliveryId?: string
+}
+
+/** Statuses that mean the provider already accepted this email. */
+const ACCEPTED_STATUSES = ['SENT', 'QUEUED'] as const
+
+function isAcceptedStatus(status: string): boolean {
+  return (ACCEPTED_STATUSES as readonly string[]).includes(status)
 }
 
 /**
@@ -162,8 +239,10 @@ interface UpsertOutcome {
  *   · no dedupeKey           → create a fresh PENDING row
  *   · key absent from table  → create a PENDING row (raced create on
  *                              the unique index is re-read and classified)
- *   · existing row SENT      → 'sent-protected' → caller returns 'skipped'
- *                              (idempotency — a SENT row is never touched)
+ *   · existing row SENT/QUEUED → 'accepted-protected' → caller returns
+ *                              'skipped' (idempotency — an accepted
+ *                              email is never re-sent; re-sending would
+ *                              duplicate at the provider)
  *   · existing PENDING/FAILED→ reset to PENDING, attempts 0
  *                              (FAILED = retry allowed; PENDING = concurrent
  *                              sender, last writer wins)
@@ -196,8 +275,8 @@ async function upsertPendingDelivery(input: EmailInput, to: string): Promise<Ups
         if (!existing) throw e
       }
     }
-    if (existing.status === 'SENT') {
-      return { kind: 'sent-protected', deliveryId: existing.id }
+    if (isAcceptedStatus(existing.status)) {
+      return { kind: 'accepted-protected', deliveryId: existing.id }
     }
     await db.emailDelivery.update({
       where: { id: existing.id },
@@ -213,8 +292,8 @@ async function upsertPendingDelivery(input: EmailInput, to: string): Promise<Ups
 /**
  * Step (a) audit row for a rejected recipient — FAILED with
  * lastError 'invalid recipient'. A dedupeKey collision (an existing row,
- * including a SENT one, already owns the key) is logged and left
- * untouched: a SENT row is never modified.
+ * including an accepted one, already owns the key) is logged and left
+ * untouched: an accepted row is never modified.
  */
 async function recordInvalidRecipient(input: EmailInput): Promise<string | undefined> {
   try {
@@ -236,15 +315,19 @@ async function recordInvalidRecipient(input: EmailInput): Promise<string | undef
   }
 }
 
+/** Post-acceptance status (QUEUED for real providers, SENT for dev-log). */
+type AcceptedStatus = 'QUEUED' | 'SENT'
+
 /**
- * Step (h): final status write. `updateMany` with `status != 'SENT'`
- * makes "never touch a SENT row" a DB-level guarantee — if a concurrent
- * sender already marked the row SENT, this write is a no-op.
+ * Step (h): final status write. `updateMany` with
+ * `status NOT IN ('SENT','QUEUED')` makes "never touch an accepted
+ * row" a DB-level guarantee — if a concurrent sender already marked
+ * the row accepted, this write is a no-op.
  */
 async function finalizeDelivery(
   deliveryId: string | undefined,
   outcome: {
-    status: 'SENT' | 'FAILED'
+    status: AcceptedStatus | 'FAILED'
     attempts: number
     providerMessageId?: string | null
     lastError?: string | null
@@ -253,7 +336,7 @@ async function finalizeDelivery(
   if (!deliveryId) return
   try {
     await db.emailDelivery.updateMany({
-      where: { id: deliveryId, status: { not: 'SENT' } },
+      where: { id: deliveryId, status: { notIn: ['SENT', 'QUEUED'] } },
       data: {
         status: outcome.status,
         attempts: outcome.attempts,
@@ -266,58 +349,71 @@ async function finalizeDelivery(
   }
 }
 
-// ─── resend transport (one attempt) ─────────────────────────────────────
+// ─── the provider retry loop (shared by resend + gmail-smtp) ────────────
 
-interface TransportAttempt {
+interface ProviderOutcome {
   ok: boolean
   messageId?: string
   retryable: boolean
+  errorClass?: string
   error?: string
 }
 
 /**
- * ONE POST to https://api.resend.com/emails, bounded by a 5s
- * AbortController timeout. NEVER throws (network errors/aborts come
- * back as retryable outcomes). Error details carry status + a brief
- * response-body excerpt — NEVER the Authorization header or API key.
+ * Bounded retry loop over a provider attempt function. Retries ONLY
+ * retryable outcomes (rate-limited / transient — 429, 5xx, network,
+ * SMTP 4xx-transient); permanent provider rejections (auth-invalid,
+ * testing-recipient-restricted, unverified-sender-domain,
+ * invalid-request) break immediately. Backoff 250ms/1000ms, awaited.
  */
-async function resendAttempt(
-  apiKey: string,
-  from: string,
-  to: string,
-  rendered: RenderedEmail,
-): Promise<TransportAttempt> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), RESEND_TIMEOUT_MS)
-  try {
-    const res = await fetch(RESEND_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ from, to, subject: rendered.subject, html: rendered.html }),
-      signal: controller.signal,
-    })
-    if (res.ok) {
-      const body = (await res.json().catch(() => null)) as { id?: unknown } | null
-      const messageId = body && typeof body.id === 'string' ? body.id : undefined
-      if (!messageId) {
-        // 2xx without a parseable id — accepted, but flag it loudly.
-        log('warn', 'email_attempt', { transport: 'resend', status: 'ok_no_provider_id' })
-      }
-      return { ok: true, messageId, retryable: false }
+async function runProviderAttempts(
+  provider: EmailProviderId,
+  template: string,
+  deliveryId: string | undefined,
+  maxAttempts: number,
+  attemptOnce: () => Promise<ProviderOutcome>,
+): Promise<{ accepted: boolean; attempts: number; messageId?: string; lastError?: string }> {
+  let attempts = 0
+  let lastError: string | undefined
+  while (attempts < maxAttempts) {
+    attempts++
+    const outcome = await attemptOnce()
+    if (outcome.ok) {
+      log('info', 'email_attempt', {
+        template,
+        transport: provider,
+        attempt: attempts,
+        status: 'ok',
+      })
+      return { accepted: true, attempts, messageId: outcome.messageId }
     }
-    const bodyText = await res.text().catch(() => '')
-    const error = clip(`HTTP ${res.status}: ${bodyText.trim().slice(0, 200)}`, 200)
-    const retryable = res.status === 429 || res.status >= 500
-    return { ok: false, retryable, error }
-  } catch (e) {
-    // Network failure or the 5s abort — both retryable by policy.
-    return { ok: false, retryable: true, error: clip(`network: ${briefError(e)}`, 200) }
-  } finally {
-    clearTimeout(timer)
+
+    lastError = outcome.error
+    log(outcome.retryable ? 'warn' : 'error', 'email_attempt', {
+      template,
+      transport: provider,
+      attempt: attempts,
+      status: outcome.retryable ? 'retryable' : 'permanent',
+      errorClass: outcome.errorClass ?? 'unknown',
+      detail: outcome.error,
+    })
+    if (!outcome.retryable) break // permanent provider rejection: no retry
+    if (attempts < maxAttempts) {
+      const backoffMs = RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)]
+      await sleep(backoffMs) // bounded, awaited
+    }
   }
+  return { accepted: false, attempts, lastError }
+}
+
+/**
+ * Provider-accepted → the honest row status. Real providers (resend,
+ * gmail-smtp): QUEUED — accepted into the provider's queue, delivery
+ * unconfirmed (SENT requires the delivery webhook event). Dev-log:
+ * SENT — the structured log line IS the delivery.
+ */
+function acceptedRowStatus(provider: EmailProviderId): AcceptedStatus {
+  return provider === 'dev-log' ? 'SENT' : 'QUEUED'
 }
 
 // ─── transport drivers ──────────────────────────────────────────────────
@@ -331,73 +427,122 @@ async function deliverViaResend(
 ): Promise<EmailResult> {
   const apiKey = resendApiKey()
   if (!apiKey) {
-    // Key vanished between transport detection and now (env race) —
+    // Key vanished between provider resolution and now (env race) —
     // fail loudly-but-safely rather than silently not delivering.
-    const detail = 'RESEND_API_KEY disappeared mid-send'
+    const detail = formatProviderError('provider-config', 'RESEND_API_KEY disappeared mid-send')
     log('error', 'email_result', { template: input.template, transport: 'resend', status: 'failed', detail })
     await finalizeDelivery(deliveryId, { status: 'FAILED', attempts: 0, lastError: detail })
     return { status: 'failed', transport: 'resend', attempts: 0, deliveryId }
   }
   const from = (process.env.EMAIL_FROM ?? '').trim() || DEFAULT_FROM
 
-  let attempts = 0
-  let lastError: string | undefined
-  while (attempts < maxAttempts) {
-    attempts++
-    const outcome = await resendAttempt(apiKey, from, to, rendered)
-    if (outcome.ok) {
-      log('info', 'email_attempt', {
-        template: input.template,
-        transport: 'resend',
-        attempt: attempts,
-        status: 'ok',
-      })
-      await finalizeDelivery(deliveryId, {
-        status: 'SENT',
-        attempts,
-        providerMessageId: outcome.messageId ?? null,
-      })
-      log('info', 'email_result', {
-        template: input.template,
-        transport: 'resend',
-        status: 'sent',
-        attempts,
-        deliveryId,
-      })
-      return {
-        status: 'sent',
-        transport: 'resend',
-        attempts,
-        messageId: outcome.messageId,
-        deliveryId,
-      }
-    }
+  const outcome = await runProviderAttempts('resend', input.template, deliveryId, maxAttempts, () =>
+    resendAttempt(apiKey, from, to, rendered),
+  )
 
-    lastError = outcome.error
-    log(outcome.retryable ? 'warn' : 'error', 'email_attempt', {
+  if (outcome.accepted) {
+    if (!outcome.messageId) {
+      // 2xx without a parseable id — accepted, but flag it loudly.
+      log('warn', 'email_attempt', { transport: 'resend', status: 'ok_no_provider_id', deliveryId })
+    }
+    const rowStatus = acceptedRowStatus('resend')
+    await finalizeDelivery(deliveryId, {
+      status: rowStatus,
+      attempts: outcome.attempts,
+      providerMessageId: outcome.messageId ?? null,
+    })
+    log('info', 'email_result', {
       template: input.template,
       transport: 'resend',
-      attempt: attempts,
-      status: outcome.retryable ? 'retryable' : 'permanent',
-      detail: outcome.error,
+      status: rowStatus === 'QUEUED' ? 'queued' : 'sent',
+      attempts: outcome.attempts,
+      deliveryId,
     })
-    if (!outcome.retryable) break // 4xx (non-429): permanent, no retry
-    if (attempts < maxAttempts) {
-      const backoffMs = RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)]
-      await sleep(backoffMs) // bounded, awaited
+    return {
+      status: 'queued',
+      transport: 'resend',
+      attempts: outcome.attempts,
+      messageId: outcome.messageId,
+      deliveryId,
     }
   }
 
-  const finalError = lastError ?? 'resend transport failed'
-  await finalizeDelivery(deliveryId, { status: 'FAILED', attempts, lastError: finalError })
+  const finalError = outcome.lastError ?? formatProviderError('unknown', 'resend transport failed')
+  await finalizeDelivery(deliveryId, { status: 'FAILED', attempts: outcome.attempts, lastError: finalError })
   log('error', 'email_result', {
     template: input.template,
     transport: 'resend',
     status: 'failed',
-    attempts,
+    attempts: outcome.attempts,
     deliveryId,
   })
-  return { status: 'failed', transport: 'resend', attempts, deliveryId }
+  return { status: 'failed', transport: 'resend', attempts: outcome.attempts, deliveryId }
+}
+
+async function deliverViaGmailSmtp(
+  input: EmailInput,
+  to: string,
+  rendered: RenderedEmail,
+  deliveryId: string | undefined,
+  maxAttempts: number,
+): Promise<EmailResult> {
+  const cfg = gmailSmtpConfig()
+  if (!cfg.user || !cfg.appPassword) {
+    // Credentials vanished between provider resolution and now —
+    // fail loudly-but-safely.
+    const detail = formatProviderError(
+      'provider-config',
+      'GMAIL_SMTP_USER / GMAIL_SMTP_APP_PASSWORD disappeared mid-send',
+    )
+    log('error', 'email_result', { template: input.template, transport: 'gmail-smtp', status: 'failed', detail })
+    await finalizeDelivery(deliveryId, { status: 'FAILED', attempts: 0, lastError: detail })
+    return { status: 'failed', transport: 'gmail-smtp', attempts: 0, deliveryId }
+  }
+  // Gmail rewrites the From header to the authenticated account; the
+  // display name preserves the Scholario identity in inboxes that
+  // honor it. Branding (school name/color) rides subject + body.
+  const from = `Scholario <${cfg.user}>`
+  const sendMail = createNodemailerSendMail({ user: cfg.user, appPassword: cfg.appPassword })
+
+  const outcome = await runProviderAttempts('gmail-smtp', input.template, deliveryId, maxAttempts, () =>
+    gmailSmtpAttempt(sendMail, from, to, rendered),
+  )
+
+  if (outcome.accepted) {
+    // SMTP 250 = accepted into Gmail's delivery queue. There is NO
+    // delivery-confirmation channel for this provider — the row stays
+    // QUEUED, honestly, forever unless evidence arrives.
+    await finalizeDelivery(deliveryId, {
+      status: 'QUEUED',
+      attempts: outcome.attempts,
+      providerMessageId: outcome.messageId ?? null,
+    })
+    log('info', 'email_result', {
+      template: input.template,
+      transport: 'gmail-smtp',
+      status: 'queued',
+      attempts: outcome.attempts,
+      deliveryId,
+    })
+    return {
+      status: 'queued',
+      transport: 'gmail-smtp',
+      attempts: outcome.attempts,
+      messageId: outcome.messageId,
+      deliveryId,
+    }
+  }
+
+  const finalError = outcome.lastError ?? formatProviderError('unknown', 'gmail-smtp transport failed')
+  await finalizeDelivery(deliveryId, { status: 'FAILED', attempts: outcome.attempts, lastError: finalError })
+  log('error', 'email_result', {
+    template: input.template,
+    transport: 'gmail-smtp',
+    status: 'failed',
+    attempts: outcome.attempts,
+    deliveryId,
+  })
+  return { status: 'failed', transport: 'gmail-smtp', attempts: outcome.attempts, deliveryId }
 }
 
 async function deliverViaDevLog(
@@ -444,12 +589,36 @@ async function deliverViaDevLog(
 
 // ─── the entry point ────────────────────────────────────────────────────
 
-async function sendEmailInner(
-  input: EmailInput,
-  options: SendEmailOptions,
-  transport: 'resend' | 'dev-log',
-): Promise<EmailResult> {
+async function sendEmailInner(input: EmailInput, options: SendEmailOptions, provider: ResolvedProvider): Promise<EmailResult> {
   const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS))
+
+  // Provider resolution failure (explicit EMAIL_PROVIDER pin without
+  // credentials, or an unrecognized value): fail LOUDLY — every send
+  // gets a FAILED row with a [provider-config] class. Never a silent
+  // fallback to another transport.
+  if (!provider.configured) {
+    const detail = formatProviderError('provider-config', provider.configError ?? 'provider not configured')
+    log('error', 'email_result', {
+      template: input.template,
+      transport: provider.id,
+      status: 'failed',
+      detail,
+    })
+    // Still audited: invalid-recipient guard first so the row carries
+    // the honest reason even for malformed addresses.
+    const recipient = emailSchema.safeParse(input.to)
+    if (!recipient.success) {
+      const deliveryId = await recordInvalidRecipient(input)
+      return { status: 'failed', transport: provider.id, attempts: 0, deliveryId }
+    }
+    const to = recipient.data
+    const upserted = await upsertPendingDelivery(input, to)
+    if (upserted.kind === 'accepted-protected') {
+      return { status: 'skipped', transport: provider.id, attempts: 0, deliveryId: upserted.deliveryId }
+    }
+    await finalizeDelivery(upserted.deliveryId, { status: 'FAILED', attempts: 0, lastError: detail })
+    return { status: 'failed', transport: provider.id, attempts: 0, deliveryId: upserted.deliveryId }
+  }
 
   // (a) recipient validation — normalized (trim + lowercase) by the
   // shared API emailSchema; malformed addresses never reach a transport.
@@ -457,21 +626,21 @@ async function sendEmailInner(
   if (!recipient.success) {
     log('warn', 'email_invalid_recipient', { template: input.template })
     const deliveryId = await recordInvalidRecipient(input)
-    return { status: 'failed', transport, attempts: 0, deliveryId }
+    return { status: 'failed', transport: provider.id, attempts: 0, deliveryId }
   }
   const to = recipient.data
 
-  // (b) + (c) dedupe + PENDING upsert (SENT rows are never touched).
+  // (b) + (c) dedupe + PENDING upsert (accepted rows are never touched).
   const upserted = await upsertPendingDelivery(input, to)
-  if (upserted.kind === 'sent-protected') {
+  if (upserted.kind === 'accepted-protected') {
     log('info', 'email_result', {
       template: input.template,
-      transport,
+      transport: provider.id,
       status: 'skipped',
       attempts: 0,
       deliveryId: upserted.deliveryId,
     })
-    return { status: 'skipped', transport, attempts: 0, deliveryId: upserted.deliveryId }
+    return { status: 'skipped', transport: provider.id, attempts: 0, deliveryId: upserted.deliveryId }
   }
 
   // (d) render — unknown template / invalid props → FAILED row + result.
@@ -483,12 +652,15 @@ async function sendEmailInner(
     const detail = clip(briefError(e))
     log('error', 'email_render_failed', { template: input.template, deliveryId: upserted.deliveryId, detail })
     await finalizeDelivery(upserted.deliveryId, { status: 'FAILED', attempts: 0, lastError: detail })
-    return { status: 'failed', transport, attempts: 0, deliveryId: upserted.deliveryId }
+    return { status: 'failed', transport: provider.id, attempts: 0, deliveryId: upserted.deliveryId }
   }
 
-  // (e) + (f) transport.
-  if (transport === 'resend') {
+  // (e) + (f) provider dispatch.
+  if (provider.id === 'resend') {
     return deliverViaResend(input, to, rendered, upserted.deliveryId, maxAttempts)
+  }
+  if (provider.id === 'gmail-smtp') {
+    return deliverViaGmailSmtp(input, to, rendered, upserted.deliveryId, maxAttempts)
   }
   return deliverViaDevLog(input, to, rendered, upserted.deliveryId)
 }
@@ -498,7 +670,7 @@ async function sendEmailInner(
  * contract — the guarantee that matters to call sites: NEVER THROWS.
  */
 export async function sendEmail(input: EmailInput, options: SendEmailOptions = {}): Promise<EmailResult> {
-  const transport = currentTransport()
+  const provider = resolveProvider()
   try {
     // Correlation scope: when no HTTP request scope is active (raw
     // handlers, jobs, tests), open a minimal email scope so every log
@@ -506,7 +678,7 @@ export async function sendEmail(input: EmailInput, options: SendEmailOptions = {
     // scope the caller's context is already authoritative and wins
     // (AsyncLocalStorage nesting is intentionally avoided there).
     if (getRequestContext()) {
-      return await sendEmailInner(input, options, transport)
+      return await sendEmailInner(input, options, provider)
     }
     return await runWithContext(
       {
@@ -515,29 +687,38 @@ export async function sendEmail(input: EmailInput, options: SendEmailOptions = {
         route: 'email',
         operation: `sendEmail:${input.template}`,
       },
-      () => sendEmailInner(input, options, transport),
+      () => sendEmailInner(input, options, provider),
     )
   } catch (e) {
     // Belt-and-braces: the pipeline itself catches everything it can,
     // but the never-throws contract must hold unconditionally.
     log('error', 'email_pipeline_failure', {
       template: input.template,
-      transport,
+      transport: provider.id,
       detail: clip(briefError(e)),
     })
-    return { status: 'failed', transport, attempts: 0 }
+    return { status: 'failed', transport: provider.id, attempts: 0 }
   }
 }
 
 // Convenient re-exports so call sites import from '@/lib/email' only.
 export { renderTemplate } from './templates'
+export {
+  classifyProviderHttpStatus,
+  classifyProviderTransportError,
+  formatProviderError,
+  parseErrorClass,
+} from './provider-errors'
+export type { EmailErrorClass, ProviderErrorClassification } from './provider-errors'
 export type {
   EmailBranding,
   EmailInput,
+  EmailProviderId,
   EmailResult,
   EmailTemplateProps,
   EmailTransportStatus,
   RenderedEmail,
+  ResolvedProvider,
   SendEmailOptions,
   TemplateId,
 } from './types'

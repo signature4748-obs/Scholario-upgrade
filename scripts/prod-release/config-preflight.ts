@@ -81,6 +81,13 @@ const GOOGLE_VARS: readonly string[] = [
   'GOOGLE_OAUTH_CLIENT_SECRET',
   'GOOGLE_OAUTH_REDIRECT_URI',
 ]
+/** Optional email-provider pinning/SMTP vars (reported; --strict to enforce). */
+const EMAIL_PROVIDER_VARS: readonly string[] = [
+  'EMAIL_PROVIDER',
+  'GMAIL_SMTP_USER',
+  'GMAIL_SMTP_APP_PASSWORD',
+  'RESEND_WEBHOOK_SECRET',
+]
 /** Status column alignment (longest key: GOOGLE_OAUTH_REDIRECT_URI = 24). */
 const KEY_PAD = 28
 
@@ -336,6 +343,12 @@ async function main(): Promise<void> {
         '    ⚠ Google sign-in stays honestly OFF until all three GOOGLE_* variables are configured (runtime config gate keeps it disabled — no partial sign-in)',
       )
     }
+    reportCategory(
+      'EMAIL PROVIDER (optional — provider pin/SMTP/webhook; reported only)',
+      EMAIL_PROVIDER_VARS,
+      keys,
+      'google-optional',
+    )
 
     // Half-configured Google OAuth: exactly one of CLIENT_ID / CLIENT_SECRET
     // present — an ID without a SECRET (or vice versa) is broken, not OFF.
@@ -343,6 +356,11 @@ async function main(): Promise<void> {
     const problems: string[] = []
     if (keys.production.has('GOOGLE_OAUTH_CLIENT_ID') !== keys.production.has('GOOGLE_OAUTH_CLIENT_SECRET')) {
       problems.push('half-configured Google OAuth (CLIENT_ID without SECRET or vice versa) — fix before release')
+    }
+    // Half-configured Gmail SMTP: one credential without the other means
+    // every gmail-smtp send would fail [provider-config] — surface it now.
+    if (keys.production.has('GMAIL_SMTP_USER') !== keys.production.has('GMAIL_SMTP_APP_PASSWORD')) {
+      problems.push('half-configured Gmail SMTP (GMAIL_SMTP_USER without GMAIL_SMTP_APP_PASSWORD or vice versa) — fix before release')
     }
     if (problems.length) {
       console.log('\n  problems:')
