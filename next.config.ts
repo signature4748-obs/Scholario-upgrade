@@ -101,7 +101,16 @@ if (process.env.NODE_ENV !== "production" && lazyBackend) {
       ...config.watchOptions,
       ignored: ["**/node_modules/**", "**/.git/**", "**/db/**"],
     };
-    console.log("[memory-fix] lazyCompilation enabled (gateway-aware custom backend, port 3777)");
+    // 2026-10-11 (OOM hardening): full source maps are the single largest
+    // dev-compile memory consumer. Under the 4GB cgroup the accumulated
+    // map memory (multi-batch live security suites) pushed next-server to
+    // ~2.9-3.0GB RSS and the kernel OOM-killed it mid-suite, cascading
+    // connection-refused failures. 'eval' keeps module identity maps
+    // (cheap, string-keyed) at a fraction of the memory; stack traces
+    // still resolve to module ids in dev. Production builds are untouched
+    // (this block only runs when NODE_ENV !== 'production').
+    config.devtool = "eval";
+    console.log("[memory-fix] lazyCompilation enabled (gateway-aware custom backend, port 3777) + devtool=eval");
     return config;
   };
 }
