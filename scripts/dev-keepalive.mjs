@@ -74,6 +74,12 @@ async function launchDev() {
         //    student checkout / verify / refund flows are exercisable.
         PAYMENTS_SANDBOX: '1',
         PAYMENTS_SANDBOX_SECRET: 'local-sandbox-secret',
+        //  · tests/security/saas-hardening.test.ts:537 signs the platform
+        //    subscription webhook with PLATFORM_PAYMENT_WEBHOOK_SECRET from
+        //    the TEST process; the server route (webhooks/platform-
+        //    subscription/route.ts:49) verifies with the same env — both
+        //    sides must carry the same fixture value.
+        PLATFORM_PAYMENT_WEBHOOK_SECRET: 'platform-webhook-test-secret',
       },
     },
   )
