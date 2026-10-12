@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
+import { AppError } from '@/lib/security/errors'
 import { withPlatform } from '@/lib/platform/authz'
 
 export const runtime = 'nodejs'
@@ -21,8 +22,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       where: { id },
       select: { name: true, code: true, affiliation: true },
     })
+    if (!school) {
+      throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
+    }
     return {
-      school: school ? { name: school.name, code: school.code, affiliation: school.affiliation } : null,
+      school: { name: school.name, code: school.code, affiliation: school.affiliation },
       requests: rows.map((r) => ({
         id: r.id,
         field: r.field,

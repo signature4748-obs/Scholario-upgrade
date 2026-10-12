@@ -50,6 +50,13 @@ function validDate(value: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+/** Read-side audience enforcement — mirrors the notices helper (src/lib/notices.ts AUDIENCE_BY_ROLE). */
+const EVENT_READ_AUDIENCES: Record<string, string[]> = {
+  PRINCIPAL: ['ALL', 'STUDENTS', 'PARENTS', 'TEACHERS', 'STAFF'],
+  TEACHER: ['ALL', 'TEACHERS', 'STAFF'],
+  STUDENT: ['ALL', 'STUDENTS'],
+}
+
 export async function GET(req: NextRequest) {
   return withUser(async (user) => {
     const schoolId = schoolScoped(user)
@@ -60,6 +67,9 @@ export async function GET(req: NextRequest) {
     const where: Record<string, unknown> = { schoolId }
     if (type) where.type = type
     if (upcoming === '1') where.startDate = { gte: new Date() }
+    // Audience enforced on read — a STUDENT must not receive STAFF/PARENTS-audience events.
+    const readAudiences = EVENT_READ_AUDIENCES[user.role] ?? ['ALL']
+    where.audience = { in: readAudiences }
 
     const events = await db.schoolEvent.findMany({
       where,

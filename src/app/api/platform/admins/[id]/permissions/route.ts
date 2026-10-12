@@ -38,9 +38,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           publicMessage: 'Root admins hold every capability by design — suspend the account instead',
         })
       }
-      if (admin.id === ctx.admin.id && !body.granted) {
+      if (admin.id === ctx.admin.id) {
         throw new AppError('INVALID_INPUT', {
-          publicMessage: 'You cannot revoke your own permissions',
+          publicMessage: 'You cannot modify your own permissions',
         })
       }
 

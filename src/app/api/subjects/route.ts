@@ -8,17 +8,21 @@ export const runtime = 'nodejs'
 const MARKS_MIN = 0
 const MARKS_MAX = 1000
 
+// GET: master-data read — staff only (permission matrix school.masterdata.read; STUDENT must not enumerate the catalog).
 export async function GET(req: NextRequest) {
-  return withUser(async (user) => {
-    const schoolId = schoolScoped(user)
-    const { searchParams } = new URL(req.url)
-    const classId = searchParams.get('classId')
-    const subjects = await db.subject.findMany({
-      where: { schoolId, ...(classId ? { classId } : {}) },
-      orderBy: { name: 'asc' },
-    })
-    return subjects
-  })
+  return withUser(
+    async (user) => {
+      const schoolId = schoolScoped(user)
+      const { searchParams } = new URL(req.url)
+      const classId = searchParams.get('classId')
+      const subjects = await db.subject.findMany({
+        where: { schoolId, ...(classId ? { classId } : {}) },
+        orderBy: { name: 'asc' },
+      })
+      return subjects
+    },
+    { roles: ['PRINCIPAL', 'TEACHER'] }
+  )
 }
 
 export async function POST(req: NextRequest) {

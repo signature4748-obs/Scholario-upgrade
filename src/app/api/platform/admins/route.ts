@@ -74,6 +74,14 @@ export async function POST(req: NextRequest) {
     { permission: 'admins.manage', stepUp: true },
     async (ctx) => {
       const body = await parseJsonBody(req, createSchema)
+
+      // Root minting is root-only — an admins.manage holder must not be able to escalate to root.
+      if (body.isRoot && !ctx.admin.isRoot) {
+        throw new AppError('FORBIDDEN', {
+          publicMessage: 'Only root administrators can create root accounts',
+        })
+      }
+
       const ip = clientIpFromHeaders(req.headers)
 
       const existing = await db.platformAdmin.findUnique({ where: { email: body.email.toLowerCase() } })
