@@ -33,6 +33,8 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { GradientAvatar } from '@/components/shared/ui'
 import { useStudentsStore, type ClassRecord, type StudentRecord, type StudentPosition } from '@/lib/store/students-store'
+import { useAuth } from '@/lib/store/auth-store'
+import { DemoModuleNotice } from '../../shared/demo-module-notice'
 import { POSITION_DEFS, POSITION_ORDER, filterActivePositions, type StudentPositionKey } from '@/lib/student-positions'
 import { useAcademicSession } from '@/lib/academic-session'
 import { useClassResponsibilityStore } from '@/lib/store/class-responsibility-store'
@@ -40,7 +42,14 @@ import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
 import { formatDate, formatRelativeTime } from '@/lib/format'
 import { toast } from 'sonner'
 
-const PRINCIPAL = { id: 'PRINCIPAL', name: 'Dr. Ananya Iyer' }
+/** Real actor — the signed-in principal from the session store (the
+ *  login flow overrides name/id with the SERVER-authenticated identity).
+ *  The hardcoded 'Dr. Ananya Iyer' persona is retired: it fabricated a
+ *  person on audit records (assignment/task/review trails). */
+function usePrincipalActor() {
+  const { user } = useAuth()
+  return { id: user?.id || 'PRINCIPAL', name: user?.name?.trim() || 'Principal' }
+}
 
 /** Row one-liners for the dense per-section grid. The canonical
  * descriptions in POSITION_DEFS (src/lib/student-positions.ts) are the
@@ -64,6 +73,7 @@ export function ClassLeadership({ cls }: { cls: ClassRecord }) {
   const positions = useStudentsStore((s) => s.studentPositions)
   const assignPosition = useStudentsStore((s) => s.assignStudentPosition)
   const endPosition = useStudentsStore((s) => s.endStudentPosition)
+  const actor = usePrincipalActor()
 
   const [assigning, setAssigning] = useState<{ section: string; key: StudentPositionKey } | null>(null)
   const [ending, setEnding] = useState<StudentPosition | null>(null)
@@ -88,7 +98,7 @@ export function ClassLeadership({ cls }: { cls: ClassRecord }) {
   const holder = (p?: StudentPosition) => (p ? students.find((s) => s.id === p.studentId) : undefined)
 
   const handleAssign = (studentId: string, key: StudentPositionKey, section: string, notes?: string) => {
-    const result = assignPosition({ studentId, key, assignedById: PRINCIPAL.id, assignedByName: PRINCIPAL.name, notes })
+    const result = assignPosition({ studentId, key, assignedById: actor.id, assignedByName: actor.name, notes })
     if (result.ok) {
       toast.success(`${POSITION_DEFS[key].title} appointed`, {
         description: `${result.record.studentName} is now ${POSITION_DEFS[key].title} of ${cls.name}-${section}.`,
@@ -100,7 +110,7 @@ export function ClassLeadership({ cls }: { cls: ClassRecord }) {
   }
 
   const handleEnd = (p: StudentPosition) => {
-    const result = endPosition(p.id, PRINCIPAL.name)
+    const result = endPosition(p.id, actor.name)
     if (result.ok) {
       toast.success('Responsibility ended', {
         description: `${p.studentName} no longer holds ${POSITION_DEFS[p.key].title} of ${p.className}-${p.section}.`,
@@ -113,6 +123,12 @@ export function ClassLeadership({ cls }: { cls: ClassRecord }) {
 
   return (
     <div className="space-y-4">
+      {/* Honesty label — positions/responsibilities are client-side demo
+          state (students-store localStorage slice; no server persistence,
+          no cross-device sync). The student side honestly shows nothing
+          until this browser assigns something. */}
+      <DemoModuleNotice moduleName="Class Leadership" variant="demo" />
+
       {/* Minimal section header (§2) — flat on the page background, no card
           wrapper; the philosophy paragraph moved behind the info tooltip. */}
       <div className="pt-1">
@@ -352,6 +368,7 @@ function ConfirmEndDialog({ position, onClose, onConfirm }: {
 function AssignTaskDialog({ position, onClose }: { position: StudentPosition; onClose: () => void }) {
   useDismissOnEscape(onClose)
   const addTask = useClassResponsibilityStore((s) => s.addResponsibilityTask)
+  const actor = usePrincipalActor()
   const [title, setTitle] = useState('')
   const [detail, setDetail] = useState('')
   const [dueOn, setDueOn] = useState('')
@@ -365,7 +382,7 @@ function AssignTaskDialog({ position, onClose }: { position: StudentPosition; on
       section: position.section,
       title: title.trim(),
       detail: detail.trim() || '—',
-      assignedByName: PRINCIPAL.name,
+      assignedByName: actor.name,
       dueOn: dueOn || undefined,
     })
     if (result.ok) {
@@ -426,6 +443,7 @@ function ResponsibilityReview({ cls }: { cls: ClassRecord }) {
   const reviewUpdate = useClassResponsibilityStore((s) => s.reviewClassUpdate)
   const resolveIssue = useClassResponsibilityStore((s) => s.resolveIssue)
   const acknowledgeRequest = useClassResponsibilityStore((s) => s.acknowledgeTeacherRequest)
+  const actor = usePrincipalActor()
 
   const classUpdates = updates.filter((u) => u.classId === cls.id && u.status === 'pending-review')
   const classIssues = issues.filter((i) => i.classId === cls.id && i.status !== 'resolved')
@@ -469,10 +487,10 @@ function ResponsibilityReview({ cls }: { cls: ClassRecord }) {
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <Button size="sm" className="h-8 text-xs" onClick={() => { reviewUpdate(u.id, 'approved', PRINCIPAL.name); toast.success('Class update approved', { description: `“${u.title}” is now visible on the class notice board.` }) }}>
+                <Button size="sm" className="h-8 text-xs" onClick={() => { reviewUpdate(u.id, 'approved', actor.name); toast.success('Class update approved', { description: `“${u.title}” is now visible on the class notice board.` }) }}>
                   <CheckCircle2 className="h-3.5 w-3.5" /> Approve
                 </Button>
-                <Button variant="outline" size="sm" className="h-8 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-500/10" onClick={() => { reviewUpdate(u.id, 'removed', PRINCIPAL.name); toast.info('Class update removed') }}>
+                <Button variant="outline" size="sm" className="h-8 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-500/10" onClick={() => { reviewUpdate(u.id, 'removed', actor.name); toast.info('Class update removed') }}>
                   <XCircle className="h-3.5 w-3.5" /> Remove
                 </Button>
               </div>
@@ -499,11 +517,11 @@ function ResponsibilityReview({ cls }: { cls: ClassRecord }) {
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {i.status === 'open' && (
-                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { resolveIssue(i.id, 'acknowledged', PRINCIPAL.name); toast.success('Issue acknowledged') }}>
+                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { resolveIssue(i.id, 'acknowledged', actor.name); toast.success('Issue acknowledged') }}>
                     <UserCheck className="h-3.5 w-3.5" /> Acknowledge
                   </Button>
                 )}
-                <Button size="sm" className="h-8 text-xs" onClick={() => { resolveIssue(i.id, 'resolved', PRINCIPAL.name, 'Resolved by the school office.'); toast.success('Issue resolved') }}>
+                <Button size="sm" className="h-8 text-xs" onClick={() => { resolveIssue(i.id, 'resolved', actor.name, 'Resolved by the school office.'); toast.success('Issue resolved') }}>
                   <CheckCircle2 className="h-3.5 w-3.5" /> Resolve
                 </Button>
               </div>
@@ -523,7 +541,7 @@ function ResponsibilityReview({ cls }: { cls: ClassRecord }) {
                 <p className="text-[10px] text-muted-foreground/70 mt-1 font-mono">{r.studentName} · {formatRelativeTime(r.requestedOn)}</p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { acknowledgeRequest(r.id, PRINCIPAL.name); toast.success('Request acknowledged', { description: `${r.teacherName} has been informed.` }) }}>
+                <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { acknowledgeRequest(r.id, actor.name); toast.success('Request acknowledged', { description: `${r.teacherName} has been informed.` }) }}>
                   <UserCheck className="h-3.5 w-3.5" /> Acknowledge
                 </Button>
               </div>

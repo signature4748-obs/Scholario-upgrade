@@ -24,8 +24,10 @@ import {
 } from '@/lib/realtime/client'
 // SaaS-STAGE-2A — the shell footer reflects the signed-in school's REAL
 // identity: server session school name (current-user store) → school
-// settings server/local identity → neutral 'Our School'.
-import { useSchoolProfile } from '@/lib/school-profile'
+// settings server/local identity → neutral 'Our School'. Extracted to
+// src/lib/hooks so the account menu reads the SAME truth (no tenant-
+// registry fallback anywhere on an authenticated surface).
+import { useShellSchoolName } from '@/lib/hooks/use-shell-school-name'
 import { cn } from '@/lib/utils'
 import { formatINR } from '@/lib/format'
 import { APP_VERSION } from '@/lib/app-version'
@@ -676,15 +678,3 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
   )
 }
 
-/**
- * School identity (PHASE 7.5): the signed-in school's REAL name — server
- * session school first, then the school-settings identity cascade
- * (server slice → local slice → neutral). No mock/tenant-registry fallback.
- * ARCH-RESET-2c — now a hook: the same truth feeds BOTH the sidebar header
- * (schoolName prop) and the quiet footer line.
- */
-function useShellSchoolName(): string {
-  const sessionSchool = useCurrentUser((s) => s.me?.school?.name)
-  const profile = useSchoolProfile()
-  return sessionSchool?.trim() || profile.name
-}

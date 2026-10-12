@@ -3,10 +3,13 @@
 import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { LogOut, Settings, Building2, ChevronDown } from 'lucide-react'
-// The school context line renders the authenticated user's actual school
-// (the active tenant) — never a switcher. Multi-school switching only
-// exists when the session carries real, authorized memberships.
-import { useActiveTenant } from '@/lib/tenant/store'
+// The school context line renders the authenticated user's REAL school —
+// the server session school → school-settings cascade (the same truth as
+// the sidebar header/footer). The static tenant registry (Greenwood demo
+// tenant) is NOT an identity source: it fabricated a school name for
+// every real tenant. No switcher — multi-school switching only exists
+// when the session carries real, authorized memberships.
+import { useShellSchoolName } from '@/lib/hooks/use-shell-school-name'
 // SS-1 — server identity: renders the user's real profile photo when set.
 import { useCurrentUser } from '@/lib/store/current-user-store'
 
@@ -77,7 +80,9 @@ export function ProfileDropdown({
   onNavigateSettings,
   onLogout,
 }: ProfileDropdownProps) {
-  const activeTenant = useActiveTenant()
+  // Real school identity — server session school → school-settings
+  // cascade → neutral fallback. Never the demo tenant registry.
+  const schoolName = useShellSchoolName()
 
   // A11y — Escape closes the menu from the keyboard (the shell also
   // restores focus to the trigger; handled there via buttonRef).
@@ -111,9 +116,9 @@ export function ProfileDropdown({
                 <span className="inline-block text-[9px] font-extrabold px-2 py-0.5 rounded bg-primary/15 text-primary uppercase tracking-wider">
                   {role}
                 </span>
-                <span className="inline-flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground" title={activeTenant.name}>
+                <span className="inline-flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground" title={schoolName}>
                   <Building2 className="h-3 w-3 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{activeTenant.name}</span>
+                  <span className="truncate">{schoolName}</span>
                 </span>
               </div>
             </div>
