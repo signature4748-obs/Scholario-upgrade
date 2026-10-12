@@ -44,7 +44,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '../shared/segmented-tabs'
-import { useLibraryStore, useLibraryData } from '@/lib/store/library-store'
+import { useLibraryStore, useLibraryData, refreshLibraryServerData, useEffectiveLibraryIssues } from '@/lib/store/library-store'
 import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { formatINR, formatDate } from '@/lib/format'
 import { toast } from 'sonner'
@@ -76,9 +76,18 @@ export function LibraryModule() {
   const ensureDemoSeed = useLibraryStore((s) => s.ensureDemoSeed)
   useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
 
+  // DB feed — the real catalogue + issue register for a REAL tenant
+  // (the demo tenant keeps its curated local showcase). Fail-closed:
+  // an honest banner + retry; never fabricated rows.
+  const serverStatus = useLibraryStore((s) => s.serverStatus)
+  const serverMode = !isDemo && serverStatus === 'ready'
+  useEffect(() => {
+    if (!isDemo) void refreshLibraryServerData()
+  }, [isDemo])
+
   const returnBook = useLibraryStore((s) => s.returnBook)
   const sendReminder = useLibraryStore((s) => s.sendReminder)
-  const issues = useLibraryStore((s) => s.issues)
+  const issues = useEffectiveLibraryIssues()
   const data = useLibraryData()
   const { analytics } = data
 
@@ -116,33 +125,67 @@ export function LibraryModule() {
     setIssueOpen(true)
   }
 
-  const handleReturn = (issueId: string) => {
+  const handleReturn = async (issueId: string) => {
     const issue = issues.find((i) => i.id === issueId)
     if (!issue) return
-    returnBook(issueId)
+    const result = await returnBook(issueId)
+    if (!result.success) {
+      toast.error('Return not recorded', { description: result.error })
+      return
+    }
     toast.success('Book returned', {
       description: `${issue.bookTitle} returned by ${issue.borrowerName}${
-        issue.status === 'Overdue' ? ` · Fine calculated based on days overdue` : ''
+        serverMode ? '' : issue.status === 'Overdue' ? ` · Fine calculated based on days overdue` : ''
       }`,
     })
   }
 
   // QA-FIX-B — real store mutation: stamps reminderSentAt on the loan
-  // record (persisted), then confirms to the user.
+  // record, then confirms to the user. HONEST copy in server mode: no
+  // in-app notification is delivered yet — this records the follow-up.
   const handleSendReminder = (issue: IssueRecord) => {
     sendReminder(issue.id)
-    toast.success(`Reminder sent to ${issue.borrowerName}`, {
-      description: `Overdue reminder for "${issue.bookTitle}" · due ${formatDate(issue.dueDate)}`,
-    })
+    if (serverMode) {
+      toast.success(`Reminder logged for ${issue.borrowerName}`, {
+        description: `Overdue follow-up for "${issue.bookTitle}" · due ${formatDate(issue.dueDate)} — delivery via in-app notifications is coming.`,
+      })
+    } else {
+      toast.success(`Reminder sent to ${issue.borrowerName}`, {
+        description: `Overdue reminder for "${issue.bookTitle}" · due ${formatDate(issue.dueDate)}`,
+      })
+    }
   }
 
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: LIB_GLOBAL_STYLES }} />
       <PageTransition className="space-y-4 library-shell">
-      {/* 7-I — honest label: the UI runs client-side demo state (real
-          read-only GET APIs exist, writes are demo-only). */}
-      <DemoModuleNotice moduleName="Library" variant="preview" />
+      {/* 7-I — honest label. SERVER MODE: catalogue + circulation are LIVE
+          (DB-backed); fines/reservations remain preview features. DEMO
+          MODE: the whole module runs the curated local showcase. */}
+      {!serverMode && <DemoModuleNotice moduleName="Library" variant="preview" />}
+      {serverMode && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3.5 py-2.5 text-xs text-amber-700 dark:text-amber-300">
+          <span>
+            Catalogue, issue &amp; return are live from the school database. Fine amounts and reservations are preview-only — fine tracking is not server-backed yet.
+          </span>
+        </div>
+      )}
+      {!isDemo && serverStatus === 'error' && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/[0.06] px-3.5 py-2.5 text-xs text-destructive"
+        >
+          <span>Couldn't load the library from the server.</span>
+          <button
+            type="button"
+            onClick={() => void refreshLibraryServerData()}
+            className="font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Tab row + Issue Book action on the right */}
       <div className="flex items-center justify-between gap-3 flex-wrap">

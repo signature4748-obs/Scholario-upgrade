@@ -24,7 +24,7 @@ import {
   DialogFooter, DialogDescription,
 } from '@/components/ui/dialog'
 import { SearchableSelect } from '@/components/principal/modules/shared/searchable-select'
-import { useLibraryStore } from '@/lib/store/library-store'
+import { useLibraryStore, useLibraryServerMode, useEffectiveLibraryBooks } from '@/lib/store/library-store'
 import type { Book } from '@/lib/store/library-store'
 import { formatDate } from '@/lib/format'
 import { toast } from 'sonner'
@@ -37,35 +37,48 @@ interface IssueBookDialogProps {
 }
 
 export function IssueBookDialog({ open, onOpenChange, preselectBook }: IssueBookDialogProps) {
-  const books = useLibraryStore((s) => s.books)
+  const books = useEffectiveLibraryBooks()
   const issueBook = useLibraryStore((s) => s.issueBook)
   const getBorrowerOptions = useLibraryStore((s) => s.getBorrowerOptions)
+  const serverPending = useLibraryStore((s) => s.serverPending)
+  const serverMode = useLibraryServerMode()
 
   const [borrowerId, setBorrowerId] = useState('')
+  const [borrowerType, setBorrowerType] = useState<'student' | 'teacher'>('student')
   const [bookId, setBookId] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   // Reset state when dialog opens; preselect book if provided.
   useEffect(() => {
     if (open) {
       setBookId(preselectBook?.id ?? '')
       setBorrowerId('')
+      setBorrowerType('student')
+      setSubmitting(false)
+      setSubmitError(null)
     }
   }, [open, preselectBook])
 
-  // Build borrower options (students + teachers from canonical stores).
+  // Build borrower options (server mode: students only — the register
+  // supports student borrowers; demo mode: students + REAL teacher roster).
   const borrowerOptions = useMemo(() => {
     const opts = getBorrowerOptions()
     return opts.map((o) => ({
       id: o.id,
       label: o.name,
       avatar: o.name.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase(),
-      meta: o.detail,
+      meta: o.type === 'teacher' ? `${o.detail} · demo lending` : o.detail,
     }))
   }, [getBorrowerOptions])
 
-  const borrowerType = useMemo(() => {
-    return borrowerOptions.find((o) => o.id === borrowerId)?.id.startsWith('T-') ? 'teacher' : 'student'
-  }, [borrowerId, borrowerOptions])
+  // Track the selected option's declared type (real teacher ids are not
+  // 'T-' prefixed — the old prefix heuristic broke with real rosters).
+  const handleSelectBorrower = (id: string) => {
+    setBorrowerId(id)
+    const opt = getBorrowerOptions().find((o) => o.id === id)
+    setBorrowerType(opt?.type ?? 'student')
+  }
 
   // Book options: only books with available > 0.
   const bookOptions = useMemo(() => {
@@ -89,16 +102,19 @@ export function IssueBookDialog({ open, onOpenChange, preselectBook }: IssueBook
     return d
   }, [])
 
-  const canIssue = !!borrowerId && !!bookId && selectedBook && selectedBook.available > 0
+  const canIssue = !!borrowerId && !!bookId && selectedBook && selectedBook.available > 0 && !submitting
 
-  const handleIssue = () => {
-    if (!bookId || !borrowerId) {
+  const handleIssue = async () => {
+    if (!bookId || !borrowerId || submitting) {
       toast.error('Please select a borrower and a book')
       return
     }
-    const type = borrowerId.startsWith('T-') ? 'teacher' : 'student'
-    const result = issueBook(bookId, borrowerId, type)
+    setSubmitting(true)
+    setSubmitError(null)
+    const result = await issueBook(bookId, borrowerId, borrowerType)
+    setSubmitting(false)
     if (!result.success) {
+      setSubmitError(result.error || 'Failed to issue book')
       toast.error(result.error || 'Failed to issue book')
       return
     }
@@ -126,6 +142,17 @@ export function IssueBookDialog({ open, onOpenChange, preselectBook }: IssueBook
         </DialogHeader>
 
         <div className="space-y-4">
+          {submitError && (
+            <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/[0.06] px-3 py-2 text-xs text-destructive">
+              {submitError}
+            </p>
+          )}
+          {serverMode && (
+            <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+              Issues are saved to the school's library register. Student borrowers only — teacher lending requires a register extension (coming).
+            </p>
+          )}
+
           {/* Borrower */}
           <div className="space-y-1.5">
             <Label className="text-xs flex items-center gap-1.5">
@@ -133,8 +160,8 @@ export function IssueBookDialog({ open, onOpenChange, preselectBook }: IssueBook
             </Label>
             <SearchableSelect
               selectedId={borrowerId}
-              onSelect={setBorrowerId}
-              placeholder="Search student or teacher"
+              onSelect={handleSelectBorrower}
+              placeholder={serverMode ? 'Search student' : 'Search student or teacher'}
               options={borrowerOptions}
               pickerId="lib-borrower"
             />
@@ -199,13 +226,13 @@ export function IssueBookDialog({ open, onOpenChange, preselectBook }: IssueBook
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
           <Button
             onClick={handleIssue}
             disabled={!canIssue}
             className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
           >
-            <BookMarked className="h-3.5 w-3.5" /> Issue Book
+            <BookMarked className="h-3.5 w-3.5" /> {submitting || serverPending ? 'Issuing…' : 'Issue Book'}
           </Button>
         </DialogFooter>
       </DialogContent>

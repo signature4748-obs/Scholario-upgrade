@@ -53,6 +53,8 @@ export function AddBookDialog({ open, onOpenChange }: AddBookDialogProps) {
   const [category, setCategory] = useState<BookCategory | ''>('')
   const [publisher, setPublisher] = useState('')
   const [copies, setCopies] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   // Reset state every time the dialog opens.
   useEffect(() => {
@@ -63,20 +65,24 @@ export function AddBookDialog({ open, onOpenChange }: AddBookDialogProps) {
       setCategory('')
       setPublisher('')
       setCopies('')
+      setSubmitting(false)
+      setSubmitError(null)
     }
   }, [open])
 
   const copiesNum = Math.max(0, parseInt(copies || '0', 10))
   const canSave = Boolean(
-    title.trim() && author.trim() && isbn.trim() && category && copiesNum >= 1
+    title.trim() && author.trim() && isbn.trim() && category && copiesNum >= 1 && !submitting
   )
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!canSave) {
       toast.error('Please fill the title, author, ISBN, category and at least 1 copy')
       return
     }
-    addBook({
+    setSubmitting(true)
+    setSubmitError(null)
+    const result = await addBook({
       title: title.trim(),
       author: author.trim(),
       isbn: isbn.trim(),
@@ -84,6 +90,12 @@ export function AddBookDialog({ open, onOpenChange }: AddBookDialogProps) {
       publisher: publisher.trim() || undefined,
       copies: copiesNum,
     })
+    setSubmitting(false)
+    if (!result.success) {
+      setSubmitError(result.error || 'The book could not be added')
+      toast.error(result.error || 'The book could not be added')
+      return
+    }
     toast.success('Book added to catalogue', {
       description: `"${title.trim()}" · ${copiesNum} cop${copiesNum === 1 ? 'y' : 'ies'} · ${category}`,
     })
@@ -104,6 +116,11 @@ export function AddBookDialog({ open, onOpenChange }: AddBookDialogProps) {
         </DialogHeader>
 
         <div className="space-y-4">
+          {submitError && (
+            <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/[0.06] px-3 py-2 text-xs text-destructive">
+              {submitError}
+            </p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Title */}
             <div className="space-y-1.5 sm:col-span-2">
@@ -210,7 +227,7 @@ export function AddBookDialog({ open, onOpenChange }: AddBookDialogProps) {
             disabled={!canSave}
             className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
           >
-            <BookPlus className="h-3.5 w-3.5" /> Add Book
+            <BookPlus className="h-3.5 w-3.5" /> {submitting ? 'Adding…' : 'Add Book'}
           </Button>
         </DialogFooter>
       </DialogContent>
