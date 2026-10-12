@@ -43,9 +43,20 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { randomBytes, randomUUID } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const T = 45_000 // generous: first-hit dev compilation
+// 40s liveFetch retry budget (CI first-run fix, 2026-10-11): always under
+// this suite's 45s per-test ceiling — rides out the ~16s dev-server outage
+// window that killed the last six tests of this file in the first CI run
+// (ECONNRESET on the in-flight fee-snapshot fetch, then ECONNREFUSED for
+// the next five, then full recovery by the next file). Transport-level
+// retry with backoff keeps every assertion intact; a genuinely dead
+// server still fails loudly after the budget.
+// POST replay-safety: this suite's mutations are idempotent by design
+// (clientRequestId dedupe is literally under test here).
+const LIVE: LiveFetchOpts = { deadlineMs: 40_000 }
 const MARKER = randomBytes(4).toString('hex')
 
 // ── fixtures ───────────────────────────────────────────────────────────────
@@ -85,10 +96,19 @@ async function call(
   path: string,
   init?: RequestInit,
 ): Promise<{ status: number; body: any }> {
-  const res = await fetch(`${BASE}${path}`, {
+  // liveFetch (2026-10-11, CI first-run fix): the first CI run lost the
+  // last 6 tests of this suite to a transient dev-server outage window
+  // (ECONNRESET on the in-flight fee-snapshot fetch, then ECONNREFUSED
+  // for the next five ~0.5ms tests, then full recovery by the next file)
+  // — the dev server restarting its render worker under runner memory
+  // pressure. Transport-level retry with backoff keeps every assertion
+  // intact; a genuinely dead server still fails loudly after the budget.
+  // POST replay-safety: this suite's mutations are idempotent by design
+  // (clientRequestId dedupe is literally under test here).
+  const res = await liveFetch(`${BASE}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}), ...jar(token) },
-  })
+  }, LIVE)
   const body = (await res.json().catch(() => null)) as any
   return { status: res.status, body }
 }

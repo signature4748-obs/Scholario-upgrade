@@ -264,6 +264,12 @@ jobs:
           bun prisma/seed-platform.ts
 
       - name: Start dev server and wait for readiness
+        env:
+          # (2026-10-12, same fix as ci.yml): the dev script caps V8 heap at
+          # 1700MB (sandbox-tuned); the 16GB runner has the headroom — the
+          # CI run-2 crash-window post-mortem (in-flight ECONNRESET on a
+          # cold compile → ~30s ECONNREFUSED) says take it.
+          DEV_OLD_SPACE_MB: "4096"
         run: |
           nohup bun run dev > dev.log 2>&1 &
           for i in $(seq 1 60); do
@@ -288,7 +294,9 @@ jobs:
 
       - name: Dev server log tail (on failure)
         if: failure()
-        run: tail -n 200 dev.log || true
+        # 400 lines (was 200 — same rationale as ci.yml): the run-2
+        # post-mortem needed the crash window the 200-line tail lost.
+        run: tail -n 400 dev.log || true
 
   # ── 2. CONFIG PRE-FLIGHT — Vercel production env: CONFIGURED / MISSING ────
   # Read-only; names + target metadata only (the script never requests

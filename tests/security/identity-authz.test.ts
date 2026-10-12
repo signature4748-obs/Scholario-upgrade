@@ -41,9 +41,18 @@ import { randomBytes } from 'crypto'
 import { hashSessionToken, hashPassword, verifyPassword } from '@/lib/auth'
 import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 import { db } from '../helpers/db'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const T = 30_000
+// 60s per-test ceiling (CI first-run fix, 2026-10-11): the first CI run
+// lost GATE F's positive controls to a ~47s dev-server outage window
+// (ECONNRESET → ECONNREFUSED burst, then recovery); with the transport
+// retry budget below (50s) the request rides out the window and the
+// assertion itself is untouched.
+const T = 60_000
+/** liveFetch retry budget for this suite's requests — 50s wall clock,
+ * always under the 60s per-test ceiling. */
+const LIVE: LiveFetchOpts = { deadlineMs: 50_000 }
 const PW = TENANT_FIXTURE_PASSWORD
 
 /** Non-canonical role values probed with forged (directly-minted) sessions.
@@ -102,20 +111,25 @@ async function directSession(email: string): Promise<string> {
 async function as(email: string, path: string, init?: RequestInit): Promise<Response> {
   const token = tokens[email] ?? (await directSession(email))
   tokens[email] = token
-  return fetch(`${BASE}${path}`, {
+  // liveFetch (2026-10-11, CI first-run fix): the first CI run's first
+  // GATE-F test hung 30s on an abandoned socket right after a dev-server
+  // restart window (accepted pre-restart, never answered, next tests
+  // fine). Per-attempt timeout + transport retry recovers that exact
+  // pattern; assertions unchanged.
+  return liveFetch(`${BASE}${path}`, {
     ...init,
     headers: { ...(init?.headers ?? {}), authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-  })
+  }, LIVE)
 }
 
 /** Multipart probe (no JSON content-type — fetch derives the boundary). */
 async function asForm(email: string, path: string, form: FormData): Promise<Response> {
   const token = tokens[email] ?? (await directSession(email))
   tokens[email] = token
-  return fetch(`${BASE}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form })
+  return liveFetch(`${BASE}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form }, LIVE)
 }
 
-const anon = (path: string, init?: RequestInit) => fetch(`${BASE}${path}`, init)
+const anon = (path: string, init?: RequestInit) => liveFetch(`${BASE}${path}`, init, LIVE)
 
 /** PNG header (magic bytes suffice for the avatar MIME sniff). */
 const PNG_MAGIC = Buffer.from([

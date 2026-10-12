@@ -1,6 +1,9 @@
 import { describe, test, expect } from 'bun:test'
 import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+
+import { REPO_ROOT } from '../helpers/repo-root'
 
 /**
  * Phase 8A credential-exposure cleanup — regression guard.
@@ -23,7 +26,11 @@ import { spawnSync } from 'node:child_process'
  */
 
 const git = (args: string[]): string => {
-  const r = spawnSync('git', args, { cwd: '/home/z/my-project', encoding: 'utf8' })
+  // REPO_ROOT (derived from this file's location) replaces the hardcoded
+  // sandbox path — the first CI run got an EMPTY tracked-file list because
+  // /home/z/my-project does not exist on the runner, failing the
+  // single-value-source and .env.example regression guards vacuously.
+  const r = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' })
   return r.status === 0 ? r.stdout.toString() : ''
 }
 
@@ -74,7 +81,7 @@ describe('demo credential exposure (Phase 8A cleanup) — regression guard', () 
   test('the login quick-access credential file stays deleted', () => {
     // Disk truth (works before/after staging): the file that carried the
     // one-tap demo credential chips must never return.
-    expect(existsSync('/home/z/my-project/src/components/login/login-page/data.tsx')).toBe(false)
+    expect(existsSync(join(REPO_ROOT, 'src/components/login/login-page/data.tsx'))).toBe(false)
   })
 
   test('no demo credential value or demo-login shortcut in any app/seed/doc surface', () => {
@@ -82,7 +89,7 @@ describe('demo credential exposure (Phase 8A cleanup) — regression guard', () 
     outer: for (const file of scanFiles) {
       let content: string
       try {
-        content = readFileSync(`/home/z/my-project/${file}`, 'utf8')
+        content = readFileSync(join(REPO_ROOT, file), 'utf8')
       } catch {
         continue
       }
@@ -99,9 +106,9 @@ describe('demo credential exposure (Phase 8A cleanup) — regression guard', () 
   })
 
   test('env-driven seed credentials module exists as the single value source', () => {
-    expect(existsSync('/home/z/my-project/prisma/seed-credentials.ts')).toBe(true)
-    expect(existsSync('/home/z/my-project/tests/helpers/credentials.ts')).toBe(true)
-    const mod = readFileSync('/home/z/my-project/prisma/seed-credentials.ts', 'utf8')
+    expect(existsSync(join(REPO_ROOT, 'prisma/seed-credentials.ts'))).toBe(true)
+    expect(existsSync(join(REPO_ROOT, 'tests/helpers/credentials.ts'))).toBe(true)
+    const mod = readFileSync(join(REPO_ROOT, 'prisma/seed-credentials.ts'), 'utf8')
     // The module must remain env-driven (override-able), not env-blind.
     expect(mod).toContain('SEED_DEMO_PASSWORD')
     expect(mod).toContain('SEED_PLATFORM_ROOT_PASSWORD')
@@ -109,7 +116,7 @@ describe('demo credential exposure (Phase 8A cleanup) — regression guard', () 
   })
 
   test('.env.example documents the seed credential overrides as EMPTY placeholders', () => {
-    const template = readFileSync('/home/z/my-project/.env.example', 'utf8')
+    const template = readFileSync(join(REPO_ROOT, '.env.example'), 'utf8')
     for (const key of [
       'SEED_DEMO_PASSWORD',
       'SEED_SUPERADMIN_PASSWORD',
@@ -128,7 +135,7 @@ describe('demo credential exposure (Phase 8A cleanup) — regression guard', () 
       .filter((f) => f.startsWith('src/'))
       .filter((f) => {
         try {
-          return /NEXT_PUBLIC_DISABLE_DEMO_LOGIN/.test(readFileSync(`/home/z/my-project/${f}`, 'utf8'))
+          return /NEXT_PUBLIC_DISABLE_DEMO_LOGIN/.test(readFileSync(join(REPO_ROOT, f), 'utf8'))
         } catch {
           return false
         }

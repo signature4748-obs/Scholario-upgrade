@@ -43,13 +43,34 @@
  */
 import { describe, test, expect, beforeAll } from 'bun:test'
 import { spawn } from 'child_process'
+import { join, resolve } from 'node:path'
 import { randomBytes } from 'crypto'
 
 import { db } from '../helpers/db'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 import { hashSessionToken } from '@/lib/auth'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
-const ROOT = process.env.SCHOLARIO_ROOT ?? '/home/z/my-project'
+// Repo root derived from THIS file's location (tests/security → root):
+// the hardcoded sandbox default '/home/z/my-project' does not exist on the
+// CI runner, which made every child-probe spawn die with
+// `ENOENT ... posix_spawn 'bun'` (17 plane-gate failures at ~1ms in the
+// first CI run). SCHOLARIO_ROOT remains as an explicit override.
+const ROOT = process.env.SCHOLARIO_ROOT?.trim()
+  ? resolve(process.env.SCHOLARIO_ROOT)
+  : resolve(import.meta.dir, '../..')
+// Absolute probe path (was repo-root-relative): correct regardless of the
+// spawn cwd, and independent of how bun resolves the entry.
+const PROBE = join(import.meta.dir, '..', 'helpers', 'plane-middleware-probe.ts')
+
+// Live-door tests: the first hit on a /s/<slug>/login route can pay a
+// multi-second cold compile on a 2-core CI runner — 5s (bun's default)
+// timed out exactly there in the first CI run while every follow-up
+// request (same compiled route) passed in <500ms. 60s ceiling + a 50s
+// liveFetch budget also rides out the transient dev-server outage
+// windows (ECONNRESET/ECONNREFUSED bursts) observed in that run.
+const T = 60_000
+const LIVE: LiveFetchOpts = { deadlineMs: 50_000 }
 
 // ─── A. Plane gate (real middleware, child process per plane) ────────────
 
@@ -71,7 +92,7 @@ function probe(
     const child = spawn(
       'bun',
       [
-        'tests/helpers/plane-middleware-probe.ts',
+        PROBE,
         plane,
         path,
         method,
@@ -228,10 +249,10 @@ describe('plane config hardening — misconfiguration fails closed', () => {
 
 describe('canonical school doors — /s/<slug> routes (live)', () => {
   test('/s/<real-slug>/login renders the school login door', async () => {
-    const res = await fetch(`${BASE}/s/green-valley/login`)
+    const res = await liveFetch(`${BASE}/s/green-valley/login`, undefined, LIVE)
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toContain('text/html')
-  })
+  }, T)
 
   test('/s/<unknown-slug>/login is an honest 404 (no guessing, no fallback)', async () => {
     // NOTE on traversal: WHATWG URL parsing treats "%2e"/"%2e%2e" as
@@ -246,33 +267,33 @@ describe('canonical school doors — /s/<slug> routes (live)', () => {
       '/s/green-valley/extra',
       '/s/this-slug-is-way-too-long-to-be-a-real-school-slug-in-the-database-x/login',
     ]) {
-      const res = await fetch(`${BASE}${bad}`, { redirect: 'manual' })
+      const res = await liveFetch(`${BASE}${bad}`, { redirect: "manual" }, LIVE)
       expect(res.status).toBe(404)
     }
     // Non-spec raw traversal is also 404'd by the edge (curl-style).
-    const raw = await fetch(`${BASE}/s/%2e%2e%2flogin`, { redirect: 'manual' })
+    const raw = await liveFetch(`${BASE}/s/%2e%2e%2flogin`, { redirect: "manual" }, LIVE)
     // Spec clients normalize this before sending; if it ever DOES
     // arrive raw, the decoded-path shape gate 404s it.
     expect([200, 404]).toContain(raw.status)
-  })
+  }, T)
 
   test('/s/<real-slug> redirects to the tenant website path', async () => {
-    const res = await fetch(`${BASE}/s/green-valley`, { redirect: 'manual' })
+    const res = await liveFetch(`${BASE}/s/green-valley`, { redirect: "manual" }, LIVE)
     expect([302, 307, 308]).toContain(res.status)
     expect(res.headers.get('location')).toBe('/?tenant=green-valley')
-  })
+  }, T)
 
   test('legacy /login?tenant=<slug> door still works (no regression)', async () => {
-    const res = await fetch(`${BASE}/login?tenant=green-valley`)
+    const res = await liveFetch(`${BASE}/login?tenant=green-valley`, undefined, LIVE)
     expect(res.status).toBe(200)
-  })
+  }, T)
 
   test('the door renders real branding data, not a platform shell', async () => {
-    const res = await fetch(`${BASE}/s/green-valley/login`)
+    const res = await liveFetch(`${BASE}/s/green-valley/login`, undefined, LIVE)
     const html = await res.text()
     // The server-rendered shell must mount the client login surface.
     expect(html.length).toBeGreaterThan(500)
-  })
+  }, T)
 })
 
 // ─── C. Forged-tenant regression (live HTTP, real session) ───────────────
@@ -305,9 +326,9 @@ describe('forged tenant parameters never switch an authenticated session', () =>
   })
 
   async function meWith(query: string): Promise<{ status: number; schoolId: unknown }> {
-    const res = await fetch(`${BASE}/api/auth/me${query}`, {
+    const res = await liveFetch(`${BASE}/api/auth/me${query}`, {
       headers: { authorization: `Bearer ${tokenB}` },
-    })
+    }, LIVE)
     const body = (await res.json().catch(() => null)) as
       | { ok?: boolean; data?: { user?: { schoolId?: string } } }
       | null
@@ -340,7 +361,7 @@ describe('forged tenant parameters never switch an authenticated session', () =>
   })
 
   test('an unauthenticated forged-tenant probe never leaks identity', async () => {
-    const res = await fetch(`${BASE}/api/auth/me?tenant=hawkings-prithvipur`)
+    const res = await liveFetch(`${BASE}/api/auth/me?tenant=hawkings-prithvipur`, undefined, LIVE)
     expect(res.status).toBe(401)
   })
 })

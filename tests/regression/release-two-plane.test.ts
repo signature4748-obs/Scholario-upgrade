@@ -29,7 +29,7 @@
  *                            fired; a missing school-hook secret fails; a
  *                            4xx hook fails immediately without retry storm.
  *   4. release-gate (dry-run / no-deploy behavior — the ACTUAL bash block
- *      extracted from .github/release.yml.parked and executed):
+ *      extracted from .github/workflows/release.yml and executed):
  *                            dry-run ⇒ deployable=false, exit 0 (nothing
  *                            deploys); all-green ⇒ deployable=true; any
  *                            non-success stage (ci / config / migration
@@ -406,9 +406,12 @@ describe('trigger-deploy-hooks (two planes)', () => {
 // ─── 4. release-gate — dry-run / no-deploy behavior (the REAL bash) ───────
 
 describe('release-gate (dry-run / no-deploy — actual workflow bash)', () => {
-  const workflow = readFileSync(join(ROOT, '.github/release.yml.parked'), 'utf8')
+  // (2026-10-12, PR #7 un-parked the workflows: read the LIVE file — the
+  // parked path no longer exists and a module-scope readFileSync threw
+  // ENOENT as an unhandled error, failing the run with 0 test failures.)
+  const workflow = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8')
 
-  /** Extract the gate step's `run: |` block (YAML block scalar) from the parked workflow. */
+  /** Extract the gate step's `run: |` block (YAML block scalar) from the workflow. */
   function extractGateScript(yaml: string): string {
     const lines = yaml.split('\n')
     const gateIdx = lines.findIndex((l) => l.includes('name: Evaluate the gate'))
@@ -515,8 +518,9 @@ describe('release-gate (dry-run / no-deploy — actual workflow bash)', () => {
 
 // ─── 5. Workflow wiring (static) — hooks only after the gate, both planes ──
 
-describe('release.yml.parked wiring (two-plane static contract)', () => {
-  const wf = readFileSync(join(ROOT, '.github/release.yml.parked'), 'utf8')
+describe('release.yml wiring (two-plane static contract)', () => {
+  // (2026-10-12: live path — see §4 note.)
+  const wf = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8')
   const deployJobStart = wf.indexOf('  deploy:')
   const deployJobEnd = wf.indexOf('  verify-deployment:')
   const deployJob = wf.slice(deployJobStart, deployJobEnd)
@@ -552,8 +556,11 @@ describe('release.yml.parked wiring (two-plane static contract)', () => {
   })
 
   test('migration stages run BEFORE the gate (DATABASE FIRST, APPLICATION SECOND)', () => {
-    const gateNeeds = /release-gate:\s*\n\s*name:.*\n\s*needs: \[[^\]]*\]/
-    const m = wf.match(gateNeeds)
+    // (2026-10-12: PR #8 promoted timeout-minutes into the job header, so
+    // `name:` is no longer the line right after the job key — slice the
+    // whole release-gate job block and match the needs array inside it.)
+    const gateJob = wf.slice(wf.indexOf('  release-gate:'), wf.indexOf('  deploy:'))
+    const m = gateJob.match(/needs: \[[^\]]*\]/)
     expect(m).toBeTruthy()
     const needs = m![0]
     expect(needs).toContain('ci')
