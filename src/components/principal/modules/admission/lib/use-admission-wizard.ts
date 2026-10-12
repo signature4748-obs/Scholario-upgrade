@@ -9,8 +9,8 @@
  * detection flow, and the auto-save-draft side effect.
  */
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { students } from '@/lib/mock/students'
 import { toast } from 'sonner'
+import { useStudentsStore } from '@/lib/store/students-store'
 import { useAdmissionStore } from '@/lib/store/admission-store'
 import {
   useAdmissionFeatureFlags,
@@ -270,11 +270,32 @@ export function useAdmissionWizard() {
 
     // Check duplicates only at submit time. The application being edited
     // is excluded — a correction resubmission must never match itself.
+    // H1 (admission duplicate detection): the cross-check runs against the
+    // REAL canonical roster (DB-hydrated via /api/students/roster — the
+    // principal session syncs it at app root), never the retired mock
+    // student corpus (fabricated kids triggered false-positive warnings;
+    // real enrolled students were silently NOT cross-checked).
     if (dupConfig.enabled) {
       const others = (admissionStore.applications || []).filter(
         (a) => a.id !== editingAppIdRef.current
       )
-      const match = checkDuplicates(data, dupConfig, students as any, others)
+      const rosterStudents = useStudentsStore
+        .getState()
+        .students.map((s) => ({
+          id: s.id,
+          name: s.name,
+          className: s.className,
+          admissionNo: s.admissionNo,
+          dob: s.dob || undefined,
+          fatherName: s.fatherName || undefined,
+          motherName: s.motherName || undefined,
+          // The canonical roster carries ONE guardian contact — the
+          // duplicate keys' father/motherPhone both map to it.
+          fatherPhone: s.guardianPhone || undefined,
+          motherPhone: s.guardianPhone || undefined,
+          currentAddress: s.address || undefined,
+        }))
+      const match = checkDuplicates(data, dupConfig, rosterStudents, others)
       if (match && match.matchType !== 'none') {
         setPostSubmitDup(match)
         setPendingSubmitData({ formData: formDataPartial, feeState: feeDataPartial })
