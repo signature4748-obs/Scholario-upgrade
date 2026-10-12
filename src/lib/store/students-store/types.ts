@@ -212,6 +212,15 @@ export interface TransferRecord {
 export interface StudentsState {
   students: StudentRecord[]
   classes: ClassRecord[]
+  /**
+   * The school's active teachers as delivered by /api/students/roster
+   * (STUDENT-allowed) — {id: USER id, name}. This is the id space that
+   * Class.classTeacherId and ClassSubjectAssignment.teacherUserId carry,
+   * so student-side surfaces (e.g. messaging contact resolution) can
+   * resolve their class/subject teachers WITHOUT /api/teachers (which is
+   * PRINCIPAL/MANAGEMENT-only). Empty until the roster sync lands.
+   */
+  rosterTeachers: { id: string; name: string }[]
   houses: House[]
   promotions: PromotionRecord[]
   transfers: TransferRecord[]

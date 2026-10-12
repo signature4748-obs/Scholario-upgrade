@@ -155,6 +155,7 @@ export function mapRosterToRecords(payload: RosterPayload): {
   students: StudentRecord[]
   classes: ClassRecord[]
   subjects: SubjectDef[]
+  teachers: { id: string; name: string }[]
 } {
   // Classes: group section-level rows into grade-group ClassRecords.
   const groups = new Map<
@@ -307,7 +308,7 @@ export function mapRosterToRecords(payload: RosterPayload): {
     status: 'Active' as const,
   }))
 
-  return { students, classes, subjects }
+  return { students, classes, subjects, teachers: payload.teachers }
 }
 
 // ── sync ─────────────────────────────────────────────────────────────
@@ -335,7 +336,7 @@ export function syncStudentsFromServer(): Promise<boolean> {
       if (!payload || !Array.isArray(payload.students) || !Array.isArray(payload.classes)) {
         throw new Error('roster sync: malformed payload')
       }
-      const { students, classes, subjects } = mapRosterToRecords(payload)
+      const { students, classes, subjects, teachers } = mapRosterToRecords(payload)
       useStudentsStore.setState((state) => {
         // Prune student positions referencing students that no longer
         // exist in the canonical universe (history slices are kept —
@@ -344,7 +345,11 @@ export function syncStudentsFromServer(): Promise<boolean> {
         const studentPositions = state.studentPositions.map((p) =>
           p.active && !ids.has(p.studentId) ? { ...p, active: false, endedOn: new Date().toISOString(), endedByName: 'Canonical roster sync' } : p,
         )
-        return { students, classes, academicSubjects: subjects, studentPositions }
+        // STUDENT-CONTACTS — the school's active teachers (USER-id space)
+        // ride along with the roster sync: student sessions cannot call
+        // /api/teachers (role-scoped), so this is the only sanctioned
+        // teacher-directory source for student-side contact resolution.
+        return { students, classes, academicSubjects: subjects, studentPositions, rosterTeachers: teachers }
       })
       // Prune fee-store seed transactions referencing retired mock
       // students (STU-xxx) so the principal fee ledger only shows
@@ -397,6 +402,7 @@ export function purgeSeedRosterForRealTenant(): void {
       classes: [],
       academicSubjects: [],
       studentPositions: [],
+      rosterTeachers: [],
     })
   }
 }

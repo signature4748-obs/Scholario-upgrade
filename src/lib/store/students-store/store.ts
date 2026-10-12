@@ -134,6 +134,10 @@ export const useStudentsStore = create<StudentsState>()(
   // renders its honest empty states.
   students: [],
   classes: [],
+  // STUDENT-CONTACTS — active teacher directory from the roster sync
+  // (USER-id space). Empty until /api/students/roster lands (students
+  // get their /api/teachers 403 by design — role-scoped).
+  rosterTeachers: [],
   houses: HOUSE_DEFS,
   promotions: [],
   transfers: [],

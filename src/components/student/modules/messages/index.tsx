@@ -33,9 +33,12 @@ import {
 } from '@/lib/store/student-messaging-store'
 import { useStudentsStore, useMyStudentRecord, type StudentRecord, type ClassRecord } from '@/lib/store/students-store'
 import type { SubjectDef } from '@/lib/mock/academic'
-// PHASE 7 (Task 7-a) — teacher identities resolve from the school's real
-// roster store (hydrated from /api/teachers for staff sessions; students
-// see an honest empty list — never fabricated teacher names).
+// STUDENT-CONTACTS — teacher identities resolve from the roster sync's
+// teacher directory (payload.teachers — USER-id space, STUDENT-allowed).
+// The principal-only teacher-roster-store stays as a fallback for staff
+// sessions previewing the student shell; students themselves would get
+// a 403 from /api/teachers (role-scoped), so their contacts must never
+// depend on it (was: permanently empty contact picker for students).
 import { useTeacherRosterStore } from '@/lib/store/teacher-roster-store'
 
 /** Timestamp label for a message bubble — time today, date otherwise. */
@@ -54,11 +57,15 @@ function messageStamp(iso: string): string {
  *  their OWN class section (spec §30 — never a school-wide directory).
  *  8B-7-d: ids are the teacher's USER id — the server thread key
  *  (/api/messaging/threads/[userId]) — so threads started here are the
- *  exact Message rows the teacher's Communication Hub reads. */
+ *  exact Message rows the teacher's Communication Hub reads.
+ *  STUDENT-CONTACTS: names resolve FIRST from the roster-sync directory
+ *  (students cannot hydrate /api/teachers); the staff-roster lookup is
+ *  only a preview-session fallback. */
 function classContacts(
   student: StudentRecord | undefined,
   classes: ClassRecord[],
   subjects: SubjectDef[],
+  rosterTeachers: { id: string; name: string }[],
 ): { id: string; name: string; subject: string; role: string }[] {
   if (!student) return []
   const cls = classes.find((c) => c.id === student.classId)
@@ -68,13 +75,16 @@ function classContacts(
   const seen = new Set<string>()
   const push = (id: string | undefined, subject: string, role: string) => {
     if (!id || seen.has(id)) return
-    // Dual-id match (Phase 7): class data carries the teacher's USER id
-    // (Class.classTeacherId / CSA.teacherUserId); the roster keys Teacher
-    // rows — real appointed teachers must resolve.
-    const t = useTeacherRosterStore.getState().teachers.find((x) => x.id === id || x.userId === id)
-    if (!t) return
+    // The class data carries the teacher's USER id (Class.classTeacherId /
+    // CSA.teacherUserId). Resolve the NAME: roster directory first (the
+    // student-session path — ids are exactly USER ids), then the staff
+    // teacher-roster dual-id match (preview sessions).
+    const directory = rosterTeachers.find((t) => t.id === id)
+    const staff = useTeacherRosterStore.getState().teachers.find((x) => x.id === id || x.userId === id)
+    const name = directory?.name ?? staff?.name
+    if (!name) return
     seen.add(id)
-    roster.push({ id: t.userId, name: t.name, subject, role })
+    roster.push({ id, name, subject, role })
   }
   push(section?.classTeacherId ?? cls.classTeacherId, 'Class Teacher', 'Class Teacher')
   for (const [subId, tid] of Object.entries(cls.subjectTeachers)) {
@@ -103,13 +113,14 @@ export function StudentMessagesModule() {
   const student = useMyStudentRecord()
   const classes = useStudentsStore((s) => s.classes)
   const subjects = useStudentsStore((s) => s.academicSubjects)
+  const rosterTeachers = useStudentsStore((s) => s.rosterTeachers)
 
   const [openId, setOpenId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [composing, setComposing] = useState(false)
 
   const unread = countUnreadConversations(conversations, seenAt)
-  const contacts = useMemo(() => classContacts(student, classes, subjects), [student, classes, subjects])
+  const contacts = useMemo(() => classContacts(student, classes, subjects, rosterTeachers), [student, classes, subjects, rosterTeachers])
 
   const sorted = useMemo(
     () => [...conversations].sort((a, b) => (a.lastOn < b.lastOn ? 1 : -1)),
