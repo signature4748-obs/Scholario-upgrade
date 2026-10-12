@@ -133,9 +133,13 @@ export function useCommandPalette({
   // registry — always remain: they are UI affordances, not data.
   const searchResults = useMemo(() => {
     const local = searchEntities(query, role, groups)
+    // 'book' joins the gate (search leak fix): searchContent used to emit
+    // the fabricated mock library corpus under a type the gate missed —
+    // fabricated books rendered in the production palette. The corpus is
+    // now retired at the source; the gate entry is defense-in-depth.
     const ENTITY_TYPES = new Set([
       'student', 'teacher', 'fee', 'notice', 'parent', 'class', 'subject',
-      'exam', 'room', 'material', 'deck', 'group',
+      'exam', 'room', 'material', 'deck', 'group', 'book',
     ])
     const localNav = local.filter((i) => !ENTITY_TYPES.has(i.type))
     if (remoteResults === null) {
