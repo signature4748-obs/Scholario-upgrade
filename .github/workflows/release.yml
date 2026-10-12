@@ -271,7 +271,21 @@ jobs:
           # cold compile → ~30s ECONNREFUSED) says take it.
           DEV_OLD_SPACE_MB: "4096"
         run: |
-          nohup bun run dev > dev.log 2>&1 &
+          # DEV-SERVER SUPERVISOR (2026-10-12, same third-flake fix as
+          # ci.yml): Next.js dev's memory guard exits BY DESIGN for a
+          # supervised restart (RESTART_EXIT_CODE) — runs 38198889755 /
+          # 38200849834 died for the rest of the job because nothing
+          # respawned the server. Honor the contract: respawn on ANY exit.
+          cat > dev-supervisor.sh <<'SH'
+          #!/usr/bin/env bash
+          while true; do
+            bun run dev
+            echo "[dev-supervisor] dev server exited (code $?) at $(date -u +%FT%TZ) — respawning" >&2
+            sleep 2
+          done
+          SH
+          chmod +x dev-supervisor.sh
+          nohup ./dev-supervisor.sh > dev-supervisor.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://localhost:3000/health/ready && break || sleep 5
           done
@@ -288,6 +302,53 @@ jobs:
 
       - name: Test suite (unit · integration · API · regression · security)
         run: bun run test
+
+      # (2026-10-12, same third-flake fix as ci.yml): the security suites
+      # grow the dev-server heap until Next's 0.8×-heap guard can fire
+      # mid-E2E; the e2e journeys use plain fetch (no transport retry).
+      # Bounce the server FRESH right before the journeys + re-warm doors.
+      - name: Reset dev server for E2E (fresh heap)
+        run: |
+          pkill -f "next dev" || true
+          pkill -f "next-server" || true
+          for i in $(seq 1 40); do
+            curl -sf http://localhost:3000/health/ready && break || sleep 3
+          done
+          curl -sf http://localhost:3000/health/ready
+          curl -sf -o /dev/null http://localhost:3000/platform/login
+          curl -sf -o /dev/null http://localhost:3000/login
+          curl -sf -o /dev/null http://localhost:3000/s/hawkings-prithvipur/login
+          curl -sf http://localhost:3000/health/ready
+          # WARM THE JOURNEY ROUTES (run 38201982130 lesson): a freshly
+          # respawned server re-compiles route modules on first hit — the
+          # login doors alone are NOT enough; Journey 1 blew its 45s budget
+          # on 8 cold API compiles. Unauthenticated probes still pay the
+          # compile (401 answers come from the compiled route), so a plain
+          # GET/POST sweep pre-compiles every route the journeys touch.
+          for path in /api/auth/me /api/dashboard /api/students /api/fees/defaulters \
+                      /api/exams /api/timetable /api/teacher/dashboard \
+                      /api/teacher/class-hub /api/student/dashboard \
+                      /api/student/timetable /health/live /; do
+            curl -s -o /dev/null -m 60 "http://localhost:3000$path" || true
+          done
+          curl -s -o /dev/null -m 60 -X POST "http://localhost:3000/api/auth/login" \
+            -H "content-type: application/json" -d '{"email":"warm@invalid.test","password":"x"}' || true
+          # AUTHENTICATED warm (run 38203623586 lesson): one real fixture
+          # login + the principal chain pays ANY first-authenticated-path
+          # cost during the reset (observed once: a single 62s /api/auth/me
+          # stall right after respawn — subsequent identical requests 11ms;
+          # the journeys must not be the first authenticated caller).
+          # Fixture credential = prisma/seed-credentials.ts default (CI
+          # seeds with defaults; .github is not a client surface).
+          WARM_COOKIE=$(curl -s -m 60 -X POST "http://localhost:3000/api/auth/login" \
+            -H "content-type: application/json" \
+            -d '{"email":"principal@hawkingshigh.edu","password":"principal123"}' \
+            -D - -o /dev/null | grep -i '^set-cookie: erp_session=' | head -1 | sed 's/^[Ss]et-[Cc]ookie: //' | cut -d';' -f1) || true
+          if [ -n "$WARM_COOKIE" ]; then
+            curl -s -o /dev/null -m 60 -H "cookie: $WARM_COOKIE" http://localhost:3000/api/auth/me || true
+            curl -s -o /dev/null -m 60 -H "cookie: $WARM_COOKIE" http://localhost:3000/api/dashboard || true
+          fi
+          curl -sf http://localhost:3000/health/ready
 
       - name: E2E journeys (live server)
         run: bun run test:e2e

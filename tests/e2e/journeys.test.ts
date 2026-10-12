@@ -30,7 +30,13 @@ import { DEMO_PRINCIPAL_EMAIL, DEMO_PRINCIPAL_PASSWORD, TENANT_FIXTURE_PASSWORD 
 
 const BASE = process.env.E2E_BASE_URL ?? 'http://localhost:3000'
 
-const T = 45000 // generous: first-hit dev compilation
+// 90s (2026-10-12, run-38203623586 lesson): the sibling e2e suites
+// (tenant-/provisioning-acceptance) already run at 60_000 for the same
+// "first-hit dev compilation" reason; one observed post-restart stall
+// (a single 62s /api/auth/me — every subsequent identical request 11ms)
+// blew the old 45s budget. Assertions unchanged; only the budget is
+// honest about a CI dev server.
+const T = 90000 // generous: first-hit dev compilation + one-off stalls
 
 const RUN_IP = `10.222.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 const FIXTURE_PW = TENANT_FIXTURE_PASSWORD
