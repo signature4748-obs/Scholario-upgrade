@@ -18,8 +18,10 @@
 // fallback is RETIRED (Phase B): a day without recorded rows renders
 // "no attendance yet" — never a fabricated rate.
 
-import { useEffect, useState } from 'react'
 import { isWeekend, isHoliday as mirrorIsHoliday, getHoliday, type Holiday } from '@/lib/mock/school-calendar'
+// Phase B shared feed: the DB holiday hook + expansion live in
+// src/lib/hooks/use-school-holidays.ts (both planes consume one feed).
+export { holidaysFromEvents, useSchoolHolidays, type HolidayEvent } from '@/lib/hooks/use-school-holidays'
 
 export type CalendarCell = {
   /** ISO date string (YYYY-MM-DD) — used for holiday lookups. */
@@ -110,97 +112,6 @@ export function buildMonthCalendar(
   }
 
   return days
-}
-
-/** DB SchoolEvent row subset (GET /api/events?type=HOLIDAY). */
-export interface HolidayEvent {
-  title: string
-  startDate: string
-  endDate?: string | null
-}
-
-/**
- * Expand DB HOLIDAY events (inclusive date ranges) into the per-date
- * Holiday map the calendar consumes. Type mapping: SchoolEvent HOLIDAY
- * rows carry no sub-type — 'school' keeps the neutral violet styling.
- */
-export function holidaysFromEvents(events: HolidayEvent[]): Record<string, Holiday> {
-  const map: Record<string, Holiday> = {}
-  for (const ev of events) {
-    const start = ev.startDate.slice(0, 10)
-    const end = (ev.endDate ?? ev.startDate).slice(0, 10)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) continue
-    // Guard against pathological ranges (bounded expansion, ≤370 days).
-    let cursor = new Date(`${start}T00:00:00.000Z`)
-    const last = new Date(`${end}T00:00:00.000Z`)
-    let guard = 0
-    while (cursor <= last && guard < 370) {
-      const dateStr = cursor.toISOString().slice(0, 10)
-      if (!(dateStr in map)) {
-        map[dateStr] = { dateStr, name: ev.title, type: 'school' }
-      }
-      cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)
-      guard++
-    }
-  }
-  return map
-}
-
-/**
- * useSchoolHolidays — the authoritative DB holiday feed (Phase B):
- * GET /api/events?type=HOLIDAY (tenant-scoped SchoolEvent rows),
- * module-level cached for the window. Falls back to `undefined` while
- * loading / on failure — consumers then use the bundled mirror (the
- * documented fallback), never fabricated data.
- */
-let cachedHolidays: Record<string, Holiday> | null = null
-let holidaysInflight: Promise<Record<string, Holiday> | null> | null = null
-
-function fetchHolidays(): Promise<Record<string, Holiday> | null> {
-  if (cachedHolidays) return Promise.resolve(cachedHolidays)
-  if (!holidaysInflight) {
-    holidaysInflight = fetch('/api/events?type=HOLIDAY', {
-      cache: 'no-store',
-      credentials: 'same-origin',
-    })
-      .then(async (res) => {
-        let json: unknown = null
-        try {
-          json = await res.json()
-        } catch {
-          /* non-JSON body — treated as failure below */
-        }
-        const envelope = json as { ok?: unknown; data?: HolidayEvent[] } | null
-        if (!res.ok || !envelope || envelope.ok !== true || !Array.isArray(envelope.data)) {
-          return null
-        }
-        return holidaysFromEvents(envelope.data)
-      })
-      .then((map) => {
-        if (map) cachedHolidays = map
-        return map
-      })
-      .catch(() => null)
-      .finally(() => {
-        holidaysInflight = null
-      })
-  }
-  return holidaysInflight
-}
-
-export function useSchoolHolidays(): Record<string, Holiday> | undefined {
-  const [holidays, setHolidays] = useState<Record<string, Holiday> | undefined>(cachedHolidays ?? undefined)
-  useEffect(() => {
-    if (cachedHolidays) return
-    let cancelled = false
-    void fetchHolidays().then((map) => {
-      if (!cancelled && map) setHolidays(map)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  return holidays
 }
 
 export function rateColor(rate: number | null): string {

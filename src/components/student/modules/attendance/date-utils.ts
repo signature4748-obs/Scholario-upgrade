@@ -6,11 +6,19 @@
  * `toISOString()`, which shifts by UTC) so "11 September" can never render
  * as "10 September". Parsing uses `T00:00:00` local midnight.
  *
- * Month grids are Monday-first: the school week is Mon–Sat with Sunday off
- * (Indian school convention, matches the working-day calendar).
+ * Month grids are Monday-first: the school week is MON–SAT with Sunday
+ * off (Indian school convention; matches the DB Timetable DAY_ORDER and
+ * the school-calendar helpers' staff rule — Saturdays are SCHOOL days,
+ * so an unrecorded Saturday renders honestly as 'no record', never as a
+ * blanket weekend).
+ *
+ * HOLIDAYS (real-data fix): callers pass the DB SchoolEvent map from
+ * useSchoolHolidays (GET /api/events?type=HOLIDAY, tenant-scoped). The
+ * bundled client mirror is the documented fallback while loading / on
+ * fetch failure — never the primary source, never fabricated.
  */
 
-import { getHoliday } from '@/lib/mock/school-calendar'
+import { getHoliday, type Holiday } from '@/lib/mock/school-calendar'
 import type { StudentAttendanceRecord } from '@/lib/store/student-attendance-store'
 import type { DayCell, DayKind } from './status-tokens'
 
@@ -50,40 +58,61 @@ export function daysInMonth(c: MonthCursor): number {
   return new Date(c.y, c.m, 0).getDate()
 }
 
-/* ── Day resolution (record → weekend → holiday → future → no record) ── */
+/* ── Day resolution (record → Sunday → holiday → future → no record) ── */
 
-export function resolveDay(iso: string, byDate: Map<string, StudentAttendanceRecord>, todayIso: string): Omit<DayCell, 'day' | 'key'> {
+/** Holiday lookup for a date: DB events first, mirror as documented fallback. */
+function holidayFor(iso: string, holidays?: Record<string, Holiday>): Holiday | null {
+  if (holidays) return holidays[iso] ?? null
+  return getHoliday(iso)
+}
+
+export function resolveDay(
+  iso: string,
+  byDate: Map<string, StudentAttendanceRecord>,
+  todayIso: string,
+  holidays?: Record<string, Holiday>,
+): Omit<DayCell, 'day' | 'key'> {
   const record = byDate.get(iso)
   if (record) return { iso, kind: record.status as DayKind, record }
   const dow = parseIso(iso).getDay()
-  if (dow === 0 || dow === 6) return { iso, kind: 'weekend' }
-  const holiday = getHoliday(iso)
+  // Sunday-only weekend (Mon–Sat school — see the module header).
+  if (dow === 0) return { iso, kind: 'weekend' }
+  const holiday = holidayFor(iso, holidays)
   if (holiday) return { iso, kind: 'holiday', holidayName: holiday.name }
   if (iso > todayIso) return { iso, kind: 'future' }
   return { iso, kind: 'norecord' }
 }
 
 /** Monday-first month grid (leading blanks are null days). */
-export function buildMonthGrid(c: MonthCursor, byDate: Map<string, StudentAttendanceRecord>, todayIso: string): DayCell[] {
+export function buildMonthGrid(
+  c: MonthCursor,
+  byDate: Map<string, StudentAttendanceRecord>,
+  todayIso: string,
+  holidays?: Record<string, Holiday>,
+): DayCell[] {
   const cells: DayCell[] = []
   const firstDow = new Date(c.y, c.m - 1, 1).getDay()
   const lead = (firstDow + 6) % 7 // Monday-first offset
   for (let i = 0; i < lead; i++) cells.push({ key: `blank-${i}`, day: null, iso: '', kind: 'norecord' })
   for (let d = 1; d <= daysInMonth(c); d++) {
     const iso = `${c.y}-${pad(c.m)}-${pad(d)}`
-    cells.push({ key: iso, day: d, ...resolveDay(iso, byDate, todayIso) })
+    cells.push({ key: iso, day: d, ...resolveDay(iso, byDate, todayIso, holidays) })
   }
   return cells
 }
 
-/** Working (school) days in a calendar month, per the school calendar. */
-export function workingDaysInMonth(c: MonthCursor): number {
+/**
+ * Working (school) days in a calendar month: Mon–Sat minus the school's
+ * real holidays (DB events when provided, mirror fallback) — the school
+ * week runs Monday–Saturday.
+ */
+export function workingDaysInMonth(c: MonthCursor, holidays?: Record<string, Holiday>): number {
   let n = 0
   for (let d = 1; d <= daysInMonth(c); d++) {
     const iso = `${c.y}-${pad(c.m)}-${pad(d)}`
     const dow = parseIso(iso).getDay()
-    if (dow === 0 || dow === 6) continue
-    if (getHoliday(iso) === null) n++
+    if (dow === 0) continue // Sunday-only weekend
+    if (holidayFor(iso, holidays) === null) n++
   }
   return n
 }

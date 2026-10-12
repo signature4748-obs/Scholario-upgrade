@@ -44,6 +44,7 @@ import {
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
 import { useMyStudentRecord } from '@/lib/store/students-store'
 import { useCurrentUser } from '@/lib/store/current-user-store'
+import { useSchoolHolidays } from '@/lib/hooks/use-school-holidays'
 import { Snapshot, type TodayStatus } from './snapshot'
 import { CalendarView } from './calendar-view'
 import { MonthRecords } from './month-records'
@@ -80,6 +81,9 @@ export function AttendanceModule() {
   const my = useMemo(() => studentRecords(allRecords, studentId), [allRecords, studentId])
   const stats = computeStats(my)
 
+  // ── Real holidays — DB SchoolEvent rows (shared feed; mirror fallback) ──
+  const holidays = useSchoolHolidays()
+
   // ── School policy — thresholds drive labels and chips only (§27) ──
   const thresholds = useSchoolSettingsStore((s) => s.academics?.attendanceThresholds)
 
@@ -113,20 +117,20 @@ export function AttendanceModule() {
   }
 
   // ── Month-scoped data (memoized — month nav never refetches, §23) ──
-  const grid = useMemo(() => buildMonthGrid(cursor, byDate, todayIso), [cursor, byDate, todayIso])
+  const grid = useMemo(() => buildMonthGrid(cursor, byDate, todayIso, holidays), [cursor, byDate, todayIso, holidays])
   const monthPrefix = `${cursor.y}-${pad(cursor.m)}`
   const monthRecords = useMemo(
     () => my.filter((r) => r.date.startsWith(monthPrefix)).reverse(), // newest first
     [my, monthPrefix],
   )
   const monthStats = useMemo(() => computeStats(monthRecords), [monthRecords])
-  const workingDays = useMemo(() => workingDaysInMonth(cursor), [cursor])
+  const workingDays = useMemo(() => workingDaysInMonth(cursor, holidays), [cursor, holidays])
 
   // ── Today's status + trend (real records only) ──
   const todayStatus: TodayStatus = useMemo(() => {
-    const d = resolveDay(todayIso, byDate, todayIso)
+    const d = resolveDay(todayIso, byDate, todayIso, holidays)
     return { kind: d.kind, holidayName: d.holidayName, record: d.record }
-  }, [todayIso, byDate])
+  }, [todayIso, byDate, holidays])
   const weekPoints = useMemo(() => weeklyTrend(my), [my])
   const windowLabel = useMemo(
     () => (my.length > 0 ? formatWindow(my[0].date, my[my.length - 1].date) : ''),

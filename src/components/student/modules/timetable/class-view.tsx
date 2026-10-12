@@ -29,6 +29,7 @@ import {
 } from '@/lib/store/timetable-store'
 import { TimelineRow } from './timeline-row'
 import { subjectColor } from './subject-colors'
+import { useSchoolHolidays } from '@/lib/hooks/use-school-holidays'
 import {
   buildDayEntries,
   endTimeLabel,
@@ -94,16 +95,17 @@ export function ClassView({
 }) {
   const todayDay = realTodayDay()
   const scheduledDays = useMemo(() => scheduledDaysForClass(slots, classLabel), [slots, classLabel])
+  const holidays = useSchoolHolidays()
 
   // Today is a school day only when the class is scheduled AND it is not a
   // calendar holiday (weekends can never be scheduled days by data model).
   const todayHolidayName = useMemo(() => {
     if (todayDay === 'Sunday') return 'Weekend'
-    return holidayName(new Date())
-  }, [todayDay])
+    return holidayName(new Date(), holidays)
+  }, [todayDay, holidays])
   const todayIsSchoolDay = todayDay !== 'Sunday' && scheduledDays.includes(todayDay) && todayHolidayName === null
 
-  const nextDay = useMemo(() => nextScheduledDay(new Date(), new Set(scheduledDays)), [scheduledDays])
+  const nextDay = useMemo(() => nextScheduledDay(new Date(), new Set(scheduledDays), holidays), [scheduledDays, holidays])
 
   const defaultDay: DayType = todayIsSchoolDay ? todayDay : (nextDay?.day ?? scheduledDays[0] ?? 'Monday')
   const [selectedDay, setSelectedDay] = useState<DayType>(defaultDay)
