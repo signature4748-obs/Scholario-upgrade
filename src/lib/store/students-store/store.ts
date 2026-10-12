@@ -697,8 +697,10 @@ export const useStudentsStore = create<StudentsState>()(
       guardianPhone: input.guardianPhone,
       guardianEmail: input.guardianEmail ?? '',
       address: input.address ?? '',
-      city: 'Gurugram',
-      state: 'Haryana',
+      // HONESTY: no city/state source (single address string) — the
+      // fabricated 'Gurugram'/'Haryana' defaults are retired.
+      city: '',
+      state: '',
       admissionDate: input.admissionDate ?? now.slice(0, 10),
       previousSchool: input.previousSchool ?? '',
       status: 'Active' as const,

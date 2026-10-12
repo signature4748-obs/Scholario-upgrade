@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/select'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '../shared/segmented-tabs'
+import { DemoModuleNotice } from '../shared/demo-module-notice'
 import { useDownloadsStore, type DownloadDocument, type CategoryTab } from '@/lib/store/downloads-store'
 import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { useCertificatesStore } from '@/lib/store/certificates-store'
@@ -141,6 +142,9 @@ export function DownloadsModule() {
   return (
     <PageTransition className="space-y-4 downloads-shell">
       <style dangerouslySetInnerHTML={{ __html: DOWNLOADS_GLOBAL_STYLES }} />
+      {/* Honesty label — the document registry is local/demo-tier (generated
+          certificates live in this browser's store; no server persistence). */}
+      <DemoModuleNotice moduleName="Downloads" variant="preview" />
 
       {/* Tab + filter row — SegmentedTabs on the left, search/filter/sort on the right. */}
       <div className="flex items-center justify-between gap-3 flex-wrap">

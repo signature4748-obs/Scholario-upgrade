@@ -240,8 +240,11 @@ export function mapRosterToRecords(payload: RosterPayload): {
       guardianName: s.guardianName ?? '',
       guardianPhone: s.guardianPhone ?? '',
       guardianEmail: s.guardianEmail ?? '',
-      city: 'Gurugram',
-      state: 'Haryana',
+      // HONESTY: the DB carries a single address string — no city/state
+      // columns. Fabricated 'Gurugram'/'Haryana' rendered on every
+      // student's Parents tab; empty + renderer '—' is the honest state.
+      city: '',
+      state: '',
       hostel: false,
       disciplinePoints: s.growthPoints,
       address: s.address ?? '',
