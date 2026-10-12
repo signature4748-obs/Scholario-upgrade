@@ -88,7 +88,14 @@ export function ParentsTab({ student, real }: Props) {
       <Section title="Address">
         <div className="rounded-lg border border-border bg-card/40 p-3 flex items-start gap-2">
           <MapPin className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-          <div><p className="text-sm">{student.address}</p><p className="text-xs text-muted-foreground mt-0.5">{student.city}, {student.state}</p></div>
+          <div>
+            <p className="text-sm">{student.address || '—'}</p>
+            {(student.city || student.state) && (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {[student.city, student.state].filter(Boolean).join(', ')}
+              </p>
+            )}
+          </div>
         </div>
       </Section>
     </div>

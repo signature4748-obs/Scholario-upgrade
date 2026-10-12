@@ -19,6 +19,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { Download, Pencil, Upload, AlertCircle, Check, CalendarClock } from 'lucide-react'
 import { PageTransition } from '@/components/shared/ui'
+import { useAuth } from '@/lib/store/auth-store'
 import { Button } from '@/components/ui/button'
 import {
   useTimetableStore,
@@ -53,6 +54,11 @@ import { ExportPreview } from './export-preview'
 import { Trash2, AlertTriangle } from 'lucide-react'
 
 export function TimetableModule() {
+  // Real author — the signed-in principal from the session store
+  // (the login flow overrides it with the SERVER-authenticated name;
+  // the old hardcoded persona is retired).
+  const { user: sessionUser } = useAuth()
+
   // ── Store subscriptions ──
   const slots = useTimetableStore((s) => s.slots)
   const pendingChanges = useTimetableStore((s) => s.pendingChanges)
@@ -548,7 +554,8 @@ export function TimetableModule() {
       })
       return
     }
-    const version = publish('Dr. Ananya Iyer')
+    const author = sessionUser?.name?.trim() || 'Principal'
+    const version = publish(author)
     if (!version) return
     setPublishOpen(false)
 

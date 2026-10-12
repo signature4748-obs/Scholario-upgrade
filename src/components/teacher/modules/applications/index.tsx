@@ -36,6 +36,7 @@ import { formatDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { PageTransition } from '@/components/shared/ui'
 import { SegmentedTabs } from '@/components/principal/modules/shared/segmented-tabs'
+import { DemoModuleNotice } from '@/components/principal/modules/shared/demo-module-notice'
 import { AppStatusBadge, ApplicationReviewDetail } from './review-detail'
 import { MyFormsView } from './my-forms'
 
@@ -109,6 +110,9 @@ export function ApplicationReviewsModule() {
 
   return (
     <PageTransition className="space-y-4">
+      {/* Honesty label — applications & forms run client-side demo state
+          (localStorage); the principal/student twins carry the same banner. */}
+      <DemoModuleNotice moduleName="Applications & Forms" variant="preview" />
       {workspace === 'my-forms' ? (
         <>
           <SegmentedTabs<'reviews' | 'my-forms'>
