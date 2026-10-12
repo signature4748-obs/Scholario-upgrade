@@ -8,7 +8,7 @@
  * and the REAL clock. No hardcoded days, dates, or "today" labels.
  */
 import { PERIODS, DAYS, type DayType, type TimetableSlot } from '@/lib/timetable/config'
-import { getHoliday } from '@/lib/mock/school-calendar'
+import { getHoliday, type Holiday } from '@/lib/mock/school-calendar'
 
 /* ─── Time parsing ─────────────────────────────────────────────────── */
 
@@ -97,24 +97,30 @@ export function upcomingDayLabel(day: DayType, todayDay: DayType | 'Sunday', fro
   return day === todayDay ? `Today · ${label}` : label
 }
 
-/** Holiday name for a date (canonical school calendar), or null. */
-export function holidayName(d: Date): string | null {
+/** Holiday name for a date — DB SchoolEvent map first, mirror fallback. */
+export function holidayName(d: Date, holidays?: Record<string, Holiday>): string | null {
+  if (holidays) return holidays[isoDate(d)]?.name ?? null
   return getHoliday(isoDate(d))?.name ?? null
 }
 
 /**
  * Next school day AFTER `from` that has timetable slots for the class.
- * Skips Sundays + canonical holidays. Returns null when the class has no
- * future scheduled days in the weekly cycle (falls back to next weekday).
+ * Skips Sundays + the school's real holidays (DB events when provided,
+ * mirror fallback). Returns null when the class has no future scheduled
+ * days in the weekly cycle (falls back to next weekday).
  */
-export function nextScheduledDay(from: Date, scheduledDays: Set<DayType>): { day: DayType; date: Date } | null {
+export function nextScheduledDay(
+  from: Date,
+  scheduledDays: Set<DayType>,
+  holidays?: Record<string, Holiday>,
+): { day: DayType; date: Date } | null {
   const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate())
   cursor.setDate(cursor.getDate() + 1)
   for (let guard = 0; guard < 21; guard++) {
     const dow = cursor.getDay()
     if (dow !== 0) {
       const dayName = DAYS[dow - 1] as DayType
-      if (scheduledDays.has(dayName) && holidayName(cursor) === null) {
+      if (scheduledDays.has(dayName) && holidayName(cursor, holidays) === null) {
         return { day: dayName, date: new Date(cursor) }
       }
     }
