@@ -18,7 +18,7 @@ Audit date: 2026-10-09 · No configuration was changed; no credential values wer
 
 ## 2. Vercel (status: UNVERIFIABLE from this workspace — honest)
 
-- Production URLs (README): platform `https://scholario-platform.vercel.app`, school ERP `https://scholario-app-virid.vercel.app`, legacy unified `https://scholario-production.vercel.app` (deprecated, retained during decommission window).
+- Production URLs (README): platform `https://scholario-platform.vercel.app`, school ERP `https://scholario-app-virid.vercel.app`, legacy unified `https://scholario-production.vercel.app` (project deleted 2026-10-12; URL 404).
 - **No Vercel credential exists in this workspace** (env wiped; the 8C session recorded the handoff token as INVALID — `invalidToken`). Last verified live evidence (Oct 2, 8C report): production home 200, `/health/ready database:ok` (199 ms), cache-isolation + security headers live on the 8B-era build.
 - Deployed-SHA vs. repo SHA: **cannot be established from here**. If Git integration is indeed not connected, production may still serve an older build than `3ae3c85`; if it were connected, the Oct-8 pushes would have deployed. This is a P1 verification item for the user (Vercel dashboard) — no action was taken from this sandbox.
 - Domain routing/SSO protection: designed via `TenantDomain` model + `SCHOOL_EMBED_ORIGINS` (16/16 tenant-domains tests, H1); deployment protection ON for team aliases (8C record).

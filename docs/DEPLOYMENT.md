@@ -8,7 +8,7 @@
 
 | Layer | Provider | Resource |
 | --- | --- | --- |
-| Application | Vercel | **two production projects**: `scholario-platform` (control plane) + `scholario-app` (school plane) — same repo, same build, split by `SCHOLARIO_PLANE`. Legacy `scholario-production` (unified) is **deprecated** — `docs/VERCEL_PROJECTS.md` §7 |
+| Application | Vercel | **two production projects**: `scholario-platform` (control plane) + `scholario-app` (school plane) — same repo, same build, split by `SCHOLARIO_PLANE`. Legacy `scholario-production` (unified) was **deleted 2026-10-12** — `docs/VERCEL_PROJECTS.md` §7 |
 | Database | Supabase | project `scholario-production` (ap-south-1, PostgreSQL 17, Supavisor pooling) |
 | Realtime | Supabase Realtime | broadcast channels (capability names, HMAC-signed) |
 | Storage | Supabase Storage | tenant-scoped buckets, signed URLs |
@@ -17,8 +17,8 @@
 
 There is **one repository, one Supabase project, and two production Vercel
 projects** — the two planes build from the same code and share the same
-database. The deprecated legacy project (`scholario-production`) still
-auto-deploys `main` during its decommission window (rollback path only).
+database. The legacy project (`scholario-production`) was deleted on
+2026-10-12; both planes auto-deploy `main`.
 Schools are tenants (rows), never deployments. Adding a school is a data
 operation performed by the platform administrator through the control plane —
 no infrastructure changes.

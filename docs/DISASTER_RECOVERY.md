@@ -53,7 +53,7 @@ Single source of truth for recovering the Scholario production database, its ten
 | Layer | Component |
 | --- | --- |
 | Source | `signature4748-obs/Scholario-upgrade`, branch `main` = production |
-| Serving | Vercel `scholario-platform` (control plane) + `scholario-app` (school plane, `scholario-app-virid.vercel.app`); legacy `scholario-production` parked as known-good rollback (docs/VERCEL_PROJECTS.md §7) |
+| Serving | Vercel `scholario-platform` (control plane) + `scholario-app` (school plane, `scholario-app-virid.vercel.app`); legacy `scholario-production` deleted 2026-10-12 (it was broken — 503 database:failed — and never a rollback target; docs/VERCEL_PROJECTS.md §7) |
 | Database | Supabase project `kbyknezedewvgrnqervj` (named `scholario-production`), PG 17.11, ap-south-1, 112 public tables, 14 Prisma migrations |
 | Auth | Custom server-side scrypt+cookie; `auth.users` = 0; Supabase Auth not used |
 | Storage | Buckets `public-media` (public, 38 objects) and `school-media` (private, 20 objects) |

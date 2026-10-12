@@ -1,6 +1,7 @@
-# Vercel Projects — the three deployments
+# Vercel Projects — the two production deployments
 
-> One repository builds three Vercel projects from the same codebase. The
+> One repository builds **two** Vercel projects from the same codebase (the
+> third, `scholario-production`, was deleted on 2026-10-12 — §7). The
 > `SCHOLARIO_PLANE` environment variable decides which half of the route
 > surface exists on each project (`src/lib/plane.ts`, `src/middleware.ts`).
 > Companion docs: `docs/ARCHITECTURE.md` (system map), `docs/DEPLOYMENT.md`
@@ -12,7 +13,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `scholario-platform` | `prj_gIO4DmWcBkHMhwkVpmzqqHNWU0MW` | `SCHOLARIO_PLANE=platform` | control plane ONLY: `/platform/*` console, `/api/platform/*`, shared infra | `https://scholario-platform.vercel.app` | **active — production control plane** |
 | `scholario-app` | `prj_oiKZtuC7UgOSsShQ63MWxS5nWu53` | `SCHOLARIO_PLANE=school` | school plane ONLY: `/s/<slug>/login` doors, `/login`, ERP APIs, shared infra | `https://scholario-app-virid.vercel.app` | **active — production school plane** |
-| `scholario-production` | `prj_cJFN4oYHZEM50ooGKUMiQmG3e6qM` | `SCHOLARIO_PLANE=unified` + `SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1` | BOTH planes (legacy topology) | `https://scholario-production.vercel.app` | **DEPRECATED** — retained during the decommission window (§7); no new entry points |
+| `scholario-production` | `prj_cJFN4oYHZEM50ooGKUMiQmG3e6qM` | `SCHOLARIO_PLANE=unified` + `SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1` | BOTH planes (legacy topology) | `https://scholario-production.vercel.app` | **RETIRED** — project deleted 2026-10-12 (§7); URL now 404 |
 
 Shared infra served on **every** plane: `GET /api` (heartbeat + version),
 `/api/app-version` (VersionGuard poll), `/api/webhooks/*` (provider-signed
@@ -86,7 +87,7 @@ staging tier and why **previews are not staging**, see `docs/STAGING.md`.
 
 ### Target notes (production / preview / development)
 
-- Application variables are set on **all three Vercel targets**
+- Application variables are set on **both production Vercel targets** (previously three, before the 2026-10-12 legacy retirement)
   (production, preview, development) per project, as in
   `docs/DEPLOYMENT.md`.
 - `SCHOLARIO_PLANE` is a project-level property — **previews inherit the
@@ -98,9 +99,9 @@ staging tier and why **previews are not staging**, see `docs/STAGING.md`.
 
 ## 3. How deploys happen
 
-- All three projects are connected to the same GitHub repository with
+- Both production projects are connected to the same GitHub repository with
   production branch `main` (Vercel Git integration). **A push to `main`
-  deploys all three projects** from the same commit — the plane split is
+  deploys both plane projects** from the same commit — the plane split is
   an env var, not a fork.
 - Every branch push builds Vercel **preview deployments** on each project
   (plane-inherited, see above).
@@ -119,8 +120,8 @@ independently verified, and serve all production entry points:
 | 1. `scholario-app` (school plane) deployed and smoke-verified | ✅ done — doors, branding, plane-gate 404s verified |
 | 2. `scholario-platform` (platform plane) deployed with `SCHOOL_APP_BASE_URL` | ✅ done — console login, `/s/*` 404s, absolute `loginUrl` values verified |
 | 3. Entry points on the plane URLs (console-emitted login URLs, school doors) | ✅ done |
-| 4. `scholario-production` retained as fallback during a stability window | ✅ current — DEPRECATED, kept working (see §7) |
-| 5. Decommission `scholario-production` | ⏳ owner decision after the stability window — runbook in §7 |
+| 4. `scholario-production` retained as fallback during a stability window | ✅ completed — window closed 2026-10-08 (broken DB, not a rollback target) |
+| 5. Decommission `scholario-production` | ✅ **executed 2026-10-12** — project deleted per §7 runbook (owner-authorized cleanup) |
 
 ## 5. Deploy hook & release gate (migration-first ordering)
 
@@ -143,7 +144,7 @@ verify A–G) → RELEASE GATE → deploy → SHA-provenance + /health/ready
   `scholario-production`. Extending the gated pipeline to the two plane
   projects means running the same stages per project id (same scripts, same
   gates); until then the plane projects ride the push-to-main deploys and
-  the migration gates run once against the shared database (all three
+  the migration gates run once against the shared database (both plane
   projects use the **same** `DATABASE_URL`, so a gated migration protects
   all of them simultaneously).
 
@@ -154,18 +155,23 @@ verify A–G) → RELEASE GATE → deploy → SHA-provenance + /health/ready
 | See what a plane serves | `SCHOLARIO_PLANE` value + the route table in `docs/ARCHITECTURE.md` §6. |
 | Verify the plane gate | `curl https://scholario-platform.vercel.app/s/anything` → honest 404; `curl https://scholario-app-virid.vercel.app/platform/login` → honest 404. |
 | Find a school's canonical login URL | Platform console → Schools (rows carry `loginUrl` = `SCHOOL_APP_BASE_URL` + `/s/<slug>/login`). |
-| Deploy all three | Push to `main` (after the release chain is green — `docs/RELEASE.md`). |
+| Deploy both planes | Push to `main` (after the release chain is green — `docs/RELEASE.md`). |
 | Roll back an app | Vercel → Deployments → Promote the previous known-good deployment (per project). Database only rolls forward (additive-only policy). |
 | Rotate a secret | Overwrite the Vercel env var (secrets are Sensitive — they cannot be read back), then redeploy the affected projects. |
 
-## 7. Legacy project `scholario-production` — DEPRECATED
+## 7. Legacy project `scholario-production` — RETIRED (deleted 2026-10-12)
 
-**Status: deprecated.** The unified deployment was superseded by the
-two-plane architecture on 2026-10-06. It still auto-deploys `main`, keeps
-serving both planes at `https://scholario-production.vercel.app`, and
-requires the explicit `SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1` opt-in to
-boot in production (without that opt-in, `unified` fails closed like any
-other legacy value).
+**Status: RETIRED — project deleted.** The unified deployment was superseded
+by the two-plane architecture on 2026-10-06, audited as broken (503
+database:failed) on 2026-10-08, and **deleted on 2026-10-12** during the
+owner-authorized Vercel cleanup: the project, its 137 deployments, its env
+vars, and its `scholario-production.vercel.app` domain are gone (URL 404s).
+Pre-deletion dependency sweep that made this safe: canonical env vars never
+referenced it (`SCHOOL_APP_BASE_URL` → school plane), no deploy hooks or
+webhooks existed, no workflow or release script targeted it, Supabase
+`site_url` re-pointed to `https://scholario-app-virid.vercel.app/` first,
+and the orphaned GitHub environments (`Preview/Production –
+scholario-production`) were removed after deletion.
 
 **Rollback status (audited 2026-10-08): BROKEN — not a rollback target.**
 The project auto-deploys current `main` (READY) with its legacy
