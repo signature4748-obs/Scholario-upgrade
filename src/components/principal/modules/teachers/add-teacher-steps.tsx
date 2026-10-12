@@ -205,7 +205,7 @@ export function Step3Appointment({ form, setF }: StepProps) {
 
 interface Step4Props extends StepProps {
   availableInchargePositions: string[]
-  availableClassesList: string[]
+  classOptions: string[]
   classesWithClassTeacher: Set<string>
   classesWithAsstClassTeacher: Set<string>
   subjectList: string[]
@@ -216,7 +216,7 @@ interface Step4Props extends StepProps {
 /* ---------- STEP 4: Academic Assignment ---------- */
 export function Step4Academic({
   form, setF,
-  availableInchargePositions, availableClassesList,
+  availableInchargePositions, classOptions,
   classesWithClassTeacher, classesWithAsstClassTeacher,
   subjectList, toggleClass, toggleSubject,
 }: Step4Props) {
@@ -245,7 +245,7 @@ export function Step4Academic({
               <SelectTrigger className="mt-1.5 h-10"><SelectValue placeholder="Select class" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="None">None</SelectItem>
-                {availableClassesList.map((cls) => {
+                {classOptions.map((cls) => {
                   const isTaken = classesWithClassTeacher.has(cls)
                   return (
                     <SelectItem key={cls} value={cls} disabled={isTaken}>
@@ -262,7 +262,7 @@ export function Step4Academic({
               <SelectTrigger className="mt-1.5 h-10"><SelectValue placeholder="Select class" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="None">None</SelectItem>
-                {availableClassesList.map((cls) => {
+                {classOptions.map((cls) => {
                   const isTaken = classesWithAsstClassTeacher.has(cls)
                   return (
                     <SelectItem key={cls} value={cls} disabled={isTaken}>
@@ -285,7 +285,7 @@ export function Step4Academic({
             <Select onValueChange={(v) => { if (v && !form.selectedClasses.includes(v)) toggleClass(v) }}>
               <SelectTrigger className="h-10"><SelectValue placeholder="Add class..." /></SelectTrigger>
               <SelectContent>
-                {availableClassesList.filter((cls) => !form.selectedClasses.includes(cls)).map((cls) => (
+                {classOptions.filter((cls) => !form.selectedClasses.includes(cls)).map((cls) => (
                   <SelectItem key={cls} value={cls}>{cls}</SelectItem>
                 ))}
               </SelectContent>

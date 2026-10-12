@@ -1,7 +1,6 @@
 'use client'
 
 import { toast } from 'sonner'
-import { useAuth } from '@/lib/store/auth-store'
 import { useSalaryStore } from '@/lib/store/salary-store'
 import type { TeacherRecord } from '@/lib/store/teachers-store'
 import { resetTeachersSyncGuard, syncTeachersFromServer } from '@/lib/store/teachers-store/server-sync'
@@ -19,7 +18,6 @@ import type { TeachersState } from './use-teachers-state'
  * only mirrors of confirmed server truth.
  */
 export function useTeachersActions(s: TeachersState) {
-  const { switchTo } = useAuth()
   const setSalaryStructure = useSalaryStore((st) => st.setStructure)
 
   const openTeacherProfile = (t: TeacherRecord) => {
@@ -27,13 +25,10 @@ export function useTeachersActions(s: TeachersState) {
     s.setSheetOpen(true)
   }
 
-  const handleLoginAsTeacher = (t?: TeacherRecord) => {
-    const targetName = t ? t.name : 'Rohan Mehta'
-    toast.success('Switching to Teacher Portal', {
-      description: `Logging in as ${targetName} — live permission view.`,
-    })
-    setTimeout(() => switchTo('teacher'), 600)
-  }
+  // HONESTY PASS (audit M4): the unused handleLoginAsTeacher is REMOVED —
+  // its no-argument fallback toasted a fabricated persona ("Logging in as
+  // Rohan Mehta") for a teacher that was never selected. No caller
+  // existed; nothing fabricated remains.
 
   const handleOpenAppointmentLetter = (t: TeacherRecord) => {
     s.setSelectedTeacher(t)
@@ -310,7 +305,6 @@ export function useTeachersActions(s: TeachersState) {
 
   return {
     openTeacherProfile,
-    handleLoginAsTeacher,
     handleOpenAppointmentLetter,
     handleOpenJoiningLetter,
     handleResetPassword,

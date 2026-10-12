@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   UserPlus, CheckCircle2,
@@ -14,11 +14,11 @@ import type { TeacherRecord } from '@/lib/store/teachers-store'
 import {
   initialFormState,
   masterInchargePositions,
-  availableClassesList,
   subjectList,
   buildNewTeacherRecord,
   type AddTeacherForm,
 } from './add-teacher-data'
+import { fetchSchoolClasses } from '../admission/lib/server-classes'
 import { Step1BasicInfo, Step2Qualifications, Step3Appointment, Step4Academic } from './add-teacher-steps'
 import { Step5PhotoSignature } from './add-teacher-step-photo'
 import { StepperHeader, type WizardStep } from '../admission/components/StepperHeader'
@@ -43,6 +43,30 @@ const TEACHER_STEPS: WizardStep[] = [
 
 export function AddTeacherWizard({ onSuccess, onCancel }: Props) {
   const { teachers } = useTeachersStore()
+
+  // HONESTY PASS (audit M2) — class options are the school's REAL
+  // classes (GET /api/classes), never the retired mock list ("Grade 9 /
+  // Grade 10") that silently failed the class-teacher appointment at
+  // submit. Empty while loading / on failure — the Select shows its
+  // placeholder, never fabricated class names.
+  const [classOptions, setClassOptions] = useState<string[]>([])
+  useEffect(() => {
+    let cancelled = false
+    fetchSchoolClasses()
+      .then((rows) => {
+        if (cancelled) return
+        setClassOptions(
+          rows.map((c) => `${c.name}${c.section ? `-${c.section}` : ''}`),
+        )
+      })
+      .catch(() => {
+        /* honest empty — the placeholder stays; the fetch retries on
+           the next wizard open */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const assignedInchargePositions = useMemo(() => {
     const taken = new Set<string>()
@@ -210,7 +234,7 @@ export function AddTeacherWizard({ onSuccess, onCancel }: Props) {
   const stepProps = { form, setF }
   const step4Props = {
     ...stepProps,
-    availableInchargePositions, availableClassesList,
+    availableInchargePositions, classOptions,
     classesWithClassTeacher, classesWithAsstClassTeacher,
     subjectList, toggleClass, toggleSubject,
   }
