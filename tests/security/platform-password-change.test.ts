@@ -38,6 +38,15 @@ import { hashToken } from '@/lib/platform/auth'
 import { PLATFORM_ROOT_PASSWORD } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
+
+// Live-HTTP against the dev server: every request here is server-side
+// sub-100ms when unloaded, but CI-runner contention (webpack dev compile
+// of sibling routes) has pushed individual requests past bun's 5s default
+// (observed 2026-10-12: garbage-token 401 path timed out at 5000ms while
+// the anonymous 401 on the SAME route answered in 41ms; the happy path
+// measured 3127ms). 20s matches the observability suite's generosity and
+// keeps these tests asserting BEHAVIOR, not runner scheduling luck.
+const T = 20_000
 const MARKER = randomBytes(4).toString('hex')
 const TEST_EMAIL = `pwchange-${MARKER}@platform.test`
 const ORIGINAL_PASSWORD = 'Original-Passw0rd'
@@ -181,12 +190,12 @@ describe('P0-A platform change-password — boundary', () => {
     expect(res.status).toBe(401)
     const body = await json(res)
     expect(body?.code).toBe('AUTH_REQUIRED')
-  })
+  }, T)
 
   test('garbage token → 401 AUTH_REQUIRED', async () => {
     const res = await callChangePassword(VALID_BODY, randomBytes(16).toString('hex'))
     expect(res.status).toBe(401)
-  })
+  }, T)
 
   test('SCHOOL session in the platform bearer slot → 401 (token spaces disjoint)', async () => {
     if (!schoolSessionToken) return // no seeded school user found — skip silently
@@ -194,7 +203,7 @@ describe('P0-A platform change-password — boundary', () => {
     expect(res.status).toBe(401)
     const body = await json(res)
     expect(body?.code).toBe('AUTH_REQUIRED')
-  })
+  }, T)
 
   test('SCHOOL session in the platform cookie slot → 401', async () => {
     if (!schoolSessionToken) return
@@ -204,7 +213,7 @@ describe('P0-A platform change-password — boundary', () => {
       body: JSON.stringify(VALID_BODY),
     })
     expect(res.status).toBe(401)
-  })
+  }, T)
 })
 
 describe('P0-A platform change-password — current-password proof & policy', () => {
@@ -231,7 +240,7 @@ describe('P0-A platform change-password — current-password proof & policy', ()
       where: { adminId, action: 'platform.password.change_failed' },
     })
     expect(after).toBe(before + 1)
-  })
+  }, T)
 
   test('weak new password (no digit) → 422 policy violation', async () => {
     await healPwChangeBucket()
@@ -240,7 +249,7 @@ describe('P0-A platform change-password — current-password proof & policy', ()
       currentToken,
     )
     expect(res.status).toBe(422)
-  })
+  }, T)
 
   test('short new password → 422 policy violation', async () => {
     await healPwChangeBucket()
@@ -249,7 +258,7 @@ describe('P0-A platform change-password — current-password proof & policy', ()
       currentToken,
     )
     expect(res.status).toBe(422)
-  })
+  }, T)
 
   test('confirmation mismatch → 422', async () => {
     await healPwChangeBucket()
@@ -260,7 +269,7 @@ describe('P0-A platform change-password — current-password proof & policy', ()
     expect(res.status).toBe(422)
     const body = await json(res)
     expect(body?.error).toContain('do not match')
-  })
+  }, T)
 
   test('new password identical to current → 422', async () => {
     await healPwChangeBucket()
@@ -275,13 +284,13 @@ describe('P0-A platform change-password — current-password proof & policy', ()
     expect(res.status).toBe(422)
     const body = await json(res)
     expect(body?.error).toContain('different')
-  })
+  }, T)
 
   test('unknown extra field → 422 (strict body)', async () => {
     await healPwChangeBucket()
     const res = await callChangePassword({ ...VALID_BODY, evil: 'x' }, currentToken)
     expect(res.status).toBe(422)
-  })
+  }, T)
 })
 
 describe('P0-A platform change-password — effect', () => {
@@ -356,7 +365,7 @@ describe('P0-A platform change-password — effect', () => {
         .deleteMany({ where: { adminId, tokenHash: hashToken(loginBody?.data?.sessionToken ?? '') } })
         .catch(() => {}),
     )
-  })
+  }, T)
 })
 
 describe('P0-B schools ledger — access-truth contract (root, read-only)', () => {
@@ -405,5 +414,5 @@ describe('P0-B schools ledger — access-truth contract (root, read-only)', () =
         .deleteMany({ where: { tokenHash: hashToken(token ?? '') } })
         .catch(() => {}),
     )
-  })
+  }, T)
 })
