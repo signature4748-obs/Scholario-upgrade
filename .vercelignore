@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Vercel build-upload exclusions (docs/VERCEL_PROJECTS.md §6)
+#
+# These paths are tracked in git but never needed by a Vercel build or at
+# runtime: CI-only, sandbox-only, or documentation-only. Excluding them keeps
+# every deployment's source upload small (the ~19 MB of OCR assets under
+# public/tesseract is runtime-required and intentionally NOT excluded).
+#
+# Keep in sync with tsconfig.json `exclude` (tests, mini-services, docs) —
+# anything listed here must not be imported by src/ (verified: zero imports).
+#
+# DO NOT add runtime-required paths: src, public, prisma, package.json,
+# bun.lock, next.config.ts, tsconfig.json, postcss.config.mjs,
+# components.json, next-env.d.ts, eslint.config.mjs.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# CI-only (GitHub Actions runs the full matrix; Vercel builds never run tests)
+tests
+.github
+
+# documentation-only
+docs
+audit
+README.md
+
+# local sandbox / operations-only (never imported by the Next.js app)
+mini-services
+scripts
+Caddyfile
+keepalive.mjs
+db
+
+# examples & dev-only tracked files
+.env.example
+
+# local-only artifacts (gitignored already; belt-and-braces)
+.tmp-scripts
+tool-results
+agent-ctx
+*.log

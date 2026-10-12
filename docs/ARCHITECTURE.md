@@ -20,7 +20,7 @@ domains).
 | Database + Storage + Realtime | Supabase | project `kbyknezedewvgrnqervj` (ap-south-1, PostgreSQL 17, Supavisor pooling) | **ONE production database**, 14 migrations, RLS deny-all |
 | Control-plane deployment | Vercel | `scholario-platform` (`prj_gIO4DmWcBkHMhwkVpmzqqHNWU0MW`) | `SCHOLARIO_PLANE=platform` |
 | School-plane deployment | Vercel | `scholario-app` (`prj_oiKZtuC7UgOSsShQ63MWxS5nWu53`) | `SCHOLARIO_PLANE=school` |
-| Legacy unified deployment | Vercel | `scholario-production` (`prj_cJFN4oYHZEM50ooGKUMiQmG3e6qM`, live at `https://scholario-production.vercel.app`) | `SCHOLARIO_PLANE=unified` + legacy opt-in; **DEPRECATED** — retained until decommissioned (`docs/VERCEL_PROJECTS.md` §7) |
+| Legacy unified deployment | Vercel | `scholario-production` | `SCHOLARIO_PLANE=unified`; **RETIRED — project deleted 2026-10-12** (`docs/VERCEL_PROJECTS.md` §7) |
 | Transactional email | Resend | REST send + signed delivery webhook | server-side only (`docs/EMAIL.md`) |
 | Supabase Auth | — | — | **used for NOTHING** (see §4) |
 
@@ -90,7 +90,7 @@ unified when the variable is unset.
 | 2 | Where is authorization enforced? | Three layers. (a) Middleware edge gate: plane route existence + platform-API credential presence (`src/middleware.ts`). (b) `withUser` (school APIs): live session, role, `mustChangePassword`, tenant binding via `User.schoolId`, subscription entitlement (`src/lib/api.ts`). (c) `withPlatform` (control-plane APIs): live session, ACTIVE admin, permission set, step-up MFA (`src/lib/platform/authz.ts`). Postgres RLS is the backstop. |
 | 3 | Where is school identity stored? | The `School` row (id, slug, code, domain, status, plan, settings). Every member's tenant membership is `User.schoolId` — one column, server-side, immutable per user. |
 | 4 | Where is tenant identity derived? | Authenticated requests: from the **server-side session** (`withUser` → `User.schoolId`). Public/anonymous requests: `src/lib/tenant/resolution.ts` — Host header → VERIFIED `TenantDomain` → legacy `School.domain` → `?slug=`/`?tenant=` → null. Public resolution selects **branding/content only**, never authorization (`docs/TENANT_ROUTING.md`). |
-| 5 | Which Vercel project serves what? | `scholario-platform` → `/platform/*` console + `/api/platform/*` + shared infra. `scholario-app` → `/s/<slug>/login` doors, `/login`, school ERP APIs + shared infra. `scholario-production` → both planes (DEPRECATED legacy, retained during decommission window). Full table: `docs/VERCEL_PROJECTS.md`. |
+| 5 | Which Vercel project serves what? | `scholario-platform` → `/platform/*` console + `/api/platform/*` + shared infra. `scholario-app` → `/s/<slug>/login` doors, `/login`, school ERP APIs + shared infra. `scholario-production` → both planes (legacy; **project deleted 2026-10-12**). Full table: `docs/VERCEL_PROJECTS.md`. |
 | 6 | How is a school's login URL discovered? | The control plane computes it: `schoolLoginUrl(slug)` = `SCHOOL_APP_BASE_URL` + `/s/<slug>/login` (cross-plane) or `/s/<slug>/login` (unified fallback). It is returned by `POST /api/platform/schools` and surfaced in the schools list — admins never guess. |
 | 7 | What is the new-school creation flow? | `POST /api/platform/schools` (permission `schools.provision`) — one atomic transaction creates School (PENDING) + `SchoolSubscription` (ACTIVE) + founding PRINCIPAL + optional PENDING `TenantDomain` + optional academic bootstrap. Separate audited `activate` step. Full detail: `docs/SCHOOL_FACTORY.md`. |
 | 8 | How is the principal created? | Inside the same provisioning transaction: `User` row with `role=PRINCIPAL`, `status=ACTIVE`, `mustChangePassword=true`, scrypt-hashed password (supplied or crypto-random 12-char temp). |
@@ -103,7 +103,7 @@ unified when the variable is unset.
 | 15 | Cloudflare later? | No Cloudflare layer exists or is planned in the current docs. Custom domains attach at the **Vercel edge**: DNS points at `cname.vercel-dns.com` / `76.76.21.21`, Vercel routes the hostname, and the app resolves the tenant from the Host header (`docs/CUSTOM_DOMAINS.md`). |
 | 16 | What is the custom-domain lifecycle? | PENDING `TenantDomain` (random verification token) → school DNS TXT `_scholario-verify.<hostname>` + CNAME/A to Vercel → verify (TXT match) → `VERIFIED` → routes. Unverified mappings **never** route traffic. Full flow: `docs/TENANT_ROUTING.md` §5, `docs/CUSTOM_DOMAINS.md`. |
 | 17 | How are cross-tenant attacks prevented? | Ten independent layers — see §5 below. Summary: public URL never authorizes; the session's `User.schoolId` is the only tenant authority; token spaces are disjoint per plane; RLS denies the anon key; hostnames are globally unique and verified. |
-| 18 | How does code reach production? | Push to `main` → Vercel Git integration auto-deploys all three projects; migrations run **before** the app via the Release pipeline (dispatch mode today, deploy-hook switch planned) — `docs/RELEASE.md`, `docs/VERCEL_PROJECTS.md` §5. |
+| 18 | How does code reach production? | Push to `main` → Vercel Git integration auto-deploys both plane projects (was three, before the 2026-10-12 legacy retirement); migrations run **before** the app via the Release pipeline (dispatch mode today, deploy-hook switch planned) — `docs/RELEASE.md`, `docs/VERCEL_PROJECTS.md` §5. |
 
 ## 4. Provider responsibility matrix
 
@@ -164,7 +164,7 @@ inherit the same `SCHOLARIO_PLANE` value (`docs/VERCEL_PROJECTS.md`).
 | Provision a school | Platform console → Add School wizard (6 steps) → activate from the school record. See `docs/SCHOOL_FACTORY.md`. |
 | Attach a custom domain | Follow `docs/CUSTOM_DOMAINS.md` (TenantDomain + TXT proof + Vercel domain attach). |
 | Check production health | `GET /health/live`, `GET /health/ready` (checks DB) on any plane deployment. |
-| Deploy | Push to `main` (all three projects auto-deploy); migrations first — `docs/RELEASE.md`. |
+| Deploy | Push to `main` (both plane projects auto-deploy); migrations first — `docs/RELEASE.md`. |
 | Trace an email | `EmailDelivery` row (send-side truth) + `WebhookEvent` rows (provider-side truth). `docs/EMAIL.md`. |
 
 ## 8. What this architecture intentionally is not

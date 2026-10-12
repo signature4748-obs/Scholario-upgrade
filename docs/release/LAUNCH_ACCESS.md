@@ -15,7 +15,7 @@ are delivered by exactly one secure mechanism (below).
 
 | Item | Value |
 | --- | --- |
-| Production URL | `https://scholario-production.vercel.app/platform` → `/platform/login` |
+| Production URL | `https://scholario-platform.vercel.app/platform` → `/platform/login` |
 | Login identifier | `admin@scholario.cloud` (root, all permissions) |
 | Login factors | email + password + **TOTP** (6-digit authenticator code, every sign-in) |
 | Secure handoff | `/home/z/.sec/scholario-demo-credentials.md` (chmod 600, outside the repo) → *Platform control plane* table. TOTP secret = env-driven `SEED_PLATFORM_ROOT_TOTP` (same artifact section). |
@@ -26,7 +26,7 @@ Secondary platform admin: `ops@scholario.io` (ops, limited) — same artifact ta
 
 | Item | Value |
 | --- | --- |
-| School URL | `https://scholario-production.vercel.app/?slug=hawkings-prithvipur` → **Login Portal** |
+| School URL | `https://scholario-app-virid.vercel.app/s/hawkings-prithvipur/login` → **Login Portal** |
 | Principal login | `principal@hawkingshigh.edu` — Dr. (Smt.) Sunita Verma |
 | Teacher login | `teacher1@hawkingshigh.edu` — Smt. Kavita Singh |
 | Student login | `aman.sah@hawkingshigh.edu` — Aman Sah, Class 7-A |
@@ -36,7 +36,7 @@ Secondary platform admin: `ops@scholario.io` (ops, limited) — same artifact ta
 
 | Item | Value |
 | --- | --- |
-| School URL | `https://scholario-production.vercel.app/?slug=green-valley` → **Login Portal** |
+| School URL | `https://scholario-app-virid.vercel.app/s/green-valley/login` → **Login Portal** |
 | Principal login | `principal@greenvalley.test` — Dr. Sandhya Menon |
 | Teacher login | `teacher.b@greenvalley.test` — Sunil Rao |
 | Student login | `student.b@greenvalley.test` — Ira Rao |
@@ -96,7 +96,7 @@ workspace stack above is the verified operational surface.
 ## Infrastructure (unchanged)
 
 ONE repo (`signature4748-obs/Scholario-upgrade`, main @ 2199417) · ONE Vercel project
-(`scholario-production`) · ONE Supabase project (`kbyknezedewvgrnqervj`) · TWO school
+(scholario-platform + scholario-app; legacy scholario-production deleted 2026-10-12) · ONE Supabase project (`kbyknezedewvgrnqervj`) · TWO school
 tenants (hawkings-prithvipur, green-valley) · temporary slug URLs are canonical until
 real custom domains are configured. Resend: one API key; custom sending domain still
 unconfigured (owner DNS action).

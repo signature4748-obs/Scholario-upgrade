@@ -9,8 +9,8 @@
 
 | Environment | App | Database | Isolation | Status |
 | --- | --- | --- | --- | --- |
-| **Production** | Vercel `scholario-platform` (control plane) + `scholario-app` (school plane); `scholario-production` (deprecated, broken DB) | Supabase `kbyknezedewvgrnqervj` (aws-0-ap-south-1) — shared by all three projects | — | live at `3ae3c854` |
-| **Vercel previews** | Per-branch preview deployments on each project (plane-inherited, SSO-protected) | **the PRODUCTION database** (env vars are set on all three Vercel targets) | ⚠ **NOT isolated** | auto-built on branch pushes |
+| **Production** | Vercel `scholario-platform` (control plane) + `scholario-app` (school plane); legacy `scholario-production` deleted 2026-10-12 | Supabase `kbyknezedewvgrnqervj` (aws-0-ap-south-1) — shared by both plane projects | — | live at `3ae3c854` |
+| **Vercel previews** | Per-branch preview deployments on each project (plane-inherited, SSO-protected) | **the PRODUCTION database** (env vars are set on both plane Vercel targets) | ⚠ **NOT isolated** | auto-built on branch pushes |
 | **Local staging (sandbox)** | Isolated `next dev` instance, port 3101, own `.next`, lazy port 3778, `DATABASE_ENV=staging` | Local embedded PostgreSQL **database `scholario_staging`** (separate database on the 127.0.0.1:5432 cluster) | ✅ isolated | verified Batch 1 (see §3) |
 | **Local development** | `bun run dev` on :3000 (keepalive-managed) | Local embedded PostgreSQL database `scholario` | ✅ isolated from staging & prod | live |
 | **CI** | GitHub Actions job (release workflow `ci` job) | job-local disposable `postgres:16` container | ✅ ephemeral | parked workflow (see docs/RELEASE.md §9) |
@@ -25,7 +25,7 @@ locally (§3).
 
 ## 2. Vercel preview caveat (why previews are not staging)
 
-Application variables — including `DATABASE_URL` — are set on all three
+Application variables — including `DATABASE_URL` — are set on both plane
 Vercel targets (production / preview / development) per project
 (`docs/VERCEL_PROJECTS.md` §2). A preview deployment therefore talks to
 the **production database**. For this release specifically (compiled

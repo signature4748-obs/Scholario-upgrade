@@ -1,0 +1,46 @@
+{
+  "recorded_at": "2026-10-12T09:17:21.024661+00:00",
+  "phase": "BEFORE cleanup",
+  "team": "team_hCzBj3bYUQgDxKf6MhpY5N0r (signature4748-2940, plan: hobby)",
+  "projects": {
+    "scholario-platform": {
+      "deployments_first_page": 89,
+      "states": {
+        "READY": 75,
+        "CANCELED": 13,
+        "ERROR": 1
+      },
+      "legacy_project_total_known": 89,
+      "keep_deployments": {
+        "production_serving": "dpl_GgEQfDiQcFUh2YubCFd1NFaJsePq @ 541cfe8",
+        "newest_preview": "dpl_2orWT7LDnFnMPcJjjiVGu99j2FqZM @ f611d10"
+      }
+    },
+    "scholario-app": {
+      "deployments_first_page": 90,
+      "states": {
+        "READY": 76,
+        "CANCELED": 12,
+        "ERROR": 2
+      },
+      "legacy_project_total_known": 90,
+      "keep_deployments": {
+        "production_serving": "dpl_Hnybc4ETQYAAzPSx4BrNoPEgmTde @ 541cfe8",
+        "newest_preview": "dpl_G6PcaPkodyoUgwqMz1j9i8C7un24 @ f611d10"
+      }
+    },
+    "scholario-production": {
+      "deployments_first_page": 100,
+      "states": {
+        "READY": 84,
+        "CANCELED": 15,
+        "ERROR": 1
+      },
+      "legacy_project_total_known": 137,
+      "keep_deployments": {
+        "production_serving": "NONE - project being retired",
+        "newest_preview": "N/A"
+      }
+    }
+  }
+}
