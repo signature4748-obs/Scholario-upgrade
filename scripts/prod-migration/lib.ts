@@ -71,6 +71,11 @@ export interface UserState {
   schoolPlaneNeverSetAndFlagged: number | null
   /** Rows violating the migration invariant (must be 0 after apply). */
   schoolPlaneInvariantViolations: number | null
+  /** Honest-signal invariant (20261013130000): EVERY user row that never
+   *  completed a rotation (passwordChangedAt IS NULL) but is not flagged
+   *  mustChangePassword = true — covers SUPER_ADMIN and school-less rows
+   *  the earlier predicate structurally missed. Must be 0 after apply. */
+  neverSetOwnPasswordUnflagged: number | null
 }
 
 export interface AdminState {
@@ -316,6 +321,15 @@ export async function tableColumns(
   return rows
 }
 
+/** Names of all constraints on public tables (FK/UNIQUE/CHECK/PK — the
+ *  migration object-existence surface for constraint-creating migrations). */
+export async function allConstraintNames(): Promise<Set<string>> {
+  const rows = (await mgmtQuery(
+    `SELECT conname FROM pg_constraint WHERE connamespace = 'public'::regnamespace`,
+  )) as Array<{ conname: string }>
+  return new Set(rows.map((r) => r.conname))
+}
+
 /** indexname → indexdef for the given tables (UNIQUE-ness assertion surface). */
 export async function indexDefinitions(
   tables: readonly string[],
@@ -358,6 +372,7 @@ export async function userState(columnsPresent: boolean): Promise<UserState> {
     schoolPlaneNeverSetOwnPassword: null,
     schoolPlaneNeverSetAndFlagged: null,
     schoolPlaneInvariantViolations: null,
+    neverSetOwnPasswordUnflagged: null,
   }
   if (columnsPresent) {
     const flagged = (await mgmtQuery(
@@ -384,6 +399,10 @@ export async function userState(columnsPresent: boolean): Promise<UserState> {
       `SELECT count(*)::int AS n FROM "User" WHERE "schoolId" IS NOT NULL AND role <> 'SUPER_ADMIN' AND "passwordChangedAt" IS NULL AND "mustChangePassword" <> true`,
     )) as Array<{ n: number }>
     state.schoolPlaneInvariantViolations = Number(violations[0]?.n ?? 0)
+    const globalUnflagged = (await mgmtQuery(
+      `SELECT count(*)::int AS n FROM "User" WHERE "passwordChangedAt" IS NULL AND "mustChangePassword" <> true`,
+    )) as Array<{ n: number }>
+    state.neverSetOwnPasswordUnflagged = Number(globalUnflagged[0]?.n ?? 0)
   }
   return state
 }
@@ -598,6 +617,8 @@ export interface MigrationExpectation {
   tables?: readonly string[]
   /** table-scoped column expectations (ACCOUNT-RECOVERY era). */
   tableColumns?: Readonly<Record<string, readonly string[]>>
+  /** named constraints the migration creates (FK-hardening era: 20261013120000). */
+  constraints?: readonly string[]
 }
 
 export const MIGRATION_EXPECTATIONS: Record<string, MigrationExpectation> = {
@@ -611,6 +632,13 @@ export const MIGRATION_EXPECTATIONS: Record<string, MigrationExpectation> = {
     indexes: ACCOUNT_RECOVERY_INDEXES,
     tables: ACCOUNT_RECOVERY_TABLES,
   },
+  // FeeTransaction.studentId FK hardening: the migration self-heals the 3
+  // orphan studentId references (detaching the pointer, preserving the
+  // financial rows) and then enforces the constraint. The constraint name is
+  // the migration's verifiable object.
+  '20261013120000_fee_transaction_student_fk': {
+    constraints: ['FeeTransaction_studentId_fkey'],
+  },
 }
 
 export interface ExpectationResult {
@@ -623,10 +651,11 @@ export interface ExpectationResult {
  * pending → objects must be absent; applied → objects must be present.
  */
 export async function evaluateExpectations(gate: HistoryGate): Promise<ExpectationResult> {
-  const [indexes, columns, tables] = await Promise.all([
+  const [indexes, columns, tables, constraints] = await Promise.all([
     allIndexNames(),
     userCredentialColumns(),
     tableCounts(),
+    allConstraintNames(),
   ])
   const columnNames = new Set(columns.map((c) => c.column_name))
   const tableNames = new Set(Object.keys(tables))
@@ -666,6 +695,7 @@ export async function evaluateExpectations(gate: HistoryGate): Promise<Expectati
     bucket('column', expectation.columns ?? [], (n) => columnNames.has(n))
     bucket('index', expectation.indexes ?? [], (n) => indexes.has(n))
     bucket('table', expectation.tables ?? [], (n) => tableNames.has(n))
+    bucket('constraint', expectation.constraints ?? [], (n) => constraints.has(n))
     for (const [table, cols] of Object.entries(expectation.tableColumns ?? {})) {
       const present = scopedColumnNames.get(table) ?? new Set<string>()
       for (const column of cols) {

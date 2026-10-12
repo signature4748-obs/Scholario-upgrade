@@ -126,7 +126,9 @@ async function main(): Promise<void> {
   }
   console.log(`\n  A. migration status : ${gate.applied.length}/${gate.repo.length} applied, ${gate.pending.length} pending, checksums ${gate.checksumDivergences.length ? 'DRIFT ✖' : 'true ✓'}`)
 
-  // B. Schema verification — credential columns.
+  // B. Schema verification — credential columns + the FeeTransaction.studentId
+  // FK hardening object (20261013120000): the constraint must exist with the
+  // intended referential behavior (ledger-preserving ON DELETE SET NULL).
   const columns = await userCredentialColumns()
   const colMap = new Map(columns.map((c) => [c.column_name, c]))
   const mustChange = colMap.get('mustChangePassword')
@@ -141,8 +143,17 @@ async function main(): Promise<void> {
   } else if (!changedAt.data_type.startsWith('timestamp')) {
     problems.push(`User.passwordChangedAt has wrong type (${changedAt.data_type})`)
   }
+  const fkRows = (await mgmtQuery(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'FeeTransaction_studentId_fkey' AND conrelid = '"FeeTransaction"'::regclass`,
+  )) as Array<{ def: string }>
+  const fkDef = fkRows[0]?.def ?? null
+  if (!fkDef) {
+    problems.push('FeeTransaction_studentId_fkey constraint missing (20261013120000 not in effect)')
+  } else if (!fkDef.includes('ON DELETE SET NULL') || !fkDef.includes('ON UPDATE CASCADE')) {
+    problems.push(`FeeTransaction_studentId_fkey has unintended referential behavior: ${fkDef}`)
+  }
   console.log(
-    `  B. schema           : mustChangePassword ${mustChange ? `${mustChange.data_type} NOT NULL ✓` : 'MISSING ✖'} · passwordChangedAt ${changedAt ? changedAt.data_type + ' ✓' : 'MISSING ✖'}`,
+    `  B. schema           : mustChangePassword ${mustChange ? `${mustChange.data_type} NOT NULL ✓` : 'MISSING ✖'} · passwordChangedAt ${changedAt ? changedAt.data_type + ' ✓' : 'MISSING ✖'} · studentId FK ${fkDef ? 'present (SET NULL/CASCADE) ✓' : 'MISSING ✖'}`,
   )
 
   // C. Index verification — exact names, from the migration files.
@@ -177,8 +188,17 @@ async function main(): Promise<void> {
   if ((users.schoolPlaneInvariantViolations ?? 0) !== 0) {
     problems.push(`credential-migration invariant violations: ${users.schoolPlaneInvariantViolations} row(s)`)
   }
+  // Honest-signal closure (20261013130000): the invariant
+  // "mustChangePassword = false implies the owner completed a rotation"
+  // must hold for EVERY row — including SUPER_ADMIN and school-less rows
+  // the earlier predicate structurally missed.
+  if ((users.neverSetOwnPasswordUnflagged ?? 0) !== 0) {
+    problems.push(
+      `honest-signal invariant violations: ${users.neverSetOwnPasswordUnflagged} user row(s) with passwordChangedAt IS NULL and mustChangePassword = false`,
+    )
+  }
   console.log(
-    `  D. credentials      : principals never-set-own-password flagged ${users.principalsNeverSetAndFlagged}/${users.principalsNeverSetOwnPassword} ✓ · school-plane never-set-own-password flagged ${users.schoolPlaneNeverSetAndFlagged}/${users.schoolPlaneNeverSetOwnPassword} ✓ · invariant violations ${users.schoolPlaneInvariantViolations} (password values never read)`,
+    `  D. credentials      : principals never-set-own-password flagged ${users.principalsNeverSetAndFlagged}/${users.principalsNeverSetOwnPassword} ✓ · school-plane never-set-own-password flagged ${users.schoolPlaneNeverSetAndFlagged}/${users.schoolPlaneNeverSetOwnPassword} ✓ · invariant violations ${users.schoolPlaneInvariantViolations} · honest-signal violations ${users.neverSetOwnPasswordUnflagged ?? 'n/a'} (password values never read)`,
   )
 
   // E. Row-count comparison — no table may shrink.
