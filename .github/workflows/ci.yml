@@ -326,6 +326,21 @@ jobs:
           done
           curl -s -o /dev/null -m 60 -X POST "http://localhost:3000/api/auth/login" \
             -H "content-type: application/json" -d '{"email":"warm@invalid.test","password":"x"}' || true
+          # AUTHENTICATED warm (run 38203623586 lesson): one real fixture
+          # login + the principal chain pays ANY first-authenticated-path
+          # cost during the reset (observed once: a single 62s /api/auth/me
+          # stall right after respawn — subsequent identical requests 11ms;
+          # the journeys must not be the first authenticated caller).
+          # Fixture credential = prisma/seed-credentials.ts default (CI
+          # seeds with defaults; .github is not a client surface).
+          WARM_COOKIE=$(curl -s -m 60 -X POST "http://localhost:3000/api/auth/login" \
+            -H "content-type: application/json" \
+            -d '{"email":"principal@hawkingshigh.edu","password":"principal123"}' \
+            -D - -o /dev/null | grep -i '^set-cookie: erp_session=' | head -1 | sed 's/^[Ss]et-[Cc]ookie: //' | cut -d';' -f1) || true
+          if [ -n "$WARM_COOKIE" ]; then
+            curl -s -o /dev/null -m 60 -H "cookie: $WARM_COOKIE" http://localhost:3000/api/auth/me || true
+            curl -s -o /dev/null -m 60 -H "cookie: $WARM_COOKIE" http://localhost:3000/api/dashboard || true
+          fi
           curl -sf http://localhost:3000/health/ready
 
       # 13. Gate 9 — live-server user journeys (auth → dashboards → data).
