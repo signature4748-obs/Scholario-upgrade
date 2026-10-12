@@ -251,7 +251,24 @@ jobs:
         env:
           DEV_OLD_SPACE_MB: "4096"
         run: |
-          nohup bun run dev > dev.log 2>&1 &
+          # DEV-SERVER SUPERVISOR (2026-10-12, third-flake root cause): the
+          # live suites grew the dev-server heap until Next.js dev's own
+          # memory guard fired mid-E2E ("Server is approaching the used
+          # memory threshold, restarting…" → process.exit(RESTART_EXIT_CODE)
+          # — runs 38198889755 / 38200849834) and NOTHING restarted it:
+          # ECONNRESET → ECONNREFUSED for the rest of the job. The guard
+          # exit code is a SUPERVISED-RESTART contract — honor it: respawn
+          # on ANY exit (memory guard, worker crash, boot failure).
+          cat > dev-supervisor.sh <<'SH'
+          #!/usr/bin/env bash
+          while true; do
+            bun run dev
+            echo "[dev-supervisor] dev server exited (code $?) at $(date -u +%FT%TZ) — respawning" >&2
+            sleep 2
+          done
+          SH
+          chmod +x dev-supervisor.sh
+          nohup ./dev-supervisor.sh > dev-supervisor.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://localhost:3000/health/ready && break || sleep 5
           done
@@ -274,6 +291,27 @@ jobs:
       #     above); DB-backed suites use the job-level DATABASE_URL.
       - name: Test suite (unit · integration · API · regression · security)
         run: bun run test
+
+      # 12b. E2E memory reset (2026-10-12, third flake): the live security
+      #      suites grow the dev-server heap ~400MB/min; Next's 0.8×-heap
+      #      guard fired mid-E2E twice even at DEV_OLD_SPACE_MB=4096 (the
+      #      security suites survive a restart window — liveFetch retries
+      #      — but the e2e journeys use plain fetch). Deterministic fix:
+      #      bounce the server FRESH right before the journeys (heap resets
+      #      to boot level — the guard is unreachable in the short E2E
+      #      window), then re-warm the doors (first-request compile cost).
+      - name: Reset dev server for E2E (fresh heap)
+        run: |
+          pkill -f "next dev" || true
+          pkill -f "next-server" || true
+          for i in $(seq 1 40); do
+            curl -sf http://localhost:3000/health/ready && break || sleep 3
+          done
+          curl -sf http://localhost:3000/health/ready
+          curl -sf -o /dev/null http://localhost:3000/platform/login
+          curl -sf -o /dev/null http://localhost:3000/login
+          curl -sf -o /dev/null http://localhost:3000/s/hawkings-prithvipur/login
+          curl -sf http://localhost:3000/health/ready
 
       # 13. Gate 9 — live-server user journeys (auth → dashboards → data).
       - name: E2E journeys (live server)
