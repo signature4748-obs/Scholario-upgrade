@@ -121,11 +121,15 @@ function startMockServer(state: MockState): Promise<{ server: Server; port: numb
       return
     }
 
-    // Deploy hooks (POST) — status per path; every hit recorded.
+    // Deploy hooks (POST) — status per path; every hit recorded. The
+    // DEFAULT is 201 with a PENDING job — the LIVE Vercel deploy-hook
+    // behavior (release run 38198268389: both hooks answered 201 Created
+    // {"job":{"state":"PENDING"}}); the mock previously defaulted to
+    // 200, which is why the script's 200-only bug passed every test.
     if (req.method === 'POST') {
       state.hookHits.push(url.pathname)
-      const status = state.hookStatus[url.pathname] ?? 200
-      send(status, { deploymentId: `dpl_mock${url.pathname.replace(/\W/g, '_')}` })
+      const status = state.hookStatus[url.pathname] ?? 201
+      send(status, { job: { id: `job_mock${url.pathname.replace(/\W/g, '_')}`, state: 'PENDING' } })
       return
     }
 
@@ -348,6 +352,35 @@ describe('trigger-deploy-hooks (two planes)', () => {
     expect(all(r)).toContain('BOTH production deploy hooks accepted')
     expect(state.hookHits.filter((h) => h === PLATFORM_HOOK).length).toBe(1)
     expect(state.hookHits.filter((h) => h === SCHOOL_HOOK).length).toBe(1)
+  })
+
+  test('201 Created with a PENDING job is ACCEPTED (the LIVE Vercel behavior — run 38198268389 regression)', async () => {
+    // The mock server now defaults hooks to 201 {"job":{"state":"PENDING"}}
+    // — exactly what Vercel answered in production. A 200-only script
+    // failed the deploy stage while both planes were actually building.
+    state.hookHits.length = 0
+    try {
+      const r = await runScript(script, [], goodEnv())
+      expect(r.code).toBe(0)
+      expect(all(r)).toContain('BOTH production deploy hooks accepted')
+      expect(all(r)).not.toContain('FAILED')
+    } finally {
+      state.hookHits.length = 0
+    }
+  })
+
+  test('an explicit 200 remains accepted (legacy contract)', async () => {
+    state.hookHits.length = 0
+    state.hookStatus[PLATFORM_HOOK] = 200
+    state.hookStatus[SCHOOL_HOOK] = 200
+    try {
+      const r = await runScript(script, [], goodEnv())
+      expect(r.code).toBe(0)
+    } finally {
+      delete state.hookStatus[PLATFORM_HOOK]
+      delete state.hookStatus[SCHOOL_HOOK]
+      state.hookHits.length = 0
+    }
   })
 
   test('ONE hook failing (school hook 500) → RED run; BOTH hooks were still fired; partial-deploy backstop message', async () => {

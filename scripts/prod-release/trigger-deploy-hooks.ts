@@ -18,6 +18,10 @@
  *     not a release).
  *   · Each hook is POSTed with a 30s timeout; transport hiccups and 5xx are
  *     retried (3 attempts, backoff); 4xx is an immediate hard failure.
+ *     ACCEPTED = any 2xx (LIVE BEHAVIOR: Vercel deploy hooks answer
+ *     201 Created with {"job":{"state":"PENDING"}} — the release run
+ *     38198268389 caught the script rejecting the real 201s while the
+ *     deployments were actually triggered).
  *   · BOTH hooks are fired even if the first one fails (maximal progress on
  *     an open gate); ANY failure then exits 1 — a partially triggered
  *     release is RED, and the verify-deployment stage will catch any plane
@@ -37,7 +41,7 @@
  *   VERCEL_DEPLOY_HOOK_URL=… VERCEL_DEPLOY_HOOK_URL_SCHOOL=… \
  *     bun scripts/prod-release/trigger-deploy-hooks.ts
  *
- * Exit codes: 0 = both hooks accepted (HTTP 200); 1 = STOP (fail-closed).
+ * Exit codes: 0 = both hooks accepted (HTTP 2xx — Vercel answers 201); 1 = STOP (fail-closed).
  */
 const HOOK_TIMEOUT_MS = 30_000
 const HOOK_RETRIES = 3
@@ -65,7 +69,8 @@ function requireEnv(name: string): string {
 }
 
 /**
- * Fire ONE deploy hook. Returns the final HTTP code (200 = accepted).
+ * Fire ONE deploy hook. Returns the final HTTP code (2xx = accepted —
+ * Vercel deploy hooks answer 201 Created in practice).
  * Transport failures (timeout / network) and 5xx are retried with backoff —
  * a 4xx (bad request / unauthorized hook) is an immediate hard failure.
  */
@@ -78,7 +83,11 @@ async function fireHook(plane: PlaneHookSpec): Promise<{ ok: boolean; status: nu
       const res = await fetch(plane.url, { method: 'POST', signal: controller.signal })
       const body = await res.text()
       last = { status: res.status, body: clip(body, 200) }
-      if (res.status === 200) return { ok: true, status: res.status, body: last.body }
+      // ACCEPTED = any 2xx. Vercel deploy hooks answer 201 Created with a
+      // PENDING job — treat exactly like 200 (run 38198268389: both hooks
+      // returned 201 and the script wrongly failed the deploy stage while
+      // the planes were actually building).
+      if (res.status >= 200 && res.status < 300) return { ok: true, status: res.status, body: last.body }
       if (res.status >= 500 && attempt < HOOK_RETRIES) {
         console.warn(
           `  [${plane.key}] deploy hook HTTP ${res.status} — retrying (${attempt}/${HOOK_RETRIES - 1})…`,

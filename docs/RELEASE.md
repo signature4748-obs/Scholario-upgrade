@@ -157,8 +157,9 @@ writes (gate closes green, nothing deploys).
   Both hook URLs are secrets (`VERCEL_DEPLOY_HOOK_URL` = platform plane,
   `VERCEL_DEPLOY_HOOK_URL_SCHOOL` = school plane); they are never echoed —
   they only travel inside the script's fetch calls. The script is
-  fail-closed: either hook missing or rejected (non-200 after retries) =
-  RED run, never a one-plane release. Each hook responds 200 and Vercel
+  fail-closed: either hook missing or rejected (non-2xx after retries) =
+  RED run, never a one-plane release. Each hook answers **201 Created**
+  (live-verified, release run 38198268389) and Vercel
   builds `main` HEAD for that plane's project. If one hook fails after the
   other succeeded, the run is still RED and the verify-deployment stage
   (SHA provenance + health on BOTH planes) is the backstop that cannot pass
