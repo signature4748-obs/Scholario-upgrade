@@ -19,6 +19,13 @@
  *   5. The pending migrations' SQL is re-checked against the contract the
  *      runbook promises: self-heal BEFORE the constraint, ledger rows
  *      preserved (no DELETE), no receipt rewriting, no hash rewriting.
+ *   6. Guard-safe self-heal contract (B-4b): the FeeTransaction tenant-guard
+ *      tg_guard_FT_upd (whose feeId branch rejects ANY update of the 3 legacy
+ *      rows that carry a dangling feeId) must be disabled for exactly the
+ *      one self-heal statement inside the migration's single transaction and
+ *      re-enabled BEFORE the FK is added; only tg_guard_FT_upd is ever
+ *      disabled; feeId is never modified (dangling feeId preserved for a
+ *      separate owner decision).
  */
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -219,5 +226,64 @@ describe('pending migration SQL contracts', () => {
     expect(FLAG_SQL).not.toMatch(/passwordHash|password_hash/)
     expect(FLAG_SQL).not.toContain('DELETE FROM')
     expect(FLAG_SQL).toContain('"mustChangePassword" = true')
+  })
+})
+
+// ─── 6. guard-safe self-heal contracts (B-4b) ──────────────────────────────
+//
+// B-3 proved the merged self-heal UPDATE could never commit: production's 3
+// legacy orphan rows carry a SECOND dangling pointer (feeId), and the feeId
+// branch of tg_guard_FT_upd (→ tg_guard_FT_ins_fn) rejects ANY update of such
+// rows — even a no-op on an unrelated column. The migration must therefore
+// suspend exactly that UPDATE guard for exactly the one self-heal statement,
+// inside its own single transaction (transactional DDL rolls the trigger
+// state back on failure), and re-enable it before the constraint is added.
+
+/** SQL with `--` line comments stripped: the order/substring checks below
+ *  reason about EXECUTABLE statements only (the explanatory comment block
+ *  mentions DISABLE/ENABLE TRIGGER and feeId, which would otherwise
+ *  false-match). */
+const SQL_CODE = SQL.replace(/--[^\n]*/g, '')
+
+describe('guard-safe self-heal SQL contracts (B-4b)', () => {
+  test('guard window: DISABLE TRIGGER before the self-heal UPDATE; ENABLE TRIGGER after it and before ADD CONSTRAINT', () => {
+    const disableIndex = SQL_CODE.indexOf('DISABLE TRIGGER')
+    const healIndex = SQL_CODE.indexOf('UPDATE "FeeTransaction"')
+    const enableIndex = SQL_CODE.indexOf('ENABLE TRIGGER')
+    const constraintIndex = SQL_CODE.indexOf('ADD CONSTRAINT')
+    expect(disableIndex).toBeGreaterThan(-1)
+    expect(healIndex).toBeGreaterThan(disableIndex)
+    expect(enableIndex).toBeGreaterThan(healIndex)
+    expect(constraintIndex).toBeGreaterThan(enableIndex)
+  })
+
+  test('only the UPDATE guard is disabled — no other trigger name in any DISABLE statement', () => {
+    const disableStatements = SQL_CODE.match(/DISABLE TRIGGER[^;]*;/g) ?? []
+    expect(disableStatements.length).toBeGreaterThan(0)
+    for (const stmt of disableStatements) {
+      expect(stmt).toContain('"tg_guard_FT_upd"')
+      expect(stmt).not.toMatch(/tg_guard_FT_ins/)
+      expect(stmt).not.toMatch(/\b(ALL|ALWAYS|USER|REPLICA|ORIGIN)\b/)
+    }
+  })
+
+  test('the guard is re-enabled: ENABLE TRIGGER count is at least DISABLE TRIGGER count', () => {
+    const disableCount = (SQL_CODE.match(/DISABLE TRIGGER/g) ?? []).length
+    const enableCount = (SQL_CODE.match(/ENABLE TRIGGER/g) ?? []).length
+    expect(disableCount).toBeGreaterThan(0)
+    expect(enableCount).toBeGreaterThanOrEqual(disableCount)
+  })
+
+  test('feeId is never modified: no executable feeId reference; the self-heal UPDATE sets only studentId', () => {
+    expect(SQL_CODE).not.toMatch(/feeId/i)
+    const healStart = SQL_CODE.indexOf('UPDATE "FeeTransaction"')
+    expect(healStart).toBeGreaterThan(-1)
+    const healEnd = SQL_CODE.indexOf(';', healStart)
+    const healStatement = SQL_CODE.slice(healStart, healEnd + 1)
+    const setClause = healStatement.slice(
+      healStatement.indexOf('SET'),
+      healStatement.indexOf('WHERE'),
+    )
+    expect(setClause.trim()).toBe('SET "studentId" = NULL')
   })
 })
