@@ -3,39 +3,34 @@
  *
  * Combines event sources into a single CalendarEvent[]:
  *
- *   1. School events   — `calendarEvents` static array (`@/lib/mock/operations`)
- *                        minus any Holiday entries (those come from #2 below,
- *                        which is the canonical school-calendar source of
- *                        truth and resolves the Dec 23 vs Dec 24 inconsistency).
- *   2. Holidays        — `getHoliday(dateStr)` from `@/lib/mock/school-calendar`
- *                        (FIXED_HOLIDAYS + WINTER_BREAK + SUMMER_BREAK).
- *                        Multi-day breaks collapse to a single "Begins" event
- *                        on the first day of the break that falls in the
- *                        visible month (Dec 23 / Jan 1 / Apr 15).
- *   3. Exams           — `useMockExamsStore` schedule items + per-exam
- *                        "Begins" / "Ends" markers on startDate/endDate.
- *   4. User events     — added at runtime via `addEvent` mutation (these
- *                        now persist across reloads, tenant-scoped).
+ *   1. Server events   — `GET /api/events` (SchoolEvent rows, DB truth):
+ *                        school events + declared holidays for EVERY tenant,
+ *                        hydrated once per session via refreshCalendarServerEvents().
+ *                        Writes go through POST/DELETE /api/events — added or
+ *                        removed events are cross-device, server-authoritative.
+ *   2. School events   — `calendarEvents` static array (`@/lib/mock/operations`)
+ *                        minus Holiday entries. DEMO TENANT ONLY (seed calendar).
+ *   3. Holidays        — DB HOLIDAY rows (source #1) are canonical; the bundled
+ *                        `getHoliday` mirror renders only for the demo tenant
+ *                        overlay EXCEPT it no longer duplicates — see
+ *                        getUnifiedEvents (DB wins, mirror holidays dropped
+ *                        when server events are present).
+ *   4. Exams           — `useMockExamsStore` schedule items (demo tenants only).
+ *   5. User events     — LEGACY localStorage records (pre-server-wiring era).
+ *                        Still rendered (they are the user's real local data)
+ *                        but new events go to the server; removal of legacy
+ *                        rows stays local.
  *
- * FINAL-GATE (EG-9F/R4+R6) — sources #1–#3 are ILLUSTRATIVE demo-tier
+ * FINAL-GATE (EG-9F/R4+R6) — sources #2–#4 are ILLUSTRATIVE demo-tier
  * corpora (R4 register: mock/operations events + mock/school-calendar
  * holidays; R6: mock exams). `getUnifiedEvents` therefore takes an
  * `includeSeedCalendar` option: the shared Calendar module root passes
  * it ONLY for the demo tenant (School.isDemo) — a real production tenant
- * sees its real user events and an honest empty calendar, never the
- * fabricated school/holiday/exam seeds. Exams additionally self-gate:
- * the mock-exams store boots empty for non-demo tenants.
+ * sees its real server events (DB) and an honest empty calendar otherwise.
  *
  * QA-FIX-B — TENANT-SCOPED PERSISTENCE: ONLY the user-events slice is
- * persisted (per-school namespace) so added/removed events survive reload.
- * School events / holidays / exams are DERIVED from their canonical sources
- * on every render — persisting them would freeze derived data, so they are
- * deliberately excluded from partialize.
- *
- * No circular deps: this file imports `useMockExamsStore` (a Zustand store,
- * not a hook call) only to read its `.getState()` snapshot inside the pure
- * `getUnifiedEvents` helper. The component subscribes to exams reactively
- * and passes the latest `exams` array into the helper.
+ * persisted (per-school namespace) so pre-wiring events survive reload.
+ * Server events are fetched — persisting them would freeze derived data.
  */
 
 import { create } from 'zustand'
@@ -66,6 +61,73 @@ export interface CalendarEvent {
   /** Optional notes/description (Add Event form, detail view). */
   description?: string
   source: CalendarEventSource
+  /** Present when the event came from GET /api/events — the SchoolEvent row
+   *  id, used for server DELETE. Absent for demo corpora + legacy user rows. */
+  serverId?: string
+}
+
+/** DB SchoolEvent row as returned by GET /api/events (subset we consume). */
+export interface SchoolEventDTO {
+  id: string
+  title: string
+  description?: string | null
+  type: string
+  startDate: string
+  endDate?: string | null
+  startTime?: string | null
+  location?: string | null
+}
+
+// ─── DB ⇄ UI type vocabulary ─────────────────────────────────────────────
+
+/** UI type pill → DB SchoolEvent.type (POST payload). */
+export const UI_TO_DB_TYPE: Record<string, string> = {
+  Event: 'EVENT',
+  Holiday: 'HOLIDAY',
+  Exam: 'EXAM',
+  Meeting: 'MEETING',
+  Competition: 'COMPETITION',
+  Cultural: 'CULTURAL',
+  General: 'EVENT',
+}
+
+/** DB SchoolEvent.type → UI type pill (GET mapping; unknown → 'Event'). */
+export const DB_TO_UI_TYPE: Record<string, string> = {
+  EVENT: 'Event',
+  HOLIDAY: 'Holiday',
+  EXAM: 'Exam',
+  MEETING: 'Meeting',
+  ACTIVITY: 'Event',
+  COMPETITION: 'Competition',
+  CULTURAL: 'Cultural',
+}
+
+/**
+ * SchoolEvent row → CalendarEvent.
+ *
+ * · date: the UTC date slice of startDate ('YYYY-MM-DD') — matches the
+ *   seed convention (dates stored as UTC midnights) and the shared
+ *   holiday feed (`use-school-holidays.ts`).
+ * · time: `startTime` ('HH:MM') or '—' (all-day).
+ * · type: DB → UI vocabulary; source 'school' (DB HOLIDAY rows render as
+ *   the same 'Holiday' pill the demo mirror used).
+ */
+export function schoolEventToCalendarEvent(ev: SchoolEventDTO): CalendarEvent {
+  const date = String(ev.startDate).slice(0, 10)
+  const time = ev.startTime && /^([01]\d|2[0-3]):[0-5]\d$/.test(ev.startTime) ? ev.startTime : '—'
+  const rawType = String(ev.type ?? 'EVENT').toUpperCase()
+  const type = DB_TO_UI_TYPE[rawType] ?? 'Event'
+  return {
+    id: `server-${ev.id}`,
+    serverId: ev.id,
+    date,
+    title: ev.title,
+    type,
+    time,
+    location: ev.location ?? undefined,
+    description: ev.description ?? undefined,
+    source: type === 'Holiday' ? 'holiday' : 'school',
+  }
 }
 
 interface CalendarStoreState {
@@ -73,6 +135,13 @@ interface CalendarStoreState {
   addEvent: (input: Omit<CalendarEvent, 'id' | 'source'>) => CalendarEvent
   removeEvent: (id: string) => void
   clearUserEvents: () => void
+  /** DB rows (GET /api/events) mapped to CalendarEvent — every tenant. */
+  serverEvents: CalendarEvent[]
+  /** 'idle' | 'loading' | 'ready' | 'error' — the server feed state. */
+  serverStatus: 'idle' | 'loading' | 'ready' | 'error'
+  hydrateServerEvents: (events: CalendarEvent[], status: 'ready' | 'error') => void
+  setServerStatus: (status: 'idle' | 'loading' | 'ready' | 'error') => void
+  removeServerEvent: (serverId: string) => void
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -238,20 +307,33 @@ function getSchoolEvents(): CalendarEvent[] {
  * FINAL-GATE (EG-9F) — `opts.includeSeedCalendar` (default true for
  * backwards compatibility) gates the ILLUSTRATIVE school-events +
  * holidays corpora: the shared Calendar module root passes `true` only
- * for the demo tenant. Exam events arrive via the (demo-gated) mock
- * exams store; user events are always the tenant's own real records.
+ * for the demo tenant. `opts.serverEvents` (the DB rows) render for
+ * EVERY tenant — they are the school's real calendar. When server events
+ * are present the demo overlay DROPS its mock holiday entries so DB
+ * HOLIDAY rows are not duplicated (DB wins; the attendance heatmap and
+ * the student month grid already treat the DB feed as authoritative).
  */
 export function getUnifiedEvents(
   year: number,
   month0: number,
   exams: ExamDTO[],
   userEvents: CalendarEvent[],
-  opts: { includeSeedCalendar?: boolean } = {},
+  opts: { includeSeedCalendar?: boolean; serverEvents?: CalendarEvent[] } = {},
 ): CalendarEvent[] {
   const includeSeed = opts.includeSeedCalendar !== false
+  const serverEvents = opts.serverEvents ?? []
+  const seedHolidays = includeSeed
+    ? getHolidaysForMonth(year, month0).filter(() => {
+        // DB wins: once server rows are loaded, mirror holidays would
+        // duplicate every declared HOLIDAY row — keep the overlay only
+        // while the server feed has not produced any holiday entry.
+        return !serverEvents.some((s) => s.type === 'Holiday')
+      })
+    : []
   return [
+    ...serverEvents,
     ...(includeSeed ? getSchoolEvents() : []),
-    ...(includeSeed ? getHolidaysForMonth(year, month0) : []),
+    ...seedHolidays,
     ...getExamEventsForMonth(year, month0, exams),
     ...userEvents,
   ]
@@ -268,6 +350,13 @@ export const useCalendarStore = create<CalendarStoreState>()(
   persist(
     (set) => ({
       userEvents: [],
+      serverEvents: [],
+      serverStatus: 'idle',
+      hydrateServerEvents: (events, status) =>
+        set({ serverEvents: events, serverStatus: status }),
+      setServerStatus: (status) => set({ serverStatus: status }),
+      removeServerEvent: (serverId) =>
+        set((s) => ({ serverEvents: s.serverEvents.filter((e) => e.serverId !== serverId) })),
       addEvent: (input) => {
         const event: CalendarEvent = {
           ...input,
@@ -284,10 +373,43 @@ export const useCalendarStore = create<CalendarStoreState>()(
       name: 'scholario-calendar-v1',
       storage: createTenantScopedStorage('scholario-calendar-v1'),
       version: 1,
-      // QA-FIX-B — ONLY user-created events are persisted; school/holiday/
-      // exam events are derived from canonical sources at render time and
-      // must not be frozen by persistence.
+      // QA-FIX-B — ONLY user-created events are persisted; server events
+      // are fetched (derived), seed events are demo-only — neither must be
+      // frozen by persistence.
       partialize: (s) => ({ userEvents: s.userEvents }),
     },
   ),
 )
+
+// ─── Server feed (GET /api/events) ─────────────────────────────────────
+
+/**
+ * Fetch the school's events (all types) and hydrate the store.
+ * Fail-closed: on transport/HTTP failure the store keeps its previous
+ * serverEvents and flips serverStatus to 'error' (the workspace shows an
+ * honest retry banner — never fabricated data). Callers: the workspace on
+ * mount, the Add/Remove dialogs after successful mutations.
+ */
+export async function refreshCalendarServerEvents(): Promise<CalendarEvent[]> {
+  const store = useCalendarStore.getState()
+  store.setServerStatus('loading')
+  try {
+    const res = await fetch('/api/events', { cache: 'no-store', credentials: 'same-origin' })
+    let json: unknown = null
+    try {
+      json = await res.json()
+    } catch {
+      /* non-JSON body — handled below */
+    }
+    const envelope = json as { ok?: unknown; data?: SchoolEventDTO[] } | null
+    if (!res.ok || !envelope || envelope.ok !== true || !Array.isArray(envelope.data)) {
+      throw new Error(`events feed failed (${res.status})`)
+    }
+    const events = envelope.data.map(schoolEventToCalendarEvent)
+    useCalendarStore.getState().hydrateServerEvents(events, 'ready')
+    return events
+  } catch {
+    useCalendarStore.getState().setServerStatus('error')
+    return useCalendarStore.getState().serverEvents
+  }
+}

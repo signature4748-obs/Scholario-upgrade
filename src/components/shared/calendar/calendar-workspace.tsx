@@ -32,11 +32,16 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { CalendarDays, ChevronLeft, ChevronRight, EyeOff, Plus } from 'lucide-react'
+import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, EyeOff, Plus, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { PageTransition, SectionHeading, StatusBadge } from '@/components/shared/ui'
-import { getUnifiedEvents, useCalendarStore, type CalendarEvent } from '@/lib/store/calendar-store'
+import {
+  getUnifiedEvents,
+  refreshCalendarServerEvents,
+  useCalendarStore,
+  type CalendarEvent,
+} from '@/lib/store/calendar-store'
 import { useMockExamsStore } from '@/lib/exams/mock-exams-data'
 import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { cn } from '@/lib/utils'
@@ -94,8 +99,18 @@ export function CalendarWorkspace({ canCreate, showHeading = false }: CalendarWo
   // ─── Data (single unified source) ───────────────────────────────
   const exams = useMockExamsStore((s) => s.exams)
   const userEvents = useCalendarStore((s) => s.userEvents)
+  const serverEvents = useCalendarStore((s) => s.serverEvents)
+  const serverStatus = useCalendarStore((s) => s.serverStatus)
   const ensureDemoSeed = useMockExamsStore((s) => s.ensureDemoSeed)
   useEffect(() => { if (isDemo) ensureDemoSeed() }, [isDemo, ensureDemoSeed])
+
+  // DB feed — the school's real calendar (SchoolEvent rows). Fetched on
+  // mount for EVERY tenant (the demo overlay still renders its seed
+  // corpora on top). Fail-closed: a failed feed keeps prior rows and
+  // shows an honest retry banner; it NEVER fabricates events.
+  useEffect(() => {
+    void refreshCalendarServerEvents()
+  }, [])
 
   // Once the (async) demo signal arrives, move the view to the demo
   // seed corpus's anchor month — identical to the pre-PIH-4c showcase
@@ -122,12 +137,15 @@ export function CalendarWorkspace({ canCreate, showHeading = false }: CalendarWo
     const byId = new Map<string, CalendarEvent>()
     for (const key of keys) {
       const [y, m] = key.split('-').map(Number)
-      for (const e of getUnifiedEvents(y, m, exams, userEvents, { includeSeedCalendar: isDemo })) {
+      for (const e of getUnifiedEvents(y, m, exams, userEvents, {
+        includeSeedCalendar: isDemo,
+        serverEvents,
+      })) {
         byId.set(e.id, e)
       }
     }
     return [...byId.values()]
-  }, [year, month, exams, userEvents, isDemo])
+  }, [year, month, exams, userEvents, serverEvents, isDemo])
 
   // Type-filtered view of everything.
   const visibleEvents = useMemo(
@@ -387,6 +405,27 @@ export function CalendarWorkspace({ canCreate, showHeading = false }: CalendarWo
         counts={typeCounts}
         onShowAll={showAllTypes}
       />
+
+      {/* Server-feed failure — honest retry banner (fail-closed: the grid
+          keeps whatever rows were already loaded; it never fabricates). */}
+      {serverStatus === 'error' && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3.5 py-2.5 text-xs text-amber-700 dark:text-amber-300"
+        >
+          <span className="flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            Couldn't load school events from the server.
+          </span>
+          <button
+            type="button"
+            onClick={() => void refreshCalendarServerEvents()}
+            className="inline-flex items-center gap-1.5 font-medium text-amber-800 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-200"
+          >
+            <RefreshCw className="h-3 w-3" aria-hidden /> Retry
+          </button>
+        </div>
+      )}
 
       {/* All types hidden → slim inline notice instead of a dead grid. */}
       {filterTypes.length === 0 && (

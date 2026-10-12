@@ -9,10 +9,15 @@
  *
  * The type picker is a wrap-row of single-select pills carrying the
  * type dot — it doubles as a color preview and stays touch-friendly
- * on phones. Submitting goes through `useCalendarStore.addEvent` (the
- * same unified data source the grid reads), then the workspace
- * navigates to the event's month and selects the day so the new event
- * is immediately visible.
+ * on phones.
+ *
+ * CALENDAR DB WIRING — submission is server-authoritative: POST
+ * /api/events (session tenant, `school.events.write` = PRINCIPAL/
+ * MANAGEMENT). On success the feed refetches (cross-device truth) and
+ * the workspace navigates to the event's month. On failure the dialog
+ * stays open with the honest server error — NO local fallback event is
+ * created (a silent localStorage row would pretend to be a real school
+ * event on this browser only).
  */
 
 import { useEffect, useState } from 'react'
@@ -32,7 +37,12 @@ import {
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { useCalendarStore, type CalendarEvent } from '@/lib/store/calendar-store'
+import {
+  refreshCalendarServerEvents,
+  UI_TO_DB_TYPE,
+  type CalendarEvent,
+  type SchoolEventDTO,
+} from '@/lib/store/calendar-store'
 import { ALL_TYPES, TYPE_TOKENS, typeColor } from './data'
 
 export interface AddEventDialogProps {
@@ -45,8 +55,6 @@ export interface AddEventDialogProps {
 }
 
 export function AddEventDialog({ open, onOpenChange, defaultDate, onAdded }: AddEventDialogProps) {
-  const addEvent = useCalendarStore((s) => s.addEvent)
-
   const [title, setTitle] = useState('')
   const [type, setType] = useState<string>('Event')
   const [date, setDate] = useState(defaultDate)
@@ -55,6 +63,8 @@ export function AddEventDialog({ open, onOpenChange, defaultDate, onAdded }: Add
   const [location, setLocation] = useState('')
   const [notes, setNotes] = useState('')
   const [touched, setTouched] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   // Reset to a clean form each time the dialog opens.
   useEffect(() => {
@@ -67,31 +77,76 @@ export function AddEventDialog({ open, onOpenChange, defaultDate, onAdded }: Add
       setLocation('')
       setNotes('')
       setTouched(false)
+      setSubmitError(null)
     }
   }, [open, defaultDate])
 
   const titleMissing = touched && !title.trim()
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setTouched(true)
     const trimmed = title.trim()
-    if (!trimmed) return
+    if (!trimmed || submitting) return
 
-    const event = addEvent({
-      date,
-      title: trimmed,
-      type,
-      time: allDay ? '—' : time || '09:00',
-      location: location.trim() || 'School Campus',
-      description: notes.trim() || undefined,
-    })
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      const res = await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          title: trimmed,
+          type: UI_TO_DB_TYPE[type] ?? 'EVENT',
+          // Plain 'YYYY-MM-DD' → the API stores it as a UTC-midnight date;
+          // the display time travels separately (timezone-free string).
+          startDate: date,
+          time: allDay ? null : time || null,
+          location: location.trim() || null,
+          description: notes.trim() || null,
+        }),
+      })
+      let json: unknown = null
+      try {
+        json = await res.json()
+      } catch {
+        /* non-JSON body — handled below */
+      }
+      const envelope = json as { ok?: unknown; data?: SchoolEventDTO; error?: { publicMessage?: string; message?: string } } | null
+      if (!res.ok || !envelope || envelope.ok !== true) {
+        const msg =
+          envelope?.error?.publicMessage ??
+          envelope?.error?.message ??
+          (res.status === 403
+            ? 'Your role cannot publish school events.'
+            : 'The event could not be saved. Please try again.')
+        throw new Error(msg)
+      }
 
-    toast.success('Event added', {
-      description: `${trimmed} · ${allDay ? 'All day' : time}`,
-    })
-
-    onAdded(event)
-    onOpenChange(false)
+      const events = await refreshCalendarServerEvents()
+      const created = events.find((e) => e.serverId === envelope.data?.id)
+      toast.success('Event added', {
+        description: `${trimmed} · ${allDay ? 'All day' : time || '—'}`,
+      })
+      onAdded(
+        created ?? {
+          id: `server-${envelope.data?.id ?? Date.now()}`,
+          serverId: envelope.data?.id,
+          date,
+          title: trimmed,
+          type,
+          time: allDay ? '—' : time || '—',
+          location: location.trim() || undefined,
+          description: notes.trim() || undefined,
+          source: 'school',
+        },
+      )
+      onOpenChange(false)
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'The event could not be saved.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -105,6 +160,12 @@ export function AddEventDialog({ open, onOpenChange, defaultDate, onAdded }: Add
         </DialogHeader>
 
         <div className="space-y-4 px-5 py-4 sm:px-6">
+          {submitError && (
+            <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/[0.06] px-3 py-2 text-xs text-destructive">
+              {submitError}
+            </p>
+          )}
+
           {/* Title */}
           <div className="space-y-1.5">
             <Label htmlFor="event-title" className="text-xs">
@@ -223,10 +284,12 @@ export function AddEventDialog({ open, onOpenChange, defaultDate, onAdded }: Add
         </div>
 
         <DialogFooter className="border-t border-border px-5 py-4 sm:px-6">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit}>Add Event</Button>
+          <Button onClick={handleSubmit} disabled={submitting}>
+            {submitting ? 'Adding…' : 'Add Event'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
