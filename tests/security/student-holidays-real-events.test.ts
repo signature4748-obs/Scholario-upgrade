@@ -176,7 +176,6 @@ describe('STUDENT-HOLIDAYS · resolver semantics (DB map authoritative, Mon–Sa
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const MARKER = randomBytes(4).toString('hex')
 let studentToken: string
-let eventId: string | null = null
 let schoolId: string | null = null
 
 async function directSession(email: string): Promise<string> {
