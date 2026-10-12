@@ -1,21 +1,38 @@
 /**
- * Library store — connected school library management.
+ * Library store — school library management.
  *
- * Borrowers come from canonical Students store + Teachers mock data.
- * Book catalog, issue/return, overdue, fines all derive from this store.
+ * LIBRARY DB WIRING (this change): for a REAL tenant the module is now
+ * server-authoritative — GET /api/library hydrates `serverBooks`/
+ * `serverIssues` (fetched, NEVER persisted), and issue/return/add-book go
+ * through POST /api/library (tenant-scoped, `school.library.manage`,
+ * transactional stock guard). Failures surface honest errors — no local
+ * fallback rows pretend to be real data. The DB has no columns/models for
+ * fines, reservations or teacher borrowers, so those surfaces stay
+ * honestly labeled preview features (server issues carry fine: 0 + the
+ * Fines tab explains fine tracking is not server-backed yet).
  *
- * QA-FIX-B — TENANT-SCOPED PERSISTENCE: books + issues + reservations
- * survive reload (per-school namespace via createTenantScopedStorage).
- * Search/filter state is ephemeral UI state and is NOT persisted.
- * sendReminder stamps reminderSentAt on the loan record (real action,
- * no more toast-only stub in the module UI).
+ * DEMO TENANT (School.isDemo): keeps the curated local showcase corpus
+ * (localStorage, honestly labeled via DemoModuleNotice) — the store
+ * operates exactly as before (local mutations). Server rows are ignored
+ * in demo mode.
+ *
+ * Borrowers: students always come from the canonical roster store;
+ * teacher options come from the REAL teacher directory (the fabricated
+ * mock/teachers personas are retired from the Issue dialog — in server
+ * mode teachers are excluded honestly: BookIssue's schema supports
+ * student borrowers only).
+ *
+ * QA-FIX-B — TENANT-SCOPED PERSISTENCE: the LOCAL slices (books/issues/
+ * reservations) remain persisted per-school namespace (demo mode data).
+ * Server slices are derived (fetched) and never persisted.
  */
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { useMemo } from 'react'
 import { useStudentsStore } from '@/lib/store/students-store'
-import { teachers } from '@/lib/mock/teachers'
+import { useTeachersStore } from '@/lib/store/teachers-store'
+import { readIsDemoTenant, useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { makeDemoSeedApplier } from '@/lib/store/demo-tenant'
 import { migrateLegacyScopedStore, createTenantScopedStorage } from '@/lib/tenant/tenant-storage'
 import { DEFAULT_TENANT_ID } from '@/lib/tenant/schools'
@@ -95,7 +112,9 @@ function getStudent(id: string) {
 }
 
 function getTeacher(id: string) {
-  return teachers.find((t) => t.id === id)
+  // REAL directory only — the fabricated mock/teachers personas are
+  // retired from library flows (an honest 'not found' beats a fake lender).
+  return useTeachersStore.getState().teachers.find((t) => t.id === id)
 }
 
 // Build initial issues using canonical students
@@ -145,17 +164,103 @@ interface LibraryState {
   /** FINAL-GATE (EG-9F/R4) — one-shot demo-tier seeder (module root). */
   ensureDemoSeed: () => void
 
+  /** DB feed (GET /api/library) — real tenants; never persisted. */
+  serverBooks: Book[]
+  serverIssues: IssueRecord[]
+  serverStatus: 'idle' | 'loading' | 'ready' | 'error'
+  /** True while a server mutation is in flight (UI disabling). */
+  serverPending: boolean
+  hydrateServerLibrary: (books: Book[], issues: IssueRecord[]) => void
+  setServerStatus: (status: 'idle' | 'loading' | 'ready' | 'error') => void
+  setServerPending: (pending: boolean) => void
+
   setSearch: (q: string) => void
   setCategoryFilter: (c: string) => void
   setAvailabilityFilter: (a: string) => void
-  issueBook: (bookId: string, borrowerId: string, borrowerType: 'student' | 'teacher') => { success: boolean; error?: string }
-  returnBook: (issueId: string) => void
+  issueBook: (bookId: string, borrowerId: string, borrowerType: 'student' | 'teacher') => Promise<{ success: boolean; error?: string }>
+  returnBook: (issueId: string) => Promise<{ success: boolean; error?: string }>
   sendReminder: (loanId: string) => void
-  addBook: (book: Omit<Book, 'id' | 'issued' | 'available' | 'status'>) => void
+  addBook: (book: Omit<Book, 'id' | 'issued' | 'available' | 'status'>) => Promise<{ success: boolean; error?: string }>
   payFine: (issueId: string) => void
   waiveFine: (issueId: string) => void
   addReservation: (bookId: string, borrowerId: string, borrowerName: string) => void
   getBorrowerOptions: () => Array<{ id: string; name: string; type: 'student' | 'teacher'; detail: string }>
+}
+
+// ─── DB row types (GET /api/library) ───────────────────────────────────
+
+/** LibraryBook row subset as returned by the API. */
+export interface LibraryBookDTO {
+  id: string
+  title: string
+  author?: string | null
+  isbn?: string | null
+  category?: string | null
+  publisher?: string | null
+  copies: number
+  available: number
+  shelf?: string | null
+  _count?: { issues?: number }
+}
+
+/** BookIssue row subset (status ISSUED, include book + student.user.name). */
+export interface BookIssueDTO {
+  id: string
+  bookId: string
+  book?: { title?: string | null; schoolId?: string }
+  studentId: string
+  student?: {
+    admissionNo?: string | null
+    user?: { name?: string | null }
+  } | null
+  issuedDate?: string | null
+  dueDate: string
+  returnDate?: string | null
+  status: string
+}
+
+/** True when the module should operate server-authoritatively. */
+function serverModeActive(): boolean {
+  return useLibraryStore.getState().serverStatus === 'ready' && !readIsDemoTenant()
+}
+
+/** LibraryBook row → store Book (issued = copies − available; status derived). */
+export function libraryBookToStoreBook(b: LibraryBookDTO): Book {
+  const issued = Math.max(0, b.copies - b.available)
+  const status: BookStatus = b.available <= 0 ? 'Out of Stock' : b.available <= 3 ? 'Low Stock' : 'Available'
+  return {
+    id: b.id,
+    title: b.title,
+    author: b.author ?? '—',
+    isbn: b.isbn ?? '',
+    category: (b.category ?? 'Reference') as Book['category'],
+    publisher: b.publisher ?? undefined,
+    copies: b.copies,
+    issued,
+    available: b.available,
+    status,
+  }
+}
+
+/** BookIssue row → store IssueRecord (Overdue derived from dueDate; no server fines). */
+export function bookIssueToStoreIssue(i: BookIssueDTO): IssueRecord {
+  const due = String(i.dueDate).slice(0, 10)
+  const today = new Date().toISOString().slice(0, 10)
+  return {
+    id: i.id,
+    bookId: i.bookId,
+    bookTitle: i.book?.title ?? '—',
+    borrowerId: i.studentId,
+    borrowerName: i.student?.user?.name ?? '—',
+    borrowerType: 'student',
+    admissionNo: i.student?.admissionNo ?? undefined,
+    class: undefined,
+    issueDate: String(i.issuedDate ?? i.dueDate).slice(0, 10),
+    dueDate: due,
+    status: due < today ? 'Overdue' : 'Issued',
+    fine: 0,
+    fineStatus: 'Pending',
+  }
 }
 
 export const useLibraryStore = create<LibraryState>()(
@@ -174,11 +279,63 @@ export const useLibraryStore = create<LibraryState>()(
   availabilityFilter: 'all',
   ensureDemoSeed: () => ensureLibraryDemoSeed(),
 
+  serverBooks: [],
+  serverIssues: [],
+  serverStatus: 'idle',
+  serverPending: false,
+  hydrateServerLibrary: (books, issues) => set({ serverBooks: books, serverIssues: issues, serverStatus: 'ready' }),
+  setServerStatus: (status) => set({ serverStatus: status }),
+  setServerPending: (pending) => set({ serverPending: pending }),
+
   setSearch: (q) => set({ search: q }),
   setCategoryFilter: (c) => set({ categoryFilter: c }),
   setAvailabilityFilter: (a) => set({ availabilityFilter: a }),
 
-  issueBook: (bookId, borrowerId, borrowerType) => {
+  issueBook: async (bookId, borrowerId, borrowerType) => {
+    // SERVER MODE (real tenants): tenant-scoped POST with the
+    // transactional stock guard; the feed refetches on success. A
+    // failure returns the honest server error — no local fallback row.
+    if (serverModeActive()) {
+      if (borrowerType === 'teacher') {
+        return {
+          success: false,
+          error: 'Teacher lending is not supported yet (the library register supports student borrowers).',
+        }
+      }
+      const book = get().serverBooks.find((b) => b.id === bookId)
+      if (!book) return { success: false, error: 'Book not found' }
+      if (book.available <= 0) return { success: false, error: 'No copies available' }
+      const due = new Date()
+      due.setDate(due.getDate() + 14)
+      const student = getStudent(borrowerId)
+      if (!student) return { success: false, error: 'Student not found' }
+      set({ serverPending: true })
+      try {
+        const res = await fetch('/api/library', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            action: 'issue',
+            bookId,
+            studentId: borrowerId,
+            dueDate: due.toISOString().slice(0, 10),
+          }),
+        })
+        const envelope = (await res.json().catch(() => null)) as { ok?: unknown; error?: { publicMessage?: string; message?: string } } | null
+        if (!res.ok || !envelope || envelope.ok !== true) {
+          throw new Error(envelope?.error?.publicMessage ?? envelope?.error?.message ?? 'The book could not be issued.')
+        }
+        await refreshLibraryServerData()
+        return { success: true }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'The book could not be issued.' }
+      } finally {
+        set({ serverPending: false })
+      }
+    }
+
+    // DEMO MODE — the sanctioned local showcase (unchanged semantics).
     const state = get()
     const book = state.books.find((b) => b.id === bookId)
     if (!book) return { success: false, error: 'Book not found' }
@@ -229,10 +386,35 @@ export const useLibraryStore = create<LibraryState>()(
     return { success: true }
   },
 
-  returnBook: (issueId) => {
+  returnBook: async (issueId) => {
+    // SERVER MODE: conditional ISSUED→RETURNED transition (409 on replay);
+    // the feed refetches so stock counters converge from the DB.
+    if (serverModeActive()) {
+      set({ serverPending: true })
+      try {
+        const res = await fetch('/api/library', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ action: 'return', issueId }),
+        })
+        const envelope = (await res.json().catch(() => null)) as { ok?: unknown; error?: { publicMessage?: string; message?: string } } | null
+        if (!res.ok || !envelope || envelope.ok !== true) {
+          throw new Error(envelope?.error?.publicMessage ?? envelope?.error?.message ?? 'The return could not be recorded.')
+        }
+        await refreshLibraryServerData()
+        return { success: true }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'The return could not be recorded.' }
+      } finally {
+        set({ serverPending: false })
+      }
+    }
+
+    // DEMO MODE (unchanged).
     const state = get()
     const issue = state.issues.find((i) => i.id === issueId)
-    if (!issue || issue.status === 'Returned') return
+    if (!issue || issue.status === 'Returned') return { success: false, error: 'Already returned' }
 
     const now = new Date()
     const due = new Date(issue.dueDate)
@@ -247,6 +429,7 @@ export const useLibraryStore = create<LibraryState>()(
         ? { ...b, issued: b.issued - 1, available: b.available + 1, status: b.available + 1 <= 3 && b.available + 1 < b.copies ? 'Low Stock' : 'Available' }
         : b),
     })
+    return { success: true }
   },
 
   sendReminder: (loanId) => {
@@ -260,7 +443,39 @@ export const useLibraryStore = create<LibraryState>()(
     })
   },
 
-  addBook: (book) => {
+  addBook: async (book) => {
+    // SERVER MODE: the catalogue write goes to the DB (tenant-scoped
+    // create with available = copies); the feed refetches on success.
+    if (serverModeActive()) {
+      set({ serverPending: true })
+      try {
+        const res = await fetch('/api/library', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            title: book.title,
+            author: book.author ?? null,
+            isbn: book.isbn ?? null,
+            category: book.category ?? null,
+            publisher: book.publisher ?? null,
+            copies: book.copies,
+          }),
+        })
+        const envelope = (await res.json().catch(() => null)) as { ok?: unknown; error?: { publicMessage?: string; message?: string } } | null
+        if (!res.ok || !envelope || envelope.ok !== true) {
+          throw new Error(envelope?.error?.publicMessage ?? envelope?.error?.message ?? 'The book could not be added.')
+        }
+        await refreshLibraryServerData()
+        return { success: true }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'The book could not be added.' }
+      } finally {
+        set({ serverPending: false })
+      }
+    }
+
+    // DEMO MODE (unchanged).
     const state = get()
     const id = `BK${String(state.books.length + 1).padStart(3, '0')}${Date.now().toString(36)}`
     const newBook: Book = {
@@ -271,6 +486,7 @@ export const useLibraryStore = create<LibraryState>()(
       status: 'Available',
     }
     set({ books: [newBook, ...state.books] })
+    return { success: true }
   },
 
   payFine: (issueId) => {
@@ -314,12 +530,20 @@ export const useLibraryStore = create<LibraryState>()(
       type: 'student' as const,
       detail: `${s.admissionNo} · ${s.className}-${s.section}`,
     }))
-    const teacherOptions = teachers.slice(0, 10).map((t) => ({
-      id: t.id,
-      name: t.name,
-      type: 'teacher' as const,
-      detail: `${t.designation} · ${t.department}`,
-    }))
+    // SERVER MODE: student borrowers only — BookIssue's schema has no
+    // teacher column, so offering teachers would silently fail.
+    if (serverModeActive()) return studentOptions
+    // DEMO MODE: the REAL teacher directory (roster-synced records),
+    // never the fabricated mock/teachers personas.
+    const teacherOptions = useTeachersStore
+      .getState()
+      .teachers.slice(0, 10)
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        type: 'teacher' as const,
+        detail: `${t.designation} · ${t.department}`,
+      }))
     return [...studentOptions, ...teacherOptions]
   },
     }),
@@ -350,12 +574,75 @@ function ensureLibraryDemoSeed(): void {
   _ensureLibraryDemoSeed()
 }
 
+// ─── Server feed (GET /api/library) ─────────────────────────────────
+
+/**
+ * Fetch the school's catalogue + active issue register and hydrate the
+ * store's server slices. Fail-closed: on failure the previous server rows
+ * stay and serverStatus flips to 'error' (the module shows an honest retry
+ * banner; it never fabricates rows). Callers: the module root on mount and
+ * the server mutations after success.
+ */
+export async function refreshLibraryServerData(): Promise<void> {
+  const store = useLibraryStore.getState()
+  store.setServerStatus('loading')
+  try {
+    const res = await fetch('/api/library', { cache: 'no-store', credentials: 'same-origin' })
+    let json: unknown = null
+    try {
+      json = await res.json()
+    } catch {
+      /* non-JSON body — handled below */
+    }
+    const envelope = json as
+      | { ok?: unknown; data?: { books?: LibraryBookDTO[]; issues?: BookIssueDTO[] } }
+      | null
+    if (!res.ok || !envelope || envelope.ok !== true || !Array.isArray(envelope.data?.books)) {
+      throw new Error(`library feed failed (${res.status})`)
+    }
+    const books = (envelope.data?.books ?? []).map(libraryBookToStoreBook)
+    const issues = (envelope.data?.issues ?? []).map(bookIssueToStoreIssue)
+    useLibraryStore.getState().hydrateServerLibrary(books, issues)
+  } catch {
+    useLibraryStore.getState().setServerStatus('error')
+  }
+}
+
 // ─── Hook: Library Analytics ─────────────────────────────────────────
 
+/** True (reactive) when the module runs server-authoritatively. */
+export function useLibraryServerMode(): boolean {
+  const serverStatus = useLibraryStore((s) => s.serverStatus)
+  const isDemo = useIsDemoTenant()
+  return serverStatus === 'ready' && !isDemo
+}
+
+/** Effective catalogue — server rows in server mode, local/demo otherwise. */
+export function useEffectiveLibraryBooks(): Book[] {
+  const local = useLibraryStore((s) => s.books)
+  const server = useLibraryStore((s) => s.serverBooks)
+  return useLibraryServerMode() ? server : local
+}
+
+/** Effective issue register — server rows in server mode, local/demo otherwise. */
+export function useEffectiveLibraryIssues(): IssueRecord[] {
+  const local = useLibraryStore((s) => s.issues)
+  const server = useLibraryStore((s) => s.serverIssues)
+  return useLibraryServerMode() ? server : local
+}
+
 export function useLibraryData() {
-  const books = useLibraryStore((s) => s.books)
-  const issues = useLibraryStore((s) => s.issues)
+  const localBooks = useLibraryStore((s) => s.books)
+  const localIssues = useLibraryStore((s) => s.issues)
   const reservations = useLibraryStore((s) => s.reservations)
+  const serverBooks = useLibraryStore((s) => s.serverBooks)
+  const serverIssues = useLibraryStore((s) => s.serverIssues)
+  const serverMode = useLibraryServerMode()
+
+  // SERVER MODE: DB rows are the truth (demo tenant keeps the curated
+  // local showcase; while loading both fall back to local/empty honestly).
+  const books = serverMode ? serverBooks : localBooks
+  const issues = serverMode ? serverIssues : localIssues
 
   return useMemo(() => {
     const totalBooks = books.reduce((s, b) => s + b.copies, 0)
@@ -382,6 +669,7 @@ export function useLibraryData() {
 
     return {
       books, issues, reservations,
+      serverMode,
       analytics: {
         totalBooks, totalIssued, totalAvailable,
         overdueCount: overdue.length,
@@ -391,5 +679,5 @@ export function useLibraryData() {
         overdue, activeIssues,
       },
     }
-  }, [books, issues, reservations])
+  }, [books, issues, reservations, serverMode])
 }

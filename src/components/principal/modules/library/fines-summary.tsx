@@ -30,7 +30,7 @@ import {
 import {
   Table, TableHeader, TableBody, TableHead, TableRow, TableCell,
 } from '@/components/ui/table'
-import { useLibraryStore, useLibraryData } from '@/lib/store/library-store'
+import { useLibraryStore, useLibraryData, useEffectiveLibraryIssues, useLibraryServerMode } from '@/lib/store/library-store'
 import type { FineStatus } from '@/lib/store/library-store'
 import { formatINR, formatDate, initials } from '@/lib/format'
 import { downloadCSVFile, safeFileName } from '@/lib/download-file'
@@ -43,9 +43,10 @@ import { EnterpriseDonut } from '@/components/shared/enterprise-donut'
 // ─── FinesSummary ───────────────────────────────────────────────────
 
 export function FinesSummary() {
-  const issues = useLibraryStore((s) => s.issues)
+  const issues = useEffectiveLibraryIssues()
   const payFine = useLibraryStore((s) => s.payFine)
   const waiveFine = useLibraryStore((s) => s.waiveFine)
+  const serverMode = useLibraryServerMode()
   const data = useLibraryData()
   const [filter, setFilter] = useState<'all' | FineStatus>('all')
 
@@ -116,6 +117,15 @@ export function FinesSummary() {
 
   return (
     <div className="space-y-3">
+      {/* SERVER MODE — honest limits: the issue register is DB-backed but
+          fine AMOUNTS have no server home yet (server rows carry fine 0);
+          pay/waive remain local view actions. */}
+      {serverMode && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3.5 py-2.5 text-xs text-amber-700 dark:text-amber-300">
+          Loans and overdue dates are live from the register. Fine amounts are not server-backed
+          yet — recorded fines will appear here once fine tracking ships.
+        </div>
+      )}
       {/* Summary strip — soft tinted mini-cards (FeeStat-style) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <FineStatCard

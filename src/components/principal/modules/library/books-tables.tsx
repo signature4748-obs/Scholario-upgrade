@@ -36,7 +36,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   Table, TableHeader, TableBody, TableHead, TableRow, TableCell,
 } from '@/components/ui/table'
-import { useLibraryStore } from '@/lib/store/library-store'
+import { useLibraryStore, useEffectiveLibraryBooks, useEffectiveLibraryIssues } from '@/lib/store/library-store'
 import type { Book, IssueRecord, BookCategory } from '@/lib/store/library-store'
 import { formatDate, formatINR, initials } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -63,7 +63,7 @@ function availabilityBar(available: number, copies: number): string {
 // ─── BooksCatalogue ─────────────────────────────────────────────────
 
 export function BooksCatalogue({ onIssueBook }: { onIssueBook: (book: Book) => void }) {
-  const books = useLibraryStore((s) => s.books)
+  const books = useEffectiveLibraryBooks()
   const search = useLibraryStore((s) => s.search)
   const categoryFilter = useLibraryStore((s) => s.categoryFilter)
   const availabilityFilter = useLibraryStore((s) => s.availabilityFilter)
@@ -233,7 +233,7 @@ interface IssuedBooksTableProps {
 }
 
 export function IssuedBooksTable({ filter, onReturn, onSendReminder }: IssuedBooksTableProps) {
-  const issues = useLibraryStore((s) => s.issues)
+  const issues = useEffectiveLibraryIssues()
 
   const rows = issues
     .filter((i) => i.status !== 'Returned')
