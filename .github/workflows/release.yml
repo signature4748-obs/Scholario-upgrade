@@ -319,6 +319,21 @@ jobs:
           curl -sf -o /dev/null http://localhost:3000/login
           curl -sf -o /dev/null http://localhost:3000/s/hawkings-prithvipur/login
           curl -sf http://localhost:3000/health/ready
+          # WARM THE JOURNEY ROUTES (run 38201982130 lesson): a freshly
+          # respawned server re-compiles route modules on first hit — the
+          # login doors alone are NOT enough; Journey 1 blew its 45s budget
+          # on 8 cold API compiles. Unauthenticated probes still pay the
+          # compile (401 answers come from the compiled route), so a plain
+          # GET/POST sweep pre-compiles every route the journeys touch.
+          for path in /api/auth/me /api/dashboard /api/students /api/fees/defaulters \
+                      /api/exams /api/timetable /api/teacher/dashboard \
+                      /api/teacher/class-hub /api/student/dashboard \
+                      /api/student/timetable /health/live /; do
+            curl -s -o /dev/null -m 60 "http://localhost:3000$path" || true
+          done
+          curl -s -o /dev/null -m 60 -X POST "http://localhost:3000/api/auth/login" \
+            -H "content-type: application/json" -d '{"email":"warm@invalid.test","password":"x"}' || true
+          curl -sf http://localhost:3000/health/ready
 
       - name: E2E journeys (live server)
         run: bun run test:e2e
