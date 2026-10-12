@@ -11,8 +11,16 @@
  * Events added at runtime (source 'user') can be removed from here —
  * the removal goes through `useCalendarStore.removeEvent` so the grid,
  * upcoming list and counts all stay consistent.
+ *
+ * CALENDAR DB WIRING — removal is server-authoritative for events that
+ * came from the DB (`serverId`): DELETE /api/events?id= (tenant-scoped,
+ * `school.events.write`). The feed refetches afterwards so every device
+ * converges. LEGACY user events (pre-wiring localStorage rows) keep
+ * their local removal. Failures surface an honest toast — the event is
+ * never removed locally on a failed server delete.
  */
 
+import { useState } from 'react'
 import { Calendar, Clock, MapPin, NotebookText, Trash2 } from 'lucide-react'
 import {
   Dialog,
@@ -23,7 +31,11 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
-import { useCalendarStore, type CalendarEvent } from '@/lib/store/calendar-store'
+import {
+  refreshCalendarServerEvents,
+  useCalendarStore,
+  type CalendarEvent,
+} from '@/lib/store/calendar-store'
 import { SOURCE_META, formatFullDate, formatTimeLabel } from './data'
 import { TypeBadge } from './primitives'
 
@@ -60,6 +72,7 @@ function MetaRow({
 
 export function EventDetailDialog({ event, onOpenChange, canManage }: EventDetailDialogProps) {
   const removeEvent = useCalendarStore((s) => s.removeEvent)
+  const [removing, setRemoving] = useState(false)
   const open = event !== null
 
   if (!event) {
@@ -67,9 +80,50 @@ export function EventDetailDialog({ event, onOpenChange, canManage }: EventDetai
   }
 
   const isUserEvent = event.source === 'user'
+  const isServerEvent = Boolean(event.serverId)
   const description = event.description?.trim()
 
-  const handleDelete = () => {
+  /** Server events: DELETE /api/events?id=<row> (tenant-scoped). */
+  const handleServerDelete = async () => {
+    if (!event.serverId || removing) return
+    setRemoving(true)
+    try {
+      const res = await fetch(`/api/events?id=${encodeURIComponent(event.serverId)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      })
+      let json: unknown = null
+      try {
+        json = await res.json()
+      } catch {
+        /* non-JSON body — handled below */
+      }
+      const envelope = json as { ok?: unknown; error?: { publicMessage?: string; message?: string } } | null
+      if (!res.ok || !envelope || envelope.ok !== true) {
+        throw new Error(
+          envelope?.error?.publicMessage ??
+            envelope?.error?.message ??
+            (res.status === 403
+              ? 'Your role cannot remove school events.'
+              : 'The event could not be removed. Please try again.'),
+        )
+      }
+      await refreshCalendarServerEvents()
+      onOpenChange(false)
+      toast.success('Event removed', {
+        description: `${event.title} · ${formatFullDate(event.date)}`,
+      })
+    } catch (err) {
+      toast.error('Event not removed', {
+        description: err instanceof Error ? err.message : 'Please try again.',
+      })
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  /** Legacy localStorage rows — local removal (pre-server-wiring data). */
+  const handleLocalDelete = () => {
     removeEvent(event.id)
     onOpenChange(false)
     toast.success('Event removed', {
@@ -116,20 +170,23 @@ export function EventDetailDialog({ event, onOpenChange, canManage }: EventDetai
           )}
         </div>
 
-        {isUserEvent && canManage && (
+        {(isServerEvent || isUserEvent) && canManage && (
           <>
             <div className="mx-5 h-px bg-border sm:mx-6" aria-hidden />
             <div className="flex items-center justify-between gap-3 px-5 py-3.5 sm:px-6">
               <p className="text-[11px] leading-tight text-muted-foreground">
-                You added this event — it stays for this session.
+                {isServerEvent
+                  ? 'A saved school event — removing it updates the calendar for everyone.'
+                  : 'A local event from before server sync — removing it only affects this browser.'}
               </p>
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={handleDelete}
+                onClick={() => (isServerEvent ? void handleServerDelete() : handleLocalDelete())}
+                disabled={removing}
                 className="h-8 shrink-0 gap-1.5 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
               >
-                <Trash2 className="h-3.5 w-3.5" aria-hidden /> Remove
+                <Trash2 className="h-3.5 w-3.5" aria-hidden /> {removing ? 'Removing…' : 'Remove'}
               </Button>
             </div>
           </>

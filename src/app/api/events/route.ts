@@ -18,11 +18,17 @@ export const runtime = 'nodejs'
  *     (fail-safe, no existence oracle); every deletion is audited.
  *   · POST validates audience/type against small whitelists, validates
  *     dates, and caps the free-text fields.
- *   · POST/DELETE now gate through the permission matrix
- *     ('school.events.write' = PRINCIPAL/MANAGEMENT). Grep-verified: NO
- *     client surface POSTs/DELETEs /api/events (only the documented
- *     GET ?type=HOLIDAY consumer in src/lib/mock/school-calendar.ts), so
- *     no legit flow is affected.
+ *   · POST/DELETE gate through the permission matrix
+ *     ('school.events.write' = PRINCIPAL/MANAGEMENT).
+ *
+ * CALENDAR DB WIRING (this change): the shared Calendar workspace is now a
+ * real client of this route — GET hydrates the grid for every tenant,
+ * POST creates the principal's events (server-authoritative, cross-device),
+ * DELETE removes them. POST additionally accepts `time` ('HH:MM' 24h,
+ * null/'' = all-day) persisted to SchoolEvent.startTime, and the type
+ * whitelist covers the UI's full type set (COMPETITION/CULTURAL added —
+ * the calendar type pills send them; DB column is a free String so the
+ * extension is validation-only, no schema change beyond startTime).
  *
  * GET stays open to every member of the school (withUser + schoolScoped) —
  * the calendar is school-wide reference data.
@@ -30,11 +36,13 @@ export const runtime = 'nodejs'
 
 // Vocabulary in use: the DB seeds type HOLIDAY (schema default 'EVENT'),
 // the notices module uses ALL/STUDENTS/PARENTS/TEACHERS/STAFF audiences.
-const EVENT_TYPES = ['EVENT', 'HOLIDAY', 'EXAM', 'MEETING', 'ACTIVITY'] as const
+// COMPETITION/CULTURAL map the shared Calendar type pills (validation-only).
+const EVENT_TYPES = ['EVENT', 'HOLIDAY', 'EXAM', 'MEETING', 'ACTIVITY', 'COMPETITION', 'CULTURAL'] as const
 const EVENT_AUDIENCES = ['ALL', 'STUDENTS', 'PARENTS', 'TEACHERS', 'STAFF'] as const
 
 const TITLE_MAX = 200
 const TEXT_MAX = 2000
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
 function validDate(value: unknown): Date | null {
   if (value === undefined || value === null || value === '') return null
@@ -97,6 +105,17 @@ export async function POST(req: NextRequest) {
     const startDate = validDate(body.startDate) ?? new Date()
     const endDate = validDate(body.endDate)
 
+    // Wall-clock start 'HH:MM' (24h) or null = all-day. Calendar dates are
+    // timezone-free facts; the display time is a string, never a Date.
+    const rawTime = body.time
+    const time =
+      rawTime === undefined || rawTime === null || String(rawTime).trim() === ''
+        ? null
+        : String(rawTime).trim()
+    if (time !== null && !TIME_RE.test(time)) {
+      throw new AppError('INVALID_INPUT', { publicMessage: 'Invalid time (expected HH:MM 24h)' })
+    }
+
     const ev = await db.schoolEvent.create({
       data: {
         schoolId: ctx.schoolId, // session tenant — client schoolId is never read
@@ -105,6 +124,7 @@ export async function POST(req: NextRequest) {
         type,
         startDate,
         endDate,
+        startTime: time,
         location,
         audience,
         createdBy: ctx.user.id,

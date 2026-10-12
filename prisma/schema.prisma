@@ -1362,6 +1362,11 @@ model SchoolEvent {
   type        String    @default("EVENT")
   startDate   DateTime
   endDate     DateTime?
+  /// Wall-clock start 'HH:MM' (24h, school-local) — null = all-day event.
+  /// Deliberately a STRING (not DateTime): the school calendar treats the
+  /// date and the display time as independent, timezone-free facts, so a
+  /// 09:00 event reads back as 09:00 on every device of the tenant.
+  startTime   String?
   location    String?
   audience    String    @default("ALL")
   createdBy   String?
