@@ -5,6 +5,7 @@ import { Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GlassCard } from '@/components/shared/ui'
 import { formatDate, formatINR } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { useSchoolProfile } from '@/lib/school-profile'
 import { printIsolated } from '@/lib/print-isolate'
 import { computeFeeSnapshot } from '../../../FeeStructureStep/fee-snapshot'
@@ -48,7 +49,9 @@ export function FeeReceiptTab({ app, artifacts, serverFees }: FeeReceiptTabProps
   const receiptNo = `REC-${new Date().getFullYear()}-${tail}`
   const today = new Date().toISOString().split('T')[0]
 
-  const rows: { label: string; amount: number }[] = serverFees
+  // THREE-STATE (PR-3): an unconfigured head carries amount UNDEFINED and
+  // renders "Not configured" — never a fabricated ₹0 on a money document.
+  const rows: { label: string; amount: number | undefined }[] = serverFees
     ? serverFees.lineItems.map((li) => ({
         label:
           li.quantity > 1
@@ -61,7 +64,7 @@ export function FeeReceiptTab({ app, artifacts, serverFees }: FeeReceiptTabProps
         { label: 'Admission Fee (One-Time)', amount: snap.admissionFee },
         { label: 'Annual Tuition Fee', amount: snap.tuitionFee },
       ].concat(
-        snap.examTotal > 0 ? [{ label: 'Examination & Assessment', amount: snap.examTotal }] : [],
+        (snap.examTotal ?? 0) > 0 ? [{ label: 'Examination & Assessment', amount: snap.examTotal }] : [],
         snap.booksTotal > 0 ? [{ label: 'Textbooks & Course Material', amount: snap.booksTotal }] : [],
         snap.uniformTotal > 0 ? [{ label: 'Uniform', amount: snap.uniformTotal }] : [],
         snap.activityKitTotal > 0 ? [{ label: 'Activity Kit', amount: snap.activityKitTotal }] : [],
@@ -76,6 +79,8 @@ export function FeeReceiptTab({ app, artifacts, serverFees }: FeeReceiptTabProps
   const discountAmount = serverFees ? serverFees.discountAmount : snap.discountAmount
   const discountName = serverFees ? (serverFees.discountName ?? undefined) : snap.discountName
   const net = serverFees ? serverFees.totalAmount : snap.netTotal
+  const configIncomplete =
+    !serverFees && (gross === undefined || net === undefined)
 
   return (
     <GlassCard ref={sheetRef} className="p-6 max-w-2xl mx-auto space-y-6 border">
@@ -129,23 +134,35 @@ export function FeeReceiptTab({ app, artifacts, serverFees }: FeeReceiptTabProps
           {rows.map((r) => (
             <div key={r.label} className="flex justify-between p-2.5">
               <span>{r.label}</span>
-              <span className="font-mono">{formatINR(r.amount)}</span>
+              <span className={cn('font-mono', r.amount === undefined && 'font-sans font-medium italic text-muted-foreground/70')}>
+                {r.amount === undefined ? 'Not configured' : formatINR(r.amount)}
+              </span>
             </div>
           ))}
           <div className="flex justify-between p-2.5 bg-muted/40 font-bold">
             <span>Fee Subtotal</span>
-            <span className="font-mono">{formatINR(gross)}</span>
+            <span className={cn('font-mono', gross === undefined && 'font-sans font-medium italic text-muted-foreground/70')}>
+              {gross === undefined ? '—' : formatINR(gross)}
+            </span>
           </div>
-          {discountAmount > 0 && (
+          {(discountAmount ?? 0) > 0 && (
             <div className="flex justify-between p-2.5 text-emerald-600 font-semibold">
               <span>Concession{discountName ? ` — ${discountName}` : ''}</span>
-              <span className="font-mono">- {formatINR(discountAmount)}</span>
+              <span className="font-mono">- {formatINR(discountAmount ?? 0)}</span>
             </div>
           )}
           <div className="flex justify-between font-extrabold text-sm p-2.5">
             <span>Net Payable</span>
-            <span className="font-mono text-emerald-700 dark:text-emerald-300">{formatINR(net)}</span>
+            <span className={cn('font-mono text-emerald-700 dark:text-emerald-300', net === undefined && 'font-sans font-medium italic text-muted-foreground/70')}>
+              {net === undefined ? 'Not configured' : formatINR(net)}
+            </span>
           </div>
+          {configIncomplete && (
+            <p className="mx-2.5 mb-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
+              Fee configuration incomplete — this receipt cannot state final amounts. Configure
+              the school&apos;s fee heads in Fee Management.
+            </p>
+          )}
         </div>
       </div>
 

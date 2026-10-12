@@ -40,11 +40,6 @@ export interface ServerFeeStatement {
   issuedAt?: string
 }
 
-/** Random ID segment — same alphabet as the wizard's permanent ID generator. */
-const RAND_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-const randId = (n: number) =>
-  Array.from({ length: n }, () => RAND_ALPHABET[Math.floor(Math.random() * RAND_ALPHABET.length)]).join('')
-
 /** Build the letter fee table from a server fee statement. */
 export function serverFeeStatementToLetterFees(
   statement: ServerFeeStatement,
@@ -115,21 +110,25 @@ export function buildIssuanceArtifacts(
 ): IssuanceArtifacts {
   const formData = app.formData
   const isCompleted = app.status === 'Completed'
-  const year = new Date().getFullYear()
 
+  // ID HONESTY: a non-completed application has NO admission number, NO
+  // student id and NO registration number yet — the old code minted
+  // random SCH-ADM-…/SCH-STU-…/REG-… ids that looked like real official
+  // identifiers on the letter. They now render explicit "pending"
+  // placeholders until real enrolment assigns them.
   const admissionNo =
     isCompleted && app.admissionNo && !app.admissionNo.startsWith('DRAFT-')
       ? app.admissionNo
-      : `SCH-ADM-${year}-${randId(4)}-${randId(2)}`
+      : 'PENDING-ENROLMENT'
   const studentId =
     isCompleted && app.studentId && !app.studentId.startsWith('DRAFT-')
       ? app.studentId
-      : `SCH-STU-${randId(4)}-${randId(4)}-${randId(1)}`
+      : 'Assigned at enrolment'
   const rollNo = app.rollNo && app.rollNo !== '—' ? app.rollNo : '01'
   const regNo =
     isCompleted && app.regNo && !app.regNo.startsWith('REG-CBSE-2026-8812')
       ? app.regNo
-      : `REG-${year}-${randId(6)}`
+      : 'Pending registration'
 
   // FINAL-GATE honesty: no fabricated portal login/password artifacts —
   // the student's portal account is provisioned by the REAL enrolment

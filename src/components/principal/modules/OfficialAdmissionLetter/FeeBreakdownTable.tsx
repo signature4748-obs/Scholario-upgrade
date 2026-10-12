@@ -2,6 +2,12 @@ import { FileText } from 'lucide-react'
 import { formatINR } from '@/lib/format'
 import type { AdmissionLetterData } from './types'
 
+/** THREE-STATE cell: configured amount → INR; UNDEFINED → "Not configured".
+ *  Never a fabricated ₹0 on an official document (PR-3 spec, finding F7). */
+function amountOr(amount: number | undefined): string {
+  return amount === undefined ? 'Not configured' : formatINR(amount)
+}
+
 /**
  * Official fee summary — a restrained institutional table. Amounts come
  * from the application's own fee record (Fee Management configuration +
@@ -24,19 +30,19 @@ export function FeeBreakdownTable({ data }: { data: AdmissionLetterData }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
-              {(data.fees.registrationFee || 0) > 0 && (
+              {data.fees.registrationFee !== undefined && (
                 <tr>
                   <td className="p-2">Registration Fee</td>
-                  <td className="p-2 text-right font-mono">{formatINR(data.fees.registrationFee || 0)}</td>
+                  <td className="p-2 text-right font-mono">{amountOr(data.fees.registrationFee)}</td>
                 </tr>
               )}
               <tr>
                 <td className="p-2">Admission Fee (One-Time)</td>
-                <td className="p-2 text-right font-mono">{formatINR(data.fees.admissionFee)}</td>
+                <td className="p-2 text-right font-mono">{amountOr(data.fees.admissionFee)}</td>
               </tr>
               <tr>
                 <td className="p-2">Annual Tuition Fee</td>
-                <td className="p-2 text-right font-mono">{formatINR(data.fees.tuitionFee)}</td>
+                <td className="p-2 text-right font-mono">{amountOr(data.fees.tuitionFee)}</td>
               </tr>
               {(data.fees.booksTotal || 0) > 0 && (
                 <tr>
@@ -64,7 +70,7 @@ export function FeeBreakdownTable({ data }: { data: AdmissionLetterData }) {
               )}
               <tr className="bg-slate-50 font-bold text-slate-800">
                 <td className="p-2">Fee Subtotal</td>
-                <td className="p-2 text-right font-mono">{formatINR(data.fees.subtotal || data.fees.totalAnnualFee || 0)}</td>
+                <td className="p-2 text-right font-mono">{amountOr(data.fees.subtotal ?? data.fees.totalAnnualFee)}</td>
               </tr>
               {((data.fees.discountAmount || 0) > 0) && (
                 <tr className="bg-emerald-50/70 text-emerald-900 font-bold">
@@ -74,7 +80,7 @@ export function FeeBreakdownTable({ data }: { data: AdmissionLetterData }) {
               )}
               <tr className="bg-slate-900 text-white font-extrabold text-sm">
                 <td className="p-2.5 uppercase tracking-wider">Net Payable Amount</td>
-                <td className="p-2.5 text-right font-mono">{formatINR(data.fees.finalPayable)}</td>
+                <td className="p-2.5 text-right font-mono">{amountOr(data.fees.finalPayable)}</td>
               </tr>
             </tbody>
           </table>
