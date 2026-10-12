@@ -1,65 +1,28 @@
-// Content-domain search: notices/announcements and library books.
-// Role-aware (L2D spec §50/§78 + Teacher Workspace cleanup §7): the mock
-// "resources" block is GONE (the real learning search is server-side in
-// /api/search + the Learning module's own search); library books surface
-// ONLY for the Principal (the sole role with an active Library module —
-// the Teacher "School Library" module was removed in the cleanup pass,
-// and the student Library module is retired); notices navigate students
-// to their Notices module key instead of the staff 'communication' surface.
+// Content-domain search — RETIRED MOCK CORPUS (search leak fix).
+//
+// History: this module matched the query against the fabricated
+// `libraryBooks` (BK001-008) and `notifications` (N01-N010) corpora from
+// `@/lib/mock/operations`. The palette's FINAL-GATE already dropped the
+// 'notice'-type local results (server /api/search is the entity truth),
+// but 'book' was NOT in the gate — fabricated library books rendered in
+// the PRODUCTION command palette mixed with real DB rows, deep-linking
+// into the mock Library module.
+//
+// Now: the mock corpora are gone entirely. Entity results for the
+// content domain come from the server (/api/search — students, teachers,
+// fees, notices, messages, …; /api/library for the Library module once
+// its UI is server-wired). This function stays exported for its single
+// call site (search-entities.ts) and honestly returns no local matches.
 
-import { libraryBooks, notifications } from '@/lib/mock/operations'
 import type { SearchResultItem } from './types'
 
 type Role = 'principal' | 'teacher' | 'student' | 'superadmin' | 'parent'
 
-export function searchContent(q: string, role: Role = 'principal'): SearchResultItem[] {
-  const isStudent = role === 'student'
-  const matches = (text: string, kw: string = ''): boolean => {
-    if (!text) return false
-    const lower = text.toLowerCase()
-    return lower.includes(q) || (kw ? kw.toLowerCase().includes(q) : false)
-  }
-
-  const results: SearchResultItem[] = []
-
-  // NOTICES & ANNOUNCEMENTS SEARCH
-  notifications.forEach((n) => {
-    if (matches(n.title) || matches(n.description)) {
-      results.push({
-        id: `ntf-${n.id}`,
-        title: n.title,
-        subtitle: `${n.description} · ${n.time}`,
-        category: 'Notices & Announcements',
-        type: 'notice',
-        moduleKey: isStudent ? 'notices' : 'communication',
-        iconName: 'Megaphone',
-        badge: n.unread ? 'New' : 'Notice',
-        badgeVariant: n.unread ? 'destructive' : 'outline',
-        keywords: `${n.title} notice circular communication broadcast`,
-      })
-    }
-  })
-
-  // LIBRARY SEARCH — Principal only (the only role with an active Library
-  // module; everyone else would get dead-route search results).
-  if (role === 'principal') {
-    libraryBooks.forEach((bk) => {
-      if (matches(bk.title) || matches(bk.author) || matches(bk.category) || matches(bk.isbn)) {
-        results.push({
-          id: `bk-${bk.id}`,
-          title: bk.title,
-          subtitle: `By ${bk.author} · Category: ${bk.category} · Available: ${bk.available}/${bk.copies}`,
-          category: 'Library & Resources',
-          type: 'book',
-          moduleKey: 'library',
-          iconName: 'BookMarked',
-          badge: `${bk.available} Available`,
-          badgeVariant: bk.available > 0 ? 'success' : 'destructive',
-          keywords: `${bk.title} ${bk.author} ${bk.category} book library ISBN`,
-        })
-      }
-    })
-  }
-
-  return results
+/**
+ * Local content-domain search — retired (honest empty).
+ * See the module header: fabricated books/notices must never render in
+ * the palette; the debounced server search is the only entity source.
+ */
+export function searchContent(_q: string, _role: Role = 'principal'): SearchResultItem[] {
+  return []
 }
