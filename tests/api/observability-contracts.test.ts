@@ -221,6 +221,11 @@ describe('X-Request-Id propagation', () => {
 
   // Values that PASS the HTTP transport but must be rejected by the app's
   // request-id sanitizer → the middleware mints a fresh UUID.
+  // NOTE: the minted id is asserted via UUID_RE + non-equality with the
+  // hostile value. A substring heuristic like `!rid.includes('abc')` is a
+  // latent flake: a fresh random UUID legitimately contains hex triples
+  // like "abc" ~0.7% of the time (observed 2026-10-12 on main CI:
+  // 'too short' → minted UUID contained "abc" → false failure).
   const HOSTILE_IDS: Array<[string, string]> = [
     ['spaces', 'abc defgh'],
     ['unicode', 'ünïcödé-123'],
@@ -236,7 +241,7 @@ describe('X-Request-Id propagation', () => {
       const rid = res.headers.get('x-request-id')
       expect(rid).toMatch(UUID_RE)
       expect(rid).not.toBe(hostile.trim())
-      expect(rid!.includes('abc')).toBe(false)
+      expect(rid!.length).toBe(36) // canonical UUID, never the hostile echo
       const body = (await res.json()) as FailureEnvelope
       expect(body.requestId).toBe(rid) // envelope agrees with the minted id
     }, T)
