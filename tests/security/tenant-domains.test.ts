@@ -27,9 +27,17 @@ import { randomBytes } from 'node:crypto'
 import { normalizeHostname, hostnameRejectionReason } from '../../src/lib/tenant/hostname'
 import { hashSessionToken } from '../../src/lib/auth'
 import { DEMO_PRINCIPAL_PASSWORD, DEMO_TEACHER_1_PASSWORD, TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const T = 45_000
+// CI run 2 (2026-10-11): the raw-fetch login died in beforeAll during the
+// transient dev-server window (ECONNREFUSED, ~30s respawn) → the whole
+// file's live section failed as one unnamed test. liveFetch retries
+// TRANSPORT failures only, within a budget under the 45s ceiling / 60s
+// beforeAll; any HTTP response (429 included — the direct-session fallback
+// still handles it) is returned exactly once.
+const LIVE: LiveFetchOpts = { deadlineMs: 40_000 }
 
 const DEMO_PRINCIPAL = 'principal@hawkingshigh.edu'
 const GV_PRINCIPAL = 'principal@greenvalley.test'
@@ -46,11 +54,11 @@ const TEST_HOSTNAME = `${MARKER}.example.org`
  * 429 from rapid re-runs fall back to a DIRECT session row (auth fixture,
  * NOT an authorization bypass) riding the dev Bearer path. */
 async function login(email: string, password: string): Promise<string> {
-  const r = await fetch(`${BASE}/api/auth/login`, {
+  const r = await liveFetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
-  })
+  }, LIVE)
   if (r.status === 429) return directSession(email)
   const body = (await r.json().catch(() => null)) as { ok?: boolean; data?: { sessionToken?: string } } | null
   const token = body?.data?.sessionToken
@@ -73,7 +81,7 @@ async function api(
   path: string,
   init: { method?: string; body?: unknown; host?: string } = {},
 ): Promise<{ status: number; json: any }> {
-  const r = await fetch(`${BASE}${path}`, {
+  const r = await liveFetch(`${BASE}${path}`, {
     method: init.method ?? 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -82,7 +90,7 @@ async function api(
     },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     redirect: 'manual',
-  })
+  }, LIVE)
   const json = await r.json().catch(() => null)
   return { status: r.status, json }
 }

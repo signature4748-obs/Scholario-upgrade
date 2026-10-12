@@ -34,9 +34,18 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 const TEST_TIMEOUT = 45_000
+// CI run 2 (2026-10-11): this suite still used raw fetch and lost 9 tests
+// to the transient dev-server window (ECONNRESET on the in-flight first
+// /api/salary request — a cold route compile — then ECONNREFUSED for the
+// ~30s respawn). Same fix as the other live suites: liveFetch retries
+// TRANSPORT failures only, inside a wall-clock budget strictly under this
+// suite's 45s per-test ceiling; ANY HTTP response (500 included) is
+// returned exactly once, so assertions always see product truth.
+const LIVE: LiveFetchOpts = { deadlineMs: 40_000 }
 
 // ─── fixtures ──────────────────────────────────────────────────────────────
 
@@ -149,10 +158,14 @@ afterAll(async () => {
 // ─── helpers ───────────────────────────────────────────────────────────────
 
 function as(token: string, apiPath: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${BASE}${apiPath}`, {
-    ...init,
-    headers: { ...(init?.headers ?? {}), authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-  })
+  return liveFetch(
+    `${BASE}${apiPath}`,
+    {
+      ...init,
+      headers: { ...(init?.headers ?? {}), authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    },
+    LIVE,
+  )
 }
 
 async function json(res: Response): Promise<any> {

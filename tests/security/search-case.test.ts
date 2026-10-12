@@ -27,10 +27,18 @@ import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
 import { resetLoginBuckets } from '../helpers/login-buckets'
 import { TENANT_FIXTURE_PASSWORD, DEMO_PRINCIPAL_PASSWORD } from '../helpers/credentials'
+import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
 const T = 45_000
+// CI run 2 (2026-10-11): this suite's raw-fetch login died in beforeAll on
+// the transient dev-server window (ECONNREFUSED during the ~30s respawn),
+// taking the whole file down as an unnamed failure. liveFetch retries
+// TRANSPORT failures only, within a budget under the 45s ceiling / 60s
+// beforeAll; any HTTP response (429 included — the direct-session fallback
+// below still handles it) is returned exactly once.
+const LIVE: LiveFetchOpts = { deadlineMs: 40_000 }
 
 const RUN_IP = `10.236.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 const PW = TENANT_FIXTURE_PASSWORD
@@ -43,11 +51,11 @@ const tokens: Record<string, string> = {}
 
 async function login(email: string, password: string): Promise<string> {
   if (tokens[email]) return tokens[email]
-  const res = await fetch(`${BASE}/api/auth/login`, {
+  const res = await liveFetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email, password }),
-  })
+  }, LIVE)
   if (res.status === 429) {
     console.warn(`[search-case] login rate-limited for ${email}; using direct session fixture`)
     return (tokens[email] = await directSession(email))
@@ -71,9 +79,9 @@ async function directSession(email: string): Promise<string> {
 
 async function as(email: string, path: string, password = PW): Promise<Response> {
   const token = await login(email, password)
-  return fetch(`${BASE}${path}`, {
+  return liveFetch(`${BASE}${path}`, {
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-  })
+  }, LIVE)
 }
 
 // ── fixture resolution ──────────────────────────────────────────────────────

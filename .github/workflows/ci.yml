@@ -241,7 +241,15 @@ jobs:
       # 11. Live server for the HTTP suites: bun run dev on :3000, wait up
       #     to 300s for /health/ready (60 × 5s), then prove it one last time
       #     so a never-ready server fails THIS step, not the first test.
+      #     DEV_OLD_SPACE_MB=4096 (2026-10-12, run-2 post-mortem): the dev
+      #     script caps V8 heap at 1700MB (tuned for the 4GB sandbox); on
+      #     this 16GB runner the CI run 2 crash-window signature (in-flight
+      #     ECONNRESET on a COLD route compile → ~30s ECONNREFUSED →
+      #     recovery with fresh compiles) is a worker death under memory
+      #     pressure. The runner has the headroom — take it.
       - name: Start dev server and wait for readiness
+        env:
+          DEV_OLD_SPACE_MB: "4096"
         run: |
           nohup bun run dev > dev.log 2>&1 &
           for i in $(seq 1 60); do
@@ -273,6 +281,8 @@ jobs:
 
       # 14. Post-mortem: the dev-server tail is the first thing needed when
       #     any later gate fails (compile error, boot crash, port clash).
+      #     400 lines (was 200): the run-2 post-mortem needed the crash
+      #     window itself, which a 200-line tail had already scrolled past.
       - name: Dev server log tail (on failure)
         if: failure()
-        run: tail -n 200 dev.log || true
+        run: tail -n 400 dev.log || true
