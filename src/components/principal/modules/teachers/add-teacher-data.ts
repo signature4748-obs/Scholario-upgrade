@@ -7,8 +7,16 @@
 // (teachers-store/helpers — /api/auth/me, honest 'Principal' fallback),
 // evaluated at the point of use (wizard submit) — never a hardcoded
 // persona.
+//
+// HONESTY PASS (add-teacher audit M2/M3): the wizard's CLASS options come
+// from the school's REAL classes (GET /api/classes — fetched by the wizard
+// component), never the retired mock `classList` ("Grade 9/Grade 10");
+// and buildNewTeacherRecord fabricates NOTHING onto the new teacher's
+// profile — enrichment fields (attendance, salary split, exam
+// responsibilities, documents) mirror the honest server mapping
+// (mapServerTeacher: 0 / empty breakdown / [] / [] — "No records" until
+// real data exists).
 
-import { classList } from '@/lib/mock/school'
 import type {
   TeacherRecord,
   PositionAssignment,
@@ -17,15 +25,9 @@ import type {
 import { createAppointmentLetterSnapshot } from '@/lib/store/teachers-store/letter-factory'
 import { sessionActorName } from '@/lib/store/teachers-store/helpers'
 
-export const availableClassesList: string[] = (classList && classList.length > 0)
-  ? classList.map((c) => (typeof c === 'string' ? c : c.name))
-  : [
-      'Nursery', 'LKG', 'UKG',
-      'Class 1-A', 'Class 2-A', 'Class 3-A', 'Class 4-A', 'Class 5-A',
-      'Class 6-A', 'Class 7-A', 'Class 8-A', 'Class 9-A', 'Class 10-A',
-      'Class 11-A', 'Class 12-A',
-    ]
-
+/** Subjects offered as wizard options — a fixed vocabulary (names the
+ *  server stores as a CSV of display names; the school's own subject
+ *  registry drives the canonical list elsewhere). NOT fabricated data. */
 export const subjectList: string[] = [
   'Mathematics', 'Physics', 'Chemistry', 'Biology', 'Science', 'English',
   'Hindi', 'Social Studies', 'History', 'Geography', 'Computer Science',
@@ -140,11 +142,6 @@ export function buildNewTeacherRecord(form: AddTeacherForm): TeacherRecord {
   const seq = String(Math.floor(100 + Math.random() * 899))
   const empId = `EMP-${seq}`
   const teacherId = `TCH-2025-${seq}`
-  const basic = Math.round(form.salary * 0.5)
-  const hra = Math.round(form.salary * 0.2)
-  const da = Math.round(form.salary * 0.15)
-  const sa = Math.round(form.salary * 0.1)
-  const pf = Math.round(form.salary * 0.05)
 
   const finalDepartment = form.inchargePosition !== 'None' ? form.inchargePosition : 'Academic'
   const finalDesignation = form.classTeacherRole !== 'None'
@@ -237,19 +234,20 @@ export function buildNewTeacherRecord(form: AddTeacherForm): TeacherRecord {
     department: finalDepartment,
     designation: finalDesignation,
     status: 'Active',
-    attendance: 100,
+    // HONESTY PASS (audit M3) — no fabricated enrichment on a brand-new
+    // profile; mirrors mapServerTeacher's honest defaults (the profile
+    // shows "No records" / an empty breakdown until real data exists):
+    attendance: 0, // no attendance records exist yet — UI shows "No records"
     salary: Number(form.salary),
-    salaryBreakdown: { basic, hra, da, specialAllowance: sa, pfDeduction: pf, netPay: form.salary - pf },
+    salaryBreakdown: { basic: 0, hra: 0, da: 0, specialAllowance: 0, pfDeduction: 0, netPay: 0 },
     bankDetails: { bankName: form.bankName, accountNo: form.accountNo, ifscCode: form.ifscCode, branchName: form.branchName },
     subjects: form.selectedSubjects,
     classes: form.selectedClasses,
-    examResponsibilities: ['Invigilator'],
+    examResponsibilities: [],
     positions: initPositions,
     photo: form.photo ?? undefined,
     signature: form.signature ?? undefined,
-    documents: [
-      { id: `doc-${seq}-1`, title: 'Educational Qualification Certificate', category: 'Qualification', fileName: 'Degree_Certificate.pdf', uploadDate: new Date().toISOString().split('T')[0], status: 'Verified' },
-    ],
+    documents: [],
     appointmentLetter: createAppointmentLetterSnapshot({
       employeeId: empId,
       teacherName: form.name,

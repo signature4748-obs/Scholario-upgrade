@@ -11,7 +11,7 @@
  * controls.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Pencil, ShieldAlert, Loader2,
 } from 'lucide-react'
@@ -26,7 +26,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { DatePicker } from '@/components/ui/date-picker'
 import { toast } from 'sonner'
-import { departments } from '@/lib/mock/school'
+// HONESTY PASS (audit M4): the Department dropdown no longer lists the
+// 2-fake-department mock catalog (Science/Mathematics with fabricated
+// heads) — options derive from the school's REAL Teacher.department
+// values on the roster (plus 'Academic', the canonical default).
 import { useTeachersStore, type TeacherRecord, type PositionAssignment } from '@/lib/store/teachers-store'
 import { PhotoStep } from '../admission/components/PhotoStep'
 import { SignatureUpload } from './signature-upload'
@@ -188,8 +191,21 @@ const EMPLOYMENT_TYPES = ['Full Time', 'Part Time', 'Probation', 'Contract', 'Gu
 export function EmploymentEditDialog({ teacher, open, onClose }: { teacher: TeacherRecord; open: boolean; onClose: () => void }) {
   const updateTeacher = useTeachersStore((s) => s.updateTeacher)
   const logAudit = useTeachersStore((s) => s.logAudit)
+  const roster = useTeachersStore((s) => s.teachers)
   const [draft, setDraft] = useState(teacher)
   const [saving, setSaving] = useState(false)
+
+  // Real departments from the school's actual Teacher rows (audit M4) —
+  // never the mock catalog. The current draft value stays selectable so
+  // an existing department never silently disappears from the list.
+  const departmentOptions = useMemo(() => {
+    const set = new Set<string>(['Academic'])
+    for (const t of roster) {
+      if (t.department) set.add(t.department)
+    }
+    if (draft.department) set.add(draft.department)
+    return [...set].sort()
+  }, [roster, draft.department])
 
   useEffect(() => { if (open) setDraft(teacher) }, [open, teacher])
 
@@ -265,8 +281,8 @@ export function EmploymentEditDialog({ teacher, open, onClose }: { teacher: Teac
             <Select value={draft.department} onValueChange={(v) => setDraft((d) => ({ ...d, department: v }))}>
               <SelectTrigger className={`mt-1 h-8 text-xs`}><SelectValue /></SelectTrigger>
               <SelectContent className="max-h-60">
-                {departments.map((d) => (
-                  <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>
+                {departmentOptions.map((name) => (
+                  <SelectItem key={name} value={name}>{name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
