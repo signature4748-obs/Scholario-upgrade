@@ -642,8 +642,9 @@ function SuspendDialog({
             Suspend {schoolName}
           </DialogTitle>
           <DialogDescription className="text-slate-500">
-            Every user of this school is signed out immediately and school sign-in is blocked until it is
-            explicitly reactivated. This action requires step-up verification and is audited with your reason.
+            Every user of this school is signed out immediately. Sign-in stays available, but the workspace remains locked
+            (business modules disabled) until it is explicitly reactivated. This action requires step-up verification and
+            is audited with your reason.
           </DialogDescription>
         </DialogHeader>
 
@@ -1881,7 +1882,7 @@ export function SchoolDetailModule() {
                   {school.status === 'PENDING' &&
                     '— users of this school cannot sign in until it is activated.'}
                   {school.status === 'ACTIVE' && '— suspending signs every user out immediately.'}
-                  {school.status === 'SUSPENDED' && '— sign-in is blocked; reactivate to restore service.'}
+                  {school.status === 'SUSPENDED' && '— sign-in remains available but the workspace stays locked; reactivate to restore service.'}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-3">
                   {school.status === 'PENDING' && (

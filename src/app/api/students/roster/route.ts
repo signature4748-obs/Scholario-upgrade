@@ -27,7 +27,7 @@ export const runtime = 'nodejs'
 
 interface RosterStudent {
   id: string
-  userId: string
+  userId: string | null
   name: string
   email: string
   /** User.status — ACTIVE or INACTIVE (archived). */
@@ -167,7 +167,7 @@ export async function GET() {
       const guardianIds = studentRows.map((s) => s.guardianId).filter((x): x is string => !!x)
       const guardianEmailById = new Map(
         guardianIds.length
-          ? (await db.user.findMany({ where: { id: { in: guardianIds } }, select: { id: true, email: true } })).map((g) => [g.id, g.email])
+          ? (await db.user.findMany({ where: { id: { in: guardianIds }, schoolId }, select: { id: true, email: true } })).map((g) => [g.id, g.email])
           : [],
       )
 
@@ -316,20 +316,21 @@ export async function GET() {
         // full enrichment (fees/attendance/exams) the student panel's own
         // profile derives from.
         const hidden = isStudent && !isSelf
+        // Classmate projection: userId/admissionNo/gender are PII — hidden from student viewers (self keeps them for identity resolution).
         return {
           id: s.id,
-          userId: s.user.id,
+          userId: hidden ? null : s.user.id,
           name: s.user.name ?? '',
           email: isStudent && !isSelf ? '' : s.user.email,
           status: s.user.status,
           rollNo: s.rollNo,
-          admissionNo: s.admissionNo,
+          admissionNo: hidden ? null : s.admissionNo,
           classId: s.classId,
           guardianName: isStudent && !isSelf ? null : s.guardianName,
           guardianPhone: isStudent && !isSelf ? null : s.guardianPhone,
           guardianEmail: isStudent && !isSelf ? null : (s.guardianId ? guardianEmailById.get(s.guardianId) ?? null : null),
           dob: isStudent && !isSelf ? null : s.dob,
-          gender: s.gender,
+          gender: hidden ? null : s.gender,
           bloodGroup: isStudent && !isSelf ? null : s.bloodGroup,
           address: isStudent && !isSelf ? null : s.address,
           routeName: isStudent && !isSelf ? null : s.route?.name ?? null,

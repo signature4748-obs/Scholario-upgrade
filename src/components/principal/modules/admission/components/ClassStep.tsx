@@ -13,6 +13,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { classList } from '@/lib/mock/school'
+import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import {
   useAdmissionFeatureFlags,
   useSeatCapacity,
@@ -34,11 +35,15 @@ export function ClassStep({
   const waitlisted = seatInfo.waitlisted
   const activeSession = useSchoolSettingsStore.getState().academics.currentSession
 
+  // Demo-tier gating: the mock classList union is the sanctioned demo
+  // showcase only — a REAL tenant sees just its server-config classes.
+  const isDemo = useIsDemoTenant()
+
   const allClasses = useMemo(() => {
     const fromConfig = seatCapacity.map((c) => c.className)
-    const fromList = classList.map((c) => (typeof c === 'string' ? c : c.name))
+    const fromList = isDemo ? classList.map((c) => (typeof c === 'string' ? c : c.name)) : []
     return Array.from(new Set([...fromConfig, ...fromList]))
-  }, [seatCapacity])
+  }, [seatCapacity, isDemo])
 
   const handleClassChange = (cls: string) => {
     set('className', cls)

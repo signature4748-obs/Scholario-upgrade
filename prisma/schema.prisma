@@ -348,6 +348,7 @@ model Student {
 
   results             Result[]
   fees                Fee[]
+  feeTransactions     FeeTransaction[]
   attendance          Attendance[]
   attendanceAuditLogs AttendanceAuditLog[]
   bookIssues          BookIssue[]
@@ -1892,6 +1893,7 @@ model FeeTransaction {
   schoolId             String
   school               School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   studentId            String?
+  student              Student?         @relation(fields: [studentId], references: [id], onDelete: SetNull)
   studentName          String?
   className            String?
   structureId          String?
