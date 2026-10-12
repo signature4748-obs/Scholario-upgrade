@@ -1,14 +1,17 @@
 import { ShoppingCart } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { formatINR } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { LedgerRow } from './primitives'
 
+/** THREE-STATE (PR-3): UNDEFINED = not configured — the summary renders
+ *  "Not configured"/"—" and a completion warning, never a fabricated total. */
 export interface SummaryPanelProps {
-  registrationFee: number
-  admissionFee: number
-  tuitionFee: number
+  registrationFee: number | undefined
+  admissionFee: number | undefined
+  tuitionFee: number | undefined
   otherHeadsTotal: number
-  examTotal: number
+  examTotal: number | undefined
   booksTotal: number
   booksCount: number
   uniformTotal: number
@@ -17,12 +20,12 @@ export interface SummaryPanelProps {
   activityKitCount: number
   transportTotal: number
   hostelTotal: number
-  grossFee: number
-  scholarshipAmount: number
-  waiverAmount: number
-  netTotal: number
-  initialInstallment: number
-  remainingBalance: number
+  grossFee: number | undefined
+  scholarshipAmount: number | undefined
+  waiverAmount: number | undefined
+  netTotal: number | undefined
+  initialInstallment: number | undefined
+  remainingBalance: number | undefined
 }
 
 /** Real-time fee summary card (right column, sticky). */
@@ -50,7 +53,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
           <LedgerRow label="Admission Fee" value={admissionFee} />
           <LedgerRow label="Tuition (Annual)" value={tuitionFee} />
           <LedgerRow label="Development & Tech" value={otherHeadsTotal} />
-          {examTotal > 0 && <LedgerRow label="Exam & Assessment" value={examTotal} />}
+          {(examTotal ?? 0) > 0 && <LedgerRow label="Exam & Assessment" value={examTotal} />}
           {booksTotal > 0 && <LedgerRow label={`Books (${booksCount})`} value={booksTotal} />}
           {uniformTotal > 0 && <LedgerRow label={`Uniform (${uniformCount})`} value={uniformTotal} />}
           {activityKitTotal > 0 && <LedgerRow label={`Activity Kit (${activityKitCount})`} value={activityKitTotal} />}
@@ -59,37 +62,51 @@ export function SummaryPanel(props: SummaryPanelProps) {
 
           <div className="pt-2 border-t border-border/60 flex justify-between font-bold text-foreground">
             <span>Gross Fee</span>
-            <span className="tabular-nums">{formatINR(grossFee)}</span>
+            <span className={cn('tabular-nums', grossFee === undefined && 'font-sans font-medium italic text-muted-foreground/70')}>
+              {grossFee === undefined ? '—' : formatINR(grossFee)}
+            </span>
           </div>
 
-          {scholarshipAmount > 0 && (
+          {(scholarshipAmount ?? 0) > 0 && (
             <div className="flex justify-between text-violet-600 dark:text-violet-400">
               <span>Scholarship</span>
-              <span className="tabular-nums">− {formatINR(scholarshipAmount)}</span>
+              <span className="tabular-nums">− {formatINR(scholarshipAmount ?? 0)}</span>
             </div>
           )}
-          {waiverAmount > 0 && (
+          {(waiverAmount ?? 0) > 0 && (
             <div className="flex justify-between text-emerald-600 dark:text-emerald-400">
               <span>Waiver / Discount</span>
-              <span className="tabular-nums">− {formatINR(waiverAmount)}</span>
+              <span className="tabular-nums">− {formatINR(waiverAmount ?? 0)}</span>
             </div>
           )}
 
           <div className="pt-2 border-t-2 border-border flex justify-between items-end text-foreground">
             <div>
               <span className="text-[10px] font-sans text-muted-foreground uppercase tracking-widest block font-bold">Total Payable</span>
-              <span className="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400 tabular-nums">{formatINR(netTotal)}</span>
+              <span className={cn('text-2xl font-black font-mono tabular-nums', netTotal === undefined ? 'font-sans text-base font-medium italic text-muted-foreground/70' : 'text-emerald-600 dark:text-emerald-400')}>
+                {netTotal === undefined ? 'Not configured' : formatINR(netTotal)}
+              </span>
             </div>
           </div>
+
+          {(registrationFee === undefined || admissionFee === undefined || tuitionFee === undefined || examTotal === undefined) && (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-[11px] leading-snug text-amber-700 dark:text-amber-300">
+              Fee configuration incomplete — required fee heads or exam fees are not configured for this school. Configure them in Fee Management so the wizard and official documents can carry real amounts.
+            </p>
+          )}
 
           <div className="pt-2 border-t border-border/60 space-y-1.5">
             <div className="flex justify-between text-amber-600 dark:text-amber-400">
               <span>Initial Installment (40%)</span>
-              <span className="tabular-nums">{formatINR(initialInstallment)}</span>
+              <span className={cn('tabular-nums', initialInstallment === undefined && 'font-sans italic text-muted-foreground/70')}>
+                {initialInstallment === undefined ? '—' : formatINR(initialInstallment)}
+              </span>
             </div>
             <div className="flex justify-between text-muted-foreground">
               <span>Remaining Balance</span>
-              <span className="tabular-nums">{formatINR(remainingBalance)}</span>
+              <span className={cn('tabular-nums', remainingBalance === undefined && 'font-sans italic text-muted-foreground/70')}>
+                {remainingBalance === undefined ? '—' : formatINR(remainingBalance)}
+              </span>
             </div>
           </div>
         </div>

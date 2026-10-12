@@ -19,13 +19,15 @@ function esc(v: unknown): string {
     .replace(/>/g, '&gt;')
 }
 
-const feeRow = (label: string, amount: number, cls = '') =>
-  `<tr class="${cls}"><td>${esc(label)}</td><td class="num">${esc(formatINR(amount))}</td></tr>`
+/** THREE-STATE row (PR-3 spec, finding F8): an UNCONFIGURED head renders
+ *  "Not configured" — never a fabricated ₹0/₹1500 on the official letter. */
+const feeRow = (label: string, amount: number | undefined, cls = '') =>
+  `<tr class="${cls}"><td>${esc(label)}</td><td class="num">${amount === undefined ? 'Not configured' : esc(formatINR(amount))}</td></tr>`
 
 export function buildAdmissionLetterHTML(data: AdmissionLetterData, profile: SchoolProfile): string {
   const fullName = `${data.student.firstName} ${data.student.lastName}`
   const fees = data.fees
-  const subtotal = fees.subtotal ?? fees.totalAnnualFee ?? 0
+  const subtotal = fees.subtotal ?? fees.totalAnnualFee
   const discountAmount = fees.discountAmount ?? fees.discountApplied ?? 0
 
   const profileRow = (label: string, value: string | number) =>
@@ -54,7 +56,9 @@ export function buildAdmissionLetterHTML(data: AdmissionLetterData, profile: Sch
   ].join('')
 
   const feeRows = [
-    feeRow('Registration Fee', fees.registrationFee || 0),
+    ...(fees.registrationFee !== undefined
+      ? [feeRow('Registration Fee', fees.registrationFee)]
+      : []),
     feeRow('Admission Fee (One-Time)', fees.admissionFee),
     feeRow('Annual Tuition Fee', fees.tuitionFee),
     ...((fees.booksTotal || 0) > 0

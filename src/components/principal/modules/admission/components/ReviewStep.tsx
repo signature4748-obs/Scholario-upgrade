@@ -93,8 +93,9 @@ export function ReviewStep({
   const fullName = `${data.firstName} ${data.lastName}`.trim()
   const hasPhoto = !!data.photoDataUrl
 
-  const inr = (n: number) =>
-    `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+  // THREE-STATE: undefined (unconfigured) renders the honest placeholder.
+  const inr = (n: number | undefined) =>
+    n === undefined ? '— not configured' : `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
 
   const sections: SectionDef[] = [
     {
@@ -162,9 +163,12 @@ export function ReviewStep({
       status: 'complete',
       rows: [
         { label: 'Gross', value: inr(fee.grossFee) },
-        ...(fee.totalDiscount > 0 ? [{ label: 'Discount', value: `− ${inr(fee.totalDiscount)}` }] : []),
+        ...((fee.totalDiscount ?? 0) > 0 ? [{ label: 'Discount', value: `− ${inr(fee.totalDiscount ?? 0)}` }] : []),
         { label: 'Net Payable', value: inr(fee.netTotal) },
         { label: 'First Installment', value: inr(fee.initialInstallment) },
+        ...(fee.grossFee === undefined || fee.netTotal === undefined
+          ? [{ label: 'Configuration', value: 'Fee heads incomplete — see Fee step' }]
+          : []),
       ],
     },
     ...((flags.enableStudentPhoto && !hasPhoto)

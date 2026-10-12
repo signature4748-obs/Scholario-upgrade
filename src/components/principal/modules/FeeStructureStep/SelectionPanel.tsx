@@ -24,8 +24,9 @@ export interface SelectionPanelProps {
   schoolSettings: SchoolSettings
   classBooks: Array<{ id: string; title: string; publisher: string; category: string; price: number; isMandatory: boolean; className: string }>
   uniforms: UniformItem[]
-  examConfig: { unitTestFee: number; termExamFee: number; customGroupsFee: number }
-  examTotal: number
+  /** THREE-STATE: undefined = exam fees not configured. */
+  examConfig: { unitTestFee: number; termExamFee: number; customGroupsFee: number } | undefined
+  examTotal: number | undefined
   booksTotal: number
   booksCount: number
   uniformTotal: number
@@ -34,9 +35,9 @@ export interface SelectionPanelProps {
   activityKitCount: number
   transportCost: number
   hostelCost: number
-  registrationFee: number
-  admissionFee: number
-  tuitionFee: number
+  registrationFee: number | undefined
+  admissionFee: number | undefined
+  tuitionFee: number | undefined
   otherHeadsTotal: number
   updateSelection: (cat: SelectionCategory, itemId: string, qty: number) => void
   toggleSelection: (cat: SelectionCategory, itemId: string) => void
@@ -74,7 +75,10 @@ export function SelectionPanel(props: SelectionPanelProps) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
           <FeeHeadRow label="Registration" value={registrationFee} />
           <FeeHeadRow label="Admission (One-Time)" value={admissionFee} />
-          <FeeHeadRow label={`Tuition (${formatINR(Math.round(tuitionFee / 12))}/mo)`} value={tuitionFee} />
+          <FeeHeadRow
+            label={tuitionFee === undefined ? 'Tuition (Annual)' : `Tuition (${formatINR(Math.round(tuitionFee / 12))}/mo)`}
+            value={tuitionFee}
+          />
           <FeeHeadRow label="Development & Tech" value={otherHeadsTotal} />
         </div>
       </div>
@@ -83,9 +87,9 @@ export function SelectionPanel(props: SelectionPanelProps) {
       <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
         <h4 className="text-xs font-bold uppercase tracking-wider text-primary">Examination & Assessment</h4>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <ExamToggle label="Unit Test × 4" amount={examConfig.unitTestFee} checked={feeState.examGroups.unitTest} onChange={(c) => onChangeFeeState({ ...feeState, examGroups: { ...feeState.examGroups, unitTest: !!c } })} />
-          <ExamToggle label="Term Exam × 2" amount={examConfig.termExamFee} checked={feeState.examGroups.termExam} onChange={(c) => onChangeFeeState({ ...feeState, examGroups: { ...feeState.examGroups, termExam: !!c } })} />
-          <ExamToggle label="Practical & Lab" amount={examConfig.customGroupsFee} checked={feeState.examGroups.customGroups} onChange={(c) => onChangeFeeState({ ...feeState, examGroups: { ...feeState.examGroups, customGroups: !!c } })} />
+          <ExamToggle label="Unit Test × 4" amount={examConfig?.unitTestFee} checked={feeState.examGroups.unitTest} onChange={(c) => onChangeFeeState({ ...feeState, examGroups: { ...feeState.examGroups, unitTest: !!c } })} />
+          <ExamToggle label="Term Exam × 2" amount={examConfig?.termExamFee} checked={feeState.examGroups.termExam} onChange={(c) => onChangeFeeState({ ...feeState, examGroups: { ...feeState.examGroups, termExam: !!c } })} />
+          <ExamToggle label="Practical & Lab" amount={examConfig?.customGroupsFee} checked={feeState.examGroups.customGroups} onChange={(c) => onChangeFeeState({ ...feeState, examGroups: { ...feeState.examGroups, customGroups: !!c } })} />
         </div>
       </div>
 

@@ -3,6 +3,14 @@
  * plain function (no hooks) so non-React surfaces (issuance artifacts,
  * documents, exports) can compute the REAL fee numbers for an application
  * instead of hardcoding demo values.
+ *
+* THREE-STATE SEMANTICS (PR-3 spec, findings F1): a fee head that is not
+ * configured yields UNDEFINED — never a fabricated fallback amount
+ * (the old defaultAmount fallback literals), never a silent ₹0.
+ * Totals that depend on an unconfigured component are undefined too;
+ * renderers display "Not configured"/"—" for them. The demo tenant sees
+ * configured numbers (demoFeeSettings corpus); a real tenant that has
+ * not configured fees sees the honest three-state everywhere.
  */
 import { getSchoolSettings } from '@/lib/school-settings'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
@@ -10,20 +18,22 @@ import { ACTIVITY_KIT_ITEMS, HOSTEL_COST, SCHOLARSHIP_PERCENT, TRANSPORT_COST } 
 import type { FeeDataState } from './types'
 
 export interface FeeSnapshot {
-  registrationFee: number
-  admissionFee: number
-  tuitionFee: number
+  /** UNDEFINED = head not configured (render "Not configured"). */
+  registrationFee: number | undefined
+  admissionFee: number | undefined
+  tuitionFee: number | undefined
   otherHeadsTotal: number
-  examTotal: number
+  examTotal: number | undefined
   booksTotal: number
   uniformTotal: number
   activityKitTotal: number
   transportTotal: number
   hostelTotal: number
-  grossFee: number
+  /** UNDEFINED while any required component is unconfigured. */
+  grossFee: number | undefined
   discountName?: string
-  discountAmount: number
-  netTotal: number
+  discountAmount: number | undefined
+  netTotal: number | undefined
 }
 
 export function computeFeeSnapshot(
@@ -35,31 +45,26 @@ export function computeFeeSnapshot(
   const uniforms = useSchoolSettingsStore.getState().uniforms
   const examConfig = settings.examFeeConfig
 
-  const examTotal =
-    (feeState.examGroups.unitTest ? examConfig.unitTestFee : 0) +
-    (feeState.examGroups.termExam ? examConfig.termExamFee : 0) +
-    (feeState.examGroups.customGroups ? examConfig.customGroupsFee : 0)
+  // THREE-STATE: exam fees are undefined while unconfigured — a selected
+  // exam group with no configured fee is a missing amount, not ₹0.
+  const examTotal = !examConfig
+    ? undefined
+    : (feeState.examGroups.unitTest || feeState.examGroups.termExam || feeState.examGroups.customGroups)
+      ? (feeState.examGroups.unitTest ? examConfig.unitTestFee : 0) +
+        (feeState.examGroups.termExam ? examConfig.termExamFee : 0) +
+        (feeState.examGroups.customGroups ? examConfig.customGroupsFee : 0)
+      : 0
 
-  // Class-aware book list — mirrors resolveClassBooks (Books Master first,
-  // auto-generated fallback second) so numbers match the Fee step exactly.
+  // Class-aware book list — Books Master ONLY. The old auto-generated
+  // 6-book fallback (fabricated NCERT/Oxford titles at invented prices)
+  // is retired: an unconfigured class shows an honest empty list.
   const booksMaster = settings.booksMaster
   const existing = booksMaster.filter((b) => {
     const bCls = b.className.toLowerCase().trim()
     const targetCls = (className || '').toLowerCase().trim()
     return bCls === targetCls || targetCls.includes(bCls) || bCls.includes(targetCls)
   })
-  const cls = className || 'Class 1'
-  const classBooks =
-    existing.length > 0
-      ? existing.map((b) => ({ id: b.id, price: b.price }))
-      : [
-          { id: `BK-ENG-${cls}`, price: 180 },
-          { id: `BK-MATH-${cls}`, price: 220 },
-          { id: `BK-SCI-${cls}`, price: 240 },
-          { id: `BK-HIN-${cls}`, price: 150 },
-          { id: `BK-SST-${cls}`, price: 280 },
-          { id: `BK-COMP-${cls}`, price: 260 },
-        ]
+  const classBooks = existing.map((b) => ({ id: b.id, price: b.price }))
   const booksTotal = classBooks.reduce(
     (sum, b) => sum + (feeState.bookSelections[b.id] || 0) * b.price,
     0
@@ -78,30 +83,36 @@ export function computeFeeSnapshot(
     feeState.hostelSelected && flags?.enableHostel ? HOSTEL_COST : 0
 
   const heads = settings.feeHeads
-  const registrationFee =
-    heads.find((f) => f.category === 'Registration')?.defaultAmount || 1500
-  const admissionFee =
-    heads.find((f) => f.category === 'Admission')?.defaultAmount || 15000
-  const tuitionFee =
-    heads.find((f) => f.category === 'Tuition')?.defaultAmount || 60000
+  // THREE-STATE (F1): the missing head is UNDEFINED — the removed fallbacks
+  // (`|| 1500 / || 15000 / || 60000`) fabricated amounts that rendered on
+  // official documents as if the school had configured them.
+  const registrationFee = heads.find((f) => f.category === 'Registration')?.defaultAmount
+  const admissionFee = heads.find((f) => f.category === 'Admission')?.defaultAmount
+  const tuitionFee = heads.find((f) => f.category === 'Tuition')?.defaultAmount
   const otherHeadsTotal = heads
     .filter((f) => !['Registration', 'Admission', 'Tuition'].includes(f.category))
     .reduce((a, b) => a + b.defaultAmount, 0)
 
   const optionalTotal =
     booksTotal + uniformTotal + activityKitTotal + transportTotal + hostelTotal
+  // A gross total that omits an unconfigured required component would
+  // masquerade as the real total — it stays undefined instead.
   const grossFee =
-    registrationFee + admissionFee + tuitionFee + otherHeadsTotal + examTotal + optionalTotal
+    registrationFee !== undefined && admissionFee !== undefined && tuitionFee !== undefined && examTotal !== undefined
+      ? registrationFee + admissionFee + tuitionFee + otherHeadsTotal + examTotal + optionalTotal
+      : undefined
 
   const selectedDiscount = settings.discountRules.find(
     (d) => d.code === feeState.discountCode
   )
-  let discountAmount = 0
+  let discountAmount: number | undefined = 0
   let discountName: string | undefined
   if (selectedDiscount) {
     discountAmount =
       selectedDiscount.type === 'percentage'
-        ? Math.round((grossFee * selectedDiscount.value) / 100)
+        ? grossFee !== undefined
+          ? Math.round((grossFee * selectedDiscount.value) / 100)
+          : undefined
         : selectedDiscount.value
     discountName = selectedDiscount.name || selectedDiscount.code
   } else if (feeState.discountCode === 'CUSTOM') {
@@ -110,10 +121,18 @@ export function computeFeeSnapshot(
   }
   const scholarshipAmount =
     feeState.discountCode === 'SCHOLAR'
-      ? Math.round((grossFee * SCHOLARSHIP_PERCENT) / 100)
+      ? grossFee !== undefined
+        ? Math.round((grossFee * SCHOLARSHIP_PERCENT) / 100)
+        : undefined
       : 0
-  const totalDiscount = scholarshipAmount + discountAmount
-  const netTotal = Math.max(0, grossFee - totalDiscount)
+  const totalDiscount =
+    discountAmount !== undefined && scholarshipAmount !== undefined
+      ? discountAmount + scholarshipAmount
+      : undefined
+  const netTotal =
+    grossFee !== undefined && totalDiscount !== undefined
+      ? Math.max(0, grossFee - totalDiscount)
+      : undefined
 
   return {
     registrationFee,

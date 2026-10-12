@@ -1,6 +1,8 @@
 // School Settings Engine for ERP & Admissions Module
 // Multi-tenant, configurable, dynamic fee heads, books master, discount engine & letter visibility.
 
+import { readIsDemoTenant } from '@/lib/store/demo-tenant'
+
 export interface FeeHead {
   id: string
   name: string
@@ -38,7 +40,9 @@ export interface SchoolSettings {
   feeHeads: FeeHead[]
   booksMaster: BookItem[]
   discountRules: DiscountRule[]
-  examFeeConfig: {
+  /** Exam fee amounts. UNDEFINED = not configured (three-state: a missing
+   *  config must render "Not configured", never a fabricated ₹0/₹1000). */
+  examFeeConfig?: {
     unitTestFee: number
     termExamFee: number
     customGroupsFee: number
@@ -46,11 +50,27 @@ export interface SchoolSettings {
 }
 
 // Default School Settings Configuration (Database / Tenant Driven)
+//
+// FEE HONESTY (PR-3 spec, finding F5): the fee blocks below used to ship
+// as fabricated defaults for EVERY tenant (₹1500/₹15000/₹60000 heads, 19
+// invented book entries with real-sounding publishers, 6 discount rules,
+// exam fees). They are now DEMO-TIER ONLY: `getSchoolSettings()` composes
+// them exclusively for the demo tenant (School.isDemo). A REAL tenant
+// gets EMPTY fee blocks — unconfigured heads must render "Not configured"
+// (three-state), never fabricated amounts, per the PR-3 specification.
 export const defaultSchoolSettings: SchoolSettings = {
   showDiscountBreakdown: true,
   showFeeBreakdownOnLetter: true,
   allowFamilyDoctorDetails: false, // Disabled by default as requested
   defaultAcademicSession: '2025–2026',
+  feeHeads: [],
+  booksMaster: [],
+  discountRules: [],
+}
+
+/** DEMO-TIER fee corpus (School.isDemo only) — the sanctioned showcase
+ *  numbers the demo admission wizard/documents display. */
+export const demoFeeSettings: Pick<SchoolSettings, 'feeHeads' | 'booksMaster' | 'discountRules' | 'examFeeConfig'> = {
   feeHeads: [
     { id: 'FH-01', name: 'Registration Fee', defaultAmount: 1500, type: 'one-time', category: 'Registration' },
     { id: 'FH-02', name: 'Admission Fee', defaultAmount: 15000, type: 'one-time', category: 'Admission' },
@@ -104,12 +124,41 @@ export const defaultSchoolSettings: SchoolSettings = {
   },
 }
 
-// In-memory persistent state helper for demo runtime
-let currentSettings: SchoolSettings = { ...defaultSchoolSettings }
+// In-memory state, re-composed when the (async) demo signal changes —
+// getSchoolSettings() can be called before /api/auth/me hydrates the
+// current-user store, so a single frozen composition would pin the WRONG
+// tier for the session (the demo tenant would keep the empty real-tenant
+// blocks forever). The cache re-evaluates whenever the demo flag flips.
+let currentSettings: SchoolSettings | null = null
+let cachedDemoFlag: boolean | null = null
 
-export const getSchoolSettings = (): SchoolSettings => currentSettings
+function composeSettings(): SchoolSettings {
+  // DEMO-GATED: the fabricated fee corpus renders only for the demo
+  // tenant; real tenants see honest empty fee configuration.
+  return readIsDemoTenant()
+    ? { ...defaultSchoolSettings, ...demoFeeSettings }
+    : { ...defaultSchoolSettings }
+}
 
+export const getSchoolSettings = (): SchoolSettings => {
+  const demo = readIsDemoTenant()
+  if (!currentSettings || cachedDemoFlag !== demo) {
+    cachedDemoFlag = demo
+    currentSettings = composeSettings()
+  }
+  return currentSettings
+}
+
+/** Re-evaluate the demo gate (e.g. after login/tenant switch). */
+export const resetSchoolSettingsCache = (): void => {
+  currentSettings = null
+  cachedDemoFlag = null
+}
+
+/** Explicit overrides (kept for compatibility): applied on top of the
+ *  demo-gated composition. */
 export const updateSchoolSettings = (newSettings: Partial<SchoolSettings>): SchoolSettings => {
-  currentSettings = { ...currentSettings, ...newSettings }
+  const base = currentSettings ?? composeSettings()
+  currentSettings = { ...base, ...newSettings }
   return currentSettings
 }

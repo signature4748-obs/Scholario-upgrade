@@ -41,9 +41,12 @@ export interface AdmissionLetterData {
     previousBoard?: string
   }
   fees: {
+    /** THREE-STATE (PR-3 spec, findings F7/F8): an UNCONFIGURED head is
+     *  undefined and renders "Not configured" — never a fabricated ₹0
+     *  and never a fallback amount on an official document. */
     registrationFee?: number
-    admissionFee: number
-    tuitionFee: number
+    admissionFee?: number
+    tuitionFee?: number
     annualCharges?: number
     activityFee?: number
     otherHeadsTotal?: number
@@ -56,7 +59,7 @@ export interface AdmissionLetterData {
     discountName?: string
     discountApplied?: number
     discountAmount?: number
-    finalPayable: number
+    finalPayable?: number
     paymentMethod?: string
   }
 }

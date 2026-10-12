@@ -7,32 +7,42 @@ import type { CartRowProps } from './types'
 
 /* ---------- Helper components ---------- */
 
-export function FeeHeadRow({ label, value }: { label: string; value: number }) {
+/** THREE-STATE (PR-3): value UNDEFINED = not configured. */
+export function FeeHeadRow({ label, value }: { label: string; value: number | undefined }) {
   return (
     <div className="p-2.5 rounded-xl border border-border bg-muted/30 flex justify-between items-center">
       <span>{label}</span>
-      <span className="font-mono font-bold tabular-nums">{formatINR(value)}</span>
+      <span className={cn('font-mono font-bold tabular-nums', value === undefined && 'font-sans font-medium italic text-muted-foreground/70')}>
+        {value === undefined ? 'Not configured' : formatINR(value)}
+      </span>
     </div>
   )
 }
 
-export function LedgerRow({ label, value }: { label: string; value: number }) {
+/** THREE-STATE (PR-3): value UNDEFINED = not configured. */
+export function LedgerRow({ label, value }: { label: string; value: number | undefined }) {
   return (
     <div className="flex justify-between text-muted-foreground">
       <span>{label}</span>
-      <span className="tabular-nums">{formatINR(value)}</span>
+      <span className={cn('tabular-nums', value === undefined && 'font-sans italic text-muted-foreground/70')}>
+        {value === undefined ? 'Not configured' : formatINR(value)}
+      </span>
     </div>
   )
 }
 
-export function ExamToggle({ label, amount, checked, onChange }: { label: string; amount: number; checked: boolean; onChange: (c: boolean) => void }) {
+/** THREE-STATE (PR-3): amount UNDEFINED = not configured — rendered as
+ *  "Not configured", never a fabricated ₹0. */
+export function ExamToggle({ label, amount, checked, onChange }: { label: string; amount: number | undefined; checked: boolean; onChange: (c: boolean) => void }) {
   return (
     <label className={cn('p-3 rounded-xl border text-xs cursor-pointer transition-all flex flex-col justify-between', checked ? 'border-primary bg-primary/10 text-foreground font-semibold' : 'border-border bg-muted/20 text-muted-foreground')}>
       <div className="flex items-center justify-between mb-1">
         <span>{label}</span>
         <Checkbox checked={checked} onCheckedChange={(c) => onChange(!!c)} />
       </div>
-      <span className="font-mono font-bold text-primary tabular-nums">{formatINR(amount)}</span>
+      <span className={cn('font-mono font-bold tabular-nums', amount === undefined && 'font-sans font-medium italic text-muted-foreground/70')}>
+        {amount === undefined ? 'Not configured' : formatINR(amount)}
+      </span>
     </label>
   )
 }
