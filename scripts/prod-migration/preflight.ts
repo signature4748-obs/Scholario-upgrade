@@ -3,12 +3,13 @@
  * migration pipeline (docs/PRODUCTION_DB_MIGRATION.md).
  *
  * Read-only against production. It verifies that the production migration
- * history MATCHES this checkout, that the three pending migrations are
- * exactly the expected set (when --expect is given), that the objects they
- * create do NOT already exist (schema-drift / different-migration-state
- * protection), and it captures the full before-state (every table's row
- * count, user/credential counts, applied history) into a snapshot JSON that
- * verify.ts compares against after the apply.
+ * history MATCHES this checkout, that the pending migrations are exactly the
+ * expected set (when --expect is given), that the objects they create do
+ * NOT already exist (schema-drift / different-migration-state protection),
+ * and it captures the full before-state (every table's row count, user/
+ * credential counts, the privacy-safe financial-ledger digest, applied
+ * history) into a snapshot JSON that verify.ts compares against after the
+ * apply.
  *
  * Usage:
  *   SUPABASE_ACCESS_TOKEN=… SUPABASE_PROJECT_REF=… \
@@ -23,8 +24,10 @@ import {
   ADDITIVE_ONLY_MIGRATIONS,
   adminState,
   assertAdditiveOnly,
+  dbNow,
   evaluateExpectations,
   exitWithProblems,
+  financialIntegrity,
   gitSha,
   migrationHistoryGate,
   parseCsv,
@@ -114,12 +117,19 @@ async function main(): Promise<void> {
   // Snapshot — the before-state verify.ts compares against.
   const columns = await userCredentialColumns()
   const admins = await adminState()
+  // Financial-ledger digest (feeId-FK era): DB-clock cutoff + privacy-safe
+  // md5 over receipt|student|amount — verify.ts recomputes the SAME cutoff
+  // window after the apply and fails on any divergence. Organic app growth
+  // after this instant is excluded from both sides by construction.
+  const finCutoff = await dbNow()
+  const finIntegrity = await financialIntegrity(finCutoff)
   const snapshot: Snapshot = {
     capturedAt: new Date().toISOString(),
     gitSha: sha,
     tableCounts: await tableCounts(),
     userState: await userState(columns.length > 0),
     adminState: admins,
+    financialIntegrity: finIntegrity,
     appliedMigrations: gate.applied.map((m) => ({
       name: m.migration_name,
       checksum: m.checksum,
@@ -133,6 +143,9 @@ async function main(): Promise<void> {
   console.log(`    · users total            : ${snapshot.userState.total} (school-plane ${snapshot.userState.schoolPlane}, principals ${snapshot.userState.principals})`)
   console.log(`    · platform admins         : ${admins.total} total, ${admins.googleLinked ?? 'n/a (pre-migration)'} google-linked, ${admins.withPassword} with password (counts only)`)
   console.log(`    · credential columns     : ${columns.length ? 'present' : 'absent (expected pre-migration)'}`)
+  console.log(
+    `    · financial ledger     : ${finIntegrity.rows} rows · feeId pointers ${finIntegrity.feeIdNotNull} · amount sum ${finIntegrity.amountSum} · digest ${finIntegrity.ledgerDigest.slice(0, 12)}… (privacy-safe md5 over receipt|student|amount; cutoff ${finIntegrity.cutoff})`,
+  )
   console.log(`    · seed execution         : NEVER (pipeline runs migrations only)`)
   console.log('\n[prod-migration:preflight] ✓ PRE-FLIGHT GREEN — safe to apply')
 }

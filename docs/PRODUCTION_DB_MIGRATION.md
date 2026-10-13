@@ -62,7 +62,16 @@ either way, because this pipeline writes **exactly what Prisma writes**.
 | --- | --- | --- | --- |
 | Pre-flight | `preflight.ts` | never (snapshot to a file) | history ≠ repo · pending ≠ expected · target objects already exist · unfinished/unknown rows |
 | Apply | `apply.ts` | one transaction per migration | any SQL error (rollback + halt, never "successful") · post-row/object mismatch |
-| Verify | `verify.ts` | never | pending ≠ 0 · checksum drift · columns/indexes missing · principals not flagged · any table shrank · `/health/ready` not ok |
+| Verify | `verify.ts` | never | pending ≠ 0 · checksum drift · columns/indexes missing · principals not flagged · any table shrank · tenant-guard trigger missing/disabled · financial digest changed · `/health/ready` not ok |
+
+The pre-flight snapshot (feeId-FK era) additionally captures a
+**privacy-safe financial-ledger digest** — a DB-clock cutoff plus an md5 over
+every `FeeTransaction` row's immutable tuple (`receiptNo|studentId|amount`) —
+which verify recomputes over the *same* cutoff window: any change to an
+amount, receipt number or student reference, or any dropped ledger row,
+fails verification, while organic app inserts after the snapshot instant are
+excluded by construction (no false positives). Row values are never read,
+printed or stored.
 
 Guarantees, in order of enforcement:
 

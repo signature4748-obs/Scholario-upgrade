@@ -18,6 +18,7 @@ import { db } from '../helpers/db'
  * short-lived (1h) and belong to fixture accounts.
  */
 import { describe, test, expect, afterAll, beforeAll } from 'bun:test'
+import { liveFetch } from '../helpers/live-http'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
@@ -47,7 +48,7 @@ async function login(email: string, password: string): Promise<string> {
     console.warn(`[domain-smoke] ${email} (role ${persona.role}) is non-canonical; using direct session fixture`)
     return (tokens[email] = await directSession(email))
   }
-  const res = await fetch(`${BASE}/api/auth/login`, {
+  const res = await liveFetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email, password }),
@@ -75,7 +76,7 @@ async function directSession(email: string): Promise<string> {
 
 async function as(email: string, path: string, init?: RequestInit, password = FIXTURE_PW): Promise<Response> {
   const token = await login(email, password)
-  return fetch(`${BASE}${path}`, {
+  return liveFetch(`${BASE}${path}`, {
     ...init,
     headers: { ...(init?.headers ?? {}), authorization: `Bearer ${token}`, 'content-type': 'application/json' },
   })
@@ -89,7 +90,7 @@ afterAll(async () => {
 })
 
 beforeAll(async () => {
-  await fetch(`${BASE}/api/admissions/public`, { method: 'GET' }).catch(() => undefined) // 405 — route warm
+  await liveFetch(`${BASE}/api/admissions/public`, { method: 'GET' }).catch(() => undefined) // 405 — route warm
 }, 60000)
 
 // ══════════════════════════════════════════════════════════════════════
@@ -98,7 +99,7 @@ beforeAll(async () => {
 
 describe('auth domain · session lifecycle (demo principal, real cookie)', () => {
   test('login → 200 + HttpOnly session cookie + user payload', async () => {
-    const res = await fetch(`${BASE}/api/auth/login`, {
+    const res = await liveFetch(`${BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify(DEMO_PRINCIPAL),
@@ -116,7 +117,7 @@ describe('auth domain · session lifecycle (demo principal, real cookie)', () =>
 
   test('me → 200 with the session identity; logout → 200; me again → 401', async () => {
     // login fresh and drive the WHOLE chain on the cookie alone
-    const loginRes = await fetch(`${BASE}/api/auth/login`, {
+    const loginRes = await liveFetch(`${BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify(DEMO_PRINCIPAL),
@@ -125,18 +126,18 @@ describe('auth domain · session lifecycle (demo principal, real cookie)', () =>
     const setCookie = loginRes.headers.get('set-cookie')!
     const cookie = `erp_session=${setCookie.split('erp_session=')[1].split(';')[0]}`
 
-    const me = await fetch(`${BASE}/api/auth/me`, { headers: { cookie } })
+    const me = await liveFetch(`${BASE}/api/auth/me`, { headers: { cookie } })
     expect(me.status).toBe(200)
     const meBody = (await me.json()) as { ok: boolean; data: { user: { email: string; role: string } } }
     expect(meBody.ok).toBe(true)
     expect(meBody.data.user.email).toBe(DEMO_PRINCIPAL.email)
     expect(meBody.data.user.role).toBe('PRINCIPAL')
 
-    const logout = await fetch(`${BASE}/api/auth/logout`, { method: 'POST', headers: { cookie } })
+    const logout = await liveFetch(`${BASE}/api/auth/logout`, { method: 'POST', headers: { cookie } })
     expect(logout.status).toBe(200)
     expect((await logout.json()) as { ok: boolean }).toMatchObject({ ok: true })
 
-    const meAfter = await fetch(`${BASE}/api/auth/me`, { headers: { cookie } })
+    const meAfter = await liveFetch(`${BASE}/api/auth/me`, { headers: { cookie } })
     expect(meAfter.status).toBe(401) // the session row is destroyed server-side
     const afterBody = (await meAfter.json()) as { ok: boolean; code: string }
     expect(afterBody.ok).toBe(false)
@@ -151,7 +152,7 @@ describe('auth domain · session lifecycle (demo principal, real cookie)', () =>
 describe('admissions domain · public inquiry form', () => {
   test('POST /api/admissions/public (no session) → 200 success:true (probe rows self-cleaned)', async () => {
     const marker = `test-p4-inquiry-${Date.now().toString(36)}`
-    const res = await fetch(`${BASE}/api/admissions/public`, {
+    const res = await liveFetch(`${BASE}/api/admissions/public`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
       body: JSON.stringify({

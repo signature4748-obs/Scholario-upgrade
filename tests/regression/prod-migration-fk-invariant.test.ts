@@ -31,12 +31,23 @@
  *      predicate — cross-tenant pointers heal too) and enforces
  *      FeeTransaction_feeId_fkey; stage B additionally holds the post-heal
  *      invariant "zero dangling feeId" in verify.ts.
+ *   8. verify.ts trigger-state contract: post-apply BOTH tenant guards
+ *      (tg_guard_FT_ins / tg_guard_FT_upd) must be present, ENABLED
+ *      (tgenabled = 'O') and bound to tg_guard_FT_ins_fn — fail-closed.
+ *   9. Financial-integrity digest: preflight captures a DB-clock cutoff +
+ *      privacy-safe md5 over receiptNo|studentId|amount (never feeId — the
+ *      sanctioned heal column); verify recomputes the SAME cutoff window
+ *      and fails on divergence; organic growth is excluded by the cutoff.
+ *  10. financialIntegrity()/dbNow() unit behavior against the mocked
+ *      Management API (row mapping, cutoff scoping, DB clock).
  */
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
+  dbNow,
   evaluateExpectations,
+  financialIntegrity,
   MIGRATION_EXPECTATIONS,
   HistoryGate,
   RepoMigration,
@@ -461,5 +472,145 @@ describe('feeId self-heal SQL contracts (guard-safe, school-scoped)', () => {
     expect(FEE_SQL_CODE).not.toContain('DELETE FROM')
     expect(FEE_SQL_CODE).not.toMatch(/receiptNo/)
     expect(FEE_SQL_CODE).not.toMatch(/passwordHash/)
+  })
+})
+
+// ─── 8. verify.ts trigger-state contract (feeId-FK era) ────────────────────
+//
+// The migration suspends tg_guard_FT_upd for exactly its one self-heal
+// statement (transactional DDL — failure rolls the trigger back to enabled).
+// Post-apply, BOTH FeeTransaction tenant guards must be present and ENABLED
+// (tgenabled = 'O') and bound to tg_guard_FT_ins_fn — verify.ts holds this
+// fail-closed: a disabled or missing guard is an open tenant-isolation hole.
+
+describe('verify.ts — tenant-guard trigger-state contract', () => {
+  const verifySrc = readFileSync(join(ROOT, 'scripts/prod-migration/verify.ts'), 'utf8')
+
+  test('stage B probes BOTH guard triggers and their enabled state', () => {
+    expect(verifySrc).toContain("'tg_guard_FT_ins', 'tg_guard_FT_upd'")
+    expect(verifySrc).toContain("t.tgenabled !== 'O'")
+    expect(verifySrc).toContain('tg_guard_FT_ins_fn')
+  })
+
+  test('missing / disabled / re-bound triggers each fail closed', () => {
+    expect(verifySrc).toContain('tenant-guard trigger ')
+    expect(verifySrc).toContain('is disabled (tgenabled')
+    expect(verifySrc).toContain('missing on FeeTransaction')
+    expect(verifySrc).toContain('bound to unexpected function')
+  })
+
+  test('the trigger probe is scoped to FeeTransaction and excludes internal triggers', () => {
+    expect(verifySrc).toContain(`t.tgrelid = '"FeeTransaction"'::regclass`)
+    expect(verifySrc).toContain('NOT t.tgisinternal')
+  })
+})
+
+// ─── 9. financial-integrity digest contract (privacy-safe) ─────────────────
+//
+// Preflight captures a DB-clock cutoff + md5 digest over the immutable
+// financial columns (receiptNo | studentId | amount); verify recomputes the
+// SAME cutoff window and fails on divergence. feeId is deliberately excluded
+// (the sanctioned heal detaches dead pointers); organic growth after the
+// snapshot is excluded by the cutoff on both sides.
+
+describe('financial-integrity digest — source-level contracts', () => {
+  const libSrc = readFileSync(join(ROOT, 'scripts/prod-migration/lib.ts'), 'utf8')
+  const preflightSrc = readFileSync(join(ROOT, 'scripts/prod-migration/preflight.ts'), 'utf8')
+  const verifySrc = readFileSync(join(ROOT, 'scripts/prod-migration/verify.ts'), 'utf8')
+
+  test('the digest covers receiptNo, studentId and amount — and NEVER feeId (the heal column)', () => {
+    expect(libSrc).toContain(`COALESCE("receiptNo", '<null>')`)
+    expect(libSrc).toContain(`COALESCE("studentId", '<null>')`)
+    expect(libSrc).toContain(`"amount"::text`)
+    const digestStart = libSrc.indexOf('string_agg(')
+    const digestEnd = libSrc.indexOf('ORDER BY "id"')
+    expect(digestStart).toBeGreaterThan(-1)
+    expect(digestEnd).toBeGreaterThan(digestStart)
+    expect(libSrc.slice(digestStart, digestEnd)).not.toMatch(/feeId/i)
+  })
+
+  test('preflight captures cutoff (DB clock) + digest into the snapshot', () => {
+    expect(preflightSrc).toContain('dbNow()')
+    expect(preflightSrc).toContain('financialIntegrity(finCutoff)')
+    expect(preflightSrc).toContain('financialIntegrity: finIntegrity')
+  })
+
+  test('verify FAILS CLOSED when the snapshot lacks the digest evidence', () => {
+    expect(verifySrc).toContain('snapshot lacks financialIntegrity')
+  })
+
+  test('verify recomputes the SAME cutoff window and gates on digest/rows/sum', () => {
+    expect(verifySrc).toContain('financialIntegrity(before.cutoff)')
+    expect(verifySrc).toContain('financial digest CHANGED')
+    expect(verifySrc).toContain('ledger rows CHANGED within the snapshot window')
+    expect(verifySrc).toContain('amount sum changed within the snapshot window')
+  })
+
+  test('the digest is privacy-safe: values are hashed, only counts and the md5 are logged', () => {
+    expect(libSrc).toContain('md5(')
+    expect(verifySrc).toContain('values never read')
+    // the preflight digest query never selects row-level receiptNo/amount columns
+    const fiStart = libSrc.indexOf('export async function financialIntegrity')
+    const fiEnd = libSrc.indexOf('export async function productionHealth')
+    const fiSrc = libSrc.slice(fiStart, fiEnd)
+    expect(fiSrc).not.toMatch(/SELECT\s+"receiptNo"/)
+    expect(fiSrc).not.toMatch(/SELECT\s+"amount"\s+FROM/)
+  })
+})
+
+// ─── 10. financialIntegrity() behavior against the mocked API ──────────────
+
+describe('financialIntegrity() — mocked Management API', () => {
+  const realFetch2 = globalThis.fetch
+  let capturedQuery = ''
+
+  function installDigestMock(row: Record<string, unknown>): void {
+    process.env.SUPABASE_ACCESS_TOKEN = 'test-token'
+    process.env.SUPABASE_PROJECT_REF = 'test-ref'
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String((input as Request).url)
+      if (!url.includes('/database/query')) return realFetch2(input as RequestInfo, init)
+      const body = JSON.parse(String(init?.body ?? '{}')) as { query: string }
+      capturedQuery = body.query
+      return new Response(JSON.stringify([row]), { status: 200 })
+    }) as typeof fetch
+  }
+
+  afterEach(() => {
+    globalThis.fetch = realFetch2
+    delete process.env.SUPABASE_ACCESS_TOKEN
+    delete process.env.SUPABASE_PROJECT_REF
+    capturedQuery = ''
+  })
+
+  test('maps the API row into rows/feeIdNotNull/amountSum/ledgerDigest', async () => {
+    installDigestMock({ n_rows: 226, fee_id_not_null: 226, amount_sum: '123456.78', ledger_digest: 'a'.repeat(32) })
+    const fi = await financialIntegrity('2026-10-13 01:00:00.123456+00')
+    expect(fi.rows).toBe(226)
+    expect(fi.feeIdNotNull).toBe(226)
+    expect(fi.amountSum).toBe('123456.78')
+    expect(fi.ledgerDigest).toBe('a'.repeat(32))
+    expect(fi.cutoff).toBe('2026-10-13 01:00:00.123456+00')
+  })
+
+  test('the digest query is cutoff-scoped when a cutoff is passed', async () => {
+    installDigestMock({ n_rows: 0, fee_id_not_null: 0, amount_sum: '0', ledger_digest: 'b'.repeat(32) })
+    await financialIntegrity('2026-10-13 01:00:00.123456+00')
+    expect(capturedQuery).toContain('WHERE "createdAt" <=')
+    expect(capturedQuery).toContain(`'2026-10-13 01:00:00.123456+00'::timestamptz`)
+  })
+
+  test('without a cutoff the query is unscoped (full ledger)', async () => {
+    installDigestMock({ n_rows: 0, fee_id_not_null: 0, amount_sum: '0', ledger_digest: 'b'.repeat(32) })
+    const fi = await financialIntegrity()
+    expect(fi.cutoff).toBe('')
+    expect(capturedQuery).not.toContain('WHERE "createdAt" <=')
+  })
+
+  test('dbNow() reads the DB clock (clock_timestamp)', async () => {
+    installDigestMock({ now: '2026-10-13 01:00:00.654321+00' })
+    const now = await dbNow()
+    expect(now).toBe('2026-10-13 01:00:00.654321+00')
+    expect(capturedQuery).toContain('clock_timestamp()')
   })
 })

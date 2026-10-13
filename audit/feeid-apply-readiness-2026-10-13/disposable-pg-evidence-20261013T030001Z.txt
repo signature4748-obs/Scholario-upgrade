@@ -1,0 +1,143 @@
+══════════════════════════════════════════════════════════════════════
+feeId migration evidence run — migration 20261013140000 (disposable PG)
+══════════════════════════════════════════════════════════════════════
+local PG version : PostgreSQL 18.4 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit
+prod  PG version : PostgreSQL 17.11 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit  (captured step 0 via read-only Management API)
+migration file   : 20261013140000_fee_transaction_dangling_feeid_self_heal
+migration sha256 : ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db (matches expected ec171c91…b16e9db)
+
+─── PHASE A: setup database feeid_evidence (23 migrations + fixtures) ───
+applied 23 pre-existing migrations (target excluded)
+pre-state (FeeTransaction, school-scoped fixtures only — ids are local):
+  txCross    school=schA student=null  fee=feeB     receipt=R-003 amount=3000.00 status=SUCCESS rowdigest(id,school,student,fee,receipt,amount,status,method)=41b21d6fe9a5
+  txMissing  school=schA student=stuA  fee=feeTemp  receipt=R-002 amount=2000.00 status=SUCCESS rowdigest(id,school,student,fee,receipt,amount,status,method)=a6f37d8d8931
+  txNull     school=schA student=stuA  fee=null     receipt=R-004 amount=4000.00 status=SUCCESS rowdigest(id,school,student,fee,receipt,amount,status,method)=875956a28b7b
+  txValid    school=schA student=stuA  fee=feeA     receipt=R-001 amount=1000.00 status=SUCCESS rowdigest(id,school,student,fee,receipt,amount,status,method)=3f9751f48615
+  txX        school=schA student=stuX  fee=feeX     receipt=R-005 amount=500.00 status=SUCCESS rowdigest(id,school,student,fee,receipt,amount,status,method)=ad5955653e89
+  txY        school=schA student=stuY  fee=feeY     receipt=R-006 amount=600.00 status=SUCCESS rowdigest(id,school,student,fee,receipt,amount,status,method)=d99c274676f1
+pre-state triggers: {"tg_guard_FT_ins":"O","tg_guard_FT_upd":"O"}
+pre-state FeeTransaction_feeId_fkey exists: false
+
+─── PHASE B: rollback scenarios (database feeid_rollback) ───
+
+  scenario 6-R1: forced failure after the heal UPDATE → full rollback
+  [PASS] scenario 6-R1 — forced failure after the heal UPDATE rolls back everything
+        ok: forced failure injected (SELECT 1/0) — sqlstate 22012: division by zero
+        ok: txMissing.feeId still dangles (NOT healed) — feeId=feeTemp
+        ok: txCross.feeId still cross-school (NOT healed) — feeId=feeB
+        ok: tg_guard_FT_upd re-enabled by rollback — tgenabled=O
+        ok: FeeTransaction_feeId_fkey does NOT exist
+
+  scenario 6-R2: failure at the final ADD CONSTRAINT rolls back the heal
+  [PASS] scenario 6-R2 — failure at ADD CONSTRAINT rolls back the heal too
+        ok: pre-created constraint in place
+        ok: ADD CONSTRAINT failed as forced (duplicate object) — sqlstate 42710: constraint "FeeTransaction_feeId_fkey" for relation "FeeTransaction" already exists
+        ok: txR2.feeId NOT healed (UPDATE rolled back) — feeId=feeB
+        ok: tg_guard_FT_upd still enabled — tgenabled=O
+        ok: pre-created constraint still exists
+
+─── PHASE C: apply the EXACT migration file on feeid_evidence (one transaction) ───
+migration applied (BEGIN; <exact migration.sql bytes>; COMMIT)
+  [PASS] scenario 1 — valid same-school feeId reference untouched
+        ok: txValid.feeId still feeA — feeId=feeA
+  [PASS] scenario 2 — dangling feeId detached to NULL
+        ok: txMissing.feeId IS NULL (dangling → detached) — feeId=null
+  [PASS] scenario 3 — cross-school feeId detached to NULL
+        ok: txCross.feeId IS NULL (cross-school → detached) — feeId=null
+  [PASS] scenario 4 — ledger preservation: amounts, receipts, statuses, students identical; row count unchanged
+        ok: row count unchanged — 6 → 6
+        ok: txCross.feeId only healed where invalid — feeB → null
+        ok: txMissing.feeId only healed where invalid — feeTemp → null
+        ok: txNull.feeId only healed where invalid — null → null
+        ok: txValid.feeId only healed where invalid — feeA → feeA
+        ok: txX.feeId only healed where invalid — feeX → feeX
+        ok: txY.feeId only healed where invalid — feeY → feeY
+  [PASS] scenario 5 — both tenant-guard triggers enabled after apply
+        ok: tg_guard_FT_ins tgenabled=O — tgenabled=O
+        ok: tg_guard_FT_upd tgenabled=O — tgenabled=O
+
+  scenario 7: future-proof FK / guard behaviour on INSERT
+  [PASS] scenario 7 — future-proof FK: nonexistent feeId → 23503 (FK), cross-school feeId → guard P0001 (trigger fires first)
+        ok: INSERT feeId='fee-nonexistent' refused with guard P0001 (trigger fires before FK) — sqlstate P0001: tenant-guard: FeeTransaction references another school's row
+        ok: INSERT feeId='fee-nonexistent' refused by the FK (SQLSTATE 23503) with guard suspended — sqlstate 23503: insert or update on table "FeeTransaction" violates foreign key constraint "FeeTransaction_feeId_fkey"
+        ok: INSERT feeId='feeB' (cross-school) refused by the guard P0001 (FK alone would allow it) — sqlstate P0001: tenant-guard: FeeTransaction references another school's row
+        ok: no probe rows survived the refusals — leftovers=[]
+
+  scenario 8: DELETE Fee feeA → ledger row preserved, pointer detached
+  [PASS] scenario 8 — Fee deletion detaches feeId (SET NULL) and preserves the immutable ledger row
+        ok: txValid row preserved
+        ok: txValid.feeId now NULL (SET NULL) — feeId=null
+        ok: amount/receiptNo unchanged — amount=1000.00 receipt=R-001
+        ok: feeA actually deleted
+
+  scenario 9: guard refuses cross-school / nonexistent UPDATE targets
+  [PASS] scenario 9 — tenant-guard still enforces updates post-migration
+        ok: UPDATE txNull SET feeId='feeB' → P0001 tenant-guard — sqlstate P0001: tenant-guard: FeeTransaction references another school's row
+        ok: UPDATE txNull SET feeId='fee-nonexistent' → P0001 tenant-guard — sqlstate P0001: tenant-guard: FeeTransaction references another school's row
+        ok: UPDATE txNull SET studentId='stuB' (cross-school student) → P0001 tenant-guard — sqlstate P0001: tenant-guard: FeeTransaction references another school's row
+        ok: txNull unchanged by the refusals — feeId=null studentId=stuA
+
+  scenario 10a: DELETE Student stuX (live feeId pointer) → guard refuses (fail-closed)
+  [PASS] scenario 10a — hard-delete with live feeId pointer refused (documented PRE-EXISTING fail-closed)
+        ok: DELETE Student refused with P0001 tenant-guard — sqlstate P0001: tenant-guard: FeeTransaction references another school's row
+        ok: Student stuX still exists
+        ok: Fee feeX still exists
+        ok: txX still exists with live feeId=feeX — feeId=feeX
+
+  scenario 10b: detach txY.feeId, then DELETE Student stuY → succeeds
+  [PASS] scenario 10b — hard-delete after feeId detach succeeds; ledger row preserved with studentId NULL
+        ok: Student stuY deleted
+        ok: Fee feeY cascade-deleted with the student
+        ok: txY ledger row preserved
+        ok: txY.studentId SET NULL — studentId=null
+        ok: txY amount/receiptNo unchanged — amount=600.00 receipt=R-006
+
+  scenario 11: uncommitted trigger disable vs. a concurrent session
+        pg_locks on FeeTransaction while disable is uncommitted: [{"mode":"ShareRowExclusiveLock","granted":true}]
+        NOTE: the expected error observed as 55P03 — the writer BLOCKED on the table lock held by the uncommitted ALTER and never executed. That is a STRONGER guarantee than a P0001 refusal: the uncommitted disable window is unwritable; the guard is demonstrably still armed for any writer that gets through (verified in (vi)).
+  [PASS] scenario 11 — concurrency: uncommitted disable is invisible AND unwritable to other sessions; guard re-arms on rollback
+        ok: other session still sees the trigger ENABLED (disable invisible until commit) — tgenabled=O
+        ok: migration ALTER holds a table lock until COMMIT — modes=ShareRowExclusiveLock
+        ok: concurrent cross-school UPDATE could NOT bypass tenant validation while the disable was uncommitted (blocked on the migration lock → lock timeout — see note) — sqlstate 55P03: canceling statement due to lock timeout
+        ok: readers unaffected (SELECT served during the lock window) — count=6 in 1ms
+        ok: concurrent INSERT serialized behind the migration lock (lock timeout) — sqlstate 55P03: canceling statement due to lock timeout
+        ok: after rollback the same UPDATE is refused by the re-armed guard (P0001) — sqlstate P0001: tenant-guard: FeeTransaction references another school's row
+        ok: trigger still enabled after rollback — tgenabled=O
+        ok: txValid.feeId unchanged by the failed concurrent writes — feeId=null
+        ok: blocked INSERT left no row
+
+─── PHASE D / scenario 12: Prisma validation ───
+        info: BARE bunx prisma validate → exit=1 — P1012 "URL must start with postgresql://" because repo .env DATABASE_URL is a file: placeholder (env artifact, .env untouchable; NOT a schema defect). Gating on the env-override run below.
+        info: bun test tests/regression/release-two-plane.test.ts → exit=0; 38 pass / 0 fail
+        info: bun test tests/regression/timetable-conflict.test.ts → exit=1; 0 pass / 1 fail (needs the live dev server / not part of this evidence gate)
+        info: bun test tests/regression/regression.test.ts → exit=1; 0 pass / 18 fail (needs the live dev server / not part of this evidence gate)
+        info: bun test tests/regression/ (combined dir) → exit=1; 71 pass / 19 fail (fk-invariant + release-two-plane pass; timetable-conflict + regression need the live dev server — not part of this evidence gate)
+  [PASS] scenario 12 — prisma validate / deploy+checksum / status / regression tests
+        ok: bunx prisma validate (DATABASE_URL env-var override, .env untouched) → schema valid — exit=0; The schema at prisma/schema.prisma is valid 🚀
+        ok: prisma migrate deploy applied all 24 incl. the target — exit=0; target applied=true
+        ok: recorded Prisma checksum === ec171c91…b16e9db — checksum=ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db
+        ok: local file sha256 === expected checksum — sha256=ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db
+        ok: prisma migrate status → no pending migrations — exit=0; Datasource "db": PostgreSQL database "feeid_prisma", schema "public" at "127.0.0.1:55432" / 24 migrations found in prisma/migrations / Database schema is up to date!
+        ok: bun test tests/regression/prod-migration-fk-invariant.test.ts (mandated) — all pass — exit=0; 33 pass / 0 fail
+        ok: bun test tests/regression/release-two-plane.test.ts — all pass — exit=0; 38 pass / 0 fail
+
+════════════════ RESULTS ═══════════════════════════════════════════
+PASS | scenario 6-R1 | forced failure after the heal UPDATE rolls back everything
+PASS | scenario 6-R2 | failure at ADD CONSTRAINT rolls back the heal too
+PASS | scenario 1    | valid same-school feeId reference untouched
+PASS | scenario 2    | dangling feeId detached to NULL
+PASS | scenario 3    | cross-school feeId detached to NULL
+PASS | scenario 4    | ledger preservation: amounts, receipts, statuses, students identical; row count unchanged
+PASS | scenario 5    | both tenant-guard triggers enabled after apply
+PASS | scenario 7    | future-proof FK: nonexistent feeId → 23503 (FK), cross-school feeId → guard P0001 (trigger fires first)
+PASS | scenario 8    | Fee deletion detaches feeId (SET NULL) and preserves the immutable ledger row
+PASS | scenario 9    | tenant-guard still enforces updates post-migration
+PASS | scenario 10a  | hard-delete with live feeId pointer refused (documented PRE-EXISTING fail-closed)
+PASS | scenario 10b  | hard-delete after feeId detach succeeds; ledger row preserved with studentId NULL
+PASS | scenario 11   | concurrency: uncommitted disable is invisible AND unwritable to other sessions; guard re-arms on rollback
+PASS | scenario 12   | prisma validate / deploy+checksum / status / regression tests
+
+SCENARIOS: 14/14 PASS
+local PG: PostgreSQL 18.4 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit
+prod  PG: PostgreSQL 17.11 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit (read-only probe, step 0)
+migration checksum (file / prisma-deployed): ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db / ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db — match: true
