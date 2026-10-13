@@ -230,10 +230,9 @@ export async function settleSubscriptionOrder(opts: {
     }
 
     if (order.scope === 'STUDENT_PLAN' && order.studentId) {
-      // Student payment receipt (SCH-SSR sequence inside the tx).
-      const yearStart = new Date(new Date().getFullYear(), 0, 1)
-      const count = await tx.studentSubscriptionPayment.count({ where: { createdAt: { gte: yearStart } } })
-      const receiptNo = `SCH-SSR-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`
+      // Atomic DB sequence receipt (SCH-SSR) — race-free in-transaction.
+      const seqRows = await tx.$queryRaw<Array<{ seq: number }>>`SELECT nextval('student_payment_receipt_seq')::int AS seq`
+      const receiptNo = `SCH-SSR-${new Date().getFullYear()}-${String(Number(seqRows[0]?.seq ?? 1)).padStart(5, '0')}`
       const payment = await tx.studentSubscriptionPayment.create({
         data: {
           schoolId: order.schoolId,

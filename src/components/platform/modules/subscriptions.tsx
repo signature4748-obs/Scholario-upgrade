@@ -21,9 +21,9 @@
 // actions; dialogs are scrollable; nothing essential is truncated.
 // ============================================================
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import {
-  BadgeCheck, BookMarked, Building2, CalendarClock, CreditCard, Gift, KeyRound,
+  BookMarked, Building2, CalendarClock, CreditCard, Gift, KeyRound,
   Loader2, Package, RefreshCw, Search, Settings2, ShieldAlert, Users, Wallet,
 } from 'lucide-react'
 import { platformApi, type PlatformApiError } from '../platform-client'

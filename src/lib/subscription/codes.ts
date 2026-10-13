@@ -26,6 +26,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { db } from '@/lib/db'
 import type { Prisma } from '@prisma/client'
+import { activateEntitlementInTx } from './student'
 
 /** Prisma interactive-transaction client (the tx parameter type). */
 type Tx = Prisma.TransactionClient
@@ -59,10 +60,12 @@ function activationRef(seq: number): string {
   return `SCH-ACT-${new Date().getFullYear()}-${String(seq).padStart(5, '0')}`
 }
 
-async function nextActivationSeq(): Promise<number> {
-  const yearStart = new Date(new Date().getFullYear(), 0, 1)
-  const count = await db.activationCode.count({ where: { createdAt: { gte: yearStart } } })
-  return count + 1
+async function nextActivationSeq(tx: typeof db): Promise<number> {
+  // Atomic DB sequence — race-free inside issuance transactions (the
+  // count-based variant collided under concurrent claims: P2002 aborted
+  // the caller's transaction).
+  const rows = await (tx ?? db).$queryRaw<Array<{ seq: number }>>`SELECT nextval('activation_code_ref_seq')::int AS seq`
+  return Number(rows[0]?.seq ?? 1)
 }
 
 // ── Validity computation (explicit dates, never labels) ────────────────────
@@ -151,7 +154,7 @@ export async function issueActivationCode(input: IssueCodeInput): Promise<Issued
   const expiresAt = new Date(Date.now() + claimWindow * 24 * 60 * 60 * 1000)
   const code = generateCode()
   const codeHash = hashCode(normalizeCode(code))
-  let seq = await nextActivationSeq()
+  let seq = await nextActivationSeq(input.tx)
 
   // publicRef uniqueness: count-based sequence with the unique index as the
   // race backstop (same honest-retry pattern as receipt numbers).
@@ -316,80 +319,24 @@ export async function claimStudentActivationCode(
       throw new CodeClaimError('RACE_LOST', STUDENT_CLAIM_MESSAGE)
     }
 
-    // Entitlement: extend/renew from the current live end (renewal anchor),
-    // replace any lapsed history row.
-    const validity = resolveValidity({
+    // Entitlement activation through the SHARED core (renewal semantics:
+    // a claim while a live entitlement exists EXTENDS it from its end —
+    // the student never loses the current period by claiming early).
+    const activated = await activateEntitlementInTx(tx, {
+      schoolId: ctx.schoolId,
+      studentId: ctx.studentId,
+      planId: code.planId,
+      planCode: code.planCode,
+      source: 'OFFLINE_CODE',
+      activationCodeId: code.id,
       validityMonths: code.validityMonths,
-      claimedAt: now,
       validityStartOverride: code.validityStartOverride,
       validityEndOverride: code.validityEndOverride,
     })
-    const anchor = await tx.studentEntitlement.findFirst({
-      where: { studentId: ctx.studentId, status: { in: ['PENDING', 'ACTIVE'] } },
-      orderBy: { validityEnd: 'desc' },
-    })
-    if (anchor && anchor.validityEnd.getTime() > validity.validityStart.getTime()) {
-      // Renewal ahead of the current end — extend from the current end.
-      const renewedEnd = resolveValidity({
-        validityMonths: code.validityMonths,
-        claimedAt: anchor.validityEnd,
-        validityEndOverride: code.validityEndOverride,
-      })
-      validity.validityEnd = renewedEnd.validityEnd
-    }
-    if (anchor) {
-      // Supersede the live row (history retained by the payment rows; the
-      // partial unique index demands at most one live row per student).
-      await tx.studentEntitlement.update({
-        where: { id: anchor.id },
-        data: { status: anchor.validityEnd.getTime() <= now.getTime() ? 'EXPIRED' : 'REVOKED', revokeReason: 'Superseded by a new activation' },
-      })
-    }
-
-    const startActive = validity.validityStart.getTime() <= now.getTime()
-    let entitlementId: string | null = null
-    let created: { id: string } | null = null
-    try {
-      created = await tx.studentEntitlement.create({
-        data: {
-          schoolId: ctx.schoolId,
-          studentId: ctx.studentId,
-          planId: code.planId,
-          planCode: code.planCode,
-          status: startActive ? 'ACTIVE' : 'PENDING',
-          validityStart: validity.validityStart,
-          validityEnd: validity.validityEnd,
-          source: 'OFFLINE_CODE',
-          activationCodeId: code.id,
-          activatedAt: startActive ? now : null,
-        },
-      })
-      entitlementId = created.id
-    } catch (e: unknown) {
-      if ((e as { code?: string }).code === 'P2002') {
-        // The partial unique index fired: another live entitlement exists.
-        // Re-check what won and either adopt it or fail honestly.
-        const winner = await tx.studentEntitlement.findFirst({
-          where: { studentId: ctx.studentId, status: { in: ['PENDING', 'ACTIVE'] } },
-          orderBy: { validityEnd: 'desc' },
-        })
-        if (winner) {
-          throw new AppError('CONFLICT', {
-            publicMessage: 'This student already has an active subscription. The code was marked claimed — contact SCHOLARIO support for a reconciliation.',
-            internalDetail: `claimStudentActivationCode: live entitlement ${winner.id} exists (partial unique guard)`,
-          })
-        }
-        throw new AppError('CONFLICT', {
-          publicMessage: 'The subscription could not be activated — please retry or contact SCHOLARIO support.',
-          internalDetail: 'claimStudentActivationCode: P2002 with no live row (unexpected)',
-        })
-      }
-      throw e
-    }
 
     await tx.activationCode.update({
       where: { id: code.id },
-      data: { entitlementId },
+      data: { entitlementId: activated.entitlementId },
     })
     await tx.activationCodeEvent.create({
       data: {
@@ -398,15 +345,15 @@ export async function claimStudentActivationCode(
         userId: ctx.userId,
         studentId: ctx.studentId,
         ip: ctx.ip ?? null,
-        detail: JSON.stringify({ entitlementId, validityEnd: validity.validityEnd.toISOString() }),
+        detail: JSON.stringify({ entitlementId: activated.entitlementId, validityEnd: activated.validityEnd.toISOString() }),
       },
     })
 
     return {
-      entitlementId,
-      validityStart: validity.validityStart,
-      validityEnd: validity.validityEnd,
-      status: startActive ? 'ACTIVE' : 'PENDING',
+      entitlementId: activated.entitlementId,
+      validityStart: activated.validityStart,
+      validityEnd: activated.validityEnd,
+      status: activated.statusAfter,
       planCode: code.planCode,
       publicRef: code.publicRef,
     }

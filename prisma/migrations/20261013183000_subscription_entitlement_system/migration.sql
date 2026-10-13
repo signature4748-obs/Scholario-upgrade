@@ -358,3 +358,9 @@ ALTER TABLE "ActivationCodeEvent" ADD CONSTRAINT "ActivationCodeEvent_studentId_
 CREATE UNIQUE INDEX "StudentEntitlement_one_live_per_student"
   ON "StudentEntitlement"("studentId")
   WHERE "status" IN ('PENDING', 'ACTIVE');
+
+-- Reference sequences (atomic, race-free inside the settlement/issuance
+-- transactions — count-based sequencing collided under concurrent claims).
+CREATE SEQUENCE IF NOT EXISTS "student_payment_receipt_seq" START 1;
+CREATE SEQUENCE IF NOT EXISTS "activation_code_ref_seq" START 1;
+CREATE SEQUENCE IF NOT EXISTS "platform_payment_receipt_seq" START 1;

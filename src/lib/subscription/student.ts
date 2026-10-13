@@ -18,7 +18,7 @@ import type { Prisma } from '@prisma/client'
 
 type Tx = Prisma.TransactionClient
 import { AppError } from '@/lib/security/errors'
-import { addMonths, resolveValidity } from './codes'
+import { addMonths } from './codes'
 
 export const STUDENT_PAYMENT_MODES = [
   'ONLINE_PAYMENT',
@@ -36,10 +36,10 @@ export function studentReceiptNumber(seq: number): string {
   return `SCH-SSR-${new Date().getFullYear()}-${String(seq).padStart(5, '0')}`
 }
 
-async function nextStudentReceiptSeq(): Promise<number> {
-  const yearStart = new Date(new Date().getFullYear(), 0, 1)
-  const count = await db.studentSubscriptionPayment.count({ where: { createdAt: { gte: yearStart } } })
-  return count + 1
+async function nextStudentReceiptSeq(tx?: typeof db): Promise<number> {
+  // Atomic DB sequence — race-free inside settlement transactions.
+  const rows = await (tx ?? db).$queryRaw<Array<{ seq: number }>>`SELECT nextval('student_payment_receipt_seq')::int AS seq`
+  return Number(rows[0]?.seq ?? 1)
 }
 
 // ── Record payment + activate/extend (offline/manual/complimentary) ─────────
@@ -113,11 +113,9 @@ export async function recordStudentPayment(
     })
   }
 
-  let seq = await nextStudentReceiptSeq()
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const receiptNo = studentReceiptNumber(seq + attempt)
-    try {
-      return await db.$transaction(async (tx) => {
+  const seq = await nextStudentReceiptSeq()
+  const receiptNo = studentReceiptNumber(seq)
+  return db.$transaction(async (tx) => {
         const payment = await tx.studentSubscriptionPayment.create({
           data: {
             schoolId: input.schoolId,
@@ -168,17 +166,8 @@ export async function recordStudentPayment(
             validityEndAfter: activated.validityEnd,
           },
         })
-        return { paymentId: payment.id, receiptNo, ...activated }
-      }, { timeout: 15_000 })
-    } catch (e: unknown) {
-      if ((e as { code?: string }).code === 'P2002') continue // receipt collision
-      throw e
-    }
-  }
-  throw new AppError('CONFLICT', {
-    publicMessage: 'Could not assign a unique receipt number — please retry.',
-    internalDetail: 'recordStudentPayment: receipt sequence exhausted',
-  })
+      return { paymentId: payment.id, receiptNo, ...activated }
+  }, { timeout: 15_000 })
 }
 
 // ── Entitlement activation core (shared by every activation cause) ─────────
@@ -197,11 +186,21 @@ export interface ActivateEntitlementOpts {
 }
 
 /**
- * Create/extend the live entitlement inside the caller's transaction:
- * renewals anchor at max(now, current live validityEnd) so pre-paying
- * extends rather than restarts; the superseded row is retained as history.
- * The partial unique index backs concurrent activation attempts (P2002 →
- * honest CONFLICT — never a double grant).
+ * Create/extend the live entitlement inside the caller's transaction.
+ *
+ * RENEWAL SEMANTICS (the acceptance-critical rule): when the student
+ * already holds a live (PENDING|ACTIVE) entitlement, a new payment
+ * EXTENDS that row — validityEnd = addMonths(max(now, current
+ * validityEnd), months). The student never loses the current period by
+ * pre-paying, and there is always exactly ONE live row (the partial
+ * unique index). Financial history lives in the immutable payment rows
+ * that link to the entitlement; REVOKED/EXPIRED rows only appear when an
+ * entitlement is actually withdrawn or lapses.
+ *
+ * First activation: explicit validity dates (Model C date-picked) or
+ * months from now (or from an explicit future start → PENDING).
+ * Concurrent activation attempts are backed by the partial unique index
+ * (P2002 → honest CONFLICT — never a double grant).
  */
 export async function activateEntitlementInTx(
   tx: Tx,
@@ -212,8 +211,31 @@ export async function activateEntitlementInTx(
     where: { studentId: opts.studentId, status: { in: ['PENDING', 'ACTIVE'] } },
     orderBy: { validityEnd: 'desc' },
   })
-  const anchorEnd = anchor?.validityEnd && anchor.validityEnd.getTime() > now.getTime() ? anchor.validityEnd : null
 
+  // ── Renewal: extend the live row in place. ──
+  if (anchor && anchor.validityEnd.getTime() > now.getTime() && !opts.validityStartOverride && !opts.validityEndOverride) {
+    const extendedEnd = opts.validityEndOverride ?? addMonths(anchor.validityEnd, Math.max(1, opts.validityMonths))
+    await tx.studentEntitlement.update({
+      where: { id: anchor.id },
+      data: {
+        validityEnd: extendedEnd,
+        planId: opts.planId ?? anchor.planId,
+        planCode: opts.planCode ?? anchor.planCode,
+        paymentId: opts.paymentId ?? anchor.paymentId,
+        activatedAt: anchor.activatedAt ?? now,
+        status: anchor.validityStart.getTime() <= now.getTime() ? 'ACTIVE' : 'PENDING',
+      },
+    })
+    return {
+      entitlementId: anchor.id,
+      validityStart: anchor.validityStart,
+      validityEnd: extendedEnd,
+      statusAfter: anchor.validityStart.getTime() <= now.getTime() ? 'ACTIVE' : 'PENDING',
+    }
+  }
+
+  // ── First activation (or an explicitly dated grant). ──
+  const anchorEnd = anchor?.validityEnd && anchor.validityEnd.getTime() > now.getTime() ? anchor.validityEnd : null
   let validity: { validityStart: Date; validityEnd: Date }
   if (opts.validityEndOverride) {
     const start = opts.validityStartOverride ?? (anchorEnd ?? now)
@@ -225,7 +247,6 @@ export async function activateEntitlementInTx(
     }
     validity = { validityStart: start, validityEnd: opts.validityEndOverride }
   } else if (anchorEnd) {
-    // Renewal ahead of the current end: extend from the current end.
     validity = { validityStart: anchorEnd, validityEnd: addMonths(anchorEnd, Math.max(1, opts.validityMonths)) }
   } else {
     const start = opts.validityStartOverride ?? now
@@ -237,7 +258,7 @@ export async function activateEntitlementInTx(
       where: { id: anchor.id },
       data: {
         status: anchor.validityEnd.getTime() <= now.getTime() ? 'EXPIRED' : 'REVOKED',
-        revokeReason: 'Superseded by a newer subscription',
+        revokeReason: 'Superseded by a dated grant',
       },
     })
   }

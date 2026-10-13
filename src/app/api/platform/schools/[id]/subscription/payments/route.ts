@@ -12,7 +12,7 @@ import {
   type PaymentMode,
 } from '@/lib/platform/billing'
 import { resolvePlanForPurchase, planPrice } from '@/lib/subscription/plans'
-import { loadSubscriptionConfig, BILLING_MODELS } from '@/lib/subscription/config'
+import { BILLING_MODELS } from '@/lib/subscription/config'
 import { issueActivationCode } from '@/lib/subscription/codes'
 import { z } from 'zod'
 
@@ -123,7 +123,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
 
       // ── PLAN-DRIVEN path (Model A offline). ──
-      const config = await loadSubscriptionConfig()
       const plan = await resolvePlanForPurchase({
         code: body.planCode,
         expectedScope: 'SCHOOL',

@@ -8,7 +8,7 @@ import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { resolvePlanForPurchase } from '@/lib/subscription/plans'
 import { loadSubscriptionConfig } from '@/lib/subscription/config'
 import { recordStudentPayment, applyEntitlementLifecycle, STUDENT_PAYMENT_MODES } from '@/lib/subscription/student'
-import { issueActivationCode, type CodeScope } from '@/lib/subscription/codes'
+import { issueActivationCode } from '@/lib/subscription/codes'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'

@@ -47,6 +47,22 @@ export async function POST(req: NextRequest) {
       if (!order || order.scope !== 'STUDENT_PLAN' || !order.studentId) {
         throw new AppError('INVALID_INPUT', { publicMessage: 'Order not found.' })
       }
+      // Idempotent re-check: an order that is already PAID (the payment
+      // page verifying again after settlement) returns the original
+      // result WITHOUT minting a new sandbox payment or touching the
+      // settled state — "already processed, no double activation".
+      if (order.status === 'PAID') {
+        const payment = await db.studentSubscriptionPayment.findUnique({ where: { orderId: order.id } })
+        return {
+          ok: true,
+          alreadyPaid: true,
+          orderNo: order.orderNo,
+          entitlement: payment?.entitlementId ? { id: payment.entitlementId } : null,
+          statusAfter: order.statusAfter,
+          validityEndAfter: order.validityEndAfter?.toISOString() ?? null,
+          message: 'This payment was already processed — no second entitlement was created.',
+        }
+      }
       const student = await db.student.findUnique({ where: { userId: user.id }, select: { id: true, schoolId: true } })
       if (!student || order.studentId !== student.id || order.schoolId !== schoolId) {
         throw new AppError('FORBIDDEN', {

@@ -20,12 +20,11 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
   BadgeCheck, CalendarClock, CheckCircle2, CreditCard, Info, KeyRound,
-  Loader2, Lock, RefreshCw, ShieldAlert, Wallet, XCircle,
+  Loader2, Lock, Wallet,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
 
@@ -42,11 +41,6 @@ interface StudentSubscriptionData {
 
 const dateStr = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—')
 const money = (n: number, c: string) => `${c === 'INR' ? '₹' : ''}${n.toLocaleString('en-IN')}${c === 'INR' ? '' : ' ' + c}`
-
-function apiError(e: unknown): string {
-  const anyE = e as { error?: string; message?: string }
-  return anyE?.error ?? anyE?.message ?? 'Request failed'
-}
 
 export function StudentSubscriptionModule() {
   const [data, setData] = useState<StudentSubscriptionData | null>(null)

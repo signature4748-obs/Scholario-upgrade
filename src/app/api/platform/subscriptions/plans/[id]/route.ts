@@ -5,7 +5,7 @@ import { withPlatform } from '@/lib/platform/authz'
 import { platformAuditEvent } from '@/lib/platform/audit'
 import { parseJsonBody, strictBody } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
-import { validatePlanInput, PLAN_SCOPES, PLAN_INTERVALS } from '@/lib/subscription/plans'
+import { validatePlanInput, PLAN_INTERVALS } from '@/lib/subscription/plans'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'

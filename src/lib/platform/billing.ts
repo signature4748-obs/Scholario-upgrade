@@ -290,44 +290,30 @@ export async function applySchoolSubscriptionPeriodInTx(
   let paymentId = opts.existingPaymentId ?? null
   let receiptNo: string | null = null
   if (!paymentId) {
-    const yearStart = new Date(new Date().getFullYear(), 0, 1)
-    const count = await tx.platformPayment.count({ where: { createdAt: { gte: yearStart } } })
-    let seq = count + 1
-    let created: { id: string; receiptNo: string | null } | null = null
-    for (let attempt = 0; attempt < 10; attempt++) {
-      try {
-        created = await tx.platformPayment.create({
-          data: {
-            schoolId: opts.schoolId,
-            amount: opts.amount,
-            currency: opts.currency ?? 'INR',
-            mode: opts.mode,
-            paymentDate: opts.paymentDate,
-            periodMonths: months,
-            reference: opts.reference ?? null,
-            notes: opts.notes ?? null,
-            recordedById: opts.recordedById ?? null,
-            verification: 'VERIFIED',
-            verifiedAt: new Date(),
-            statusAfter: 'ACTIVE',
-            periodEndAfter,
-            receiptNo: applyReceiptNumber(seq + attempt),
-            subscriptionId: current?.id ?? null,
-            orderId: opts.orderId ?? null,
-          },
-        })
-        break
-      } catch (e: unknown) {
-        if ((e as { code?: string }).code === 'P2002') continue
-        throw e
-      }
-    }
-    if (!created) {
-      throw new AppError('CONFLICT', {
-        publicMessage: 'Could not assign a unique receipt number — please retry.',
-        internalDetail: 'applySchoolSubscriptionPeriodInTx: receipt sequence exhausted',
-      })
-    }
+    // Atomic DB sequence receipt (SCH-RCP) — race-free inside this
+    // transaction (the count-based variant collided with concurrent
+    // recordings: P2002 aborted the caller's transaction).
+    const seqRows = await tx.$queryRaw<Array<{ seq: number }>>`SELECT nextval('platform_payment_receipt_seq')::int AS seq`
+    const created = await tx.platformPayment.create({
+      data: {
+        schoolId: opts.schoolId,
+        amount: opts.amount,
+        currency: opts.currency ?? 'INR',
+        mode: opts.mode,
+        paymentDate: opts.paymentDate,
+        periodMonths: months,
+        reference: opts.reference ?? null,
+        notes: opts.notes ?? null,
+        recordedById: opts.recordedById ?? null,
+        verification: 'VERIFIED',
+        verifiedAt: new Date(),
+        statusAfter: 'ACTIVE',
+        periodEndAfter,
+        receiptNo: applyReceiptNumber(Number(seqRows[0]?.seq ?? 1)),
+        subscriptionId: current?.id ?? null,
+        orderId: opts.orderId ?? null,
+      },
+    })
     paymentId = created.id
     receiptNo = created.receiptNo
   } else {
