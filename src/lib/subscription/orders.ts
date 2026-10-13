@@ -318,11 +318,14 @@ export async function settleSubscriptionOrder(opts: {
 }
 
 /** Server-side verification of a checkout confirmation for an order —
- *  provider signature check (Razorpay HMAC / sandbox HMAC), then settle. */
+ *  provider signature check (Razorpay HMAC / sandbox HMAC), then settle
+ *  (school-scope orders settle the tenant subscription through the
+ *  applySchool callback inside the SAME settlement transaction). */
 export async function verifyAndSettleOrder(opts: {
   orderNo: string
   confirmation: CheckoutConfirmation
   initiatedByUserId?: string
+  applySchool?: Parameters<typeof settleSubscriptionOrder>[0]['applySchool']
 }): Promise<SettleOrderResult> {
   const order = await db.subscriptionOrder.findUnique({ where: { orderNo: opts.orderNo } })
   if (!order) {
@@ -348,7 +351,7 @@ export async function verifyAndSettleOrder(opts: {
     orderNo: opts.orderNo,
     providerPaymentId: opts.confirmation.paymentId,
     settledVia: 'verify',
-    applySchool: undefined,
+    applySchool: opts.applySchool,
   })
 }
 

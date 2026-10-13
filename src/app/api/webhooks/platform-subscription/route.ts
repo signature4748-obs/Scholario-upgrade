@@ -4,6 +4,8 @@ import { db } from '@/lib/db'
 import { enforceRateLimitStrict, RATE_LIMITS, clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { platformAuditEvent } from '@/lib/platform/audit'
 import { recordPlatformPayment } from '@/lib/platform/billing'
+import { applySchoolSubscriptionPeriodInTx } from '@/lib/platform/billing'
+import { settleSubscriptionOrder } from '@/lib/subscription/orders'
 
 export const runtime = 'nodejs'
 
@@ -36,14 +38,24 @@ export const runtime = 'nodejs'
  *       "amount": 24000, "currency": "INR",
  *       "providerPaymentId": "pay_...", "reference": "..."
  *     },
- *     "subscription": { "periodMonths": 12 }
+ *     "subscription": { "periodMonths": 12 },
+ *     "order": { "orderNo": "SCH-ORD-..." }           (SUBSCRIPTION &
+ *                     ENTITLEMENT SYSTEM — when present, the payment is
+ *                     matched to the server-created order and settled
+ *                     exactly-once through the order lane)
  *   }
+ *
+ * SUBSCRIPTION & ENTITLEMENT SYSTEM — additional activating event:
+ *   "eventType": "student_subscription.payment.captured" with an
+ *   "order": {"orderNo"} — settles the STUDENT order (entitlement
+ *   activation, exactly-once, idempotent on eventId + order flip).
  *
  * Signature header: x-scholario-signature = hex(HMAC_SHA256(rawBody)).
  * Unknown/unsigned requests are rejected 401 with a safe message.
  */
 const SIGNATURE_HEADER = 'x-scholario-signature'
 const ACTIVATING_EVENT = 'subscription.payment.captured'
+const STUDENT_ACTIVATING_EVENT = 'student_subscription.payment.captured'
 
 function verifySignature(rawBody: string, signature: string | null): boolean {
   const secret = process.env.PLATFORM_PAYMENT_WEBHOOK_SECRET
@@ -71,6 +83,8 @@ interface WebhookBody {
     reference?: string
   }
   subscription?: { periodMonths?: number }
+  /** SUBSCRIPTION & ENTITLEMENT SYSTEM — order linkage. */
+  order?: { orderNo?: string }
 }
 
 export async function POST(req: NextRequest) {
@@ -119,6 +133,57 @@ export async function POST(req: NextRequest) {
   })
 
   try {
+    // ── SUBSCRIPTION & ENTITLEMENT SYSTEM — order-linked settlement ──────
+    // (student events require an order; school events settle through the
+    // order lane when orderNo is present, else the legacy path below).
+    if (body.eventType === STUDENT_ACTIVATING_EVENT || (body.eventType === ACTIVATING_EVENT && body.order?.orderNo)) {
+      const orderNo = body.order?.orderNo
+      const providerPaymentId = body.payment?.providerPaymentId ?? body.eventId
+      if (!orderNo || !providerPaymentId) {
+        await db.webhookEvent.update({
+          where: { id: row.id },
+          data: { status: 'error', error: 'missing order linkage', processedAt: new Date() },
+        })
+        return NextResponse.json({ ok: false, error: 'Payment could not be applied' }, { status: 200 })
+      }
+      const result = await settleSubscriptionOrder({
+        orderNo,
+        providerPaymentId,
+        settledVia: 'webhook',
+        applySchool: (tx, o) =>
+          applySchoolSubscriptionPeriodInTx(tx, {
+            schoolId: o.schoolId,
+            planId: o.order.planId,
+            planCode: o.order.planCode,
+            interval: o.order.interval,
+            priceSnapshot: o.order.amount,
+            currency: o.order.currency,
+            amount: o.order.amount,
+            mode: 'ONLINE_PAYMENT',
+            paymentDate: new Date(),
+            validityMonths: o.order.validityMonths,
+            reference: providerPaymentId,
+            notes: 'Online payment — signature-verified webhook (order-linked)',
+            orderId: o.orderId,
+          }),
+      })
+      await db.webhookEvent.update({
+        where: { id: row.id },
+        data: { status: 'processed', processedAt: new Date(), matchedTransactionId: result.orderId, schoolId: body.payment?.schoolId ?? null },
+      })
+      await platformAuditEvent({
+        adminId: null,
+        action: 'platform.billing.webhook_payment',
+        targetType: body.eventType === STUDENT_ACTIVATING_EVENT ? 'STUDENT' : 'SCHOOL',
+        targetId: body.payment?.schoolId ?? result.orderNo,
+        schoolId: body.payment?.schoolId ?? undefined,
+        ip,
+        reason: `Online ${body.eventType === STUDENT_ACTIVATING_EVENT ? 'student' : 'school'} subscription payment captured (verified webhook, order-linked)`,
+        metadata: { eventId: body.eventId, orderNo, alreadyPaid: result.alreadyPaid, statusAfter: result.statusAfter },
+      }).catch(() => {})
+      return NextResponse.json({ ok: true, processed: true, orderNo, alreadyPaid: result.alreadyPaid })
+    }
+
     if (body.eventType !== ACTIVATING_EVENT) {
       await db.webhookEvent.update({
         where: { id: row.id },
