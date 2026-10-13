@@ -639,6 +639,14 @@ export const MIGRATION_EXPECTATIONS: Record<string, MigrationExpectation> = {
   '20261013120000_fee_transaction_student_fk': {
     constraints: ['FeeTransaction_studentId_fkey'],
   },
+  // FeeTransaction.feeId FK hardening: the migration self-heals the 3
+  // dangling legacy fee pointers (school-scoped predicate, mirroring the
+  // tenant guard's feeId branch — cross-school pointers heal too) and then
+  // enforces the constraint. The constraint name is the migration's
+  // verifiable object.
+  '20261013140000_fee_transaction_dangling_feeid_self_heal': {
+    constraints: ['FeeTransaction_feeId_fkey'],
+  },
 }
 
 export interface ExpectationResult {
