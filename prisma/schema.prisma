@@ -844,6 +844,7 @@ model Fee {
   createdAt DateTime  @default(now())
 
   payments Payment[]
+  feeTransactions FeeTransaction[]
 
   // PHASE 3 — fee lists are filtered by (school, status) and read per
   // student on every ledger surface.
@@ -1909,6 +1910,12 @@ model FeeTransaction {
   source               String?
   /// The legacy Fee row this collection applies to (ledger application).
   feeId                String?
+  /// FK hardening (20261013140000): the Fee row while it exists — deleting
+  /// the Fee (directly, or via the Fee.studentId cascade when a Student is
+  /// deleted) detaches the pointer (SET NULL) and preserves the immutable
+  /// ledger row. NULL is the sanctioned "no live Fee to apply to" state
+  /// (the online order-creation routes persist feeId: null by design).
+  fee                  Fee?             @relation(fields: [feeId], references: [id], onDelete: SetNull)
   /// Collector identity (User.id + display snapshot) — who took the money.
   collectedById        String?
   collectedByName      String?
