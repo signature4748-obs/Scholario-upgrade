@@ -130,22 +130,6 @@ async function sessionForAdmin(adminId: string): Promise<string> {
   return token
 }
 
-async function directPlatformSession(email: string): Promise<{ token: string; id: string }> {
-  const admin = await db.platformAdmin.findUnique({ where: { email } })
-  if (!admin) throw new Error(`no platform admin ${email}`)
-  const token = randomBytes(32).toString('hex')
-  await db.platformAdminSession.create({
-    data: {
-      adminId: admin.id,
-      tokenHash: createHash('sha256').update(token).digest('hex'),
-      stepUpAt: new Date(),
-      expiresAt: new Date(Date.now() + 3600_000),
-    },
-  })
-  cleanup.push(() => db.platformAdminSession.deleteMany({ where: { adminId: admin.id, tokenHash: createHash('sha256').update(token).digest('hex') } }))
-  return { token, id: admin.id }
-}
-
 function signWebhook(raw: string): string {
   return createHmac('sha256', WEBHOOK_SECRET).update(raw).digest('hex')
 }
