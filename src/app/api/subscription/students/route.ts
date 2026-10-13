@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
           include: {
             user: { select: { name: true, email: true, subscriptionStatus: true } },
             class: { select: { name: true } },
-            entitlements: {
+            studentEntitlements: {
               where: { status: { in: ['PENDING', 'ACTIVE', 'SUSPENDED', 'REVOKED'] } },
               orderBy: { validityEnd: 'desc' },
               take: 1,
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
 
       const rows = students
         .map((s) => {
-          const live = s.entitlements[0] ?? null
+          const live = s.studentEntitlements[0] ?? null
           const decision = evaluateStudentEntitlement({
             accountSubscriptionStatus: s.user.subscriptionStatus,
             tenant: tenantEntitlement,

@@ -32,6 +32,7 @@ import {
   Menu,
   X,
   Cloud,
+  Wallet,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from './platform-client'
 import { Button } from '@/components/ui/button'

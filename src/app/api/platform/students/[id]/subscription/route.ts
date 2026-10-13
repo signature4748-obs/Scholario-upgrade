@@ -27,7 +27,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         school: { select: { id: true, name: true, slug: true, subscription: true } },
         user: { select: { id: true, name: true, email: true, subscriptionStatus: true } },
         class: { select: { name: true } },
-        entitlements: { orderBy: { createdAt: 'desc' }, take: 20 },
+        studentEntitlements: { orderBy: { createdAt: 'desc' }, take: 20 },
       },
     })
     if (!student) {
@@ -61,7 +61,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         accountLocked: student.user.subscriptionStatus === 'LOCKED',
       },
       school: { id: student.school.id, name: student.school.name, slug: student.school.slug, billingModel },
-      entitlements: student.entitlements.map((e) => ({
+      entitlements: student.studentEntitlements.map((e) => ({
         id: e.id,
         status: e.status,
         planCode: e.planCode,

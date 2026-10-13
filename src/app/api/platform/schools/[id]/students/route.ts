@@ -50,7 +50,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         include: {
           user: { select: { id: true, name: true, email: true, status: true, subscriptionStatus: true } },
           class: { select: { name: true } },
-          entitlements: {
+          studentEntitlements: {
             where: { status: { in: ['PENDING', 'ACTIVE', 'SUSPENDED'] } },
             orderBy: { validityEnd: 'desc' },
             take: 1,
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const rows = students
       .map((s) => {
-        const live = s.entitlements[0] ?? null
+        const live = s.studentEntitlements[0] ?? null
         // School-wide tenants: students are covered — the entitlement
         // column shows "covered" rather than a per-student state.
         const coveredBySchool = billingModel === 'SCHOOL_WIDE'
