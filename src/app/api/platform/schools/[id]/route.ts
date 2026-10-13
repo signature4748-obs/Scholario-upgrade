@@ -8,6 +8,11 @@ import { parseJsonBody, strictBody, safeText } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { parseFlags } from '@/lib/platform/module-flags'
 import { schoolLoginUrl, schoolPublicUrl } from '@/lib/plane'
+import { computeSetupReadiness } from '@/lib/school/setup-readiness'
+import {
+  deriveProvisioningState,
+  principalInviteDeliveryState,
+} from '@/lib/platform/principal-invite'
 
 export const runtime = 'nodejs'
 
@@ -61,6 +66,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
         select: { hostname: true, status: true, isPrimary: true },
       }),
+    ])
+
+    // PROVISIONING STATE (Phase 3) — the honest lifecycle vocabulary
+    // derived from the live database: School.status + the full
+    // setup-readiness document + the principal-invite delivery state.
+    // One school, one dossier — the per-school readiness computation is
+    // the same one the school-plane route serves.
+    const [readiness, invitation] = await Promise.all([
+      computeSetupReadiness(school.id),
+      principal ? principalInviteDeliveryState(principal.id) : Promise.resolve({ state: 'NONE' as const }),
     ])
 
     const [recentActivity, activeSchoolSessions, activeSupportSessions] = await Promise.all([
@@ -122,6 +137,29 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
                   ? 'OWNED'
                   : 'UNKNOWN',
               lastLoginAt: principal.lastLoginAt?.toISOString() ?? null,
+              // Phase 3 — the invite-email delivery state for this
+              // principal (NONE = no invite on record — honest).
+              invitation,
+            }
+          : null,
+      },
+      // Phase 3 — the operator-facing provisioning lifecycle state,
+      // derived (never stored): PENDING_ACTIVATION | REQUIRES_ATTENTION
+      // | READY | NEEDS_SETUP | SUSPENDED, plus the readiness summary
+      // that backs it.
+      provisioning: {
+        state: deriveProvisioningState({
+          status: school.status,
+          setupUsable: readiness?.summary.usable ?? false,
+          inviteState: invitation.state,
+          credentialBootstrapPending: principal?.mustChangePassword ?? false,
+        }),
+        readiness: readiness
+          ? {
+              requiredDone: readiness.summary.requiredDone,
+              requiredTotal: readiness.summary.requiredTotal,
+              requiredComplete: readiness.summary.requiredComplete,
+              usable: readiness.summary.usable,
             }
           : null,
       },

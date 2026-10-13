@@ -46,6 +46,7 @@
  * start, in one transaction). Final digest == initial digest.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
+import { liveFetch } from '../helpers/live-http'
 import { createHash, randomBytes } from 'crypto'
 import { db } from '../helpers/db'
 import { hashSessionToken } from '@/lib/auth'
@@ -112,7 +113,7 @@ let conflictKey = ''
 // ── helpers ─────────────────────────────────────────────────────────────
 
 async function publish(payload: PublishableSlot[]): Promise<Response> {
-  return fetch(`${BASE}/api/timetable/publish`, {
+  return liveFetch(`${BASE}/api/timetable/publish`, {
     method: 'POST',
     headers: { cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ slots: payload }),
@@ -120,7 +121,7 @@ async function publish(payload: PublishableSlot[]): Promise<Response> {
 }
 
 async function getTimetable(): Promise<ServerSlot[]> {
-  const res = await fetch(`${BASE}/api/timetable`, { headers: { cookie } })
+  const res = await liveFetch(`${BASE}/api/timetable`, { headers: { cookie } })
   expect(res.status).toBe(200)
   const body = (await res.json()) as Envelope<ServerSlot[]>
   expect(body.ok).toBe(true)
@@ -219,7 +220,7 @@ beforeAll(async () => {
   originalRows = await db.timetable.findMany({ where: { schoolId } })
   expect(originalRows.length).toBeGreaterThan(0)
 
-  const res = await fetch(`${BASE}/api/auth/login`, {
+  const res = await liveFetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email: DEMO_PRINCIPAL_EMAIL, password: DEMO_PRINCIPAL_PASSWORD }),
@@ -492,7 +493,7 @@ describe('regression · Phase 8 §2(A) timetable publish conflict hardening', ()
 
 afterAll(async () => {
   if (cookie) {
-    await fetch(`${BASE}/api/auth/logout`, {
+    await liveFetch(`${BASE}/api/auth/logout`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
     }).catch(() => {})

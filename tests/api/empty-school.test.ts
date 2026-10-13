@@ -25,6 +25,7 @@ import { db } from '../helpers/db'
  * afterAll — the clean school returns to its at-rest ZERO state.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
+import { liveFetch } from '../helpers/live-http'
 
 import { randomBytes } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
@@ -60,7 +61,7 @@ beforeAll(async () => {
   await resetLoginBuckets([GV_PRINCIPAL])
 
   // Real login (the honest-zero journey starts at the front door).
-  const res = await fetch(`${BASE}/api/auth/login`, {
+  const res = await liveFetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
     body: JSON.stringify({ email: GV_PRINCIPAL, password: PW }),
@@ -110,7 +111,7 @@ afterAll(async () => {
 // ── helpers ────────────────────────────────────────────────────────────────
 
 function as(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${BASE}${path}`, {
+  return liveFetch(`${BASE}${path}`, {
     ...init,
     headers: { ...(init?.headers ?? {}), authorization: `Bearer ${token}`, 'content-type': 'application/json' },
   })

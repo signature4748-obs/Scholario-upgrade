@@ -133,6 +133,20 @@ interface SchoolDetailData {
       status: string
       credentialState: 'BOOTSTRAP_PENDING' | 'OWNED' | 'UNKNOWN'
       lastLoginAt: string | null
+      // Phase 3 — invite-email delivery state (honest: SENT | QUEUED |
+      // FAILED | PENDING | NONE).
+      invitation?: { state: string; transport?: string; errorClass?: string; at?: string }
+    } | null
+  }
+  // Phase 3 — derived provisioning lifecycle state + the readiness
+  // summary that backs it.
+  provisioning?: {
+    state: string
+    readiness: {
+      requiredDone: number
+      requiredTotal: number
+      requiredComplete: boolean
+      usable: boolean
     } | null
   }
   domains: Array<{ hostname: string; status: string; isPrimary: boolean }>
@@ -194,6 +208,40 @@ const STATUS_STYLES: Record<string, string> = {
   SUSPENDED: 'border-red-200 bg-red-50 text-red-600',
   PENDING: 'border-amber-200 bg-amber-50 text-amber-700',
   TRIAL: 'border-slate-200 bg-slate-100 text-slate-600',
+}
+
+// Phase 3 — the derived provisioning lifecycle state (the mission's
+// PENDING / READY / REQUIRES_ATTENTION vocabulary, adapted to the
+// existing status + readiness + invite-delivery facts).
+const PROVISIONING_META: Record<
+  string,
+  { label: string; className: string; hint: string }
+> = {
+  PENDING_ACTIVATION: {
+    label: 'Provisioning complete — awaiting activation',
+    className: 'border-amber-200 bg-amber-50 text-amber-700',
+    hint: 'The tenant is fully provisioned; sign-in stays blocked until you Activate it (audited action).',
+  },
+  REQUIRES_ATTENTION: {
+    label: 'Needs attention — credential delivery',
+    className: 'border-amber-200 bg-amber-50 text-amber-700',
+    hint: 'The principal\'s one-time credential has not been delivered (invite email failed or none on record) and has not been replaced yet — confirm delivery or re-issue the credential below.',
+  },
+  READY: {
+    label: 'Ready',
+    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    hint: 'Active and every required setup section is complete.',
+  },
+  NEEDS_SETUP: {
+    label: 'Usable — setup incomplete',
+    className: 'border-sky-200 bg-sky-50 text-sky-700',
+    hint: 'The school is active; required onboarding sections are still incomplete (see the Setup tab).',
+  },
+  SUSPENDED: {
+    label: 'Suspended',
+    className: 'border-red-200 bg-red-50 text-red-600',
+    hint: 'Locked out — sessions revoked and business APIs locked.',
+  },
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -309,11 +357,25 @@ const CREDENTIAL_META: Record<string, { label: string; className: string }> = {
   },
 }
 
-/** The founding principal's access truth: identity, status, credential state, last sign-in. */
+const INVITE_META: Record<string, { label: string; className: string }> = {
+  SENT: { label: 'Invite sent', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+  QUEUED: { label: 'Invite queued', className: 'border-sky-200 bg-sky-50 text-sky-700' },
+  PENDING: { label: 'Invite pending', className: 'border-sky-200 bg-sky-50 text-sky-700' },
+  FAILED: { label: 'Invite failed', className: 'border-red-200 bg-red-50 text-red-600' },
+  NONE: { label: 'No invite on record', className: 'border-slate-200 bg-slate-100 text-slate-600' },
+}
+
+/** The founding principal's access truth: identity, status, credential state, invite delivery, last sign-in. */
 function PrincipalAccessBlock({
   principal,
+  canManage,
+  onReissue,
+  reissueBusy,
 }: {
   principal: SchoolDetailData['access']['principal']
+  canManage: boolean
+  onReissue: () => void
+  reissueBusy: boolean
 }) {
   if (!principal) {
     return (
@@ -329,6 +391,8 @@ function PrincipalAccessBlock({
   }
 
   const cred = CREDENTIAL_META[principal.credentialState] ?? CREDENTIAL_META.UNKNOWN
+  const invite = principal.invitation ? (INVITE_META[principal.invitation.state] ?? INVITE_META.NONE) : null
+  const reissuable = principal.credentialState === 'BOOTSTRAP_PENDING'
   return (
     <div className="min-w-0 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3.5 lg:col-span-2">
       <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -349,6 +413,15 @@ function PrincipalAccessBlock({
           <Badge variant="outline" className={`normal-case ${cred.className}`}>
             {cred.label}
           </Badge>
+          {invite ? (
+            <Badge
+              variant="outline"
+              className={`normal-case ${invite.className}`}
+              title={principal.invitation?.errorClass ?? undefined}
+            >
+              {invite.label}
+            </Badge>
+          ) : null}
         </div>
         <p className="text-[11px] text-slate-500" title={principal.lastLoginAt ?? undefined}>
           {principal.lastLoginAt ? `Last sign-in ${timeAgo(principal.lastLoginAt)}` : 'Never signed in'}
@@ -360,12 +433,47 @@ function PrincipalAccessBlock({
           sign-in (server-enforced).
         </p>
       )}
+      {/* Phase 3 — credential re-issue: the recovery path for a lost
+          one-time password / failed invite delivery. Only offered while
+          the bootstrap credential is still PENDING (never against an
+          owned credential) and only to schools.manage holders; the
+          server re-authorizes both conditions anyway. */}
+      {reissuable && canManage ? (
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onReissue}
+            disabled={reissueBusy}
+            className="h-8 border-amber-300 bg-white text-amber-700 hover:bg-amber-50 focus-ring"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${reissueBusy ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {reissueBusy ? 'Re-issuing…' : 'Re-issue one-time credential'}
+          </Button>
+          <span className="text-[11px] text-slate-500">
+            Generates a fresh one-time password (the old one stops working), re-sends the invite email and
+            revokes the principal&rsquo;s live sessions. Audited.
+          </span>
+        </div>
+      ) : null}
     </div>
   )
 }
 
 /** The Access card: canonical doors + principal credential truth + domain status summary. */
-function AccessCard({ access, domains }: { access: SchoolDetailData['access']; domains: SchoolDetailData['domains'] }) {
+function AccessCard({
+  access,
+  domains,
+  canManage,
+  onReissue,
+  reissueBusy,
+}: {
+  access: SchoolDetailData['access']
+  domains: SchoolDetailData['domains']
+  canManage: boolean
+  onReissue: () => void
+  reissueBusy: boolean
+}) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
@@ -388,7 +496,12 @@ function AccessCard({ access, domains }: { access: SchoolDetailData['access']; d
           url={access.publicUrl}
           openLabel="Open website"
         />
-        <PrincipalAccessBlock principal={access.principal} />
+        <PrincipalAccessBlock
+          principal={access.principal}
+          canManage={canManage}
+          onReissue={onReissue}
+          reissueBusy={reissueBusy}
+        />
       </div>
       {/* Tenant-domain status summary — the Domains tab remains the
           management surface (verify / add / remove); this is the
@@ -852,6 +965,17 @@ export function SchoolDetailModule() {
 
   const [statusBusy, setStatusBusy] = useState<string | null>(null)
 
+  // Phase 3 — credential re-issue flow state: confirmation dialog +
+  // the one-time result (new tempPassword shown EXACTLY once).
+  const [reissueOpen, setReissueOpen] = useState(false)
+  const [reissueBusy, setReissueBusy] = useState(false)
+  const [reissueResult, setReissueResult] = useState<{
+    tempPassword: string
+    revokedSessions: number
+    invitation?: { state: string; errorClass?: string }
+    principalEmail: string
+  } | null>(null)
+
   const reload = useCallback(async () => {
     if (!id) return
     setLoading(true)
@@ -960,6 +1084,38 @@ export function SchoolDetailModule() {
       toast.error(err.error || 'Plan change failed')
     } finally {
       setPlanBusy(false)
+    }
+  }
+
+  // Phase 3 — credential re-issue (step-up-gated on the server; the
+  // gate wrapper handles the MFA prompt when step-up is armed). The
+  // new one-time password is shown EXACTLY once in the result dialog.
+  const reissueCredential = async () => {
+    if (!id) return
+    setReissueBusy(true)
+    try {
+      const res = await gate(() =>
+        platformApi<{
+          tempPassword: string
+          revokedSessions: number
+          invitation?: { state: string; errorClass?: string }
+          principal: { email: string }
+        }>(`/api/platform/schools/${id}/reissue-credential`, { method: 'POST' }),
+      )
+      if (!res) return // cancelled at the step-up prompt
+      setReissueResult({
+        tempPassword: res.tempPassword,
+        revokedSessions: res.revokedSessions,
+        invitation: res.invitation,
+        principalEmail: res.principal.email,
+      })
+      toast.success('One-time credential re-issued — shown once in the dialog')
+      await reload()
+    } catch (e) {
+      const err = e as PlatformApiError
+      toast.error(err.error || 'Credential re-issue failed')
+    } finally {
+      setReissueBusy(false)
     }
   }
 
@@ -1191,6 +1347,22 @@ export function SchoolDetailModule() {
               {school.name}
             </h1>
             <StatusBadge status={school.status} />
+            {data?.provisioning ? (
+              <Badge
+                variant="outline"
+                className={`normal-case ${
+                  (PROVISIONING_META[data.provisioning.state] ?? PROVISIONING_META.NEEDS_SETUP).className
+                }`}
+                title={
+                  (PROVISIONING_META[data.provisioning.state] ?? PROVISIONING_META.NEEDS_SETUP).hint +
+                  (data.provisioning.readiness
+                    ? ` (${data.provisioning.readiness.requiredDone}/${data.provisioning.readiness.requiredTotal} required setup sections done)`
+                    : '')
+                }
+              >
+                {(PROVISIONING_META[data.provisioning.state] ?? PROVISIONING_META.NEEDS_SETUP).label}
+              </Badge>
+            ) : null}
             {school.isDemo && (
               <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-600 normal-case">
                 demo
@@ -1314,7 +1486,16 @@ export function SchoolDetailModule() {
           {/* Access (PHASE 10) — canonical doors + principal credential
               truth + domain status; leads the dossier so an admin never
               guesses how a tenant is reached. */}
-          <AccessCard access={data.access} domains={data.domains} />
+          <AccessCard
+            access={data.access}
+            domains={data.domains}
+            canManage={canManage}
+            onReissue={() => {
+              setReissueResult(null)
+              setReissueOpen(true)
+            }}
+            reissueBusy={reissueBusy}
+          />
 
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
@@ -2023,6 +2204,121 @@ export function SchoolDetailModule() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── Phase 3 — credential re-issue: confirmation + one-time result ── */}
+      <Dialog open={reissueOpen} onOpenChange={setReissueOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto custom-scrollbar bg-white border-slate-200 text-slate-900 sm:max-w-lg">
+          {reissueResult ? (
+            <div className="space-y-4">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500 text-white">
+                    <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                  </span>
+                  New one-time credential
+                </DialogTitle>
+                <DialogDescription className="text-slate-500">
+                  The previous bootstrap password stopped working the moment this was issued.{' '}
+                  {reissueResult.revokedSessions > 0
+                    ? `${reissueResult.revokedSessions} live session(s) for the principal were revoked. `
+                    : ''}
+                  The principal must replace this password at first sign-in (enforced).
+                </DialogDescription>
+              </DialogHeader>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-700">
+                  One-time credential for {reissueResult.principalEmail}
+                </p>
+                <p className="mt-1 text-xs text-amber-800">
+                  Shown only once — never displayed again. Copy it now and deliver it to the principal.
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded-lg border border-amber-200 bg-white px-3 py-2 font-mono text-sm text-slate-900">
+                    {reissueResult.tempPassword}
+                  </code>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 border-amber-300 bg-white text-amber-700 hover:bg-amber-50 focus-ring"
+                    onClick={() => {
+                      void navigator.clipboard
+                        ?.writeText(reissueResult.tempPassword)
+                        .then(() => toast.success('One-time credential copied'))
+                        .catch(() => toast.error('Copy failed — select the text manually'))
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                    Copy
+                  </Button>
+                </div>
+              </div>
+              {reissueResult.invitation ? (
+                <div
+                  className={`flex items-start gap-2.5 rounded-xl border p-3 text-xs ${
+                    reissueResult.invitation.state === 'FAILED' || reissueResult.invitation.state === 'NONE'
+                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                      : 'border-teal-200 bg-teal-50 text-teal-800'
+                  }`}
+                >
+                  {reissueResult.invitation.state === 'FAILED' || reissueResult.invitation.state === 'NONE' ? (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  )}
+                  <p>
+                    <span className="font-semibold">Invite email to {reissueResult.principalEmail}:</span>{' '}
+                    {reissueResult.invitation.state === 'SENT'
+                      ? 'sent.'
+                      : reissueResult.invitation.state === 'QUEUED'
+                        ? 'accepted by the email provider — delivery pending confirmation.'
+                        : `failed${reissueResult.invitation.errorClass ? ` (${reissueResult.invitation.errorClass})` : ''} — deliver the one-time credential above yourself.`}
+                  </p>
+                </div>
+              ) : null}
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => setReissueOpen(false)}
+                  className="h-10 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
+                >
+                  Done
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
+                  <RefreshCw className="h-4 w-4 text-amber-600" aria-hidden="true" />
+                  Re-issue the one-time credential?
+                </DialogTitle>
+                <DialogDescription className="text-slate-500">
+                  {data?.access.principal
+                    ? `A fresh one-time password will be generated for ${data.access.principal.email}. The current bootstrap password stops working immediately, the principal's live sessions are revoked, and a new invite email is sent. Audited.`
+                    : 'A fresh one-time password will be generated for the founding principal. Audited.'}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => setReissueOpen(false)}
+                  disabled={reissueBusy}
+                  className="h-10 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => void reissueCredential()}
+                  disabled={reissueBusy}
+                  className="h-10 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold focus-ring"
+                >
+                  <RefreshCw className={`h-4 w-4 ${reissueBusy ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  {reissueBusy ? 'Re-issuing…' : 'Re-issue credential'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {stepUpNode}
     </section>

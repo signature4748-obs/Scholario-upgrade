@@ -10,7 +10,13 @@
  *                               none failed, every checksum == repo file.
  *   B. schema verification   — User.mustChangePassword (boolean, NOT NULL)
  *                               and User.passwordChangedAt (timestamp)
- *                               exist.
+ *                               exist; the FeeTransaction studentId + feeId
+ *                               FKs exist with the intended referential
+ *                               behavior; BOTH tenant-guard triggers
+ *                               (tg_guard_FT_ins / tg_guard_FT_upd) are
+ *                               present and ENABLED (tgenabled = 'O') and
+ *                               bound to tg_guard_FT_ins_fn; zero dangling
+ *                               feeId references remain.
  *   C. index verification    — all 24 pg_trgm search indexes and all 11
  *                               schoolId tenant indexes exist (exact names).
  *   D. credential migration  — every PRINCIPAL that never set its own
@@ -26,6 +32,13 @@
  *                               (no unexpected deletions); _prisma_migrations
  *                               grew by exactly the number of applied
  *                               migrations; user counts unchanged.
+ *   E2. financial ledger     — the privacy-safe digest (receiptNo |
+ *                               studentId | amount per row, cutoff-scoped)
+ *                               is IDENTICAL to the pre-flight snapshot and
+ *                               the ledger row count within the cutoff
+ *                               window is unchanged: amounts, receipt
+ *                               numbers and student references are
+ *                               immutable; row VALUES are never read.
  *   F. production health     — BOTH active production planes answer
  *                               /health/ready 200 with database:ok (the
  *                               deployments stayed healthy). TWO-PLANE
@@ -61,6 +74,7 @@ import {
   AdminState,
   allIndexNames,
   exitWithProblems,
+  financialIntegrity,
   gitSha,
   indexDefinitions,
   mgmtQuery,
@@ -127,7 +141,8 @@ async function main(): Promise<void> {
   console.log(`\n  A. migration status : ${gate.applied.length}/${gate.repo.length} applied, ${gate.pending.length} pending, checksums ${gate.checksumDivergences.length ? 'DRIFT ✖' : 'true ✓'}`)
 
   // B. Schema verification — credential columns + the FeeTransaction.studentId
-  // FK hardening object (20261013120000): the constraint must exist with the
+  // FK hardening object (20261013120000) and the FeeTransaction.feeId FK
+  // hardening object (20261013140000): the constraints must exist with the
   // intended referential behavior (ledger-preserving ON DELETE SET NULL).
   const columns = await userCredentialColumns()
   const colMap = new Map(columns.map((c) => [c.column_name, c]))
@@ -152,8 +167,51 @@ async function main(): Promise<void> {
   } else if (!fkDef.includes('ON DELETE SET NULL') || !fkDef.includes('ON UPDATE CASCADE')) {
     problems.push(`FeeTransaction_studentId_fkey has unintended referential behavior: ${fkDef}`)
   }
+  const feeFkRows = (await mgmtQuery(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'FeeTransaction_feeId_fkey' AND conrelid = '"FeeTransaction"'::regclass`,
+  )) as Array<{ def: string }>
+  const feeFkDef = feeFkRows[0]?.def ?? null
+  if (!feeFkDef) {
+    problems.push('FeeTransaction_feeId_fkey constraint missing (20261013140000 not in effect)')
+  } else if (!feeFkDef.includes('ON DELETE SET NULL') || !feeFkDef.includes('ON UPDATE CASCADE')) {
+    problems.push(`FeeTransaction_feeId_fkey has unintended referential behavior: ${feeFkDef}`)
+  }
+  // Post-heal invariant (20261013140000): no FeeTransaction may carry a feeId
+  // that does not resolve to a same-school Fee — the guard's own predicate,
+  // held at zero. (Read-only count; row values are never read.)
+  const danglingFeeRows = (await mgmtQuery(
+    `SELECT count(*)::int AS n FROM "FeeTransaction" ft WHERE ft."feeId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Fee" f WHERE f."id" = ft."feeId" AND f."schoolId" = ft."schoolId")`,
+  )) as Array<{ n: number }>
+  const danglingFee = danglingFeeRows[0]?.n ?? 0
+  if (danglingFee !== 0) {
+    problems.push(`dangling FeeTransaction.feeId references remain: ${danglingFee} row(s) (20261013140000 heal incomplete)`)
+  }
+  // Trigger-state gate (feeId-FK era): the migration suspends
+  // tg_guard_FT_upd for exactly its one self-heal statement inside its own
+  // transaction (transactional DDL — a failed run rolls the trigger back to
+  // enabled). Post-apply, BOTH FeeTransaction tenant guards must be present,
+  // ENABLED (tgenabled = 'O') and bound to tg_guard_FT_ins_fn — a disabled
+  // or missing guard is an open tenant-isolation hole, so this fails closed.
+  const trgRows = (await mgmtQuery(
+    `SELECT t.tgname, t.tgenabled, p.proname AS fn FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid WHERE t.tgrelid = '"FeeTransaction"'::regclass AND t.tgname IN ('tg_guard_FT_ins','tg_guard_FT_upd') AND NOT t.tgisinternal`,
+  )) as Array<{ tgname: string; tgenabled: string; fn: string }>
+  const trgMap = new Map(trgRows.map((r) => [r.tgname, r]))
+  let triggersOk = true
+  for (const name of ['tg_guard_FT_ins', 'tg_guard_FT_upd']) {
+    const t = trgMap.get(name)
+    if (!t) {
+      triggersOk = false
+      problems.push(`tenant-guard trigger ${name} missing on FeeTransaction (guards must remain in place after 20261013140000)`)
+    } else if (t.tgenabled !== 'O') {
+      triggersOk = false
+      problems.push(`tenant-guard trigger ${name} is disabled (tgenabled = '${t.tgenabled}') — tenant guards must stay enabled`)
+    } else if (t.fn !== 'tg_guard_FT_ins_fn') {
+      triggersOk = false
+      problems.push(`tenant-guard trigger ${name} is bound to unexpected function '${t.fn}' (expected tg_guard_FT_ins_fn)`)
+    }
+  }
   console.log(
-    `  B. schema           : mustChangePassword ${mustChange ? `${mustChange.data_type} NOT NULL ✓` : 'MISSING ✖'} · passwordChangedAt ${changedAt ? changedAt.data_type + ' ✓' : 'MISSING ✖'} · studentId FK ${fkDef ? 'present (SET NULL/CASCADE) ✓' : 'MISSING ✖'}`,
+    `  B. schema           : mustChangePassword ${mustChange ? `${mustChange.data_type} NOT NULL ✓` : 'MISSING ✖'} · passwordChangedAt ${changedAt ? changedAt.data_type + ' ✓' : 'MISSING ✖'} · studentId FK ${fkDef ? 'present (SET NULL/CASCADE) ✓' : 'MISSING ✖'} · feeId FK ${feeFkDef ? 'present (SET NULL/CASCADE) ✓' : 'MISSING ✖'} · dangling feeId ${danglingFee} · tenant guards ${triggersOk ? 'ins+upd enabled ✓' : 'MISSING/DISABLED ✖'}`,
   )
 
   // C. Index verification — exact names, from the migration files.
@@ -240,6 +298,34 @@ async function main(): Promise<void> {
   console.log(
     `  E. row counts       : ${Object.keys(afterCounts).length} tables · decreases 0 ✓ · ${increases.length ? 'increases: ' + increases.join(', ') : 'no organic growth'} · users ${users.total} (stable ✓)`,
   )
+
+  // E2. Financial-ledger integrity (privacy-safe): recompute the digest over
+  // the snapshot's EXACT cutoff window and compare. The migration may detach
+  // dead feeId pointers (excluded from the digest by design) but must never
+  // change an amount, receipt number or student reference, and must never
+  // drop a ledger row. Organic app inserts after the snapshot instant are
+  // excluded from BOTH sides by the cutoff — no false positives. Values are
+  // never read, printed or stored; only counts and the aggregate md5.
+  if (!snapshot.financialIntegrity) {
+    problems.push(
+      'snapshot lacks financialIntegrity (captured before the feeId-FK era digest existed) — re-run preflight on the release commit before applying',
+    )
+  } else {
+    const before = snapshot.financialIntegrity
+    const after = await financialIntegrity(before.cutoff)
+    if (after.rows !== before.rows) {
+      problems.push(`FeeTransaction ledger rows CHANGED within the snapshot window: ${before.rows} → ${after.rows} (rows may never be added or dropped inside the window)`)
+    }
+    if (after.amountSum !== before.amountSum) {
+      problems.push(`FeeTransaction amount sum changed within the snapshot window: ${before.amountSum} → ${after.amountSum}`)
+    }
+    if (after.ledgerDigest !== before.ledgerDigest) {
+      problems.push('FeeTransaction financial digest CHANGED within the snapshot window — amounts/receiptNos/studentIds are immutable; investigate before proceeding')
+    }
+    console.log(
+      `  E2. financial ledger : rows ${before.rows} → ${after.rows} · amount sum ${before.amountSum} → ${after.amountSum} · digest ${before.ledgerDigest.slice(0, 12)}… → ${after.ledgerDigest.slice(0, 12)}… ${after.ledgerDigest === before.ledgerDigest ? '✓ unchanged' : '✖ CHANGED'} · feeId pointers ${before.feeIdNotNull} → ${after.feeIdNotNull} (informational; the heal detaches dead pointers) (values never read)`,
+    )
+  }
 
   // F. Production health — BOTH active planes must have stayed healthy.
   // Fail-closed two-plane contract: one unhealthy plane = verification FAIL.

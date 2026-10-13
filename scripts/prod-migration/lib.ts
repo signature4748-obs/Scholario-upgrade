@@ -88,6 +88,26 @@ export interface AdminState {
   withPassword: number
 }
 
+/**
+ * Privacy-safe financial-ledger integrity evidence (feeId-FK era,
+ * 20261013140000): an md5 digest over the IMMUTABLE financial columns of
+ * every FeeTransaction row (receiptNo | studentId | amount, ordered by id)
+ * plus row count and amount sum — scoped to a DB-clock cutoff so organic
+ * app growth after the snapshot cannot false-positive the comparison.
+ * feeId is deliberately NOT part of the digest: the migration's sanctioned
+ * heal detaches dead feeId pointers, and the app may legitimately attach
+ * valid ones. Row VALUES are never returned, printed or stored — only the
+ * aggregate hash and counts.
+ */
+export interface FinancialIntegrity {
+  /** DB clock at capture (clock_timestamp()::text) — the digest window. */
+  cutoff: string
+  rows: number
+  feeIdNotNull: number
+  amountSum: string
+  ledgerDigest: string
+}
+
 export interface Snapshot {
   capturedAt: string
   gitSha: string | null
@@ -95,6 +115,10 @@ export interface Snapshot {
   userState: UserState
   /** PlatformAdmin credential-plane state (ACCOUNT-RECOVERY era; counts only). */
   adminState?: AdminState
+  /** Financial-ledger digest (feeId-FK era). Verify FAILS CLOSED when a
+   *  snapshot lacks it — the apply runbook always pairs a fresh preflight
+   *  snapshot with the verify stage from the same pipeline version. */
+  financialIntegrity?: FinancialIntegrity
   appliedMigrations: Array<{ name: string; checksum: string | null; finished: boolean }>
 }
 
@@ -436,6 +460,44 @@ export async function adminState(): Promise<AdminState> {
   }
 }
 
+/** DB clock (the authoritative time source for digest windows — the same
+ *  server that stamps "createdAt" on inserts, so the cutoff can never
+ *  classify a future insert as pre-snapshot). */
+export async function dbNow(): Promise<string> {
+  const rows = (await mgmtQuery(`SELECT clock_timestamp()::text AS now`)) as Array<{ now: string }>
+  return String(rows[0]?.now ?? new Date().toISOString())
+}
+
+/**
+ * Privacy-safe financial-ledger digest for "FeeTransaction": count, count of
+ * non-null feeId pointers, exact decimal sum of amounts, and an md5 over
+ * every row's immutable financial tuple (receiptNo | studentId | amount,
+ * ordered by id). With a cutoff, the digest covers only rows created at or
+ * before that DB clock instant — preflight captures the cutoff+digest, and
+ * verify recomputes the SAME window: organic app inserts after the snapshot
+ * are excluded (no false positive), while any change to a pre-existing
+ * row's amount, receipt number or student reference — or any deleted ledger
+ * row — changes the digest and fails verification.
+ */
+export async function financialIntegrity(cutoff?: string): Promise<FinancialIntegrity> {
+  const where = cutoff ? `WHERE "createdAt" <= ${sqlLiteral(cutoff)}::timestamptz` : ''
+  const rows = (await mgmtQuery(
+    `SELECT count(*)::int AS n_rows,
+            count(*) FILTER (WHERE "feeId" IS NOT NULL)::int AS fee_id_not_null,
+            COALESCE(sum("amount"), 0)::text AS amount_sum,
+            md5(COALESCE(string_agg(COALESCE("receiptNo", '<null>') || '|' || COALESCE("studentId", '<null>') || '|' || "amount"::text, E'\\n' ORDER BY "id"), '')) AS ledger_digest
+     FROM "FeeTransaction" ${where}`,
+  )) as Array<{ n_rows: number; fee_id_not_null: number; amount_sum: string; ledger_digest: string }>
+  const r = rows[0]
+  return {
+    cutoff: cutoff ?? '',
+    rows: Number(r?.n_rows ?? 0),
+    feeIdNotNull: Number(r?.fee_id_not_null ?? 0),
+    amountSum: String(r?.amount_sum ?? '0'),
+    ledgerDigest: String(r?.ledger_digest ?? ''),
+  }
+}
+
 /** Production readiness probe (no credentials involved). */
 export async function productionHealth(url: string): Promise<{ ok: boolean; status: number; body: string }> {
   const controller = new AbortController()
@@ -638,6 +700,14 @@ export const MIGRATION_EXPECTATIONS: Record<string, MigrationExpectation> = {
   // the migration's verifiable object.
   '20261013120000_fee_transaction_student_fk': {
     constraints: ['FeeTransaction_studentId_fkey'],
+  },
+  // FeeTransaction.feeId FK hardening: the migration self-heals the 3
+  // dangling legacy fee pointers (school-scoped predicate, mirroring the
+  // tenant guard's feeId branch — cross-school pointers heal too) and then
+  // enforces the constraint. The constraint name is the migration's
+  // verifiable object.
+  '20261013140000_fee_transaction_dangling_feeid_self_heal': {
+    constraints: ['FeeTransaction_feeId_fkey'],
   },
 }
 

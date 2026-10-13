@@ -72,6 +72,9 @@ interface PrincipalSummary {
   status: string
   credentialState: 'BOOTSTRAP_PENDING' | 'OWNED' | 'UNKNOWN'
   lastLoginAt: string | null
+  // Phase 3 — invite-email delivery state (SENT | QUEUED | PENDING |
+  // FAILED | NONE).
+  invitation?: string
 }
 
 interface SchoolRow {
@@ -277,21 +280,33 @@ function OpenControl({
   )
 }
 
-/** The founding principal line: email + credential state hint. */
+/** The founding principal line: email + credential/invite state hints. */
 function PrincipalLine({ principal }: { principal: PrincipalSummary | null }) {
   if (!principal) {
     return <p className="truncate text-[11px] text-slate-400">no principal on record</p>
   }
+  const inviteFailed = principal.invitation === 'FAILED'
   return (
     <p
       className="flex min-w-0 items-center gap-1 truncate text-[11px] text-slate-500"
-      title={`Founding principal: ${principal.name ?? principal.email}${principal.lastLoginAt ? ` · last sign-in ${new Date(principal.lastLoginAt).toLocaleString()}` : ' · never signed in'}`}
+      title={`Founding principal: ${principal.name ?? principal.email}${principal.lastLoginAt ? ` · last sign-in ${new Date(principal.lastLoginAt).toLocaleString()}` : ' · never signed in'}${principal.invitation ? ` · invite email: ${principal.invitation}` : ''}`}
     >
       <UserCog className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
       <span className="truncate font-mono">{principal.email}</span>
       {principal.credentialState === 'BOOTSTRAP_PENDING' && (
         <span className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1 text-[10px] font-medium text-amber-700" title="One-time bootstrap credential not yet replaced by the principal">
           bootstrap
+        </span>
+      )}
+      {/* Phase 3 — invite-delivery warning chip: only surfaces when the
+          delivery failed while the credential is still pending (the
+          school record's Access card is the management surface). */}
+      {inviteFailed && principal.credentialState === 'BOOTSTRAP_PENDING' && (
+        <span
+          className="shrink-0 rounded border border-red-200 bg-red-50 px-1 text-[10px] font-medium text-red-600"
+          title="Invite email failed — confirm credential delivery or re-issue it from the school record's Access card"
+        >
+          invite failed
         </span>
       )}
     </p>

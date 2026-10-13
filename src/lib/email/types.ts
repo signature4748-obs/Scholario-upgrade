@@ -32,6 +32,7 @@ export type TemplateId =
   | 'admission-enquiry-received'
   | 'salary-payment-recorded'
   | 'platform-password-reset'
+  | 'principal-invite'
 
 /** Props for 'admission-enquiry-received' (public form confirmation). */
 export interface AdmissionEnquiryEmailProps {
@@ -66,11 +67,32 @@ export interface PlatformPasswordResetEmailProps {
   requestIp?: string
 }
 
+/** Props for 'principal-invite' (founding-principal credential delivery). */
+export interface PrincipalInviteEmailProps {
+  /** Principal display name (from the provisioned User row). */
+  principalName: string
+  /** School display name (the new tenant). */
+  schoolName: string
+  /** The school's canonical sign-in door (absolute or relative — rendered as a link). */
+  loginUrl: string
+  /**
+   * The one-time bootstrap password — included ONLY when it was
+   * generated server-side (the same convention as the provision
+   * response's tempPassword field: a caller-supplied password is
+   * never emailed). Omitted ⇒ the email honestly says the platform
+   * team will hand it over.
+   */
+  tempPassword?: string
+  /** True while the school is PENDING (sign-in works after activation). */
+  pendingActivation: boolean
+}
+
 /** Per-template prop payload (validated at RENDER time, not by types). */
 export type EmailTemplateProps =
   | AdmissionEnquiryEmailProps
   | SalaryPaymentEmailProps
   | PlatformPasswordResetEmailProps
+  | PrincipalInviteEmailProps
 
 /**
  * Tenant branding resolved server-side from the School row (minimal

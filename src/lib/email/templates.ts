@@ -288,6 +288,75 @@ function renderPlatformPasswordReset(
   }
 }
 
+// ─── 'principal-invite' (founding principal credential delivery) ───────
+// PHASE 3 (school provisioning completion). The tempPassword prop is
+// only ever populated with a SERVER-GENERATED one-time bootstrap
+// password (never a caller-supplied one); it is escaped and rendered
+// as plain text in a <code> block — never into a URL, log line, or
+// subject. The EmailDelivery row stores recipient+template only.
+const principalInvitePropsSchema = z.object({
+  principalName: z.string().trim().min(1).max(200),
+  schoolName: z.string().trim().min(1).max(200),
+  loginUrl: z
+    .string()
+    .trim()
+    .min(4)
+    .max(2048)
+    .regex(/^(https?:\/\/|\/)/, 'loginUrl must be an absolute http(s) URL or a root-relative path'),
+  tempPassword: z.string().trim().min(8).max(128).optional(),
+  pendingActivation: z.boolean(),
+})
+
+function renderPrincipalInvite(
+  props: z.infer<typeof principalInvitePropsSchema>,
+  branding: EmailBranding,
+): RenderedEmail {
+  const principalName = escapeHtml(props.principalName)
+  const loginHref = escapeHtml(props.loginUrl)
+  // Display label for the link: neutral text (long URLs wrap badly).
+  const loginLabel = 'Sign in to your school'
+  const tempPassword = props.tempPassword ? escapeHtml(props.tempPassword) : ''
+
+  const body = [
+    heading('Your principal account is ready'),
+    paragraph(`Dear <strong>${principalName}</strong>,`),
+    paragraph(
+      `A Scholario workspace has been created for <strong>${escapeHtml(props.schoolName)}</strong>, and you are its founding principal. Use the button below to sign in.`,
+    ),
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px 0;"><tr><td style="background:${sanitizeColor(branding.primaryColor)};border-radius:8px;">` +
+      `<a href="${loginHref}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${loginLabel}</a>` +
+      `</td></tr></table>`,
+    props.tempPassword
+      ? paragraph('Your one-time sign-in password is:')
+      : '',
+    props.tempPassword
+      ? `<div style="margin:0 0 16px 0;padding:12px 16px;background:#fafafa;border:1px solid ${CARD_BORDER};border-radius:8px;"><code style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:15px;color:${TEXT_STRONG};word-break:break-all;">${tempPassword}</code></div>`
+      : '',
+    props.tempPassword
+      ? paragraph(
+          'This password is a <strong>one-time bootstrap credential</strong> — you will be asked to choose your own password the first time you sign in (this is enforced and cannot be skipped).',
+        )
+      : paragraph(
+          'Your one-time sign-in password will be shared with you separately by the platform team. You will be asked to choose your own password the first time you sign in.',
+        ),
+    props.pendingActivation
+      ? paragraph(
+          'Your school is still being activated by the platform — if sign-in does not work yet, try again shortly.',
+        )
+      : '',
+    paragraph(
+      'If you were not expecting this email, you can safely ignore it — no account is accessible without the one-time password.',
+    ),
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  return {
+    subject: `Your Scholario principal account — ${branding.schoolName}`,
+    html: brandedWrapper(branding, body),
+  }
+}
+
 // ─── dispatcher ─────────────────────────────────────────────────────────
 
 /**
@@ -339,6 +408,17 @@ export function renderTemplate(
         )
       }
       return renderPlatformPasswordReset(parsed.data, branding)
+    }
+    case 'principal-invite': {
+      const parsed = principalInvitePropsSchema.safeParse(props)
+      if (!parsed.success) {
+        throw new Error(
+          `invalid props for template 'principal-invite': ${parsed.error.issues
+            .map((i) => `${i.path.join('.') || 'props'}: ${i.message}`)
+            .join('; ')}`,
+        )
+      }
+      return renderPrincipalInvite(parsed.data, branding)
     }
     default: {
       // Exhaustiveness guard — TemplateId is a closed union, so this
