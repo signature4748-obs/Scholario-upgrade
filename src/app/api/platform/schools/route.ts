@@ -10,6 +10,12 @@ import { parseQuery, parseJsonBody, strictBody, emailSchema, safeText } from '@/
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { hostnameRejectionReason, normalizeHostname } from '@/lib/tenant/hostname'
 import { schoolLoginUrl, schoolPublicUrl } from '@/lib/plane'
+import {
+  inviteStateFromRowStatus,
+  principalInviteDeliveryState,
+  provisionInviteKey,
+  sendPrincipalInvite,
+} from '@/lib/platform/principal-invite'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -82,6 +88,7 @@ export async function GET(req: NextRequest) {
           where: { schoolId: { in: schoolIds }, role: 'PRINCIPAL' },
           orderBy: { createdAt: 'asc' },
           select: {
+            id: true,
             schoolId: true,
             email: true,
             name: true,
@@ -92,7 +99,7 @@ export async function GET(req: NextRequest) {
           },
         })
       : []
-    const foundingBySchool = new Map<string, { email: string; name: string | null; status: string; mustChangePassword: boolean; passwordChangedAt: Date | null; lastLoginAt: Date | null }>()
+    const foundingBySchool = new Map<string, { id: string; email: string; name: string | null; status: string; mustChangePassword: boolean; passwordChangedAt: Date | null; lastLoginAt: Date | null }>()
     for (const p of principals) {
       // orderBy createdAt asc → the FIRST row seen per school is the
       // founding principal; later principals are ignored here (the
@@ -100,6 +107,28 @@ export async function GET(req: NextRequest) {
       // nullable on User — the `in` filter above guarantees a value.)
       const { schoolId, ...principalSummary } = p
       if (schoolId && !foundingBySchool.has(schoolId)) foundingBySchool.set(schoolId, principalSummary)
+    }
+
+    // Invite-delivery state per founding principal (Phase 3): one
+    // prefix-lookup pass over EmailDelivery (dedupeKey is unique → the
+    // LIKE-prefix uses the index). Rows are ordered so the LATEST row
+    // per principal wins (re-issues supersede the original invite).
+    const principalIds = [...foundingBySchool.values()].map((p) => p.id)
+    const inviteRows = principalIds.length
+      ? await db.emailDelivery.findMany({
+          where: {
+            OR: principalIds.map((id) => ({ dedupeKey: { startsWith: `principal-invite:${id}` } })),
+          },
+          orderBy: { updatedAt: 'desc' },
+          select: { dedupeKey: true, status: true },
+        })
+      : []
+    const inviteByPrincipal = new Map<string, string>()
+    for (const row of inviteRows) {
+      const principalId = row.dedupeKey?.match(/^principal-invite:([^:]+)/)?.[1]
+      if (principalId && !inviteByPrincipal.has(principalId)) {
+        inviteByPrincipal.set(principalId, row.status)
+      }
     }
 
     return {
@@ -125,7 +154,9 @@ export async function GET(req: NextRequest) {
           counts: s._count,
           // The founding principal's access state (same vocabulary as
           // the detail dossier — BOOTSTRAP_PENDING means the one-time
-          // credential has not been replaced yet).
+          // credential has not been replaced yet) + the invite-email
+          // delivery state (Phase 3: NONE = no invite on record —
+          // honestly unknown, never fabricated OK).
           principal: founding
             ? {
                 email: founding.email,
@@ -137,6 +168,7 @@ export async function GET(req: NextRequest) {
                     ? ('OWNED' as const)
                     : ('UNKNOWN' as const),
                 lastLoginAt: founding.lastLoginAt?.toISOString() ?? null,
+                invitation: inviteStateFromRowStatus(inviteByPrincipal.get(founding.id) ?? 'NONE'),
               }
             : null,
           // TWO-PROJECT TOPOLOGY — the canonical cross-plane doors this
@@ -274,6 +306,7 @@ export async function POST(req: NextRequest) {
     async (ctx) => {
       const body = await parseJsonBody(req, provisionSchema)
       const ip = clientIpFromHeaders(req.headers)
+      const principalEmail = body.principalEmail.toLowerCase()
 
       // HONEST capability gate — Google SSO is architected but NOT
       // implemented; provisioning with it must fail loudly, not silently
@@ -284,6 +317,93 @@ export async function POST(req: NextRequest) {
             'Google SSO is not yet connected on this platform. Provision with email authentication — Google identity can be enabled for this school once the integration is configured.',
           internalDetail: 'provision: authMethod GOOGLE_SSO refused (integration not implemented)',
         })
+      }
+
+      // IDEMPOTENT REPLAY (Phase 3 — mission §4: idempotency for
+      // retries and duplicate requests). A retry of a just-provisioned
+      // request (lost response, double submit, network error
+      // mid-flight) must not bury the operator in an opaque 409. When a
+      // school exists whose FULL identity fingerprint matches this
+      // payload — same slug AND code AND founding-principal email — AND
+      // it was provisioned by THIS admin (audit-proven) AND it is still
+      // PENDING, the retry is a REPLAY: the original school is returned
+      // with `replayed: true` and NO second school/principal is created.
+      // The database uniques remain the authority; anything that does
+      // not match ALL replay conditions falls through to the standard
+      // CONFLICT path below. The one-time tempPassword is deliberately
+      // NOT re-surfaced (only its scrypt hash exists) — the recovery
+      // path for a lost credential is the reissue-credential route.
+      const existingBySlug = await db.school.findUnique({ where: { slug: body.slug } })
+      if (existingBySlug) {
+        const [existingPrincipal, origProvisionAudit] = await Promise.all([
+          db.user.findFirst({
+            where: { schoolId: existingBySlug.id, role: 'PRINCIPAL' },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true, email: true, name: true, mustChangePassword: true },
+          }),
+          db.platformAuditLog.findFirst({
+            where: {
+              action: 'platform.school.provisioned',
+              targetId: existingBySlug.id,
+              adminId: ctx.admin.id,
+            },
+            select: { id: true },
+          }),
+        ])
+        const isReplay =
+          existingBySlug.code === body.code &&
+          existingBySlug.status === 'PENDING' &&
+          !!existingPrincipal &&
+          existingPrincipal.email === principalEmail &&
+          !!origProvisionAudit
+        if (isReplay && existingPrincipal) {
+          const [tenantDomains, invitation] = await Promise.all([
+            db.tenantDomain.findMany({
+              where: { schoolId: existingBySlug.id },
+              orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+              select: { hostname: true, status: true, isPrimary: true },
+            }),
+            principalInviteDeliveryState(existingPrincipal.id),
+          ])
+          const custom = tenantDomains.find((d) => d.isPrimary) ?? tenantDomains[0] ?? null
+          await platformAuditEvent({
+            adminId: ctx.admin.id,
+            action: 'platform.school.provision_replayed',
+            targetType: 'SCHOOL',
+            targetId: existingBySlug.id,
+            schoolId: existingBySlug.id,
+            ip,
+            reason: `idempotent replay of provision for ${existingBySlug.slug} (retry by the same admin; no duplicate created)`,
+          })
+          return {
+            replayed: true,
+            school: {
+              id: existingBySlug.id,
+              name: existingBySlug.name,
+              slug: existingBySlug.slug,
+              code: existingBySlug.code,
+              status: existingBySlug.status,
+              plan: existingBySlug.plan,
+            },
+            principal: {
+              id: existingPrincipal.id,
+              email: existingPrincipal.email,
+              name: existingPrincipal.name,
+            },
+            loginUrl: schoolLoginUrl(existingBySlug.slug),
+            publicUrl: schoolPublicUrl(existingBySlug.slug),
+            domain: {
+              customDomain: custom ? { hostname: custom.hostname, status: custom.status } : null,
+              tempDomain: `${existingBySlug.slug}.scholario.cloud`,
+              previewUrl: `/?tenant=${encodeURIComponent(existingBySlug.slug)}`,
+            },
+            mustChangePassword: existingPrincipal.mustChangePassword,
+            invitation,
+            nextStep: 'activate',
+            replayNote:
+              'This request matched a school you provisioned that is still PENDING — no duplicate was created. The one-time credential was displayed only at the original creation; if it was lost, re-issue it from the school record (Access card).',
+          }
+        }
       }
 
       // UX fast-path pre-checks (the transaction's DB uniques are the
@@ -321,7 +441,6 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const principalEmail = body.principalEmail.toLowerCase()
       // The school's platform subdomain — DATA derived from the slug
       // (Part 4 STEP 3): <slug>.scholario.cloud, with the ?tenant= link
       // as the pre-DNS development fallback. Never a custom domain.
@@ -533,6 +652,22 @@ export async function POST(req: NextRequest) {
         },
       })
 
+      // PRINCIPAL INVITE (Phase 3) — best-effort credential-delivery
+      // email through the shared pipeline, AFTER the transaction and
+      // audit are durable. sendEmail NEVER throws: a failed delivery
+      // is a VALUE (state FAILED) surfaced to the operator — the school
+      // itself is fully provisioned and the one-time tempPassword above
+      // remains the authoritative channel. The email includes the
+      // password ONLY when it was server-generated (same convention as
+      // the response field). Dedupe: one logical invite per principal
+      // bootstrap (a SENT/QUEUED row is never re-sent).
+      const invitation = await sendPrincipalInvite({
+        school: { id: school.id, name: school.name, slug: school.slug, status: school.status },
+        principal: { id: principal.id, email: principal.email, name: principal.name },
+        ...(generated ? { tempPassword: principalPassword } : {}),
+        dedupeKey: provisionInviteKey(principal.id),
+      })
+
       return {
         school: {
           id: school.id,
@@ -566,6 +701,10 @@ export async function POST(req: NextRequest) {
         // bootstrap credential is single-purpose.
         mustChangePassword: true,
         bootstrap: bootstrapCounts,
+        // Invite-delivery state (honest: SENT/QUEUED/FAILED — never
+        // fabricated; FAILED ⇒ deliver the credential manually or
+        // re-issue it from the school record).
+        invitation,
         nextStep: 'activate',
       }
     },
