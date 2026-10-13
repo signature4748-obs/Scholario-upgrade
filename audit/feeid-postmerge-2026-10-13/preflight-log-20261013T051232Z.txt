@@ -1,0 +1,22 @@
+[prod-migration:preflight] ═══ PRE-FLIGHT (read-only) ═══
+  project ref : kbyknezedewvgrnqervj
+  checkout    : 27183a991926db07729784b16f4752821a029ae6
+  token       : <present, never logged>
+
+  repository migrations : 24
+  production applied    : 23
+  pending (to apply)    : 1
+    · 20261013140000_fee_transaction_dangling_feeid_self_heal  (sha256 ec171c91ee4e2be1…)
+
+  expected pending set  : exact match ✓ (1 migration(s) in timestamp order)
+  object expectations   : clean ✓
+
+  snapshot written      : /home/z/my-project/audit/feeid-postmerge-2026-10-13/preflight-snapshot-20261013T051232Z.json
+    · public tables counted : 117
+    · users total            : 187 (school-plane 184, principals 4)
+    · platform admins         : 2 total, 0 google-linked, 2 with password (counts only)
+    · credential columns     : present
+    · financial ledger     : 226 rows · feeId pointers 226 · amount sum 602480.00 · digest a87ebe601cdf… (privacy-safe md5 over receipt|student|amount; cutoff 2026-10-13 05:12:37.824538+00)
+    · seed execution         : NEVER (pipeline runs migrations only)
+
+[prod-migration:preflight] ✓ PRE-FLIGHT GREEN — safe to apply

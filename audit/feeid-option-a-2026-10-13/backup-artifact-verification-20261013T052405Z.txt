@@ -1,0 +1,63 @@
+Backup artifact verification evidence — Option A preparation session
+Collected: 2026-10-13T05:24Z (local file inspection ONLY — no database
+connection, no network access to production, no new export)
+
+Target artifact (located via audit/feeid-postmerge-2026-10-13/POSTMERGE-RECOVERY-REPORT.md §3b):
+  /home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump
+
+--- stat (file + containing dirs) ---
+/home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump | size=1156906 bytes | mode=-rw------- (600) | owner=z:z | mtime=2026-10-13 05:09:34.350176438 +0000
+/home/z/prod-recovery-prep/dumps  (pre-hardening drwxrwxr-x 775 → post-hardening drwx------ 700; see report §compliance)
+/home/z/prod-recovery-prep        drwxrwxr-x 775 | owner=z:z
+/home/z                            drwxr-xr-x 755 | owner=z:z
+
+--- SHA-256 (computed from the actual file) ---
+fbe7f495425f27e9dc8f922edd79d3369383035fb71455f74ace27575d64afa5  /home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump
+
+Comparison vs prior report (POSTMERGE-RECOVERY-REPORT.md §3b, recorded value):
+  recorded sha256 : fbe7f495425f27e9dc8f922edd79d3369383035fb71455f74ace27575d64afa5
+  computed sha256 : fbe7f495425f27e9dc8f922edd79d3369383035fb71455f74ace27575d64afa5
+  → IDENTICAL (full 64-hex match; the "fbe7f495…" prefix quoted in the task
+    is consistent with, and not a substitute for, this full checksum)
+  recorded size  : 1,156,906 bytes → computed size identical.
+
+--- pg_restore --list (client: pg_restore 17.11, Debian 17.11-0+deb13u1) ---
+exit code : 0
+output    : full listing stored OUTSIDE the repository at
+            /home/z/prod-recovery-prep/dumps/toc-reverify-20261013T052405Z.txt (mode 600)
+TOC header (metadata only):
+  ; Archive created at 2026-10-13 05:08:27 UTC
+  ;     dbname: postgres
+  ;     TOC Entries: 1827
+  ;     Compression: gzip
+  ;     Dump Version: 1.16-0
+  ;     Format: CUSTOM
+  ;     Integer: 4 bytes
+  ;     Offset: 8 bytes
+  ;     Dumped from database version: 17.11
+  ;     Dumped by pg_dump version: 17.11 (Debian 17.11-0+deb13u1)
+line count: 1835 (1827 TOC entries + 8 header lines)
+TABLE DATA entries: 162
+
+--- PostgreSQL client/server version compatibility ---
+server (at dump time) : 17.11 (Supabase, ap-south-1 — per TOC header and prior live probes)
+pg_dump client        : 17.11 (Debian 17.11-0+deb13u1) — exact version match
+pg_restore client     : 17.11 (same package) — exact version match
+restore proof (prior session, evidence on disk):
+  /home/z/prod-recovery-prep/restore-errors.log    → "errors ignored on restore: 3" (all supabase_vault extension DDL + vault.secrets COPY; unavailable in the bare embedded PG 18.4 drill target)
+  /home/z/prod-recovery-prep/restored-table-counts.txt → 117 tables; FeeTransaction=226; _prisma_migrations=23; RateLimitBucket=94; digest-identical financial ledger per POSTMERGE report §3b
+
+--- Git exclusion proof ---
+$ git -C /home/z/my-project check-ignore -v /home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump
+  fatal: ... is outside repository at '/home/z/my-project'   → the path is OUTSIDE any Git work tree
+$ test -d /home/z/prod-recovery-prep/.git → NOT a git repo
+$ git -C /home/z/my-project ls-files -- '*.dump' '*.dump.*'  → 0 tracked files
+$ git -C /home/z/my-project status --porcelain              → clean (0 entries)
+Repo-side safety nets: .gitignore ignores .env*, /backups/ and (added this session) *.dump + *.dump.*
+Only in-repo reference to the dump: the path/checksum mentions inside committed audit reports (no bytes).
+
+--- Owner accessibility ---
+File owner z:z, mode 600, in the sandbox owner-user's home tree (outside the
+repository). Readable/retrievable by the sandbox owner; NOTE: sandbox storage
+is not durable custody — the owner must copy the artifact (and its checksum)
+to durable owner storage; the apply-time FRESH dump supersedes it anyway.

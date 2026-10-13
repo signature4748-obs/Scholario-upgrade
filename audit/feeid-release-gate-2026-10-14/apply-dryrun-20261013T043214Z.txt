@@ -1,0 +1,14 @@
+[prod-migration:apply] ═══ APPLY (transactional, fail-loud) ═══
+  project ref : kbyknezedewvgrnqervj
+  checkout    : 3ac77bf8953bdc28426fbf72f61391490f814a5b
+  mode        : DRY RUN (no writes)
+
+  [apply] 20261013140000_fee_transaction_dangling_feeid_self_heal
+    sha256 : ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db
+    batch  : 63 statements (1 transaction incl. history row)
+    DRY RUN — transaction not executed.
+
+  final history : 23 applied / 24 in repo / 1 pending
+  DRY RUN complete — nothing was applied; pending migrations remain by design.
+
+[prod-migration:apply] ✓ DRY RUN GREEN — plan verified, no writes performed
