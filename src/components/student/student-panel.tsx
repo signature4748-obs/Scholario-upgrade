@@ -4,7 +4,7 @@ import { useMemo, useState, useEffect } from 'react'
 import {
   LayoutDashboard, User, CalendarDays, CalendarCheck, Award,
   IndianRupee, Megaphone, Bus, GraduationCap,
-  ClipboardList, ShieldCheck, Crown, MessageCircle, Settings, ScrollText,
+  ClipboardList, ShieldCheck, Crown, MessageCircle, Settings, ScrollText, KeyRound
 } from 'lucide-react'
 import { AppShell, type NavGroup } from '@/components/shell/app-shell'
 import dynamic from 'next/dynamic'
@@ -46,6 +46,7 @@ const BusTrackingModule = lazy(() => import('./modules/bus-tracking'), 'BusTrack
 const MyClassModule = lazy(() => import('./modules/my-class'), 'MyClassModule')
 const StudentMessagesModule = lazy(() => import('./modules/messages'), 'StudentMessagesModule')
 const StudentSettingsModule = lazy(() => import('./modules/settings'), 'StudentSettingsModule')
+const StudentSubscriptionModule = lazy(() => import('./modules/subscription'), 'StudentSubscriptionModule')
 
 /**
  * STUDENT WORKSPACE NAVIGATION (Learning Experience 2.0 IA — spec §3).
@@ -110,6 +111,7 @@ const navGroups: NavGroup[] = [
     label: 'Records',
     items: [
       { key: 'fees', label: 'Fees', icon: <IndianRupee className="h-4.5 w-4.5" /> },
+      { key: 'subscription', label: 'My Subscription', icon: <KeyRound className="h-4.5 w-4.5" /> },
       { key: 'my-certificates', label: 'Certificates', icon: <ScrollText className="h-4.5 w-4.5" /> },
       { key: 'bus', label: 'Transport', icon: <Bus className="h-4.5 w-4.5" /> },
       { key: 'applications', label: 'Applications', icon: <ClipboardList className="h-4.5 w-4.5" /> },
@@ -332,6 +334,7 @@ const staticModules: Record<string, React.ReactNode> = {
   results: <ResultsModule />,
   messages: <StudentMessagesModule />,
   fees: <FeesModule />,
+  subscription: <StudentSubscriptionModule />,
   'my-certificates': <MyCertificatesModule />,
   applications: <StudentApplicationsModule />,
   bus: <BusTrackingModule />,
