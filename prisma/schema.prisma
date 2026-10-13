@@ -157,6 +157,12 @@ model School {
   // ═════════════════════════════════════════════════════════════════════
   subscription          SchoolSubscription?
   platformPayments      PlatformPayment[]
+  // SUBSCRIPTION & ENTITLEMENT SYSTEM — plan-driven orders, per-student
+  // entitlements/payments and activation codes (all school-scoped).
+  subscriptionOrders    SubscriptionOrder[]
+  studentEntitlements   StudentEntitlement[]
+  studentSubPayments    StudentSubscriptionPayment[]
+  activationCodes       ActivationCode[]
   websiteNotices        WebsiteNotice[]
   websiteAdmission      WebsiteAdmission?
   websiteSocialLinks    WebsiteSocialLink[]
@@ -296,6 +302,12 @@ model User {
   subjectsTaught      ClassSubjectAssignment[] @relation("SubjectTeacher")
   timetableSlotsTaught Timetable[]             @relation("TimetableTeacher")
 
+  // SUBSCRIPTION & ENTITLEMENT SYSTEM — online orders this user initiated,
+  // activation codes this account claimed, claim-audit trail.
+  initiatedSubscriptionOrders SubscriptionOrder[]       @relation("OrderInitiator")
+  claimedActivationCodes      ActivationCode[]          @relation("CodeClaimer")
+  activationCodeEvents        ActivationCodeEvent[]
+
   // PHASE 3 — directory/bulk-message queries filter (school, role, status).
   @@index([schoolId, role, status])
 }
@@ -375,6 +387,15 @@ model Student {
 
   // Student Growth v2.16
   growthEvents     GrowthEvent[]
+
+  // SUBSCRIPTION & ENTITLEMENT SYSTEM (school-scoped like every other
+  // student-owned row — a payment/code/entitlement of one tenant can
+  // never attach to another tenant's student).
+  subscriptionOrders   SubscriptionOrder[]
+  studentEntitlements  StudentEntitlement[]
+  studentSubPayments   StudentSubscriptionPayment[]
+  activationCodes      ActivationCode[]
+  activationCodeEvents ActivationCodeEvent[]
 
   // PHASE 3 — business identity uniques: admission numbers are unique
   // per school; roll numbers are unique within a class. NULL bypasses
@@ -844,6 +865,7 @@ model Fee {
   createdAt DateTime  @default(now())
 
   payments Payment[]
+  feeTransactions FeeTransaction[]
 
   // PHASE 3 — fee lists are filtered by (school, status) and read per
   // student on every ledger surface.
@@ -1332,6 +1354,11 @@ model PlatformSetting {
   modules        String   @default("{}")
   // PHASE 6 — upper bound (minutes) for support-session duration.
   supportMaxDuration Int  @default(60)
+  // SUBSCRIPTION & ENTITLEMENT SYSTEM — commercial-model configuration
+  // (JSON: model availability switches, default billing model, default
+  // claim-window/validity/grace values). Parsed/validated exclusively in
+  // src/lib/subscription/config.ts; never client-writable.
+  subscriptionConfig String   @default("{}")
   updatedAt      DateTime @updatedAt
 }
 
@@ -1909,6 +1936,12 @@ model FeeTransaction {
   source               String?
   /// The legacy Fee row this collection applies to (ledger application).
   feeId                String?
+  /// FK hardening (20261013140000): the Fee row while it exists — deleting
+  /// the Fee (directly, or via the Fee.studentId cascade when a Student is
+  /// deleted) detaches the pointer (SET NULL) and preserves the immutable
+  /// ledger row. NULL is the sanctioned "no live Fee to apply to" state
+  /// (the online order-creation routes persist feeId: null by design).
+  fee                  Fee?             @relation(fields: [feeId], references: [id], onDelete: SetNull)
   /// Collector identity (User.id + display snapshot) — who took the money.
   collectedById        String?
   collectedByName      String?
@@ -2767,6 +2800,13 @@ model PlatformAdmin {
   paymentRecordings PlatformPayment[] @relation("PlatformPaymentRecorder")
   /// ACCOUNT-RECOVERY — forgot-password tokens (hashed, single-use).
   passwordResets PlatformPasswordReset[]
+  /// SUBSCRIPTION & ENTITLEMENT SYSTEM — operator actions (codes issued /
+  /// revoked, student payments recorded, entitlements revoked).
+  issuedActivationCodes       ActivationCode[]          @relation("CodeIssuer")
+  revokedActivationCodes      ActivationCode[]          @relation("CodeRevoker")
+  recordedStudentPayments     StudentSubscriptionPayment[] @relation("StudentPaymentRecorder")
+  revokedStudentEntitlements  StudentEntitlement[]      @relation("EntitlementRevoker")
+  reissuedActivationCodes     ActivationCode[]          @relation("CodeReissuer")
 
   @@index([status])
 }
@@ -3099,6 +3139,25 @@ model SchoolSubscription {
   /// When set, it wins over the computed state until cleared (null).
   overrideStatus String?
   notes        String?
+  // ── SUBSCRIPTION & ENTITLEMENT SYSTEM (additive) ──────────────────────
+  /// Commercial model this tenant is billed under:
+  /// SCHOOL_WIDE (default — every existing tenant keeps today's behavior:
+  /// an active tenant subscription covers ALL eligible members, no
+  /// per-student requirement) | PER_STUDENT (students need their own
+  /// entitlement) | MIXED (school plan covers staff-run modules; students
+  /// still need entitlements). Set ONLY via the platform control plane.
+  billingModel     String   @default("SCHOOL_WIDE")
+  /// Plan-of-record at purchase (snapshot fields keep history when the
+  /// plan is later archived). NOTE: `plan` (string) is the legacy plan name;
+  /// `planDef` is the plan-registry row (null for legacy rows).
+  planId           String?
+  planDef          SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  planCode         String?
+  /// MONTHLY | ANNUAL snapshot of the purchased interval.
+  interval         String?
+  /// Price actually charged (Decimal-safe; the plan's price at purchase).
+  priceSnapshot    Decimal? @db.Decimal(12, 2)
+  currencySnapshot String   @default("INR")
   updatedAt    DateTime @updatedAt
   createdAt    DateTime @default(now())
 
@@ -3141,6 +3200,10 @@ model PlatformPayment {
   receiptNo      String? @unique
   subscription   SchoolSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   subscriptionId String?
+  /// SUBSCRIPTION & ENTITLEMENT SYSTEM — the online order this payment
+  /// settled (webhook/verify paths); null for the legacy/admin flows.
+  order          SubscriptionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  orderId        String? @unique
   createdAt      DateTime @default(now())
 
   @@index([schoolId, paymentDate])
@@ -3314,4 +3377,349 @@ model SchoolPaymentGateway {
   notes        String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUBSCRIPTION & ENTITLEMENT SYSTEM (2026-10-13) — production commercial
+// models A (per-school monthly/annual), B (per-student annual), C (manual /
+// operator-assigned), the activation-code engine and the online-order lane.
+//
+// Design contract (docs/SUBSCRIPTION_ENTITLEMENT_SYSTEM.md):
+//   · Money is Decimal(12,2) + explicit currency; validity is explicit UTC
+//     timestamps (dates, never labels like "annual").
+//   · Entitlement activation has EXACTLY these causes: a signature-verified
+//     webhook, a server-side provider verification, an operator-recorded
+//     VERIFIED payment (+ offline code redemption), or an operator manual /
+//     complimentary assignment. A browser redirect NEVER activates.
+//   · Codes: SHA-256 hash at rest (plaintext shown once at issuance),
+//     publicRef as the support-safe identifier, claim = one atomic
+//     conditional-update transaction; one live entitlement per student is
+//     DB-enforced (partial unique index, hand-written in the migration).
+//   · Revocation/refund changes entitlement status ONLY — financial rows
+//     are immutable history.
+//   · All rows are school-scoped by FK; cross-tenant issuance/claims are
+//     impossible by construction.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Commercial plan registry — configured by the platform owner (Super
+/// Admin). Prices are the platform's own product prices; plans are
+/// referenced by SNAPSHOT fields everywhere downstream so archiving a
+/// plan never rewrites history. Soft-archive only (never delete).
+model SubscriptionPlan {
+  id          String   @id @default(cuid())
+  /// Stable operator-facing code (e.g. STANDARD-M, ENTERPRISE-A,
+  /// STUDENT-ANNUAL). Unique.
+  code        String   @unique
+  name        String
+  description String?
+
+  /// 'SCHOOL' (Model A) | 'STUDENT' (Model B/C target).
+  scope       String
+  /// 'MONTHLY' | 'ANNUAL' (student plans are ANNUAL by contract).
+  interval    String   @default("ANNUAL")
+
+  /// Model A — school plans: monthly price (MONTHLY interval plans).
+  priceMonthly     Decimal? @db.Decimal(12, 2)
+  /// Model A — school plans: annual price (ANNUAL interval plans).
+  priceAnnual      Decimal? @db.Decimal(12, 2)
+  /// Model B — student plans: per-student annual price.
+  pricePerStudent  Decimal? @db.Decimal(12, 2)
+
+  currency    String   @default("INR")
+
+  /// Module entitlement map (JSON, module-flag key space). Effective
+  /// module availability: school.featureFlags[key] (operator override) ??
+  /// plan modules[key] ?? PlatformSetting.modules[key] ?? true.
+  modules     String   @default("{}")
+  /// Applicable limits (JSON, e.g. {"maxStudents":500}). maxStudents is
+  /// enforced on student admission; others are surfaced honestly.
+  limits      String   @default("{}")
+
+  /// Grace days after periodEnd (school plans; existing semantics).
+  graceDays   Int      @default(14)
+
+  /// Payment policies: online lane (order + verified settle) and offline
+  /// lane (operator records payment + activation code) per plan.
+  allowOnline  Boolean  @default(true)
+  allowOffline Boolean  @default(true)
+
+  /// Availability: may new purchases pick this plan / may renewals.
+  availableForNew     Boolean @default(true)
+  availableForRenewal Boolean @default(true)
+
+  /// ACTIVE | ARCHIVED (archived = hidden from new purchase, history kept).
+  status      String   @default("ACTIVE")
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  schoolSubscriptions SchoolSubscription[]
+  orders              SubscriptionOrder[]
+  studentEntitlements StudentEntitlement[]
+  activationCodes     ActivationCode[]
+
+  @@index([scope, status])
+  @@index([status, sortOrder])
+}
+
+/// Online payment order (provider-agnostic). CREATED server-side only;
+/// settled ONLY by the verified webhook or the server-side verify route
+/// (both idempotent via the unique provider ids + conditional updates).
+model SubscriptionOrder {
+  id        String   @id @default(cuid())
+  /// Human reference (SCH-ORD-<year>-<seq>), unique.
+  orderNo   String   @unique
+
+  /// 'SCHOOL_PLAN' (Model A online renewal) | 'STUDENT_PLAN' (Model B).
+  scope     String
+
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// Student scope (STUDENT_PLAN orders only — resolved server-side from
+  /// the authenticated session, never client-supplied).
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  /// The school-plane account that initiated the order (student self-pay
+  /// or principal renewal).
+  initiatedByUserId String?
+  initiatedBy       User?    @relation("OrderInitiator", fields: [initiatedByUserId], references: [id], onDelete: SetNull)
+
+  planId     String?
+  plan       SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  planCode   String?
+  interval   String?
+
+  amount   Decimal  @db.Decimal(12, 2)
+  currency String   @default("INR")
+  /// Months of entitlement the order buys (1 monthly | 12 annual).
+  validityMonths Int @default(12)
+
+  /// PENDING | PAID | FAILED | EXPIRED | CANCELLED | REFUNDED.
+  /// PAID is reached exactly once (conditional update + unique provider
+  /// payment id); repeated webhooks/retries are idempotent no-ops.
+  status   String   @default("PENDING")
+  /// 'SANDBOX' (PAYMENTS_SANDBOX contract) | 'RAZORPAY' (platform keys) |
+  /// 'PLATFORM' (webhook envelope without a provider order).
+  provider String
+
+  providerOrderId   String? @unique
+  providerPaymentId String? @unique
+
+  paidAt    DateTime?
+  /// Order TTL (30 minutes default) — expired orders never settle.
+  expiresAt DateTime
+  /// Entitlement result snapshots (audit truth, set at settlement).
+  statusAfter     String?
+  periodEndAfter  DateTime?
+  validityEndAfter DateTime?
+
+  createdAt DateTime @default(now())
+
+  platformPayment PlatformPayment?
+  studentPayment  StudentSubscriptionPayment?
+
+  @@index([schoolId, status, createdAt])
+  @@index([studentId, status])
+  @@index([status, createdAt])
+}
+
+/// Per-student entitlement (Model B/C). ONE live row per student is
+/// DB-enforced (partial unique index on (studentId) WHERE status IN
+/// ('PENDING','ACTIVE') — hand-written in the migration SQL). Revoked/
+/// expired history rows are retained; the financial rows are immutable.
+model StudentEntitlement {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  planId   String?
+  plan     SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  planCode String?
+
+  /// PENDING (validity in the future) | ACTIVE | EXPIRED | REVOKED |
+  /// SUSPENDED. The LIVE state is computed from the validity window at
+  /// evaluation time — the stored status is a write-path snapshot (access
+  /// never depends on a scheduled job).
+  status    String   @default("ACTIVE")
+  /// Explicit UTC validity (dates, never a label).
+  validityStart DateTime
+  validityEnd   DateTime
+
+  /// 'ONLINE' | 'OFFLINE_CODE' | 'MANUAL' | 'COMPLIMENTARY'.
+  source    String
+
+  paymentId String? @unique
+  payment   StudentSubscriptionPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  activationCodeId String? @unique
+  activationCode   ActivationCode? @relation(fields: [activationCodeId], references: [id], onDelete: SetNull)
+  activatedAt DateTime?
+
+  revokedAt     DateTime?
+  revokedById   String?
+  revokedBy     PlatformAdmin? @relation("EntitlementRevoker", fields: [revokedById], references: [id], onDelete: SetNull)
+  revokeReason  String?
+  suspendedAt   DateTime?
+  suspendReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId, status])
+  @@index([studentId, validityEnd])
+  @@index([status, validityEnd])
+}
+
+/// Per-student A-domain payment ledger (student pays SCHOLARIO — the
+/// Model B/C analogue of PlatformPayment; completely disjoint from the
+/// school's own student-fee gateway). Immutable: refunds/revocations
+/// change entitlement status, never this row.
+model StudentSubscriptionPayment {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  entitlementId String?
+  entitlement   StudentEntitlement? 
+
+  planId   String?
+  planCode String?
+  interval String?
+
+  amount   Decimal  @db.Decimal(12, 2)
+  currency String   @default("INR")
+  /// ONLINE_PAYMENT | CASH | BANK_TRANSFER | CHEQUE | OTHER | COMPLIMENTARY.
+  mode     String
+  paymentDate DateTime
+
+  validityMonths Int @default(12)
+
+  /// Offline: reference / UTR / cheque number. Online: provider payment id.
+  reference String?
+  notes     String?
+
+  /// PlatformAdmin that recorded the payment (offline/manual path). Null
+  /// for webhook/verify-recorded online payments.
+  recordedById String?
+  recordedBy   PlatformAdmin? @relation("StudentPaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  /// VERIFIED only — only VERIFIED rows ever activate an entitlement.
+  verification String   @default("VERIFIED")
+  verifiedAt   DateTime @default(now())
+
+  /// Entitlement snapshots this payment produced (audit truth).
+  statusAfter       String?
+  validityEndAfter  DateTime?
+
+  /// Human-readable receipt number (SCH-SSR-<year>-<seq>).
+  receiptNo String? @unique
+
+  /// The online order this payment settled (null for offline/manual).
+  orderId String? @unique
+  order   SubscriptionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, paymentDate])
+  @@index([studentId, paymentDate])
+}
+
+/// Activation code — the offline delivery handshake. The CODE is a
+/// 100-bit random Crockford-base32 string shown exactly once at issuance
+/// (never stored in plaintext, never emailed by the platform, never
+/// logged); at rest only sha256(code). publicRef is the support-safe
+/// identifier operators use for lookup/revocation/reissue.
+model ActivationCode {
+  id        String   @id @default(cuid())
+  /// Support-safe reference (SCH-ACT-<year>-<seq>), unique.
+  publicRef String   @unique
+  /// sha256(code) hex — the only stored representation of the secret.
+  codeHash  String   @unique
+
+  /// 'SCHOOL_SUBSCRIPTION' (school-wide: one claim activates the TENANT
+  /// entitlement — never per-member grants) | 'STUDENT_ENTITLEMENT'
+  /// (activates exactly the designated student).
+  scope     String
+
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  planId   String?
+  plan     SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  planCode String?
+  interval String?
+  /// Entitlement length the code grants when claimed.
+  validityMonths Int @default(12)
+  /// Explicit start (future-dated grants — status PENDING until then).
+  validityStartOverride DateTime?
+  /// Explicit end (Model C date-picked validity; overrides months+start).
+  validityEndOverride   DateTime?
+
+  /// ISSUED | CLAIMED | EXPIRED | REVOKED | REPLACED.
+  status    String   @default("ISSUED")
+  issuedAt  DateTime @default(now())
+  issuedById String?
+  issuedBy   PlatformAdmin? @relation("CodeIssuer", fields: [issuedById], references: [id], onDelete: SetNull)
+  /// Redemption window (days after issuance the code may be claimed).
+  claimWindowDays Int @default(30)
+  expiresAt DateTime
+
+  claimedAt        DateTime?
+  claimedByUserId  String?
+  claimedBy        User?    @relation("CodeClaimer", fields: [claimedByUserId], references: [id], onDelete: SetNull)
+  /// Resulting student entitlement (student-scope codes).
+  entitlementId String?
+  entitlement   StudentEntitlement?
+
+  /// Issuance authorization linkage: the VERIFIED payment row id this
+  /// code delivers (platformPayment:… / studentPayment:…).
+  paymentRef String?
+
+  revokedAt     DateTime?
+  revokedById   String?
+  revokedBy     PlatformAdmin? @relation("CodeRevoker", fields: [revokedById], references: [id], onDelete: SetNull)
+  revokeReason  String?
+  /// Reissue chain: this code was replaced by…
+  replacedByCodeId String? @unique
+  replacedByCode   ActivationCode? @relation("CodeReplacement", fields: [replacedByCodeId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  replacingCode    ActivationCode? @relation("CodeReplacement")
+  /// Who performed the reissue (audit).
+  reissuedById String?
+  reissuedBy   PlatformAdmin? @relation("CodeReissuer", fields: [reissuedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  events ActivationCodeEvent[]
+
+  @@index([schoolId, status])
+  @@index([studentId, status])
+  @@index([status, expiresAt])
+}
+
+/// Activation-code audit trail (issue / claim / reject / revoke / replace).
+/// Rejection reasons are CLASSES ONLY — never the code, never another
+/// student's identity, never another tenant's state.
+model ActivationCodeEvent {
+  id        String   @id @default(cuid())
+  codeId    String
+  code      ActivationCode @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  /// ISSUED | CLAIM_SUCCESS | CLAIM_REJECTED | REVOKED | REPLACED.
+  type      String
+  /// Authenticated claimant (claims are always authenticated).
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  ip        String?
+  /// JSON detail (reason class + counts). Never secrets.
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([codeId, createdAt])
+  @@index([type, createdAt])
 }

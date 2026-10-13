@@ -42,6 +42,7 @@
     "examples",
     "tests",
     "mini-services",
-    "docs"
+    "docs",
+    "tqa"
   ]
 }

@@ -327,6 +327,10 @@ export type AuthUser = {
       periodEnd: Date | null
       graceDays: number
       overrideStatus: string | null
+      /** SUBSCRIPTION & ENTITLEMENT SYSTEM — the tenant's commercial model
+       *  (SCHOOL_WIDE default | PER_STUDENT | MIXED); the per-student gate
+       *  input. Server-loaded like every other field here. */
+      billingModel?: string | null
     } | null
   } | null
 }
@@ -377,6 +381,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
                 periodEnd: u.school.subscription.periodEnd,
                 graceDays: u.school.subscription.graceDays,
                 overrideStatus: u.school.subscription.overrideStatus,
+                billingModel: u.school.subscription.billingModel ?? 'SCHOOL_WIDE',
               }
             : null,
         }
