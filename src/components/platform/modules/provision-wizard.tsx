@@ -199,6 +199,8 @@ const HEX_RE = /^#[0-9a-fA-F]{6}$/
 const DOMAINISH_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
 
 interface ProvisionResult {
+  replayed?: boolean
+  replayNote?: string
   school: {
     id: string
     name: string
@@ -220,7 +222,10 @@ interface ProvisionResult {
     tempDomain: string
     previewUrl: string
   }
-  bootstrap: { classes: number; sections: number; subjects: number; rooms: number }
+  bootstrap?: { classes: number; sections: number; subjects: number; rooms: number }
+  // Phase 3 — invite-email delivery state (honest, never fabricated:
+  // SENT | QUEUED | FAILED | NONE + optional transport/errorClass).
+  invitation?: { state: string; transport?: string; errorClass?: string; at?: string }
   nextStep: string
 }
 
@@ -494,7 +499,11 @@ export function ProvisionWizard({
         body: JSON.stringify(buildPayload()),
       })
       setResult(res as unknown as ProvisionResult)
-      toast.success('School created — activate it to enable sign-in')
+      if ((res as unknown as ProvisionResult).replayed) {
+        toast.info('Matched an existing PENDING provision — no duplicate created')
+      } else {
+        toast.success('School created — activate it to enable sign-in')
+      }
       onProvisioned()
     } catch (e) {
       const err = e as PlatformApiError
@@ -512,17 +521,46 @@ export function ProvisionWizard({
           <div className="space-y-5">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-teal-600 text-white">
-                  <Check className="h-4 w-4" aria-hidden="true" />
+                <span
+                  className={`flex h-8 w-8 items-center justify-center rounded-full text-white ${
+                    result.replayed ? 'bg-amber-500' : 'bg-teal-600'
+                  }`}
+                >
+                  {result.replayed ? (
+                    <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Check className="h-4 w-4" aria-hidden="true" />
+                  )}
                 </span>
-                {result.school.name} created
+                {result.replayed ? `${result.school.name} — already provisioned` : `${result.school.name} created`}
               </DialogTitle>
               <DialogDescription className="text-slate-500">
-                The tenant ecosystem is provisioned. The school is in{' '}
-                <span className="font-medium text-amber-700">PENDING</span> state — activate it
-                from the school record to enable sign-in.
+                {result.replayed ? (
+                  <span>
+                    This request matched a PENDING school you provisioned — an <span className="font-medium text-amber-700">idempotent replay</span>, no duplicate was created.
+                  </span>
+                ) : (
+                  <span>
+                    The tenant ecosystem is provisioned. The school is in{' '}
+                    <span className="font-medium text-amber-700">PENDING</span> state — activate it
+                    from the school record to enable sign-in.
+                  </span>
+                )}
               </DialogDescription>
             </DialogHeader>
+
+            {result.replayed ? (
+              <div
+                role="status"
+                className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <p>
+                  {result.replayNote ??
+                    'The one-time credential was shown only at the original creation — re-issue it from the school record (Access card) if it was lost.'}
+                </p>
+              </div>
+            ) : null}
 
             <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
               <div className="flex justify-between gap-4">
@@ -544,13 +582,15 @@ export function ProvisionWizard({
                   </span>
                 </span>
               </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-slate-500">Bootstrap</span>
-                <span className="text-slate-900">
-                  {result.bootstrap.classes} classes · {result.bootstrap.subjects} subjects ·{' '}
-                  {result.bootstrap.rooms} rooms
-                </span>
-              </div>
+              {result.bootstrap ? (
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">Bootstrap</span>
+                  <span className="text-slate-900">
+                    {result.bootstrap.classes} classes · {result.bootstrap.subjects} subjects ·{' '}
+                    {result.bootstrap.rooms} rooms
+                  </span>
+                </div>
+              ) : null}
               {result.domain.customDomain ? (
                 <div className="flex justify-between gap-4">
                   <span className="text-slate-500">Custom domain</span>
@@ -668,6 +708,40 @@ export function ProvisionWizard({
                   <span className="font-semibold text-slate-700">Forced first-password change is armed.</span>{' '}
                   The password you supplied is a bootstrap value — the principal must set their own at
                   first sign-in (server-enforced).
+                </p>
+              </div>
+            ) : null}
+
+            {/* Principal invitation email status (Phase 3) — the honest
+                delivery state from the email pipeline. FAILED/UNKNOWN
+                turn amber with the recovery path (manual delivery or
+                re-issue from the school record); SENT/QUEUED confirm
+                the channel. NEVER a fabricated "delivered". */}
+            {result.invitation ? (
+              <div
+                className={`flex items-start gap-2.5 rounded-xl border p-3 text-xs ${
+                  result.invitation.state === 'FAILED' || result.invitation.state === 'NONE'
+                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                    : 'border-teal-200 bg-teal-50 text-teal-800'
+                }`}
+              >
+                {result.invitation.state === 'FAILED' || result.invitation.state === 'NONE' ? (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                ) : (
+                  <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                )}
+                <p>
+                  <span className="font-semibold">Invitation email to {result.principal.email}:</span>{' '}
+                  {result.invitation.state === 'SENT'
+                    ? 'delivered to the email pipeline (sent).'
+                    : result.invitation.state === 'QUEUED'
+                      ? 'accepted by the email provider — delivery pending confirmation.'
+                      : result.invitation.state === 'FAILED'
+                        ? `failed${result.invitation.errorClass ? ` (${result.invitation.errorClass})` : ''} — hand over the one-time credential yourself, or re-issue it from the school record's Access card.`
+                        : "no delivery on record — hand over the one-time credential yourself, or re-issue it from the school record's Access card."}
+                  {result.invitation.transport ? (
+                    <span className="block text-[11px] opacity-70">transport: {result.invitation.transport}</span>
+                  ) : null}
                 </p>
               </div>
             ) : null}
