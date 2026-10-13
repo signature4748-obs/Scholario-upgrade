@@ -1,0 +1,13 @@
+[prod-migration:apply] ═══ APPLY (transactional, fail-loud) ═══
+  project ref : kbyknezedewvgrnqervj
+  checkout    : 27a15110c02d492733a12f8d686f06d071b9dc3d
+  mode        : LIVE
+
+  [apply] 20261013120000_fee_transaction_student_fk
+    sha256 : b9d36eca42c5d468c10effa4309952604d492efd7e5c00861a36904f68dacda0
+    batch  : 15 statements (1 transaction incl. history row)
+
+  ✖ MIGRATION FAILED — transaction rolled back, NO history row written, pipeline HALTED:
+    20261013120000_fee_transaction_student_fk: Management API rejected the batch (HTTP 400): {"message":"Failed to run sql query: ERROR:  P0001: tenant-guard: FeeTransaction references another school's row\nCONTEXT:  PL/pgSQL function \"tg_guard_FT_ins_fn\"() line 6 at RAISE\n"}
+
+exit code: 1

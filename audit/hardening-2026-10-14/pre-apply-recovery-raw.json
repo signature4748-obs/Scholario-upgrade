@@ -1,0 +1,36 @@
+{
+  "capturedAt": "2026-10-12T22:20:42.385Z",
+  "purpose": "B-3 pre-apply recovery raw data: orphan FeeTransaction (id, studentId) pairs + never-rotated unflagged User ids. Internal row identifiers only — untracked audit evidence, never commit.",
+  "orphanFeeTransactions": [
+    {
+      "id": "cmuqz45gi04f6otzjxcqvutjh",
+      "studentId": "cmuqywin0000lotu4caryytv5"
+    },
+    {
+      "id": "cmuqz45s004fcotzjubwhyl1j",
+      "studentId": "cmuqywin0000lotu4caryytv5"
+    },
+    {
+      "id": "cmuqz463h04fiotzj9hyio9tu",
+      "studentId": "cmuqywin0000lotu4caryytv5"
+    }
+  ],
+  "unflaggedUsers": [
+    {
+      "id": "cmupn9zrg0000mywa5av14a1s",
+      "role": "SUPER_ADMIN"
+    },
+    {
+      "id": "cmupnb2nv00h8mywa54egeg3d",
+      "role": "SUPER_ADMIN"
+    },
+    {
+      "id": "cmuqv9y1p000jpwf325nnzk31",
+      "role": "SUPER_ADMIN"
+    }
+  ],
+  "counts": {
+    "orphanFeeTransactions": 3,
+    "unflaggedUsers": 3
+  }
+}
