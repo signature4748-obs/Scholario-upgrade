@@ -151,6 +151,13 @@ export const RATE_LIMITS = {
   // (per-user): POST /api/students/[id]/reset-credential reissues an
   // expiring one-time credential (same posture as the teacher surface).
   studentCredentialReset: { name: 'student-credential-reset', limit: 20, windowMs: 60 * 60_000 },
+  // SUBSCRIPTION & ENTITLEMENT SYSTEM — activation-code claims (per-user,
+  // anti-guessing posture: 5 attempts / 15 min; a second stricter per-IP
+  // bucket is applied at the route). The per-user count NEVER resets on
+  // success (claims are rare by design).
+  subscriptionCodeClaim: { name: 'subscription-code-claim', limit: 5, windowMs: 15 * 60_000 },
+  /** Subscription order creation / verification (per-user, mirrors payment). */
+  subscriptionOrder: { name: 'subscription-order', limit: 20, windowMs: 60 * 60_000 },
 } satisfies Record<string, RateLimitProfile>
 
 export interface RateLimitResult {

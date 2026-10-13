@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server'
 import { headers } from 'next/headers'
 import { getCurrentUser, type AuthUser } from './auth'
+import { db } from './db'
 import { AppError, classifyError, newRequestId } from './security/errors'
 import { runWithContext, patchRequestContext } from './observability/context'
 import { log } from './observability/logger'
 import { sanitizeRequestId } from './observability/http'
 import { entitlementForUser } from './entitlement/server'
 import { isEntitlementExemptRoute } from './entitlement/entitlement'
+import { evaluateStudentEntitlement } from './entitlement/student'
 import { isCanonicalSchoolRole } from './security/permissions'
 
 export type Ctx = { user: AuthUser }
@@ -186,6 +188,57 @@ export async function withUser(
           publicMessage: entitlement.message ?? undefined,
           internalDetail: `withUser: entitlement ${entitlement.state} (route ${route ?? 'unknown'})`,
         })
+      }
+
+      // ── SUBSCRIPTION & ENTITLEMENT SYSTEM — per-student gate ────────────
+      // (Model B/C: tenants billed PER_STUDENT/MIXED). Composes ON TOP of
+      // the tenant state: a student on a school-wide plan is covered and
+      // NEVER locked by a missing individual subscription; a student under
+      // the per-student model needs an individual entitlement that is
+      // evaluated LIVE from its explicit validity window (access never
+      // depends on a scheduled job). The same exempt non-business surface
+      // (auth/session, profile, subscription status + code claim, support,
+      // logout) stays reachable so a locked student can always activate.
+      // Fail-closed: unknown billing models map to SCHOOL_WIDE (the safe
+      // legacy default) — per-student enforcement only engages when the
+      // platform explicitly set the model.
+      if (
+        user.role === 'STUDENT' &&
+        entitlement.businessAllowed &&
+        (user.school?.subscription?.billingModel === 'PER_STUDENT' ||
+          user.school?.subscription?.billingModel === 'MIXED')
+      ) {
+        const studentBypass = routeExempt
+        if (!studentBypass) {
+          const live = await db.studentEntitlement.findFirst({
+            where: {
+              student: { userId: user.id },
+              schoolId: user.schoolId,
+              status: { in: ['PENDING', 'ACTIVE', 'SUSPENDED'] },
+            },
+            orderBy: { validityEnd: 'desc' },
+            select: { status: true, validityStart: true, validityEnd: true, source: true },
+          })
+          const decision = evaluateStudentEntitlement({
+            accountSubscriptionStatus: user.subscriptionStatus,
+            tenant: entitlement,
+            billingModel: user.school?.subscription?.billingModel,
+            entitlement: live
+              ? {
+                  status: live.status,
+                  validityStart: live.validityStart,
+                  validityEnd: live.validityEnd,
+                  source: live.source,
+                }
+              : null,
+          })
+          if (!decision.businessAllowed) {
+            throw new AppError('SUBSCRIPTION_REQUIRED', {
+              publicMessage: decision.message ?? undefined,
+              internalDetail: `withUser: student entitlement ${decision.state} (route ${route ?? 'unknown'})`,
+            })
+          }
+        }
       }
     }
     if (opts?.roles && !opts.roles.includes(user.role)) {

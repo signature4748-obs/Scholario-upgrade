@@ -32,6 +32,7 @@ import {
   Menu,
   X,
   Cloud,
+  Wallet,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from './platform-client'
 import { Button } from '@/components/ui/button'
@@ -56,6 +57,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: '/platform', label: 'Overview', icon: LayoutDashboard },
   { href: '/platform/schools', label: 'Schools', icon: Building2, permission: 'schools.read' },
+  { href: '/platform/subscriptions', label: 'Subscriptions', icon: Wallet, permission: 'billing.manage' },
   { href: '/platform/support', label: 'Support', icon: LifeBuoy, permission: 'support.access' },
   { href: '/platform/audit', label: 'Audit Log', icon: ScrollText, permission: 'audit.read' },
   { href: '/platform/announcements', label: 'Announcements', icon: Megaphone, permission: 'announcements.manage' },
@@ -65,18 +67,18 @@ const NAV: NavItem[] = [
 ]
 
 /** ARCHITECTURE RESET — grouped control-plane IA (premium console nav):
- *  honest modules that ACTUALLY exist — no invented Plans/Billing or
- *  Security modules (plan management lives inside Schools → school detail;
- *  session security lives under My Sessions). Renames for honest labels:
- *  Admins → Users (platform users), Support Tools → Support, Audit Trail →
- *  Audit Log. */
+ *  honest modules that ACTUALLY exist. The SUBSCRIPTION & ENTITLEMENT
+ *  SYSTEM added the Billing group (Subscriptions — plans/models registry,
+ *  per-student entitlements, codes, reconciliation; billing.manage-gated).
+ *  School detail keeps per-tenant plan/subscription management. */
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   { label: 'Platform', items: [NAV[0]] },
   { label: 'Tenants', items: [NAV[1]] },
-  { label: 'Operations', items: [NAV[2], NAV[4]] },
-  { label: 'Governance', items: [NAV[3]] },
-  { label: 'Administration', items: [NAV[5], NAV[6]] },
-  { label: 'Account', items: [NAV[7]] },
+  { label: 'Billing', items: [NAV[2]] },
+  { label: 'Operations', items: [NAV[3], NAV[5]] },
+  { label: 'Governance', items: [NAV[4]] },
+  { label: 'Administration', items: [NAV[6], NAV[7]] },
+  { label: 'Account', items: [NAV[8]] },
 ]
 
 function initials(name: string): string {
