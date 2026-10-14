@@ -34,6 +34,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { randomBytes, scryptSync } from 'crypto'
 import { hashSessionToken } from '@/lib/auth'
+import { liveFetch } from '../helpers/live-http'
 import { DEMO_STUDENT_EMAIL } from '../helpers/credentials'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
@@ -113,11 +114,23 @@ function jar(token: string): { cookie: string } {
   return { cookie: `erp_session=${token}` }
 }
 
+/** liveFetch (PR-30 review): plain fetch left this suite exposed to the
+ *  documented dev-server transient-unavailability windows — a request on
+ *  an ABANDONED socket (accepted by a restarting server, never answered)
+ *  hangs the full per-test budget (observed twice in CI on this suite's
+ *  logout test: exactly-45s timeouts while the server otherwise idles).
+ *  liveFetch cuts abandoned sockets at the per-attempt timeout and
+ *  retries — the established fix for this flake class (PR #26 / 3ac77bf).
+ *  Assertions are unaffected: any HTTP status is returned exactly once. */
 function as(token: string, path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { ...jar(token), ...(init?.headers ?? {}), 'content-type': 'application/json' },
-  })
+  return liveFetch(
+    `${BASE}${path}`,
+    {
+      ...init,
+      headers: { ...jar(token), ...(init?.headers ?? {}), 'content-type': 'application/json' },
+    },
+    { deadlineMs: 40_000 },
+  )
 }
 
 /** Direct-mint a session row for an existing user (fresh 1h expiry).
@@ -238,19 +251,27 @@ describe('PIH-5 · change-password rotates the token and revokes every other ses
     expect(surviving).toBe(1) // only the post-rotation row
 
     // The OLD password no longer authenticates (generic 401 — no oracle).
-    const oldLogin = await fetch(`${BASE}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
-      body: JSON.stringify({ email, password: OLD_PW }),
-    })
+    const oldLogin = await liveFetch(
+      `${BASE}/api/auth/login`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
+        body: JSON.stringify({ email, password: OLD_PW }),
+      },
+      { deadlineMs: 40_000 },
+    )
     expect(oldLogin.status).toBe(401)
 
     // The NEW password DOES (the suite's single real login — throwaway acct).
-    const newLogin = await fetch(`${BASE}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
-      body: JSON.stringify({ email, password: NEW_PW }),
-    })
+    const newLogin = await liveFetch(
+      `${BASE}/api/auth/login`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
+        body: JSON.stringify({ email, password: NEW_PW }),
+      },
+      { deadlineMs: 40_000 },
+    )
     expect(newLogin.status).toBe(200)
     const newLoginBody = (await newLogin.json()) as {
       ok: boolean
