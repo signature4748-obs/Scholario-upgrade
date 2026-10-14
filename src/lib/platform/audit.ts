@@ -36,7 +36,19 @@ import { sanitizeAuditDetail } from '@/lib/security/audit'
 export interface PlatformAuditInput {
   adminId?: string | null
   action: string
-  targetType?: 'SCHOOL' | 'ADMIN' | 'PLATFORM_SESSION' | 'SUPPORT_SESSION' | 'SETTING' | 'ANNOUNCEMENT' | 'AUTH' | null
+  targetType?:
+    | 'SCHOOL'
+    | 'ADMIN'
+    | 'PLATFORM_SESSION'
+    | 'SUPPORT_SESSION'
+    | 'SETTING'
+    | 'ANNOUNCEMENT'
+    | 'AUTH'
+    // SUBSCRIPTION & ENTITLEMENT SYSTEM — new target kinds:
+    | 'STUDENT' // per-student entitlement/payment events
+    | 'SUBSCRIPTION_PLAN' // plan registry lifecycle
+    | 'ACTIVATION_CODE' // code issue/revoke/reissue
+    | null
   targetId?: string | null
   schoolId?: string | null
   reason?: string | null

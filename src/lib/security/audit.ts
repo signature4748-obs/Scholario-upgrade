@@ -127,6 +127,15 @@ export const AUDIT_ACTIONS = [
   'AUTH_SUPABASE_PROVISIONED',
   'AUTH_SUPABASE_UPDATED',
   'AUTH_SUPABASE_PROVISION_SKIPPED',
+  // SUBSCRIPTION & ENTITLEMENT SYSTEM — school-plane subscription
+  // lifecycle events (online-order creation/settlement and activation-
+  // code claim/redeem on both planes; all school-scoped).
+  'SUBSCRIPTION_ORDER_CREATED',
+  'SUBSCRIPTION_ORDER_SETTLED',
+  'SUBSCRIPTION_CODE_REDEEMED',
+  'STUDENT_SUBSCRIPTION_CODE_CLAIMED',
+  'STUDENT_SUBSCRIPTION_ORDER_CREATED',
+  'STUDENT_SUBSCRIPTION_ORDER_SETTLED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

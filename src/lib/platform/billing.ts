@@ -17,6 +17,7 @@
  * commit atomically) and audited by the caller (platformAuditEvent).
  */
 import { db } from '@/lib/db'
+import type { Prisma } from '@prisma/client'
 import { AppError } from '@/lib/security/errors'
 
 export const PAYMENT_MODES = ['ONLINE_PAYMENT', 'CASH', 'BANK_TRANSFER', 'CHEQUE', 'OTHER'] as const
@@ -212,4 +213,222 @@ export async function applySubscriptionOverride(opts: {
     },
   })
   return { overrideStatus: opts.overrideStatus }
+}
+
+/**
+ * CODE-GATED OFFLINE ISSUANCE (Model A handshake): record the VERIFIED
+ * payment row WITHOUT applying the period — the activation cause is the
+ * school-wide code REDEMPTION, which re-applies through
+ * applySchoolSubscriptionPeriodInTx with existingPaymentId. The payment
+ * row carries NULL statusAfter/periodEndAfter (snapshotted at redemption);
+ * an optional billingModel switch rides the same transaction. No
+ * apply-then-rollback of live tenant state, no stale-snapshot risk.
+ */
+export async function recordDeferredSchoolPaymentInTx(
+  tx: Prisma.TransactionClient,
+  opts: ApplySchoolPeriodOpts,
+): Promise<{ paymentId: string; receiptNo: string | null }> {
+  const school = await tx.school.findUnique({
+    where: { id: opts.schoolId },
+    select: { id: true, subscription: true },
+  })
+  if (!school) {
+    throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
+  }
+  const current = school.subscription
+  const seqRows = await tx.$queryRaw<Array<{ seq: number }>>`SELECT nextval('platform_payment_receipt_seq')::int AS seq`
+  const created = await tx.platformPayment.create({
+    data: {
+      schoolId: opts.schoolId,
+      amount: opts.amount,
+      currency: opts.currency ?? 'INR',
+      mode: opts.mode,
+      paymentDate: opts.paymentDate,
+      periodMonths: Math.max(1, Math.min(60, Math.round(opts.validityMonths))),
+      reference: opts.reference ?? null,
+      notes: opts.notes ?? null,
+      recordedById: opts.recordedById ?? null,
+      verification: 'VERIFIED',
+      verifiedAt: new Date(),
+      // NULL until the linked code is redeemed (the activation cause).
+      statusAfter: null,
+      periodEndAfter: null,
+      receiptNo: applyReceiptNumber(Number(seqRows[0]?.seq ?? 1)),
+      subscriptionId: current?.id ?? null,
+      orderId: opts.orderId ?? null,
+    },
+  })
+  // Optional billing-model switch rides the SAME transaction (a failed
+  // request must never flip the tenant's model).
+  if (opts.billingModel && opts.billingModel !== (current?.billingModel ?? 'SCHOOL_WIDE')) {
+    await tx.schoolSubscription.upsert({
+      where: { schoolId: opts.schoolId },
+      create: {
+        schoolId: opts.schoolId,
+        status: current?.status ?? 'RESTRICTED',
+        plan: current?.plan ?? 'STANDARD',
+        billingModel: opts.billingModel,
+      },
+      update: { billingModel: opts.billingModel },
+    })
+  }
+  return { paymentId: created.id, receiptNo: created.receiptNo }
+}
+
+/* ═════════════ SUBSCRIPTION & ENTITLEMENT SYSTEM (2026-10-13) ═════════════
+ * Plan-driven school-subscription application — the ONE code path shared by
+ * the online-order settlement and the school-wide activation-code
+ * redemption. Mirrors recordPlatformPayment's verified-payment invariant
+ * and receipt semantics, plus plan/interval snapshots and the calendar-
+ * month period math. The legacy recordPlatformPayment above is untouched
+ * (existing tests + admin flow keep their behavior).
+ */
+
+export interface ApplySchoolPeriodOpts {
+  schoolId: string
+  /** Plan-of-record snapshots (kept on the subscription row for history). */
+  planId?: string | null
+  planCode?: string | null
+  interval?: string | null
+  priceSnapshot?: number | null
+  currency?: string
+  amount: number
+  mode: PaymentMode
+  paymentDate: Date
+  validityMonths: number
+  reference?: string | null
+  notes?: string | null
+  recordedById?: string | null
+  /** Online order this payment settles (webhook/verify). */
+  orderId?: string | null
+  /** The platform payment row created at code ISSUANCE (offline flow) —
+   *  redemption snapshots it instead of creating a second row. */
+  existingPaymentId?: string | null
+  /** Tenant billing-model switch applied in the SAME transaction as the
+   *  payment (never committed on a request that later fails validation). */
+  billingModel?: string | null
+}
+
+function applyReceiptNumber(seq: number): string {
+  const year = new Date().getFullYear()
+  return `SCH-RCP-${year}-${String(seq).padStart(5, '0')}`
+}
+
+/** Calendar-month addition (day-of-month preserved, clamped). Shared with
+ *  the subscription services — one period-math implementation. */
+export function addCalendarMonths(from: Date, months: number): Date {
+  const d = new Date(from.getTime())
+  const day = d.getUTCDate()
+  d.setUTCDate(1)
+  d.setUTCMonth(d.getUTCMonth() + months)
+  const daysInMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate()
+  d.setUTCDate(Math.min(day, daysInMonth))
+  return d
+}
+
+/**
+ * Apply a paid period to the tenant's subscription INSIDE the caller's
+ * transaction: VERIFIED PlatformPayment (created — online/manual — or
+ * snapshotted — offline code redemption) + SchoolSubscription upsert
+ * (status ACTIVE, override cleared, period extended from
+ * max(now, current periodEnd) by validityMonths calendar months, plan
+ * snapshots set when provided).
+ *
+ * The CODE-GATED offline flow uses recordDeferredSchoolPaymentInTx
+ * instead (payment row only, activation at redemption).
+ */
+export async function applySchoolSubscriptionPeriodInTx(
+  tx: Prisma.TransactionClient,
+  opts: ApplySchoolPeriodOpts,
+): Promise<{ paymentId: string | null; receiptNo: string | null; subscriptionId: string; statusAfter: string; periodEndAfter: Date }> {
+  const school = await tx.school.findUnique({
+    where: { id: opts.schoolId },
+    select: { id: true, subscription: true },
+  })
+  if (!school) {
+    throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
+  }
+  const current = school.subscription
+  const base = current?.periodEnd && current.periodEnd.getTime() > Date.now() ? current.periodEnd : new Date()
+  const months = Math.max(1, Math.min(60, Math.round(opts.validityMonths)))
+  const periodEndAfter = addCalendarMonths(base, months)
+
+  let paymentId = opts.existingPaymentId ?? null
+  let receiptNo: string | null = null
+  if (!paymentId) {
+    // Atomic DB sequence receipt (SCH-RCP) — race-free inside this
+    // transaction (the count-based variant collided with concurrent
+    // recordings: P2002 aborted the caller's transaction).
+    const seqRows = await tx.$queryRaw<Array<{ seq: number }>>`SELECT nextval('platform_payment_receipt_seq')::int AS seq`
+    const created = await tx.platformPayment.create({
+      data: {
+        schoolId: opts.schoolId,
+        amount: opts.amount,
+        currency: opts.currency ?? 'INR',
+        mode: opts.mode,
+        paymentDate: opts.paymentDate,
+        periodMonths: months,
+        reference: opts.reference ?? null,
+        notes: opts.notes ?? null,
+        recordedById: opts.recordedById ?? null,
+        verification: 'VERIFIED',
+        verifiedAt: new Date(),
+        statusAfter: 'ACTIVE',
+        periodEndAfter,
+        receiptNo: applyReceiptNumber(Number(seqRows[0]?.seq ?? 1)),
+        subscriptionId: current?.id ?? null,
+        orderId: opts.orderId ?? null,
+      },
+    })
+    paymentId = created.id
+    receiptNo = created.receiptNo
+  } else {
+    const existing = await tx.platformPayment.findUnique({ where: { id: paymentId } })
+    receiptNo = existing?.receiptNo ?? null
+  }
+
+  const subscription = await tx.schoolSubscription.upsert({
+    where: { schoolId: opts.schoolId },
+    create: {
+      schoolId: opts.schoolId,
+      status: 'ACTIVE',
+      plan: opts.planCode ?? current?.plan ?? 'STANDARD',
+      billingModel: opts.billingModel ?? current?.billingModel ?? 'SCHOOL_WIDE',
+      planId: opts.planId ?? null,
+      planCode: opts.planCode ?? null,
+      interval: opts.interval ?? null,
+      priceSnapshot: opts.priceSnapshot ?? null,
+      currencySnapshot: opts.currency ?? 'INR',
+      periodStart: base,
+      periodEnd: periodEndAfter,
+      graceDays: current?.graceDays ?? 14,
+    },
+    update: {
+      status: 'ACTIVE',
+      planId: opts.planId ?? undefined,
+      planCode: opts.planCode ?? undefined,
+      interval: opts.interval ?? undefined,
+      priceSnapshot: opts.priceSnapshot ?? undefined,
+      currencySnapshot: opts.currency ?? undefined,
+      // Optional model switch, applied atomically with the payment.
+      billingModel: opts.billingModel ?? undefined,
+      periodStart: base,
+      periodEnd: periodEndAfter,
+      // A verified payment clears any manual restriction override.
+      overrideStatus: null,
+    },
+  })
+
+  if (paymentId && !opts.existingPaymentId) {
+    await tx.platformPayment.update({ where: { id: paymentId }, data: { subscriptionId: subscription.id } })
+  }
+  // Offline code redemption: snapshot the applied result on the payment row.
+  if (opts.existingPaymentId) {
+    await tx.platformPayment.update({
+      where: { id: opts.existingPaymentId },
+      data: { statusAfter: 'ACTIVE', periodEndAfter },
+    }).catch(() => {})
+  }
+
+  return { paymentId, receiptNo, subscriptionId: subscription.id, statusAfter: 'ACTIVE', periodEndAfter }
 }

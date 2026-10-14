@@ -20,6 +20,10 @@ export const PLATFORM_PERMISSION_KEYS = [
   'schools.manage', // metadata, feature flags, activate/suspend/reactivate/delete
   'schools.provision', // create new schools
   'billing.manage', // plan/subscription configuration
+  'billing.complimentary', // SUBSCRIPTION & ENTITLEMENT SYSTEM — assign
+  // complimentary/waived student entitlements (Model C). SEPARATE from
+  // billing.manage by design: comping is a higher-trust commercial
+  // decision; root holds it implicitly, ops admins do NOT by default.
   'announcements.manage', // platform announcements
   'settings.manage', // platform settings + module master switches
   'audit.read', // platform audit trail
