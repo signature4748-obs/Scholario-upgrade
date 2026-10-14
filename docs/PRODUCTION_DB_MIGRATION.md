@@ -85,7 +85,16 @@ Guarantees, in order of enforcement:
 3. **Object-existence gate:** while a migration is pending, the objects it
    creates (columns / 24 trgm indexes / 11 schoolId indexes) must NOT exist —
    this is the "not already applied under a different migration state"
-   protection.
+   protection. Since PR #30 the gate also covers the full SUBSCRIPTION &
+   ENTITLEMENT SYSTEM migration `20261013183000` (6 new tables, 28 indexes
+   including the hand-written partial-unique
+   `StudentEntitlement_one_live_per_student` one-live-per-student
+   backstop, 27 FK constraints, and the additive columns on SchoolSubscription /
+   PlatformSetting / PlatformPayment) — registered in `MIGRATION_EXPECTATIONS`
+   and regression-pinned by
+   `tests/regression/prod-migration-fk-invariant.test.ts` (mapping is
+   EXHAUSTIVE against the migration SQL; the SQL is asserted additive-only
+   by statement shape; both drift directions are unit-tested).
 4. **Transactional apply:** each migration runs as `BEGIN; <migration.sql>;
    INSERT INTO _prisma_migrations (…true checksum…); COMMIT;` — one batch,
    one transaction. Failure ⇒ nothing lands, nothing is recorded.

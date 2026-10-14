@@ -668,6 +668,85 @@ export const ACCOUNT_RECOVERY_INDEXES: readonly string[] = [
 
 export const ACCOUNT_RECOVERY_TABLES: readonly string[] = ['PlatformPasswordReset', 'PlatformRecoveryTicket']
 
+// ─── SUBSCRIPTION & ENTITLEMENT SYSTEM (20261013183000) — the exact object
+// set. Single source: prisma/migrations/20261013183000_subscription_
+// entitlement_system/migration.sql (fully additive — see the migration's
+// own header note).
+
+export const SUBSCRIPTION_SYSTEM_MIGRATION = '20261013183000_subscription_entitlement_system'
+
+export const SUBSCRIPTION_SYSTEM_TABLES: readonly string[] = [
+  'SubscriptionPlan',
+  'SubscriptionOrder',
+  'StudentEntitlement',
+  'StudentSubscriptionPayment',
+  'ActivationCode',
+  'ActivationCodeEvent',
+]
+
+export const SUBSCRIPTION_SYSTEM_INDEXES: readonly string[] = [
+  // Exactly-once / uniqueness backstops first — the load-bearing invariants.
+  'SubscriptionOrder_orderNo_key',
+  'SubscriptionOrder_providerOrderId_key',
+  'SubscriptionOrder_providerPaymentId_key',
+  'StudentEntitlement_paymentId_key',
+  'StudentEntitlement_activationCodeId_key',
+  'StudentEntitlement_one_live_per_student',
+  'StudentSubscriptionPayment_receiptNo_key',
+  'StudentSubscriptionPayment_orderId_key',
+  'ActivationCode_publicRef_key',
+  'ActivationCode_codeHash_key',
+  'ActivationCode_replacedByCodeId_key',
+  'PlatformPayment_orderId_key',
+  'SubscriptionPlan_code_key',
+  // Operational composites (registry, order lanes, expiry scans, events).
+  'SubscriptionPlan_scope_status_idx',
+  'SubscriptionPlan_status_sortOrder_idx',
+  'SubscriptionOrder_schoolId_status_createdAt_idx',
+  'SubscriptionOrder_studentId_status_idx',
+  'SubscriptionOrder_status_createdAt_idx',
+  'StudentEntitlement_schoolId_status_idx',
+  'StudentEntitlement_studentId_validityEnd_idx',
+  'StudentEntitlement_status_validityEnd_idx',
+  'StudentSubscriptionPayment_schoolId_paymentDate_idx',
+  'StudentSubscriptionPayment_studentId_paymentDate_idx',
+  'ActivationCode_schoolId_status_idx',
+  'ActivationCode_studentId_status_idx',
+  'ActivationCode_status_expiresAt_idx',
+  'ActivationCodeEvent_codeId_createdAt_idx',
+  'ActivationCodeEvent_type_createdAt_idx',
+]
+
+export const SUBSCRIPTION_SYSTEM_CONSTRAINTS: readonly string[] = [
+  'SchoolSubscription_planId_fkey',
+  'PlatformPayment_orderId_fkey',
+  'SubscriptionOrder_schoolId_fkey',
+  'SubscriptionOrder_studentId_fkey',
+  'SubscriptionOrder_initiatedByUserId_fkey',
+  'SubscriptionOrder_planId_fkey',
+  'StudentEntitlement_schoolId_fkey',
+  'StudentEntitlement_studentId_fkey',
+  'StudentEntitlement_planId_fkey',
+  'StudentEntitlement_paymentId_fkey',
+  'StudentEntitlement_activationCodeId_fkey',
+  'StudentEntitlement_revokedById_fkey',
+  'StudentSubscriptionPayment_schoolId_fkey',
+  'StudentSubscriptionPayment_studentId_fkey',
+  'StudentSubscriptionPayment_recordedById_fkey',
+  'StudentSubscriptionPayment_orderId_fkey',
+  'ActivationCode_schoolId_fkey',
+  'ActivationCode_studentId_fkey',
+  'ActivationCode_planId_fkey',
+  'ActivationCode_issuedById_fkey',
+  'ActivationCode_claimedByUserId_fkey',
+  'ActivationCode_revokedById_fkey',
+  'ActivationCode_replacedByCodeId_fkey',
+  'ActivationCode_reissuedById_fkey',
+  'ActivationCodeEvent_codeId_fkey',
+  'ActivationCodeEvent_userId_fkey',
+  'ActivationCodeEvent_studentId_fkey',
+]
+
 /**
  * Object expectations per migration: while the migration is PENDING the
  * objects must NOT exist (protects against schema drift / half-applied
@@ -708,6 +787,40 @@ export const MIGRATION_EXPECTATIONS: Record<string, MigrationExpectation> = {
   // verifiable object.
   '20261013140000_fee_transaction_dangling_feeid_self_heal': {
     constraints: ['FeeTransaction_feeId_fkey'],
+  },
+  // SUBSCRIPTION & ENTITLEMENT SYSTEM (PR #30 — 20261013183000): the
+  // migration is fully ADDITIVE (6 new tables, additive columns on 3
+  // existing tables, unique/partial-unique/composite indexes, FK
+  // constraints, 3 sequences — no drops, no data statements). The
+  // registered object set makes the pre-flight/verify object gates cover
+  // the whole commercial lane: pending-drift (objects already exist while
+  // the migration is pending — schema drift STOP) AND silent-non-apply
+  // (objects missing although the migration is applied). The invariants
+  // that matter most are the exactly-once/concurrency backstops:
+  //   · SubscriptionOrder_providerPaymentId_key / providerOrderId_key
+  //     (exactly-once settlement, replay/double-payment probe)
+  //   · StudentSubscriptionPayment_orderId_key (payment↔order 1:1)
+  //   · PlatformPayment_orderId_key (school-scope exactly-once)
+  //   · StudentEntitlement_one_live_per_student (hand-written PARTIAL
+  //     unique — one PENDING|ACTIVE entitlement per student; the DB-level
+  //     double-activation backstop for concurrent claims/payments)
+  //   · ActivationCode_codeHash_key / publicRef_key (code uniqueness)
+  '20261013183000_subscription_entitlement_system': {
+    tables: SUBSCRIPTION_SYSTEM_TABLES,
+    indexes: SUBSCRIPTION_SYSTEM_INDEXES,
+    constraints: SUBSCRIPTION_SYSTEM_CONSTRAINTS,
+    tableColumns: {
+      PlatformPayment: ['orderId'],
+      PlatformSetting: ['subscriptionConfig'],
+      SchoolSubscription: [
+        'billingModel',
+        'currencySnapshot',
+        'interval',
+        'planCode',
+        'planId',
+        'priceSnapshot',
+      ],
+    },
   },
 }
 
