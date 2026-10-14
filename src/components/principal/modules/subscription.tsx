@@ -50,6 +50,52 @@ const STATE_LABEL: Record<string, string> = {
   SUSPENDED: 'Suspended', NOT_ACTIVATED: 'Not activated',
 }
 
+interface RazorpayCheckoutResponse {
+  razorpay_order_id: string
+  razorpay_payment_id: string
+  razorpay_signature: string
+}
+
+/** Load checkout.js once and open the REAL Razorpay sheet (live lane) —
+ *  the same contract as the fee payment dialog: the sheet's signed handler
+ *  payload is relayed to /verify where the server re-checks the HMAC
+ *  server-side before anything activates. */
+function openRazorpayCheckout(opts: {
+  keyId: string
+  providerOrderId: string
+  amount: number
+  currency: string
+  onConfirm: (res: RazorpayCheckoutResponse) => void
+  onDismiss: () => void
+  onFail: () => void
+}) {
+  const run = () => {
+    try {
+      const rzp = new (window as unknown as { Razorpay: new (o: Record<string, unknown>) => { open: () => void; on: (e: string, cb: () => void) => void } }).Razorpay({
+        key: opts.keyId,
+        order_id: opts.providerOrderId,
+        amount: Math.round(opts.amount * 100),
+        currency: opts.currency,
+        name: 'Scholario School Subscription',
+        description: 'School subscription renewal',
+        theme: { color: '#7c3aed' },
+        handler: (res: RazorpayCheckoutResponse) => opts.onConfirm(res),
+        modal: { ondismiss: () => opts.onDismiss() },
+      })
+      rzp.on('payment.failed', () => opts.onFail())
+      rzp.open()
+    } catch {
+      opts.onFail()
+    }
+  }
+  if ((window as unknown as { Razorpay?: unknown }).Razorpay) return run()
+  const script = document.createElement('script')
+  script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+  script.onload = run
+  script.onerror = () => opts.onFail()
+  document.body.appendChild(script)
+}
+
 export function PrincipalSubscriptionModule() {
   const [data, setData] = useState<SubData | null>(null)
   const [students, setStudents] = useState<StudentStatusRow[] | null>(null)
@@ -113,7 +159,7 @@ export function PrincipalSubscriptionModule() {
       })
       const body = await res.json().catch(() => null)
       if (!body?.ok) { toast.error(body?.error ?? 'Could not start the renewal.'); return }
-      const order = (body.data as { order: { orderNo: string; amount: number; currency: string; mode: string } }).order
+      const order = (body.data as { order: { orderNo: string; amount: number; currency: string; mode: string; providerOrderId: string; keyId: string | null } }).order
       if (order.mode === 'sandbox') {
         // Dev/test contract: run the sandbox payment + verify server-side.
         const vres = await fetch('/api/subscription/verify', {
@@ -123,9 +169,42 @@ export function PrincipalSubscriptionModule() {
         const vbody = await vres.json().catch(() => null)
         if (vbody?.ok) { toast.success(vbody.data.message ?? 'Subscription renewed.'); void load() }
         else toast.error(vbody?.error ?? 'Verification failed — nothing was activated.')
-      } else {
-        toast.info(`Order ${order.orderNo} created for ${money(order.amount, order.currency)}. Complete the payment in the checkout window; activation happens after server-side verification.`)
+        return
       }
+      if (order.keyId && order.providerOrderId) {
+        // LIVE Razorpay lane: open the real checkout sheet (same contract
+        // as the fee payment dialog) — the signed handler triple is relayed
+        // to /verify, which re-checks the HMAC server-side.
+        openRazorpayCheckout({
+          keyId: order.keyId,
+          providerOrderId: order.providerOrderId,
+          amount: order.amount,
+          currency: order.currency,
+          onConfirm: async (r) => {
+            try {
+              const vres = await fetch('/api/subscription/verify', {
+                method: 'POST', headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  orderNo: order.orderNo,
+                  orderId: r.razorpay_order_id,
+                  paymentId: r.razorpay_payment_id,
+                  signature: r.razorpay_signature,
+                }),
+              })
+              const vbody = await vres.json().catch(() => null)
+              if (vbody?.ok) { toast.success(vbody.data.message ?? 'Subscription renewed.'); void load() }
+              else toast.error(vbody?.error ?? 'Verification failed — nothing was activated.')
+            } catch {
+              toast.error('Verification failed — nothing was activated.')
+            }
+          },
+          onDismiss: () => toast.info('Checkout cancelled — your order stays pending for a few minutes.'),
+          onFail: () => toast.error('The gateway reported a failed payment — nothing was activated.'),
+        })
+        return
+      }
+      // Unconfigured live lane — honest blocked state (no fake success).
+      toast.info(`Order ${order.orderNo} created for ${money(order.amount, order.currency)}. Online payment verification is not configured on this deployment yet — please contact SCHOLARIO support.`)
     } catch {
       toast.error('Renewal failed — nothing was activated.')
     } finally {

@@ -60,7 +60,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         modules: raw.modules ? JSON.stringify(raw.modules) : plan.modules,
         limits: raw.limits ? JSON.stringify(raw.limits) : plan.limits,
         graceDays: raw.graceDays ?? plan.graceDays,
-        allowOnline: raw.allowOffline === undefined ? plan.allowOnline : (raw.allowOnline ?? plan.allowOnline),
+        // allowOnline merge (the copy-paste bug keyed off allowOffline —
+        // a solo allowOnline patch was silently dropped):
+        allowOnline: raw.allowOnline === undefined ? plan.allowOnline : raw.allowOnline,
         allowOffline: raw.allowOffline ?? plan.allowOffline,
         availableForNew: raw.availableForNew ?? plan.availableForNew,
         availableForRenewal: raw.availableForRenewal ?? plan.availableForRenewal,
@@ -113,7 +115,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withPlatform(
-    { permission: 'billing.manage' },
+    // Archive is irreversible (archived plans refuse PATCH, no unarchive
+    // route) — step-up policy, dormant while platform TOTP is stood down.
+    { permission: 'billing.manage', stepUp: true },
     async (ctx) => {
       const plan = await db.subscriptionPlan.findUnique({ where: { id } })
       if (!plan) {

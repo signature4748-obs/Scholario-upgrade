@@ -8,6 +8,7 @@ import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import {
   recordPlatformPayment,
   applySchoolSubscriptionPeriodInTx,
+  recordDeferredSchoolPaymentInTx,
   PAYMENT_MODES,
   type PaymentMode,
 } from '@/lib/platform/billing'
@@ -69,14 +70,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const paymentDate =
         body.paymentDate.length === 10 ? new Date(`${body.paymentDate}T00:00:00Z`) : new Date(body.paymentDate)
 
-      // Optional billing-model change (only via this controlled flow).
-      if (body.billingModel && body.billingModel !== (school.subscription?.billingModel ?? 'SCHOOL_WIDE')) {
-        await db.schoolSubscription.upsert({
-          where: { schoolId: school.id },
-          create: { schoolId: school.id, billingModel: body.billingModel, plan: school.subscription?.plan ?? 'STANDARD' },
-          update: { billingModel: body.billingModel },
-        })
-      }
+      // Optional billing-model change (only via this controlled flow). It
+      // is applied INSIDE (or after) the successful payment path — never
+      // committed on a request that fails plan/price validation first.
+      const modelChange =
+        body.billingModel && body.billingModel !== (school.subscription?.billingModel ?? 'SCHOOL_WIDE')
+          ? body.billingModel
+          : null
 
       // ── LEGACY path: no planCode → the original direct-activation flow. ──
       if (!body.planCode) {
@@ -92,6 +92,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           recordedById: ctx.admin.id,
           source: 'admin',
         })
+        // The model switch follows the successful payment (best-effort —
+        // the financial record stands; a failed switch is surfaced in the
+        // audit metadata rather than failing the recorded payment).
+        let modelApplied = false
+        if (modelChange) {
+          try {
+            await db.schoolSubscription.upsert({
+              where: { schoolId: school.id },
+              create: { schoolId: school.id, billingModel: modelChange, plan: school.subscription?.plan ?? 'STANDARD' },
+              update: { billingModel: modelChange },
+            })
+            modelApplied = true
+          } catch {
+            modelApplied = false
+          }
+        }
         await platformAuditEvent({
           adminId: ctx.admin.id,
           action: 'platform.billing.payment_recorded',
@@ -108,6 +124,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             periodMonths: body.periodMonths,
             statusAfter: result.statusAfter,
             periodEndAfter: result.periodEndAfter.toISOString(),
+            billingModelRequested: modelChange,
+            billingModelApplied: modelApplied,
           },
         }).catch(() => {})
         return {
@@ -154,6 +172,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             reference: body.reference ?? null,
             notes: body.notes ?? null,
             recordedById: ctx.admin.id,
+            // Model switch rides the payment transaction.
+            billingModel: modelChange,
           }),
         )
         await platformAuditEvent({
@@ -188,8 +208,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       // Offline code handshake: VERIFIED payment row + school-wide code;
       // the subscription activates when the principal redeems the code.
+      // recordDeferredSchoolPaymentInTx records the payment WITHOUT
+      // applying the period (activation happens at redemption through
+      // existingPaymentId) — no apply-then-rollback of live tenant state,
+      // no stale-snapshot risk.
       const issued = await db.$transaction(async (tx) => {
-        const payment = await applySchoolSubscriptionPeriodInTx(tx, {
+        const payment = await recordDeferredSchoolPaymentInTx(tx, {
           schoolId: school.id,
           planId: plan.id,
           planCode: plan.code,
@@ -203,26 +227,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           reference: body.reference ?? null,
           notes: (body.notes ?? 'Offline plan payment — activation code issued') + ' [PENDING REDEMPTION]',
           recordedById: ctx.admin.id,
-        })
-        // NOTE: the period application above ACTIVATES immediately — for the
-        // code-gated flow we deliberately defer: see codes.ts redemption,
-        // which re-applies with existingPaymentId. To keep the payment row
-        // as the immutable financial record WITHOUT activating, we roll the
-        // subscription state back to pre-payment here (the code redeem is
-        // the activation cause).
-        const before = school.subscription
-        await tx.schoolSubscription.update({
-          where: { schoolId: school.id },
-          data: {
-            status: before?.status ?? 'RESTRICTED',
-            overrideStatus: before?.overrideStatus ?? undefined,
-            periodStart: before?.periodStart ?? null,
-            periodEnd: before?.periodEnd ?? null,
-          },
-        })
-        await tx.platformPayment.update({
-          where: { id: payment.paymentId! },
-          data: { statusAfter: null, periodEndAfter: null },
+          billingModel: modelChange,
         })
         const code = await issueActivationCode({
           scope: 'SCHOOL_SUBSCRIPTION',

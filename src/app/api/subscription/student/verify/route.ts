@@ -12,6 +12,10 @@ export const runtime = 'nodejs'
 
 const verifySchema = strictBody({
   orderNo: z.string().min(6).max(40),
+  /** LIVE lane: the gateway order id (razorpay_order_id) from the checkout
+   *  handler — required for the server to bind the confirmation to this
+   *  order's providerOrderId before verifying the HMAC. */
+  orderId: z.string().min(4).max(80).optional(),
   paymentId: z.string().min(4).max(80).optional(),
   signature: z.string().min(16).max(256).optional(),
   /** Sandbox lane only: the server runs the sandbox payment and returns
@@ -43,9 +47,21 @@ export async function POST(req: NextRequest) {
 
       // The order must belong to THIS student (server-side scope check —
       // another student's order number is refused without leaking it).
+      // The ownership check runs BEFORE the idempotent PAID branch: the
+      // early return carries entitlement state, so it must never answer
+      // for someone else's order (order numbers are sequential — an
+      // ownership-after-fast-path ordering would leak entitlement ids and
+      // paid-status oracles across students/tenants).
       const order = await db.subscriptionOrder.findUnique({ where: { orderNo: body.orderNo } })
       if (!order || order.scope !== 'STUDENT_PLAN' || !order.studentId) {
         throw new AppError('INVALID_INPUT', { publicMessage: 'Order not found.' })
+      }
+      const student = await db.student.findUnique({ where: { userId: user.id }, select: { id: true, schoolId: true } })
+      if (!student || order.studentId !== student.id || order.schoolId !== schoolId) {
+        throw new AppError('FORBIDDEN', {
+          publicMessage: 'This order belongs to another account.',
+          internalDetail: 'student verify: order scope mismatch',
+        })
       }
       // Idempotent re-check: an order that is already PAID (the payment
       // page verifying again after settlement) returns the original
@@ -63,17 +79,17 @@ export async function POST(req: NextRequest) {
           message: 'This payment was already processed — no second entitlement was created.',
         }
       }
-      const student = await db.student.findUnique({ where: { userId: user.id }, select: { id: true, schoolId: true } })
-      if (!student || order.studentId !== student.id || order.schoolId !== schoolId) {
-        throw new AppError('FORBIDDEN', {
-          publicMessage: 'This order belongs to another account.',
-          internalDetail: 'student verify: order scope mismatch',
-        })
-      }
 
       const confirmation = body.sandbox
         ? await sandboxConfirmOrder(body.orderNo)
-        : { orderId: '', paymentId: body.paymentId ?? '', signature: body.signature ?? '' }
+        : {
+            // LIVE lane: the relayed checkout triple (razorpay_order_id |
+            // razorpay_payment_id | razorpay_signature) — the server binds
+            // it to the order's providerOrderId and verifies the HMAC.
+            orderId: body.orderId ?? '',
+            paymentId: body.paymentId ?? '',
+            signature: body.signature ?? '',
+          }
 
       const result = await verifyAndSettleOrder({
         orderNo: body.orderNo,

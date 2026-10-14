@@ -15,8 +15,9 @@
 //                   prices, policies, availability) + the global
 //                   model switches (config).
 // All actions are billing.manage-gated server-side; COMPLIMENTARY
-// additionally requires billing.complimentary (checked here for
-// honest UX, enforced server-side).
+// additionally requires billing.complimentary AND an audit note
+// (≥10 chars) — both enforced server-side; this UI only sends the
+// fields, never trusting client-side gating.
 // iPad/tablet-friendly: tables scroll horizontally with sticky
 // actions; dialogs are scrollable; nothing essential is truncated.
 // ============================================================
@@ -272,7 +273,14 @@ function StudentEntitlementsTab({ onAssigned }: { onAssigned: () => void }) {
   useEffect(() => {
     platformApi<{ schools: Array<{ id: string; name: string; slug: string }> }>('/api/platform/schools?pageSize=200')
       .then((d) => setSchools(d.schools.map((s) => ({ id: s.id, name: s.name, slug: s.slug }))))
-      .catch((e) => toast.error('Could not load schools', { description: errMessage(e) }))
+      .catch((e) =>
+        toast.error('Could not load the school list', {
+          description:
+            (errMessage(e) || '').includes('permission') || (errMessage(e) || '').includes('403')
+              ? `${errMessage(e)} — the student workspace additionally requires the schools.read permission for the school picker.`
+              : errMessage(e),
+        }),
+      )
   }, [])
 
   const loadStudents = useCallback(async (sid: string, query2 = '') => {
@@ -393,6 +401,10 @@ function AssignEntitlementDialog({ student, onClose, onDone }: { student: Studen
 
   const submit = async () => {
     if (!form.planCode) { toast.error('Select a plan first.'); return }
+    if (form.mode === 'COMPLIMENTARY' && (!form.notes || form.notes.trim().length < 10)) {
+      toast.error('Complimentary grants require an audit note (at least 10 characters) explaining why.')
+      return
+    }
     setSaving(true)
     try {
       const d = await platformApi<{ message: string; activationCode?: { publicRef: string; code: string; expiresAt: string } }>(
@@ -524,8 +536,16 @@ function StudentHistoryDialog({ student, onClose }: { student: StudentRow; onClo
   }, [student.studentId])
 
   const act = async (action: 'revoke' | 'suspend' | 'reactivate') => {
-    const reason = action === 'reactivate' ? 'Reactivated by operator' : window.prompt(`Reason for ${action}?`)
-    if (action !== 'reactivate' && (!reason || reason.trim().length < 4)) return
+    // Server requires a reason (min 10) for every lifecycle action —
+    // withdrawing/adjusting a paid entitlement is destructive.
+    const reason =
+      action === 'reactivate'
+        ? 'Reactivated by operator'
+        : window.prompt(`Reason for ${action}? (at least 10 characters — recorded in the audit trail)`)
+    if (action !== 'reactivate' && (!reason || reason.trim().length < 10)) {
+      if (reason !== null) toast.error('A reason of at least 10 characters is required.')
+      return
+    }
     setBusy(action)
     try {
       await platformApi(`/api/platform/students/${student.studentId}/subscription`, {

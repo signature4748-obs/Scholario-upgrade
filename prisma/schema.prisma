@@ -2914,7 +2914,7 @@ model PlatformAuditLog {
   adminId    String?
   /// Dot-namespaced action, e.g. 'platform.school.suspended'.
   action     String
-  /// SCHOOL | ADMIN | PLATFORM_SESSION | SUPPORT_SESSION | SETTING | ANNOUNCEMENT | AUTH
+  /// SCHOOL | ADMIN | PLATFORM_SESSION | SUPPORT_SESSION | SETTING | ANNOUNCEMENT | AUTH | STUDENT | SUBSCRIPTION_PLAN | ACTIVATION_CODE
   targetType String?
   targetId   String?
   /// Informational school scope (no FK — see above).

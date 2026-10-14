@@ -19,7 +19,8 @@
  *   · Error responses are GENERIC (no oracle about code existence, scope,
  *     owner, or another tenant's state). Rejection REASON CLASSES are
  *     recorded in ActivationCodeEvent for the code's own diagnostics only.
- *   · Reissue = revoke old + issue replacement (one transaction).
+ *   · Reissue = replace old (status ISSUED → REPLACED, conditional update)
+ *     + issue replacement (one transaction).
  *   · School-wide codes activate the TENANT subscription once — they
  *     never mint per-member grants.
  */
@@ -60,7 +61,7 @@ function activationRef(seq: number): string {
   return `SCH-ACT-${new Date().getFullYear()}-${String(seq).padStart(5, '0')}`
 }
 
-async function nextActivationSeq(tx: typeof db): Promise<number> {
+async function nextActivationSeq(tx?: Tx): Promise<number> {
   // Atomic DB sequence — race-free inside issuance transactions (the
   // count-based variant collided under concurrent claims: P2002 aborted
   // the caller's transaction).
@@ -228,6 +229,36 @@ export class CodeClaimError extends AppError {
 const STUDENT_CLAIM_MESSAGE =
   'This activation code is not valid for your account. Check the code with your school office, or ask them to reissue it.'
 
+/** Rejection outcome carried OUT of the claim transaction so the
+ * diagnostic ActivationCodeEvent row can be persisted AFTER the (rolled
+ * back) transaction — writing it inside and throwing would roll the event
+ * back with everything else, leaving rejections untraceable. */
+interface ClaimRejectionOutcome {
+  codeId: string
+  reason: ClaimRejection
+  userId?: string | null
+  studentId?: string | null
+  ip?: string | null
+}
+
+/** Best-effort post-transaction rejection event (never fails the caller). */
+async function persistRejectionEvent(outcome: ClaimRejectionOutcome): Promise<void> {
+  try {
+    await db.activationCodeEvent.create({
+      data: {
+        codeId: outcome.codeId,
+        type: 'CLAIM_REJECTED',
+        userId: outcome.userId ?? null,
+        studentId: outcome.studentId ?? null,
+        ip: outcome.ip ?? null,
+        detail: JSON.stringify({ reason: outcome.reason }),
+      },
+    })
+  } catch {
+    // Diagnostics must never break the (already rejected) claim path.
+  }
+}
+
 // ── Student claim (Model B/C) ───────────────────────────────────────────────
 
 export interface StudentClaimContext {
@@ -257,6 +288,11 @@ export interface StudentClaimResult {
  * DB-level backstop: even two concurrent winning claims cannot produce two
  * live entitlements (the second transaction aborts with P2002 → honest
  * CONFLICT, never a double grant).
+ *
+ * Rejections RETURN out of the transaction (it commits empty); the
+ * CLAIM_REJECTED diagnostic event is then persisted OUTSIDE it (see
+ * persistRejectionEvent) — a rolled-back event row would be invisible,
+ * leaving claim-attempt forensics blind.
  */
 export async function claimStudentActivationCode(
   codeInput: string,
@@ -270,31 +306,19 @@ export async function claimStudentActivationCode(
   const hash = hashCode(normalized)
   const now = new Date()
 
-  return db.$transaction(async (tx) => {
+  const outcome = await db.$transaction(async (tx) => {
     const code = await tx.activationCode.findUnique({ where: { codeHash: hash } })
-    if (!code) throw new CodeClaimError('NOT_FOUND', STUDENT_CLAIM_MESSAGE)
+    if (!code) return { rejected: true as const, codeId: '', reason: 'NOT_FOUND' as ClaimRejection }
 
-    const reject = async (reason: ClaimRejection) => {
-      await tx.activationCodeEvent.create({
-        data: {
-          codeId: code.id,
-          type: 'CLAIM_REJECTED',
-          userId: ctx.userId,
-          studentId: ctx.studentId,
-          ip: ctx.ip ?? null,
-          detail: JSON.stringify({ reason }),
-        },
-      })
-      throw new CodeClaimError(reason, STUDENT_CLAIM_MESSAGE)
-    }
+    const reject = (reason: ClaimRejection) => ({ rejected: true as const, codeId: code.id, reason })
 
-    if (code.scope !== 'STUDENT_ENTITLEMENT') await reject('SCOPE_MISMATCH')
-    if (code.schoolId !== ctx.schoolId) await reject('SCHOOL_MISMATCH')
-    if (!code.studentId || code.studentId !== ctx.studentId) await reject('STUDENT_MISMATCH')
-    if (code.status === 'CLAIMED') await reject('ALREADY_CLAIMED')
-    if (code.status === 'REVOKED') await reject('REVOKED')
-    if (code.status === 'REPLACED') await reject('REPLACED')
-    if (code.status === 'EXPIRED' || code.expiresAt.getTime() <= now.getTime()) await reject('EXPIRED')
+    if (code.scope !== 'STUDENT_ENTITLEMENT') return reject('SCOPE_MISMATCH')
+    if (code.schoolId !== ctx.schoolId) return reject('SCHOOL_MISMATCH')
+    if (!code.studentId || code.studentId !== ctx.studentId) return reject('STUDENT_MISMATCH')
+    if (code.status === 'CLAIMED') return reject('ALREADY_CLAIMED')
+    if (code.status === 'REVOKED') return reject('REVOKED')
+    if (code.status === 'REPLACED') return reject('REPLACED')
+    if (code.status === 'EXPIRED' || code.expiresAt.getTime() <= now.getTime()) return reject('EXPIRED')
 
     // Conditional claim: exactly one concurrent request wins.
     const claimed = await tx.activationCode.updateMany({
@@ -306,17 +330,7 @@ export async function claimStudentActivationCode(
       },
     })
     if (claimed.count !== 1) {
-      await tx.activationCodeEvent.create({
-        data: {
-          codeId: code.id,
-          type: 'CLAIM_REJECTED',
-          userId: ctx.userId,
-          studentId: ctx.studentId,
-          ip: ctx.ip ?? null,
-          detail: JSON.stringify({ reason: 'RACE_LOST' }),
-        },
-      })
-      throw new CodeClaimError('RACE_LOST', STUDENT_CLAIM_MESSAGE)
+      return reject('RACE_LOST')
     }
 
     // Entitlement activation through the SHARED core (renewal semantics:
@@ -350,14 +364,27 @@ export async function claimStudentActivationCode(
     })
 
     return {
-      entitlementId: activated.entitlementId,
-      validityStart: activated.validityStart,
-      validityEnd: activated.validityEnd,
-      status: activated.statusAfter,
-      planCode: code.planCode,
-      publicRef: code.publicRef,
+      rejected: false as const,
+      result: {
+        entitlementId: activated.entitlementId,
+        validityStart: activated.validityStart,
+        validityEnd: activated.validityEnd,
+        status: activated.statusAfter,
+        planCode: code.planCode,
+        publicRef: code.publicRef,
+      } as StudentClaimResult,
     }
   }, { timeout: 15_000 })
+
+  if (outcome.rejected) {
+    // Persist the diagnostic event AFTER the transaction (best-effort) —
+    // including the claimant's identity for abuse forensics.
+    if (outcome.codeId) {
+      await persistRejectionEvent({ ...outcome, userId: ctx.userId, studentId: ctx.studentId, ip: ctx.ip })
+    }
+    throw new CodeClaimError(outcome.reason, STUDENT_CLAIM_MESSAGE)
+  }
+  return outcome.result
 }
 
 // ── School-wide redemption (Model A) ────────────────────────────────────────
@@ -380,47 +407,42 @@ export interface SchoolRedeemResult {
  * the whole-school entitlement — never per-member grants). The linked
  * VERIFIED payment was recorded at issuance; redemption APPLIES the
  * period, updates the payment snapshots and the subscription row in ONE
- * transaction with the same conditional-update race guard.
+ * transaction with the same conditional-update race guard. Rejections
+ * return out of the transaction and their diagnostic events are persisted
+ * outside it (same discipline as the student claim).
  */
 export async function redeemSchoolActivationCode(
   codeInput: string,
   ctx: SchoolRedeemContext,
   applyPeriod: (tx: Tx, opts: { schoolId: string; validityMonths: number; codeId: string; paymentRef: string | null; planId: string | null; planCode: string | null; interval: string | null }) => Promise<{ subscriptionId: string; statusAfter: string; periodEndAfter: Date }>,
 ): Promise<SchoolRedeemResult> {
+  const REDEEM_MESSAGE = 'This activation code is not valid for your school. Check the code with SCHOLARIO support.'
   const normalized = normalizeCode(String(codeInput ?? ''))
   if (normalized.length < 15) {
-    throw new CodeClaimError('NOT_FOUND', 'This activation code is not valid for your school. Check the code with SCHOLARIO support.')
+    throw new CodeClaimError('NOT_FOUND', REDEEM_MESSAGE)
   }
   const hash = hashCode(normalized)
   const now = new Date()
 
-  return db.$transaction(async (tx) => {
+  const outcome = await db.$transaction(async (tx) => {
     const code = await tx.activationCode.findUnique({ where: { codeHash: hash } })
-    if (!code) throw new CodeClaimError('NOT_FOUND', 'This activation code is not valid for your school. Check the code with SCHOLARIO support.')
+    if (!code) return { rejected: true as const, codeId: '', reason: 'NOT_FOUND' as ClaimRejection }
 
-    const reject = async (reason: ClaimRejection) => {
-      await tx.activationCodeEvent.create({
-        data: { codeId: code.id, type: 'CLAIM_REJECTED', userId: ctx.userId, ip: ctx.ip ?? null, detail: JSON.stringify({ reason }) },
-      })
-      throw new CodeClaimError(reason, 'This activation code is not valid for your school. Check the code with SCHOLARIO support.')
-    }
+    const reject = (reason: ClaimRejection) => ({ rejected: true as const, codeId: code.id, reason })
 
-    if (code.scope !== 'SCHOOL_SUBSCRIPTION') await reject('SCOPE_MISMATCH')
-    if (code.schoolId !== ctx.schoolId) await reject('SCHOOL_MISMATCH')
-    if (code.status === 'CLAIMED') await reject('ALREADY_CLAIMED')
-    if (code.status === 'REVOKED') await reject('REVOKED')
-    if (code.status === 'REPLACED') await reject('REPLACED')
-    if (code.status === 'EXPIRED' || code.expiresAt.getTime() <= now.getTime()) await reject('EXPIRED')
+    if (code.scope !== 'SCHOOL_SUBSCRIPTION') return reject('SCOPE_MISMATCH')
+    if (code.schoolId !== ctx.schoolId) return reject('SCHOOL_MISMATCH')
+    if (code.status === 'CLAIMED') return reject('ALREADY_CLAIMED')
+    if (code.status === 'REVOKED') return reject('REVOKED')
+    if (code.status === 'REPLACED') return reject('REPLACED')
+    if (code.status === 'EXPIRED' || code.expiresAt.getTime() <= now.getTime()) return reject('EXPIRED')
 
     const claimed = await tx.activationCode.updateMany({
       where: { id: code.id, status: 'ISSUED' },
       data: { status: 'CLAIMED', claimedAt: now, claimedByUserId: ctx.userId },
     })
     if (claimed.count !== 1) {
-      await tx.activationCodeEvent.create({
-        data: { codeId: code.id, type: 'CLAIM_REJECTED', userId: ctx.userId, ip: ctx.ip ?? null, detail: JSON.stringify({ reason: 'RACE_LOST' }) },
-      })
-      throw new CodeClaimError('RACE_LOST', 'This activation code is not valid for your school.')
+      return reject('RACE_LOST')
     }
 
     const applied = await applyPeriod(tx, {
@@ -436,8 +458,16 @@ export async function redeemSchoolActivationCode(
     await tx.activationCodeEvent.create({
       data: { codeId: code.id, type: 'CLAIM_SUCCESS', userId: ctx.userId, ip: ctx.ip ?? null, detail: JSON.stringify({ subscriptionId: applied.subscriptionId, periodEndAfter: applied.periodEndAfter.toISOString() }) },
     })
-    return { ...applied, publicRef: code.publicRef }
+    return { rejected: false as const, result: { ...applied, publicRef: code.publicRef } as SchoolRedeemResult }
   }, { timeout: 15_000 })
+
+  if (outcome.rejected) {
+    if (outcome.codeId) {
+      await persistRejectionEvent({ ...outcome, userId: ctx.userId, ip: ctx.ip })
+    }
+    throw new CodeClaimError(outcome.reason, REDEEM_MESSAGE)
+  }
+  return outcome.result
 }
 
 // ── Operator actions (revoke / reissue) ─────────────────────────────────────
@@ -468,7 +498,13 @@ export async function revokeActivationCode(opts: {
 
 /** Reissue: revoke the old code FIRST, then issue the replacement — one
  *  transaction, linked via replacedByCodeId (audit chain). Returns the new
- *  plaintext code (shown once). */
+ *  plaintext code (shown once).
+ *
+ *  The old-code transition is a CONDITIONAL update (status ISSUED →
+ *  REPLACED): if a concurrent claim wins the code mid-reissue, this
+ *  aborts with an honest CONFLICT instead of overwriting CLAIMED (which
+ *  would leave a claimed+revoked code AND double the paid period via the
+ *  replacement). */
 export async function reissueActivationCode(opts: {
   codeId: string
   adminId: string
@@ -486,15 +522,23 @@ export async function reissueActivationCode(opts: {
       })
     }
 
-    let revokedStatus = old.status
+    let replacedStatus = old.status
     if (old.status === 'ISSUED') {
-      await tx.activationCode.update({
-        where: { id: old.id },
-        data: { status: 'REVOKED', revokedAt: new Date(), revokedById: opts.adminId, revokeReason: opts.reason },
+      // Conditional transition — a concurrent claim (ISSUED→CLAIMED)
+      // must NEVER be overwritten by the reissue's revoke.
+      const flipped = await tx.activationCode.updateMany({
+        where: { id: old.id, status: 'ISSUED' },
+        data: { status: 'REPLACED', revokedAt: new Date(), revokedById: opts.adminId, revokeReason: opts.reason },
       })
-      revokedStatus = 'REVOKED'
+      if (flipped.count !== 1) {
+        throw new AppError('CONFLICT', {
+          publicMessage: 'This code was just claimed while the reissue was running — nothing was replaced. Review the code state and retry if still needed.',
+          internalDetail: `reissueActivationCode: conditional replace lost on ${old.publicRef}`,
+        })
+      }
+      replacedStatus = 'REPLACED'
     }
-    // codes that were already EXPIRED/REVOKED can still be replaced.
+    // codes that were already EXPIRED/REVOKED/REPLACED can still be replaced.
 
     const issued = await issueActivationCode({
       scope: old.scope as CodeScope,
@@ -518,6 +562,6 @@ export async function reissueActivationCode(opts: {
     await tx.activationCodeEvent.create({
       data: { codeId: old.id, type: 'REPLACED', detail: JSON.stringify({ reason: opts.reason, newCodeId: issued.codeId, newPublicRef: issued.publicRef }) },
     })
-    return { ...issued, revokedStatus }
+    return { ...issued, revokedStatus: replacedStatus }
   }, { timeout: 15_000 })
 }

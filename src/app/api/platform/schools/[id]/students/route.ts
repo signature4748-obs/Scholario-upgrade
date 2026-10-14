@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withPlatform } from '@/lib/platform/authz'
+import { AppError } from '@/lib/security/errors'
 import { evaluateStudentEntitlement } from '@/lib/entitlement/student'
 
 export const runtime = 'nodejs'
@@ -19,7 +20,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   return withPlatform({ permission: 'billing.manage' }, async () => {
     const school = await db.school.findUnique({ where: { id }, select: { id: true, name: true, slug: true, subscription: true } })
     if (!school) {
-      return { ok: false, error: 'School not found' }
+      throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
     }
 
     const url = new URL(req.url)

@@ -706,3 +706,232 @@ describe('SUBSCRIPTION · per-student enforcement (withUser gate)', () => {
   // inline AND hard-restored in afterAll (SCHOOL_WIDE) — a failed
   // assertion mid-test must never leak PER_STUDENT into later suites.
 })
+
+// ── PR-30 REVIEW REGRESSIONS (2026-10-14) ─────────────────────────────────
+// Each case pins a defect confirmed during the pre-merge review and fixed
+// on the branch: cross-student verify oracle, rejection-event persistence,
+// renewal stacking, adjust-validity extend-only, the Razorpay-webhook
+// subscription settlement lane, the plan PATCH allowOnline merge bug, and
+// the billingModel atomicity on failing payments.
+
+describe('SUBSCRIPTION · PR-30 review regressions', () => {
+  test('student verify NEVER answers for another student\'s order — PAID or pending (no cross-student oracle)', async () => {
+    await db.schoolSubscription.update({ where: { schoolId: schoolA.id }, data: { billingModel: 'PER_STUDENT' } })
+    const owner = await makeTestStudent(schoolA.id, 'verify-owner')
+    const other = await makeTestStudent(schoolA.id, 'verify-other')
+    try {
+      const order = await asSchool(owner, '/api/subscription/student/order', {
+        method: 'POST',
+        body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, sandbox: true }),
+      }, nextIp())
+      const ob = (await body(order))?.data as { order: { orderNo: string } }
+
+      // Owner settles it (sandbox lane) — the order becomes PAID.
+      const verify = await asSchool(owner, '/api/subscription/student/verify', {
+        method: 'POST',
+        body: JSON.stringify({ orderNo: ob.order.orderNo, sandbox: true }),
+      }, nextIp())
+      expect(verify.status).toBe(200)
+
+      // ANOTHER student probes the SAME (now PAID) order number: must be
+      // 403 — NOT the idempotent alreadyPaid payload (which leaks the
+      // entitlement id / validity of the owner). This was the review
+      // defect: the PAID fast-path ran before the ownership check.
+      const probe = await asSchool(other, '/api/subscription/student/verify', {
+        method: 'POST',
+        body: JSON.stringify({ orderNo: ob.order.orderNo, sandbox: true }),
+      }, nextIp())
+      expect(probe.status).toBe(403)
+      const probeBody = await body(probe)
+      expect(probeBody?.data?.alreadyPaid ?? probeBody?.alreadyPaid).toBeUndefined()
+
+      // A fresh PENDING order is likewise refused for the other student.
+      const order2 = await asSchool(owner, '/api/subscription/student/order', {
+        method: 'POST',
+        body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, sandbox: true }),
+      }, nextIp())
+      const ob2 = (await body(order2))?.data as { order: { orderNo: string } }
+      const probe2 = await asSchool(other, '/api/subscription/student/verify', {
+        method: 'POST',
+        body: JSON.stringify({ orderNo: ob2.order.orderNo, sandbox: true }),
+      }, nextIp())
+      expect(probe2.status).toBe(403)
+      expect((await db.studentSubscriptionPayment.count({ where: { studentId: other.studentId } }))).toBe(0)
+    } finally {
+      await db.schoolSubscription.update({ where: { schoolId: schoolA.id }, data: { billingModel: 'SCHOOL_WIDE' } })
+    }
+  }, T)
+
+  test('claim rejections PERSIST their diagnostic event (post-transaction write)', async () => {
+    const owner = await makeTestStudent(schoolA.id, 'rej-owner')
+    const intruder = await makeTestStudent(schoolA.id, 'rej-intruder')
+    const issue = await asPlatform(rootToken, `/api/platform/students/${owner.studentId}/subscription`, {
+      method: 'POST',
+      body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, mode: 'CASH', amount: 500, paymentDate: new Date().toISOString(), validityMonths: 12, issueActivationCode: true, notes: `suite ${RUN}` }),
+    })
+    const code = (await body(issue))?.data?.activationCode as { codeId: string; code: string }
+
+    // The WRONG student claims → generic 403 …
+    const attempt = await asSchool(intruder, '/api/subscription/student/claim', { method: 'POST', body: JSON.stringify({ code: code.code }) }, nextIp())
+    expect([403, 429]).toContain(attempt.status)
+
+    // … AND the CLAIM_REJECTED event survives (it used to be rolled back
+    // with the rejected transaction — rejection forensics were blind).
+    const events = await db.activationCodeEvent.findMany({ where: { codeId: code.codeId, type: 'CLAIM_REJECTED' } })
+    expect(events.length).toBeGreaterThanOrEqual(1)
+    const detail = JSON.parse(events[0]?.detail ?? '{}') as { reason?: string }
+    expect(detail.reason).toBe('STUDENT_MISMATCH')
+  }, T)
+
+  test('sequential renewals STACK (validityEnd extends, one live row, financial rows accumulate)', async () => {
+    const st = await makeTestStudent(schoolA.id, 'renew-stack')
+    const claimCode = async (label: string) => {
+      const issue = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+        method: 'POST',
+        body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, mode: 'CASH', amount: 500, paymentDate: new Date().toISOString(), validityMonths: 12, issueActivationCode: true, notes: `suite ${RUN} ${label}` }),
+      })
+      const c = (await body(issue))?.data?.activationCode as { code: string }
+      const claim = await asSchool(st, '/api/subscription/student/claim', { method: 'POST', body: JSON.stringify({ code: c.code }) }, nextIp())
+      expect(claim.status).toBe(200)
+    }
+    await claimCode('first')
+    const first = await db.studentEntitlement.findFirstOrThrow({ where: { studentId: st.studentId, status: { in: ['PENDING', 'ACTIVE'] } } })
+    await claimCode('second')
+    const rows = await db.studentEntitlement.findMany({ where: { studentId: st.studentId, status: { in: ['PENDING', 'ACTIVE'] } } })
+    expect(rows.length).toBe(1) // one live row — the second claim EXTENDED it
+    expect(rows[0].validityEnd.getTime()).toBeGreaterThan(first.validityEnd.getTime()) // stacked, never reset
+    expect((await db.studentSubscriptionPayment.count({ where: { studentId: st.studentId } }))).toBe(2) // both financial rows kept
+  }, T)
+
+  test('adjust-validity is EXTEND-ONLY (a past or shortened end is rejected; revoke is the early-exit path)', async () => {
+    const st = await makeTestStudent(schoolA.id, 'adjust')
+    const assign = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'POST',
+      body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, mode: 'COMPLIMENTARY', amount: 0, paymentDate: new Date().toISOString(), validityMonths: 12, notes: `suite ${RUN} complimentary for review regression` }),
+    })
+    expect(assign.status).toBe(200)
+    const live = await db.studentEntitlement.findFirstOrThrow({ where: { studentId: st.studentId, status: { in: ['PENDING', 'ACTIVE'] } } })
+
+    // A PAST end would silently expire the grant — rejected.
+    const past = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'adjust-validity', reason: `suite adjust past ${RUN}`, validityEnd: new Date(Date.now() - 86_400_000).toISOString() }),
+    })
+    expect(past.status).toBeGreaterThanOrEqual(400)
+
+    // An end EARLIER than the current one would shorten a paid grant — rejected.
+    const shorter = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'adjust-validity', reason: `suite adjust short ${RUN}`, validityEnd: new Date(live.validityStart.getTime() + 30 * 86_400_000).toISOString() }),
+    })
+    expect(shorter.status).toBeGreaterThanOrEqual(400)
+    const unchanged = await db.studentEntitlement.findUniqueOrThrow({ where: { id: live.id } })
+    expect(unchanged.validityEnd.getTime()).toBe(live.validityEnd.getTime()) // nothing moved
+
+    // An extension is accepted and recorded.
+    const extended = new Date(live.validityEnd.getTime() + 30 * 86_400_000)
+    const ok = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'adjust-validity', reason: `suite adjust extend ${RUN}`, validityEnd: extended.toISOString() }),
+    })
+    expect(ok.status).toBe(200)
+    const after = await db.studentEntitlement.findUniqueOrThrow({ where: { id: live.id } })
+    expect(after.validityEnd.getTime()).toBe(extended.getTime())
+  }, T)
+
+  test('razorpay webhook settles a SUBSCRIPTION order (native payment.captured lane, amount-gated)', async () => {
+    const RZP_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET ?? 'batch2-test-webhook-secret'
+    await db.schoolSubscription.update({ where: { schoolId: schoolA.id }, data: { billingModel: 'PER_STUDENT' } })
+    const st = await makeTestStudent(schoolA.id, 'rzp-lane')
+    try {
+      const order = await asSchool(st, '/api/subscription/student/order', {
+        method: 'POST',
+        body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, sandbox: true }),
+      }, nextIp())
+      const ob = (await body(order))?.data as { order: { orderNo: string; amount: number } }
+      const row = await db.subscriptionOrder.findUniqueOrThrow({ where: { orderNo: ob.order.orderNo } })
+
+      // A WRONG amount is an exception, never a settlement (BATCH2-B3 discipline).
+      const rawBad = JSON.stringify({
+        event: 'payment.captured',
+        payload: { payment: { entity: { id: `pay_rzp_bad_${RUN}`, order_id: row.providerOrderId, amount: 1, currency: 'INR', status: 'captured' } } },
+      })
+      const bad = await liveFetch(`${BASE}/api/webhooks/razorpay`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-razorpay-signature': createHmac('sha256', RZP_SECRET).update(rawBad).digest('hex'), 'x-razorpay-event-id': `evt-rzp-bad-${RUN}` },
+        body: rawBad,
+      }, { deadlineMs: 40_000 })
+      expect(bad.status).toBe(200) // acked (the error is recorded on the event row)
+      expect((await db.subscriptionOrder.findUniqueOrThrow({ where: { id: row.id } })).status).toBe('PENDING') // NOT settled
+
+      // The CORRECT signed capture settles the order exactly once.
+      const raw = JSON.stringify({
+        event: 'payment.captured',
+        payload: { payment: { entity: { id: `pay_rzp_${RUN}`, order_id: row.providerOrderId, amount: Math.round(ob.order.amount * 100), currency: 'INR', status: 'captured' } } },
+      })
+      const wh = await liveFetch(`${BASE}/api/webhooks/razorpay`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-razorpay-signature': createHmac('sha256', RZP_SECRET).update(raw).digest('hex'), 'x-razorpay-event-id': `evt-rzp-${RUN}` },
+        body: raw,
+      }, { deadlineMs: 40_000 })
+      expect(wh.status).toBe(200)
+      const settled = await db.subscriptionOrder.findUniqueOrThrow({ where: { id: row.id } })
+      expect(settled.status).toBe('PAID')
+      expect(settled.providerPaymentId).toBe(`pay_rzp_${RUN}`)
+      expect(await db.studentEntitlement.count({ where: { studentId: st.studentId, status: { in: ['PENDING', 'ACTIVE'] } } })).toBe(1)
+
+      // The same event replayed is a duplicate ack — nothing double-settles.
+      const replay = await liveFetch(`${BASE}/api/webhooks/razorpay`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-razorpay-signature': createHmac('sha256', RZP_SECRET).update(raw).digest('hex'), 'x-razorpay-event-id': `evt-rzp-${RUN}` },
+        body: raw,
+      }, { deadlineMs: 40_000 })
+      const rb = await body(replay)
+      expect(replay.status).toBe(200)
+      expect(rb?.duplicate ?? rb?.data?.duplicate).toBeTruthy()
+      expect(await db.studentSubscriptionPayment.count({ where: { studentId: st.studentId } })).toBe(1)
+    } finally {
+      await db.schoolSubscription.update({ where: { schoolId: schoolA.id }, data: { billingModel: 'SCHOOL_WIDE' } })
+    }
+  }, T)
+
+  test('plan PATCH: a solo allowOnline change takes effect (merge no longer keyed off allowOffline)', async () => {
+    const planCode = `TEST-MERGE-${RUN}`
+    const created = await asPlatform(rootToken, '/api/platform/subscriptions/plans', {
+      method: 'POST',
+      body: JSON.stringify({ code: planCode, name: 'Merge Guard Plan', scope: 'STUDENT', interval: 'ANNUAL', pricePerStudent: 300, currency: 'INR' }),
+    })
+    expect(created.status).toBe(200)
+    const plan = await db.subscriptionPlan.findUniqueOrThrow({ where: { code: planCode } })
+
+    const patch = await asPlatform(rootToken, `/api/platform/subscriptions/plans/${plan.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ allowOnline: false }),
+    })
+    expect(patch.status).toBe(200)
+    const after = await db.subscriptionPlan.findUniqueOrThrow({ where: { code: planCode } })
+    expect(after.allowOnline).toBe(false) // previously silently ignored
+    expect(after.allowOffline).toBe(true) // untouched
+  }, T)
+
+  test('billingModel switch is ATOMIC with the payment (a failing request never flips the tenant model)', async () => {
+    const before = await db.schoolSubscription.findUnique({ where: { schoolId: schoolA.id } })
+    const modelBefore = before?.billingModel ?? 'SCHOOL_WIDE'
+
+    // Failing plan-driven payment (unknown planCode) WITH a model change.
+    const fail = await asPlatform(rootToken, `/api/platform/schools/${schoolA.id}/subscription/payments`, {
+      method: 'POST',
+      body: JSON.stringify({
+        planCode: `NO-SUCH-PLAN-${RUN}`,
+        amount: 2000,
+        mode: 'CASH',
+        paymentDate: new Date().toISOString(),
+        billingModel: 'PER_STUDENT',
+      }),
+    })
+    expect(fail.status).toBeGreaterThanOrEqual(400)
+
+    const afterRow = await db.schoolSubscription.findUnique({ where: { schoolId: schoolA.id } })
+    expect(afterRow?.billingModel ?? 'SCHOOL_WIDE').toBe(modelBefore) // unchanged
+  }, T)
+})

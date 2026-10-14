@@ -215,7 +215,67 @@ export async function applySubscriptionOverride(opts: {
   return { overrideStatus: opts.overrideStatus }
 }
 
-/* ═══════════ SUBSCRIPTION & ENTITLEMENT SYSTEM (2026-10-13) ═════════════
+/**
+ * CODE-GATED OFFLINE ISSUANCE (Model A handshake): record the VERIFIED
+ * payment row WITHOUT applying the period — the activation cause is the
+ * school-wide code REDEMPTION, which re-applies through
+ * applySchoolSubscriptionPeriodInTx with existingPaymentId. The payment
+ * row carries NULL statusAfter/periodEndAfter (snapshotted at redemption);
+ * an optional billingModel switch rides the same transaction. No
+ * apply-then-rollback of live tenant state, no stale-snapshot risk.
+ */
+export async function recordDeferredSchoolPaymentInTx(
+  tx: Prisma.TransactionClient,
+  opts: ApplySchoolPeriodOpts,
+): Promise<{ paymentId: string; receiptNo: string | null }> {
+  const school = await tx.school.findUnique({
+    where: { id: opts.schoolId },
+    select: { id: true, subscription: true },
+  })
+  if (!school) {
+    throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
+  }
+  const current = school.subscription
+  const seqRows = await tx.$queryRaw<Array<{ seq: number }>>`SELECT nextval('platform_payment_receipt_seq')::int AS seq`
+  const created = await tx.platformPayment.create({
+    data: {
+      schoolId: opts.schoolId,
+      amount: opts.amount,
+      currency: opts.currency ?? 'INR',
+      mode: opts.mode,
+      paymentDate: opts.paymentDate,
+      periodMonths: Math.max(1, Math.min(60, Math.round(opts.validityMonths))),
+      reference: opts.reference ?? null,
+      notes: opts.notes ?? null,
+      recordedById: opts.recordedById ?? null,
+      verification: 'VERIFIED',
+      verifiedAt: new Date(),
+      // NULL until the linked code is redeemed (the activation cause).
+      statusAfter: null,
+      periodEndAfter: null,
+      receiptNo: applyReceiptNumber(Number(seqRows[0]?.seq ?? 1)),
+      subscriptionId: current?.id ?? null,
+      orderId: opts.orderId ?? null,
+    },
+  })
+  // Optional billing-model switch rides the SAME transaction (a failed
+  // request must never flip the tenant's model).
+  if (opts.billingModel && opts.billingModel !== (current?.billingModel ?? 'SCHOOL_WIDE')) {
+    await tx.schoolSubscription.upsert({
+      where: { schoolId: opts.schoolId },
+      create: {
+        schoolId: opts.schoolId,
+        status: current?.status ?? 'RESTRICTED',
+        plan: current?.plan ?? 'STANDARD',
+        billingModel: opts.billingModel,
+      },
+      update: { billingModel: opts.billingModel },
+    })
+  }
+  return { paymentId: created.id, receiptNo: created.receiptNo }
+}
+
+/* ═════════════ SUBSCRIPTION & ENTITLEMENT SYSTEM (2026-10-13) ═════════════
  * Plan-driven school-subscription application — the ONE code path shared by
  * the online-order settlement and the school-wide activation-code
  * redemption. Mirrors recordPlatformPayment's verified-payment invariant
@@ -244,6 +304,9 @@ export interface ApplySchoolPeriodOpts {
   /** The platform payment row created at code ISSUANCE (offline flow) —
    *  redemption snapshots it instead of creating a second row. */
   existingPaymentId?: string | null
+  /** Tenant billing-model switch applied in the SAME transaction as the
+   *  payment (never committed on a request that later fails validation). */
+  billingModel?: string | null
 }
 
 function applyReceiptNumber(seq: number): string {
@@ -270,6 +333,9 @@ export function addCalendarMonths(from: Date, months: number): Date {
  * (status ACTIVE, override cleared, period extended from
  * max(now, current periodEnd) by validityMonths calendar months, plan
  * snapshots set when provided).
+ *
+ * The CODE-GATED offline flow uses recordDeferredSchoolPaymentInTx
+ * instead (payment row only, activation at redemption).
  */
 export async function applySchoolSubscriptionPeriodInTx(
   tx: Prisma.TransactionClient,
@@ -327,7 +393,7 @@ export async function applySchoolSubscriptionPeriodInTx(
       schoolId: opts.schoolId,
       status: 'ACTIVE',
       plan: opts.planCode ?? current?.plan ?? 'STANDARD',
-      billingModel: current?.billingModel ?? 'SCHOOL_WIDE',
+      billingModel: opts.billingModel ?? current?.billingModel ?? 'SCHOOL_WIDE',
       planId: opts.planId ?? null,
       planCode: opts.planCode ?? null,
       interval: opts.interval ?? null,
@@ -344,6 +410,8 @@ export async function applySchoolSubscriptionPeriodInTx(
       interval: opts.interval ?? undefined,
       priceSnapshot: opts.priceSnapshot ?? undefined,
       currencySnapshot: opts.currency ?? undefined,
+      // Optional model switch, applied atomically with the payment.
+      billingModel: opts.billingModel ?? undefined,
       periodStart: base,
       periodEnd: periodEndAfter,
       // A verified payment clears any manual restriction override.
