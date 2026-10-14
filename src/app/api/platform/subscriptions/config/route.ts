@@ -33,7 +33,7 @@ export async function PATCH(req: NextRequest) {
       await platformAuditEvent({
         adminId: ctx.admin.id,
         action: 'platform.billing.config_updated',
-        targetType: 'PLATFORM_SETTING',
+        targetType: 'SETTING',
         targetId: 'global',
         ip: clientIpFromHeaders(req.headers),
         reason: 'Subscription commercial-model configuration updated',

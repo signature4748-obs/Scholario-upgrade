@@ -212,26 +212,63 @@ export async function activateEntitlementInTx(
     orderBy: { validityEnd: 'desc' },
   })
 
-  // ── Renewal: extend the live row in place. ──
+  // ── Renewal: extend the live row in place (optimistic-concurrency
+  //    guarded — the conditional UPDATE requires the anchor's exact
+  //    validityEnd; a concurrent activation that already moved it makes
+  //    this re-read + recompute so BOTH extensions land, never one). ──
   if (anchor && anchor.validityEnd.getTime() > now.getTime() && !opts.validityStartOverride && !opts.validityEndOverride) {
-    const extendedEnd = opts.validityEndOverride ?? addMonths(anchor.validityEnd, Math.max(1, opts.validityMonths))
-    await tx.studentEntitlement.update({
-      where: { id: anchor.id },
-      data: {
-        validityEnd: extendedEnd,
-        planId: opts.planId ?? anchor.planId,
-        planCode: opts.planCode ?? anchor.planCode,
-        paymentId: opts.paymentId ?? anchor.paymentId,
-        activatedAt: anchor.activatedAt ?? now,
-        status: anchor.validityStart.getTime() <= now.getTime() ? 'ACTIVE' : 'PENDING',
-      },
-    })
-    return {
-      entitlementId: anchor.id,
-      validityStart: anchor.validityStart,
-      validityEnd: extendedEnd,
-      statusAfter: anchor.validityStart.getTime() <= now.getTime() ? 'ACTIVE' : 'PENDING',
+    let current: typeof anchor | null = anchor
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (!current) break
+      const extendedEnd = addMonths(current.validityEnd, Math.max(1, opts.validityMonths))
+      const extended = await tx.studentEntitlement.updateMany({
+        where: { id: current.id, status: current.status, validityEnd: current.validityEnd },
+        data: {
+          validityEnd: extendedEnd,
+          planId: opts.planId ?? current.planId,
+          planCode: opts.planCode ?? current.planCode,
+          paymentId: opts.paymentId ?? current.paymentId,
+          activatedAt: current.activatedAt ?? now,
+          status: current.validityStart.getTime() <= now.getTime() ? 'ACTIVE' : 'PENDING',
+        },
+      })
+      if (extended.count === 1) {
+        return {
+          entitlementId: current.id,
+          validityStart: current.validityStart,
+          validityEnd: extendedEnd,
+          statusAfter: current.validityStart.getTime() <= now.getTime() ? 'ACTIVE' : 'PENDING',
+        }
+      }
+      // Lost the optimistic-concurrency race — re-read the live row and
+      // extend from whatever end the concurrent activation produced.
+      const reloaded = await tx.studentEntitlement.findFirst({
+        where: { studentId: opts.studentId, status: { in: ['PENDING', 'ACTIVE'] } },
+        orderBy: { validityEnd: 'desc' },
+      })
+      if (
+        !reloaded ||
+        reloaded.id !== anchor.id ||
+        reloaded.validityEnd.getTime() <= now.getTime()
+      ) {
+        // The anchor was superseded/ended/removed concurrently → fall
+        // through to the first-activation/dated path below (the stale
+        // anchor is handled by its conditional supersede + the partial-
+        // unique backstop).
+        current = null
+        break
+      }
+      current = reloaded
     }
+    if (current) {
+      throw new AppError('CONFLICT', {
+        publicMessage: 'The subscription was extended by another payment at the same moment — please retry.',
+        internalDetail: 'activateEntitlementInTx: renewal optimistic-concurrency retries exhausted',
+      })
+    }
+    // current === null → anchor superseded concurrently → fall through to
+    // the first-activation/dated path with the stale anchor (its own
+    // conditional supersede + partial-unique backstop keep this safe).
   }
 
   // ── First activation (or an explicitly dated grant). ──
@@ -254,13 +291,22 @@ export async function activateEntitlementInTx(
   }
 
   if (anchor) {
-    await tx.studentEntitlement.update({
-      where: { id: anchor.id },
+    // Conditional supersede: only a row still exactly as read may be
+    // marked superseded (a concurrent extension is never clobbered —
+    // the partial-unique index backstops the residual race on create).
+    const superseded = await tx.studentEntitlement.updateMany({
+      where: { id: anchor.id, status: anchor.status, validityEnd: anchor.validityEnd },
       data: {
         status: anchor.validityEnd.getTime() <= now.getTime() ? 'EXPIRED' : 'REVOKED',
         revokeReason: 'Superseded by a dated grant',
       },
     })
+    if (superseded.count !== 1) {
+      throw new AppError('CONFLICT', {
+        publicMessage: 'This student\u2019s subscription changed while the grant was being applied — please retry.',
+        internalDetail: 'activateEntitlementInTx: supersede conditional update lost',
+      })
+    }
   }
 
   const startActive = validity.validityStart.getTime() <= now.getTime()
@@ -283,15 +329,13 @@ export async function activateEntitlementInTx(
     return { entitlementId: row.id, validityStart: validity.validityStart, validityEnd: validity.validityEnd, statusAfter: startActive ? 'ACTIVE' : 'PENDING' }
   } catch (e: unknown) {
     if ((e as { code?: string }).code === 'P2002') {
-      const winner = await tx.studentEntitlement.findFirst({
-        where: { studentId: opts.studentId, status: { in: ['PENDING', 'ACTIVE'] } },
-        orderBy: { validityEnd: 'desc' },
-      })
+      // The partial unique one-live-per-student index fired: another
+      // activation committed a live row first. The transaction is aborted
+      // (25P02 — no further queries inside it); answer the honest
+      // conflict directly, never a 500.
       throw new AppError('CONFLICT', {
-        publicMessage: winner
-          ? 'This student already has an active subscription — no second entitlement was created.'
-          : 'The subscription could not be activated — please retry or contact SCHOLARIO support.',
-        internalDetail: `activateEntitlementInTx: partial-unique guard (live row ${winner?.id ?? 'none'})`,
+        publicMessage: 'This student already has an active subscription — no second entitlement was created.',
+        internalDetail: 'activateEntitlementInTx: partial-unique guard (live row exists)',
       })
     }
     throw e
@@ -336,18 +380,44 @@ export async function applyEntitlementLifecycle(opts: {
         internalDetail: 'applyEntitlementLifecycle: reactivate past validityEnd',
       })
     }
-    await db.studentEntitlement.update({
-      where: { id: row.id },
-      data: { status: row.validityStart.getTime() > now.getTime() ? 'PENDING' : 'ACTIVE', suspendedAt: null, suspendReason: null },
-    })
+    try {
+      await db.studentEntitlement.update({
+        where: { id: row.id },
+        data: { status: row.validityStart.getTime() > now.getTime() ? 'PENDING' : 'ACTIVE', suspendedAt: null, suspendReason: null },
+      })
+    } catch (e: unknown) {
+      if ((e as { code?: string }).code === 'P2002') {
+        // Reactivating a SUSPENDED row while a live (PENDING|ACTIVE) row
+        // exists would violate the one-live-per-student index — answer an
+        // honest conflict instead of a raw 500.
+        throw new AppError('CONFLICT', {
+          publicMessage: 'This student already has a live entitlement — the suspended row cannot be reactivated.',
+          internalDetail: 'applyEntitlementLifecycle: reactivate hit one-live-per-student index',
+        })
+      }
+      throw e
+    }
     return { status: row.validityStart.getTime() > now.getTime() ? 'PENDING' : 'ACTIVE' }
   }
-  // adjust-validity
+  // adjust-validity — EXTEND-ONLY on live rows: an adjustment may never
+  // shorten or end a paid period (the symmetric guarantee of the renewal
+  // rule: nothing ever locks the current period). To withdraw access
+  // early, use revoke (status-only — financial rows preserved).
   if (!opts.validityEnd) {
     throw new AppError('VALIDATION_FAILED', { publicMessage: 'A new validity end is required.' })
   }
   if (opts.validityEnd.getTime() <= row.validityStart.getTime()) {
     throw new AppError('VALIDATION_FAILED', { publicMessage: 'Validity end must remain after the start.' })
+  }
+  if (
+    row.status !== 'REVOKED' &&
+    opts.validityEnd.getTime() <= Math.max(now.getTime(), row.validityEnd.getTime())
+  ) {
+    throw new AppError('VALIDATION_FAILED', {
+      publicMessage:
+        'Validity adjustments can only EXTEND the current end date. To end access early, revoke the entitlement instead — financial records are preserved either way.',
+      internalDetail: 'applyEntitlementLifecycle: adjust-validity would not extend the live window',
+    })
   }
   await db.studentEntitlement.update({
     where: { id: row.id },

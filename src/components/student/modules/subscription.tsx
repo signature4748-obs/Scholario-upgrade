@@ -42,6 +42,52 @@ interface StudentSubscriptionData {
 const dateStr = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—')
 const money = (n: number, c: string) => `${c === 'INR' ? '₹' : ''}${n.toLocaleString('en-IN')}${c === 'INR' ? '' : ' ' + c}`
 
+interface RazorpayCheckoutResponse {
+  razorpay_order_id: string
+  razorpay_payment_id: string
+  razorpay_signature: string
+}
+
+/** Load checkout.js once and open the REAL Razorpay sheet (live lane).
+ *  Mirrors the fee payment-dialog contract: the sheet's signed handler
+ *  payload is relayed to /verify where the server re-checks the HMAC —
+ *  nothing activates on the client's word. */
+function openRazorpayCheckout(opts: {
+  keyId: string
+  providerOrderId: string
+  amount: number
+  currency: string
+  onConfirm: (res: RazorpayCheckoutResponse) => void
+  onDismiss: () => void
+  onFail: () => void
+}) {
+  const run = () => {
+    try {
+      const rzp = new (window as unknown as { Razorpay: new (o: Record<string, unknown>) => { open: () => void; on: (e: string, cb: () => void) => void } }).Razorpay({
+        key: opts.keyId,
+        order_id: opts.providerOrderId,
+        amount: Math.round(opts.amount * 100),
+        currency: opts.currency,
+        name: 'Scholario Student Subscription',
+        description: 'Annual student subscription',
+        theme: { color: '#7c3aed' },
+        handler: (res: RazorpayCheckoutResponse) => opts.onConfirm(res),
+        modal: { ondismiss: () => opts.onDismiss() },
+      })
+      rzp.on('payment.failed', () => opts.onFail())
+      rzp.open()
+    } catch {
+      opts.onFail()
+    }
+  }
+  if ((window as unknown as { Razorpay?: unknown }).Razorpay) return run()
+  const script = document.createElement('script')
+  script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+  script.onload = run
+  script.onerror = () => opts.onFail()
+  document.body.appendChild(script)
+}
+
 export function StudentSubscriptionModule() {
   const [data, setData] = useState<StudentSubscriptionData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -102,7 +148,7 @@ export function StudentSubscriptionModule() {
       const body = await res.json().catch(() => null)
       if (!body?.ok) { toast.error(body?.error ?? 'Could not start the payment.'); return }
       const { order, sandboxConfirmation } = body.data as {
-        order: { orderNo: string; amount: number; currency: string }
+        order: { orderNo: string; amount: number; currency: string; expiresAt: string; provider: string; providerOrderId: string; keyId: string | null; mode: string }
         sandboxConfirmation: { orderId: string; paymentId: string; signature: string } | null
       }
       if (sandboxConfirmation) {
@@ -120,9 +166,48 @@ export function StudentSubscriptionModule() {
         } else {
           toast.error(vbody?.error ?? 'Payment verification failed — nothing was activated.')
         }
-      } else {
-        toast.info(`Order ${order.orderNo} created for ${money(order.amount, order.currency)}. Complete the payment in the checkout window; your subscription activates after verification.`)
+        return
       }
+      if (order.keyId && order.providerOrderId && order.mode !== 'sandbox') {
+        // 3) LIVE Razorpay lane: open the real checkout sheet. The signed
+        //    handler payload (order/payment/signature triple) is relayed to
+        //    /verify, which re-checks the HMAC server-side before anything
+        //    activates (the same contract as the fee payment dialog).
+        openRazorpayCheckout({
+          keyId: order.keyId,
+          providerOrderId: order.providerOrderId,
+          amount: order.amount,
+          currency: order.currency,
+          onConfirm: async (r) => {
+            try {
+              const vres = await fetch('/api/subscription/student/verify', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  orderNo: order.orderNo,
+                  orderId: r.razorpay_order_id,
+                  paymentId: r.razorpay_payment_id,
+                  signature: r.razorpay_signature,
+                }),
+              })
+              const vbody = await vres.json().catch(() => null)
+              if (vbody?.ok) {
+                toast.success(vbody.data.message ?? 'Payment verified and your subscription is active.')
+                void load()
+              } else {
+                toast.error(vbody?.error ?? 'Payment verification failed — nothing was activated.')
+              }
+            } catch {
+              toast.error('Payment verification failed — nothing was activated.')
+            }
+          },
+          onDismiss: () => toast.info('Checkout cancelled — your order stays pending for a few minutes.'),
+          onFail: () => toast.error('The gateway reported a failed payment — nothing was activated.'),
+        })
+        return
+      }
+      // Unconfigured live lane — honest blocked state (no fake success).
+      toast.info(`Order ${order.orderNo} created for ${money(order.amount, order.currency)}. Online payment verification is not configured on this deployment yet — if you were asked to pay, contact your school office.`)
     } catch {
       toast.error('Payment failed — nothing was activated.')
     } finally {

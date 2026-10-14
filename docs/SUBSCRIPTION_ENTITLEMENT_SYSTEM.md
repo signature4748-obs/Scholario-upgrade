@@ -126,3 +126,58 @@ HMAC checkout token, server-side settle. Razorpay (platform-level env keys) →
 server-side order creation + payment fetch verification. Otherwise the live
 lane is **fail-closed BLOCKED_INTEGRATION** — honestly labeled in the UI
 until the owner configures keys (no fake success anywhere).
+
+## 7. PR-30 pre-merge review hardening (2026-10-14)
+
+Confirmed defects found by the independent review and fixed on the branch:
+
+- **Verify routes** accept the gateway `orderId` (the checkout handler's
+  `razorpay_order_id`) — the live-lane confirmation is bound to the order's
+  `providerOrderId` before the HMAC check (a mismatched confirmation is
+  rejected). The client UI opens the real Razorpay checkout sheet (same
+  contract as the fee payment dialog) and relays the signed triple.
+- **Native Razorpay webhook** (`/api/webhooks/razorpay`) settles subscription
+  orders on `payment.captured` (matched by `providerOrderId`, amount+INR
+  agreement, exactly-once) — previously a subscription capture 500'd on the
+  FeeTransaction lookup and never settled. The platform-subscription webhook
+  (custom signed envelope) remains the provider-agnostic lane.
+- **Cross-student verify oracle closed:** the ownership check runs BEFORE
+  the idempotent PAID fast-path (entitlement ids / paid-state never leak to
+  another student probing sequential order numbers).
+- **Claim-rejection diagnostics persist:** rejections return out of the
+  transaction and their `CLAIM_REJECTED` events are written after it
+  (rolled-back event rows left forensics blind).
+- **Renewal atomicity:** the in-place extension is a conditional UPDATE
+  (optimistic concurrency + re-read retries) — concurrent activations stack,
+  never lose one. `P2002` on the one-live index surfaces as an honest
+  CONFLICT (no query on the aborted transaction).
+- **Reissue race:** the old code's ISSUED→REPLACED transition is
+  conditional; a claim winning mid-reissue aborts with CONFLICT (previously
+  a blind update could overwrite CLAIMED and double the paid period).
+- **Operator payments route:** the code-gated offline flow records the
+  payment with `deferActivation` (no apply-then-rollback of live tenant
+  state — no stale-snapshot clobber of a concurrent settlement); the
+  billingModel switch rides the payment transaction (a failing request
+  never flips the tenant's model).
+- **Webhook dedupe race:** concurrent duplicate deliveries of the same
+  `eventId` ack 200 via the P2002 catch (previously a 500).
+- **Order TTL grace:** a signature-verified settlement inside 24h past the
+  30-minute TTL still settles (captured money must not strand); beyond the
+  grace the order expires for real and stragglers go to operator
+  reconciliation.
+- **Online lane is INR-only** at order creation (the shared provider
+  charges paise-INR; non-INR plans stay offline/code-gated).
+- **Model C hardening:** operator assignment modes exclude ONLINE_PAYMENT
+  (unverifiable ledger rows); complimentary grants require an audit note
+  (≥10 chars); entitlement lifecycle actions require a reason (≥10) and
+  step-up policy; adjust-validity is EXTEND-ONLY (early exit = revoke);
+  live-row resolution prefers PENDING|ACTIVE over stale SUSPENDED rows;
+  reactivate hitting the one-live index answers CONFLICT.
+- **Audit vocabulary:** the new `targetType` (`STUDENT`, `SUBSCRIPTION_PLAN`,
+  `ACTIVATION_CODE`) and school-plane event values joined the canonical
+  unions (the omission was the CI typecheck failure).
+- Regression coverage: `tests/security/subscription-entitlement.test.ts`
+  grew the "PR-30 review regressions" suite (cross-student oracle, rejection
+  persistence, renewal stacking, extend-only adjust, Razorpay-webhook
+  settlement incl. amount mismatch + replay, plan-PATCH allowOnline merge,
+  billingModel atomicity).

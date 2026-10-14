@@ -7,7 +7,7 @@ import { parseJsonBody, strictBody } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { resolvePlanForPurchase } from '@/lib/subscription/plans'
 import { loadSubscriptionConfig } from '@/lib/subscription/config'
-import { recordStudentPayment, applyEntitlementLifecycle, STUDENT_PAYMENT_MODES } from '@/lib/subscription/student'
+import { recordStudentPayment, applyEntitlementLifecycle } from '@/lib/subscription/student'
 import { issueActivationCode } from '@/lib/subscription/codes'
 import { z } from 'zod'
 
@@ -110,11 +110,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 const assignSchema = strictBody({
   planCode: z.string().min(3).max(40),
-  mode: z.enum(STUDENT_PAYMENT_MODES),
+  /** Operator-recorded payment modes ONLY — ONLINE_PAYMENT is reserved for
+   *  the gateway settlement lanes (provider signature or signed webhook);
+   *  an operator "online" row would be an unverifiable financial entry
+   *  (no provider payment id, no recordedBy attribution). */
+  mode: z.enum(['CASH', 'BANK_TRANSFER', 'CHEQUE', 'OTHER', 'COMPLIMENTARY']),
   amount: z.number().min(0).max(100_000_000),
   currency: z.enum(['INR', 'USD', 'EUR', 'GBP', 'AED']).default('INR'),
   paymentDate: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)),
   reference: z.string().max(120).optional(),
+  /** Audit reason — REQUIRED for complimentary grants (the permission-
+   *  protected no-payment workflow is the most abusable surface). */
   notes: z.string().max(600).optional(),
   validityMonths: z.number().int().min(1).max(36).optional(),
   validityStart: z.string().datetime().optional(),
@@ -139,7 +145,10 @@ const assignSchema = strictBody({
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withPlatform(
-    { permission: 'billing.manage' },
+    // step-up (dormant while platform TOTP is stood down — re-arms with
+    // MFA): this route mints paid/complimentary entitlements, the Model C
+    // analogue of the school payments route's stepUp policy.
+    { permission: 'billing.manage', stepUp: true },
     async (ctx) => {
       const body = await parseJsonBody(req, assignSchema)
 
@@ -148,6 +157,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         throw new AppError('FORBIDDEN', {
           publicMessage: 'Assigning complimentary entitlements requires the billing.complimentary permission.',
           internalDetail: 'student subscription assign: complimentary without permission',
+        })
+      }
+      if (body.mode === 'COMPLIMENTARY' && (!body.notes || body.notes.trim().length < 10)) {
+        throw new AppError('VALIDATION_FAILED', {
+          publicMessage: 'Complimentary grants require an audit note (at least 10 characters) explaining why.',
+          internalDetail: 'student subscription assign: complimentary without audit reason',
         })
       }
 
@@ -164,7 +179,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         code: body.planCode,
         expectedScope: 'STUDENT',
         kind: 'assignment',
-        requireOffline: body.mode !== 'ONLINE_PAYMENT',
+        // Operator modes are all offline/hand-recorded by definition.
+        requireOffline: true,
       })
 
       const paymentDate =
@@ -305,7 +321,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
 const lifecycleSchema = strictBody({
   action: z.enum(['revoke', 'suspend', 'reactivate', 'adjust-validity']),
-  reason: z.string().min(4).max(400).optional(),
+  /** REQUIRED (min 10) — withdrawing/adjusting a paid entitlement is a
+   *  destructive platform action; the audit trail carries the reason. */
+  reason: z.string().min(10).max(400),
   validityEnd: z.string().datetime().optional(),
 })
 
@@ -317,12 +335,19 @@ const lifecycleSchema = strictBody({
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withPlatform(
-    { permission: 'billing.manage' },
+    { permission: 'billing.manage', stepUp: true },
     async (ctx) => {
       const body = await parseJsonBody(req, lifecycleSchema)
+      // "Live" resolution prefers the (single) PENDING|ACTIVE row — the
+      // one-live-per-student index guarantees at most one exists. A
+      // SUSPENDED row is only picked when NO live row exists (the normal
+      // suspend case), so a suspended + newly-paid pair never targets the
+      // stale row while access stays live (fail-open revoke) and never
+      // shadows the live row in the gate (alphabetical status ordering:
+      // ACTIVE < PENDING < SUSPENDED).
       const live = await db.studentEntitlement.findFirst({
         where: { studentId: id, status: { in: ['PENDING', 'ACTIVE', 'SUSPENDED'] } },
-        orderBy: { validityEnd: 'desc' },
+        orderBy: [{ status: 'asc' }, { validityEnd: 'desc' }],
       })
       if (!live) {
         throw new AppError('RESOURCE_NOT_FOUND', {
@@ -344,8 +369,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         targetId: id,
         schoolId: live.schoolId,
         ip: clientIpFromHeaders(req.headers),
-        reason: body.reason ?? `Entitlement ${body.action}`,
-        metadata: { entitlementId: live.id, result: result.status },
+        reason: body.reason,
+        metadata: {
+          entitlementId: live.id,
+          result: result.status,
+          // Before/after window — the trail shows exactly what changed.
+          validityEndBefore: live.validityEnd.toISOString(),
+          validityEndAfter: body.validityEnd ?? null,
+        },
       }).catch(() => {})
       return { ok: true, status: result.status, message: `Entitlement ${result.status.toLowerCase().replace('_', ' ')} — financial records unchanged.` }
     },

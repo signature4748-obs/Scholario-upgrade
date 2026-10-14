@@ -33,6 +33,12 @@ import { addMonths } from './codes'
 export const ORDER_SCOPES = ['SCHOOL_PLAN', 'STUDENT_PLAN'] as const
 export type OrderScope = (typeof ORDER_SCOPES)[number]
 export const ORDER_TTL_MINUTES = 30
+/** Verified-settlement grace past the TTL: a gateway that captured the
+ * payment just after the 30-minute window still settles when its signed
+ * confirmation/webhook arrives (money was taken — refusing would strand
+ * it). Beyond the grace the order expires for real and stragglers go to
+ * operator reconciliation (offline recording). */
+export const ORDER_LATE_SETTLE_GRACE_MS = 24 * 60 * 60 * 1000
 
 function orderNumber(seq: number): string {
   return `SCH-ORD-${new Date().getFullYear()}-${String(seq).padStart(6, '0')}`
@@ -75,6 +81,17 @@ export interface CreateOrderResult {
 export async function createSubscriptionOrder(input: CreateOrderInput): Promise<CreateOrderResult> {
   if (!(input.amount > 0)) {
     throw new AppError('VALIDATION_FAILED', { publicMessage: 'Order amount must be greater than zero.' })
+  }
+  // The shared gateway provider charges INR only (provider.createOrder is
+  // INR-hardcoded); a non-INR plan would charge paise-INR while recording
+  // the plan currency — refuse honestly at creation (offline/code flows
+  // keep supporting all plan currencies).
+  if (input.currency !== 'INR') {
+    throw new AppError('VALIDATION_FAILED', {
+      publicMessage:
+        'Online payment currently supports INR plans only. For other currencies, pay offline through your school office / SCHOLARIO support.',
+      internalDetail: `createSubscriptionOrder: non-INR online order refused (${input.currency})`,
+    })
   }
   const provider = getPaymentProvider()
   if (!provider) {
@@ -213,10 +230,13 @@ export async function settleSubscriptionOrder(opts: {
   if (order.status !== 'PENDING') {
     throw new OrderSettlementError('CONFLICT', `This order is ${order.status.toLowerCase()} and can no longer be paid.`, `settleSubscriptionOrder: status ${order.status}`)
   }
-  if (order.expiresAt.getTime() <= Date.now()) {
-    // Lazily expire (TTL) — honest, computed live.
+  if (order.expiresAt.getTime() + ORDER_LATE_SETTLE_GRACE_MS <= Date.now()) {
+    // Past TTL AND past the late-settlement grace — lazily expire for real.
+    // (Within the grace a VERIFIED settlement still lands: this function is
+    // only reached with a provider-verified confirmation or a signed
+    // webhook — the money moved, so the entitlement must too.)
     await db.subscriptionOrder.update({ where: { id: order.id }, data: { status: 'EXPIRED' } }).catch(() => {})
-    throw new OrderSettlementError('CONFLICT', 'This payment order has expired — please start a new one.', `settleSubscriptionOrder: TTL expired ${order.orderNo}`)
+    throw new OrderSettlementError('CONFLICT', 'This payment order has expired — please start a new one (or contact SCHOLARIO support if you were charged).', `settleSubscriptionOrder: TTL+grace expired ${order.orderNo}`)
   }
 
   return db.$transaction(async (tx) => {

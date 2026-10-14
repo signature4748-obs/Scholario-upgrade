@@ -27,7 +27,9 @@ const actionSchema = strictBody({
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withPlatform(
-    { permission: 'billing.manage' },
+    // revoke/reissue are destructive operator actions — step-up policy,
+    // dormant while platform TOTP is stood down (re-arms with MFA).
+    { permission: 'billing.manage', stepUp: true },
     async (ctx) => {
       const body = await parseJsonBody(req, actionSchema)
       const code = await db.activationCode.findUnique({

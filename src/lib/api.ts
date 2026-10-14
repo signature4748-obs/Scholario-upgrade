@@ -214,7 +214,13 @@ export async function withUser(
             where: {
               student: { userId: user.id },
               schoolId: user.schoolId,
-              status: { in: ['PENDING', 'ACTIVE', 'SUSPENDED'] },
+              // LIVE rows only: a SUSPENDED row must never shadow a live
+              // entitlement (suspend → new payment creates a second row;
+              // ordering by validityEnd could pick the stale suspended one
+              // and lock a student who holds a valid ACTIVE grant). A
+              // suspended-only student is correctly treated as not
+              // subscribed (suspend = operator-withdrawn access).
+              status: { in: ['PENDING', 'ACTIVE'] },
             },
             orderBy: { validityEnd: 'desc' },
             select: { status: true, validityStart: true, validityEnd: true, source: true },

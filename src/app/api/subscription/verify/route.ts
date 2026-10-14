@@ -11,6 +11,10 @@ export const runtime = 'nodejs'
 
 const verifySchema = strictBody({
   orderNo: z.string().min(6).max(40),
+  /** LIVE lane: the gateway order id (razorpay_order_id) from the checkout
+   *  handler — required for the server to bind the confirmation to this
+   *  order's providerOrderId before verifying the HMAC. */
+  orderId: z.string().min(4).max(80).optional(),
   paymentId: z.string().min(4).max(80).optional(),
   signature: z.string().min(16).max(256).optional(),
   /** Sandbox lane only: the server runs the sandbox payment and returns
@@ -39,7 +43,14 @@ export async function POST(req: NextRequest) {
 
       const confirmation = body.sandbox
         ? await sandboxConfirmOrder(body.orderNo)
-        : { orderId: '', paymentId: body.paymentId ?? '', signature: body.signature ?? '' }
+        : {
+            // LIVE lane: the relayed checkout triple (razorpay_order_id |
+            // razorpay_payment_id | razorpay_signature) — the server binds
+            // it to the order's providerOrderId and verifies the HMAC.
+            orderId: body.orderId ?? '',
+            paymentId: body.paymentId ?? '',
+            signature: body.signature ?? '',
+          }
 
       const result = await verifyAndSettleOrder({
         orderNo: body.orderNo,

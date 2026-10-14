@@ -121,16 +121,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, duplicate: true, eventId: body.eventId })
   }
 
-  const row = await db.webhookEvent.create({
-    data: {
-      eventId: body.eventId,
-      eventType: body.eventType,
-      gatewayName: 'platform-subscription',
-      signature: req.headers.get(SIGNATURE_HEADER)?.slice(0, 64) ?? null,
-      rawPayload: raw.slice(0, 8000),
-      status: 'processing',
-    },
-  })
+  let row
+  try {
+    row = await db.webhookEvent.create({
+      data: {
+        eventId: body.eventId,
+        eventType: body.eventType,
+        gatewayName: 'platform-subscription',
+        signature: req.headers.get(SIGNATURE_HEADER)?.slice(0, 64) ?? null,
+        rawPayload: raw.slice(0, 8000),
+        status: 'processing',
+      },
+    })
+  } catch (e: unknown) {
+    // Concurrent duplicate delivery raced the find-then-create window —
+    // the unique eventId index is the authority; the loser acknowledges
+    // the duplicate (200) exactly like the sequential replay path.
+    if ((e as { code?: string }).code === 'P2002') {
+      return NextResponse.json({ ok: true, duplicate: true, eventId: body.eventId })
+    }
+    throw e
+  }
 
   try {
     // ── SUBSCRIPTION & ENTITLEMENT SYSTEM — order-linked settlement ──────
