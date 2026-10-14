@@ -99,6 +99,16 @@ interval/priceSnapshot/currencySnapshot), `PlatformSetting`
   path.
 - **Renewal/replacement:** new payment + new/extended entitlement; the old
   row is superseded (retained) — anchor `max(now, current validityEnd)`.
+- **Suspension freeze (the approved product rule):** a suspended student
+  CAN complete a payment, but a payment NEVER lifts an admin suspension.
+  Payments (online settle, code claim, operator recording) BANK onto the
+  suspended row — the purchased months stack onto `validityEnd` in WINDOW
+  time (the validity clock is frozen while suspended; never anchored at
+  payment real-time). The status stays `SUSPENDED` and no second live row
+  can appear. The banked period starts counting ONLY when an authorized
+  operator reactivates (`reactivate` re-anchors the remaining window at
+  the reactivation moment). Dated grants onto a suspended entitlement are
+  refused — explicit reactivation comes first.
 - **Refund/revocation:** entitlement → `REVOKED` (reason + admin + audit);
   order → `REFUNDED`; the payment rows stay VERIFIED and untouched.
 - **Student leaves/transfers:** entitlement is scoped `(schoolId, studentId)`;
@@ -181,3 +191,47 @@ Confirmed defects found by the independent review and fixed on the branch:
   persistence, renewal stacking, extend-only adjust, Razorpay-webhook
   settlement incl. amount mismatch + replay, plan-PATCH allowOnline merge,
   billingModel atomicity).
+
+## 8. Suspension freeze — banking + frozen-clock resume (PR-30 final)
+
+The pre-merge review's confirmed gap: `activateEntitlementInTx` anchored
+only `PENDING|ACTIVE` rows, so a payment for a SUSPENDED student minted a
+brand-new `ACTIVE` entitlement — silently lifting the admin suspension AND
+starting the paid period immediately (double violation of the approved
+product rule). The DB partial unique index could not catch it (it only
+constrains live rows).
+
+Fixed semantics (all in `src/lib/subscription/student.ts`, regression-pinned
+in the "suspension freeze regressions" suite):
+
+- **Banking** (`activateEntitlementInTx`): when the student holds a
+  `SUSPENDED` row and no live row, every activation cause (verified online
+  settlement, code claim, operator recording) extends the SUSPENDED row's
+  `validityEnd` by the purchased months — window-time stacking
+  (`addMonths(validityEnd, months)`, never `max(now, …)`). Status stays
+  `SUSPENDED`; the caller reports `statusAfter: 'SUSPENDED'` with an honest
+  message ("paid period reserved; starts at reactivation"). Optimistic-
+  concurrency guarded (conditional `UPDATE … WHERE status='SUSPENDED' AND
+  validityEnd=<read>` + re-read retries): concurrent payments STACK, and a
+  concurrent reactivation mid-payment turns the payment into a normal
+  renewal on the now-live row.
+- **Frozen-clock resume** (`applyEntitlementLifecycle` `reactivate`):
+  reactivation computes the remaining window
+  `validityEnd − max(validityStart, suspendedAt)` (everything unconsumed
+  when the suspension began PLUS every banked period) and re-anchors it at
+  the reactivation moment: `validityStart = now`, `validityEnd = now +
+  remaining`. Purchased-during-suspension validity starts counting only
+  now; pre-existing unconsumed time resumes now. Zero remaining → honest
+  `CONFLICT` (renewal required). Race-guarded identically (a payment
+  banking mid-reactivation is re-read and resumed on the LARGER window).
+- **Dated grants onto a suspended entitlement are refused** (`CONFLICT`):
+  operator-picked dates assume a running clock — explicit reactivation
+  (the authorization) must come first. Undated operator recordings and
+  code claims bank normally.
+- **Idempotent no-op guard:** `reactivate` on a non-`SUSPENDED` row is a
+  no-op returning the row's status (the lifecycle route's live-row
+  resolution prefers `PENDING|ACTIVE`); expired rows keep the legacy
+  honest refusal.
+- **Audit trail:** the lifecycle route's `platformAuditEvent` now records
+  the re-anchored window (`reanchoredStart` / `reanchoredEnd`) — evidence
+  that the banked period started at the authorized reactivation.

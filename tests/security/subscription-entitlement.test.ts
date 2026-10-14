@@ -40,7 +40,7 @@ import { db } from '../helpers/db'
 import { liveFetch } from '../helpers/live-http'
 import { hashSessionToken } from '@/lib/auth'
 import { evaluateStudentEntitlement } from '@/lib/entitlement/student'
-import { normalizeCode, hashCode } from '@/lib/subscription/codes'
+import { normalizeCode, hashCode, addMonths } from '@/lib/subscription/codes'
 
 const BASE = process.env.LIVE_BASE ?? 'http://127.0.0.1:3000'
 const WEBHOOK_SECRET = process.env.PLATFORM_PAYMENT_WEBHOOK_SECRET ?? 'platform-webhook-test-secret'
@@ -933,5 +933,258 @@ describe('SUBSCRIPTION · PR-30 review regressions', () => {
 
     const afterRow = await db.schoolSubscription.findUnique({ where: { schoolId: schoolA.id } })
     expect(afterRow?.billingModel ?? 'SCHOOL_WIDE').toBe(modelBefore) // unchanged
+  }, T)
+})
+
+// ── SUSPENSION FREEZE REGRESSIONS (PR-30 final review) ───────────────────
+// The approved product rule, pinned end-to-end:
+//   1. A suspended student CAN complete a payment — but a payment NEVER
+//      lifts an admin suspension (no live row is minted; the single
+//      entitlement row stays SUSPENDED; business APIs stay locked).
+//   2. Validity purchased during suspension is NOT consumed: months BANK
+//      onto the frozen window (validityEnd stacks in WINDOW time), and
+//      start counting ONLY at the explicit authorized reactivation,
+//      which re-anchors the remaining window at that moment.
+//   3. Dated grants onto a suspended entitlement are refused (explicit
+//      reactivation comes first); a code claim while suspended banks.
+
+describe('SUBSCRIPTION · suspension freeze regressions', () => {
+  const DAY = 86_400_000
+  /** Directly plant a deterministic SUSPENDED entitlement row. */
+  async function plantSuspended(studentId: string, label: string, opts: { startOffsetDays: number; endOffsetDays: number; suspendedOffsetDays: number }) {
+    const now = Date.now()
+    return db.studentEntitlement.create({
+      data: {
+        schoolId: schoolA.id,
+        studentId,
+        status: 'SUSPENDED',
+        validityStart: new Date(now + opts.startOffsetDays * DAY),
+        validityEnd: new Date(now + opts.endOffsetDays * DAY),
+        source: 'MANUAL',
+        suspendedAt: new Date(now + opts.suspendedOffsetDays * DAY),
+        suspendReason: `suite ${RUN} ${label}`,
+      },
+    })
+  }
+
+  test('payment while suspended NEVER lifts the suspension — it BANKS (single row, no live row, business stays locked)', async () => {
+    await db.schoolSubscription.update({ where: { schoolId: schoolA.id }, data: { billingModel: 'PER_STUDENT' } })
+    const st = await makeTestStudent(schoolA.id, 'frz-pay')
+    try {
+      // Base live entitlement (operator complimentary assignment).
+      const assign = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+        method: 'POST',
+        body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, mode: 'COMPLIMENTARY', amount: 0, paymentDate: new Date().toISOString(), validityMonths: 12, notes: `suite ${RUN} freeze base grant` }),
+      })
+      expect(assign.status).toBe(200)
+      const entId = ((await body(assign))?.data?.entitlement as { id: string }).id
+      const before = await db.studentEntitlement.findUniqueOrThrow({ where: { id: entId } })
+      expect(before.status).toBe('ACTIVE')
+
+      // Admin suspension — then the business API locks.
+      const suspend = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'suspend', reason: `suite ${RUN} admin suspension for freeze test` }),
+      })
+      expect(suspend.status).toBe(200)
+      expect((await asSchool(st, '/api/student/dashboard')).status).toBe(403)
+
+      // The suspended student completes an ONLINE payment (sandbox lane).
+      const order = await asSchool(st, '/api/subscription/student/order', {
+        method: 'POST',
+        body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, sandbox: true }),
+      }, nextIp())
+      expect(order.status).toBe(200)
+      const orderNo = ((await body(order))?.data?.order as { orderNo: string }).orderNo
+      const orderRow = await db.subscriptionOrder.findUniqueOrThrow({ where: { orderNo } })
+
+      const verify = await asSchool(st, '/api/subscription/student/verify', {
+        method: 'POST',
+        body: JSON.stringify({ orderNo, sandbox: true }),
+      }, nextIp())
+      expect(verify.status).toBe(200)
+      const vb = await body(verify)
+      // THE rule: the settled payment reports SUSPENDED — never ACTIVE.
+      expect(vb?.data?.statusAfter).toBe('SUSPENDED')
+      expect(vb?.data?.alreadyPaid).toBe(false)
+      expect(String(vb?.data?.message)).toContain('suspended')
+
+      // Still exactly ONE entitlement row — the suspended one; no live row
+      // was minted (the payment did not unsuspend via a second row).
+      const rows = await db.studentEntitlement.findMany({ where: { studentId: st.studentId } })
+      expect(rows.length).toBe(1)
+      expect(rows[0].status).toBe('SUSPENDED')
+      expect(rows[0].id).toBe(entId)
+
+      // The financial rows exist (the base complimentary grant + the settled
+      // ONLINE payment — recorded VERIFIED, immutable).
+      expect(await db.studentSubscriptionPayment.count({ where: { studentId: st.studentId } })).toBe(2)
+      expect(await db.studentSubscriptionPayment.count({ where: { studentId: st.studentId, mode: 'ONLINE_PAYMENT', verification: 'VERIFIED' } })).toBe(1)
+
+      // Business APIs STAY locked (payment never lifts the suspension).
+      expect((await asSchool(st, '/api/student/dashboard')).status).toBe(403)
+      // Status surface tells the student the truth.
+      const status = await asSchool(st, '/api/subscription/student')
+      const sb = (await body(status))?.data
+      expect(sb?.entitlement?.state).toBe('SUSPENDED')
+
+      // BANKING math: end = addMonths(before.end, order.validityMonths) —
+      // window-time stacking, NOT anchored at payment time.
+      expect(rows[0].validityEnd.getTime()).toBeGreaterThan(before.validityEnd.getTime())
+      expect(Math.abs(rows[0].validityEnd.getTime() - addMonths(before.validityEnd, orderRow.validityMonths).getTime())).toBeLessThan(2_000)
+    } finally {
+      await db.schoolSubscription.update({ where: { schoolId: schoolA.id }, data: { billingModel: 'SCHOOL_WIDE' } })
+    }
+  }, T)
+
+  test('reactivation starts the banked clock: the remaining window re-anchors at the reactivation moment', async () => {
+    const st = await makeTestStudent(schoolA.id, 'frz-resume')
+    // Deterministic frozen row: started 30d ago, ends in 60d, suspended 10d ago.
+    const now = Date.now()
+    const start = new Date(now - 30 * DAY)
+    const end = new Date(now + 60 * DAY)
+    const suspendedAt = new Date(now - 10 * DAY)
+    const ent = await db.studentEntitlement.create({
+      data: { schoolId: schoolA.id, studentId: st.studentId, status: 'SUSPENDED', validityStart: start, validityEnd: end, source: 'MANUAL', suspendedAt, suspendReason: `suite ${RUN} resume base` },
+    })
+
+    // A payment BANKS 12 months during the suspension (operator offline).
+    const pay = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'POST',
+      body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, mode: 'CASH', amount: 500, paymentDate: new Date().toISOString(), validityMonths: 12, notes: `suite ${RUN} banked payment` }),
+    })
+    expect(pay.status).toBe(200)
+    expect((await body(pay))?.data?.entitlement?.statusAfter).toBe('SUSPENDED')
+    const banked = await db.studentEntitlement.findUniqueOrThrow({ where: { id: ent.id } })
+    expect(banked.status).toBe('SUSPENDED')
+    // Window-time stacking: banked end = addMonths(end, 12) — NOT from now.
+    expect(Math.abs(banked.validityEnd.getTime() - addMonths(end, 12).getTime())).toBeLessThan(2_000)
+
+    // Explicit authorized reactivation.
+    const reactivate = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'reactivate', reason: `suite ${RUN} authorized reactivation` }),
+    })
+    expect(reactivate.status).toBe(200)
+    expect((await body(reactivate))?.data?.status).toBe('ACTIVE')
+
+    const resumed = await db.studentEntitlement.findUniqueOrThrow({ where: { id: ent.id } })
+    expect(resumed.status).toBe('ACTIVE')
+    expect(resumed.suspendedAt).toBeNull()
+    expect(resumed.suspendReason).toBeNull()
+
+    // FROZEN-CLOCK RESUME: remaining = bankedEnd − max(start, suspendedAt)
+    //   = (end+12m) − suspendedAt  → the 20 consumed days are NOT refunded;
+    //   the 70 unconsumed days + the banked 12 months start counting NOW.
+    const frozenFrom = new Date(Math.max(start.getTime(), suspendedAt.getTime()))
+    const expectedRemainingMs = addMonths(end, 12).getTime() - frozenFrom.getTime()
+    const after = Date.now()
+    expect(Math.abs(resumed.validityStart.getTime() - after)).toBeLessThan(120_000)
+    expect(Math.abs(resumed.validityEnd.getTime() - (after + expectedRemainingMs))).toBeLessThan(120_000)
+    // Purchased-during-suspension months are not consumed by suspension
+    // time: the resumed window is ≥ 12 months longer than the 70-day
+    // pre-existing remainder would alone give.
+    expect(resumed.validityEnd.getTime() - resumed.validityStart.getTime()).toBeGreaterThan((70 + 360) * DAY * 0.99)
+  }, T)
+
+  test('reactivation with no remaining window is refused honestly (renewal required)', async () => {
+    const st = await makeTestStudent(schoolA.id, 'frz-empty')
+    const ent = await plantSuspended(st.studentId, 'empty', { startOffsetDays: -400, endOffsetDays: -40, suspendedOffsetDays: -30 })
+    const r = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'reactivate', reason: `suite ${RUN} empty reactivation attempt` }),
+    })
+    expect(r.status).toBe(409)
+    const row = await db.studentEntitlement.findUniqueOrThrow({ where: { id: ent.id } })
+    expect(row.status).toBe('SUSPENDED') // untouched
+  }, T)
+
+  test('a DATED grant onto a suspended entitlement is refused (reactivation comes first)', async () => {
+    const st = await makeTestStudent(schoolA.id, 'frz-dated')
+    await plantSuspended(st.studentId, 'dated', { startOffsetDays: -10, endOffsetDays: 80, suspendedOffsetDays: -5 })
+    const dated = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'POST',
+      body: JSON.stringify({
+        planCode: `TEST-STU-${RUN}`, mode: 'CASH', amount: 500, paymentDate: new Date().toISOString(),
+        validityMonths: 12, validityStart: new Date(Date.now() + 5 * DAY).toISOString(), notes: `suite ${RUN} dated grant attempt`,
+      }),
+    })
+    expect(dated.status).toBe(409)
+    const rows = await db.studentEntitlement.findMany({ where: { studentId: st.studentId } })
+    expect(rows.length).toBe(1)
+    expect(rows[0].status).toBe('SUSPENDED')
+  }, T)
+
+  test('a CODE claim while suspended BANKS (never unsuspends); reactivation then delivers the banked period', async () => {
+    const st = await makeTestStudent(schoolA.id, 'frz-claim')
+    const ent = await plantSuspended(st.studentId, 'claim-base', { startOffsetDays: -30, endOffsetDays: 90, suspendedOffsetDays: -10 })
+
+    // Operator records the offline payment and issues the code.
+    const issue = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'POST',
+      body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, mode: 'CASH', amount: 500, paymentDate: new Date().toISOString(), validityMonths: 12, issueActivationCode: true, notes: `suite ${RUN} claim bank` }),
+    })
+    expect(issue.status).toBe(200)
+    const code = ((await body(issue))?.data?.activationCode as { code: string }).code
+
+    // The suspended student claims — the claim SUCCEEDS (money was paid)
+    // but BANKS: status stays SUSPENDED, no live row minted.
+    const claim = await asSchool(st, '/api/subscription/student/claim', { method: 'POST', body: JSON.stringify({ code }) }, nextIp())
+    expect(claim.status).toBe(200)
+    const cb = await body(claim)
+    expect(cb?.data?.entitlement?.status).toBe('SUSPENDED')
+    expect(String(cb?.data?.message)).toContain('suspended')
+
+    const afterClaim = await db.studentEntitlement.findUniqueOrThrow({ where: { id: ent.id } })
+    expect(afterClaim.status).toBe('SUSPENDED')
+    expect(Math.abs(afterClaim.validityEnd.getTime() - addMonths(ent.validityEnd, 12).getTime())).toBeLessThan(2_000)
+    expect(await db.studentEntitlement.count({ where: { studentId: st.studentId, status: { in: ['PENDING', 'ACTIVE'] } } })).toBe(0)
+
+    // Explicit reactivation delivers the banked period (starts now).
+    const reactivate = await asPlatform(rootToken, `/api/platform/students/${st.studentId}/subscription`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'reactivate', reason: `suite ${RUN} reactivation after banked claim` }),
+    })
+    expect(reactivate.status).toBe(200)
+    const resumed = await db.studentEntitlement.findUniqueOrThrow({ where: { id: ent.id } })
+    expect(resumed.status).toBe('ACTIVE')
+    expect(resumed.validityEnd.getTime() - resumed.validityStart.getTime()).toBeGreaterThan(360 * DAY)
+  }, T)
+
+  test('two concurrent payments during suspension both BANK (stacked window, single suspended row)', async () => {
+    await db.schoolSubscription.update({ where: { schoolId: schoolA.id }, data: { billingModel: 'PER_STUDENT' } })
+    const st = await makeTestStudent(schoolA.id, 'frz-race')
+    try {
+      const ent = await plantSuspended(st.studentId, 'race-base', { startOffsetDays: -30, endOffsetDays: 60, suspendedOffsetDays: -5 })
+
+      const mkOrder = async () => {
+        const order = await asSchool(st, '/api/subscription/student/order', {
+          method: 'POST',
+          body: JSON.stringify({ planCode: `TEST-STU-${RUN}`, sandbox: true }),
+        }, nextIp())
+        return ((await body(order))?.data?.order as { orderNo: string }).orderNo
+      }
+      const [orderNoA, orderNoB] = await Promise.all([mkOrder(), mkOrder()])
+
+      const settle = (orderNo: string) => asSchool(st, '/api/subscription/student/verify', {
+        method: 'POST',
+        body: JSON.stringify({ orderNo, sandbox: true }),
+      }, nextIp())
+      const [a, b] = await Promise.all([settle(orderNoA), settle(orderNoB)])
+      expect(a.status).toBe(200)
+      expect(b.status).toBe(200)
+      expect((await body(a))?.data?.statusAfter).toBe('SUSPENDED')
+      expect((await body(b))?.data?.statusAfter).toBe('SUSPENDED')
+
+      // BOTH payments banked: the window stacks 24 months (2 × 12), one
+      // suspended row, two financial rows — never a lost payment.
+      const row = await db.studentEntitlement.findUniqueOrThrow({ where: { id: ent.id } })
+      expect(row.status).toBe('SUSPENDED')
+      expect(Math.abs(row.validityEnd.getTime() - addMonths(ent.validityEnd, 24).getTime())).toBeLessThan(2_000)
+      expect(await db.studentEntitlement.count({ where: { studentId: st.studentId } })).toBe(1)
+      expect(await db.studentSubscriptionPayment.count({ where: { studentId: st.studentId } })).toBe(2)
+    } finally {
+      await db.schoolSubscription.update({ where: { schoolId: schoolA.id }, data: { billingModel: 'SCHOOL_WIDE' } })
+    }
   }, T)
 })

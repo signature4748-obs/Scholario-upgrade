@@ -113,7 +113,9 @@ export async function POST(req: NextRequest) {
         validityEndAfter: result.validityEndAfter?.toISOString() ?? null,
         message: result.alreadyPaid
           ? 'This payment was already processed — no second entitlement was created.'
-          : 'Payment verified and your subscription is active.',
+          : result.statusAfter === 'SUSPENDED'
+            ? 'Payment verified — the paid period is reserved. Your subscription is currently suspended; it starts when your school reactivates it.'
+            : 'Payment verified and your subscription is active.',
       }
     },
     { allowLockedSubscription: true },

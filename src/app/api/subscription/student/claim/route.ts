@@ -82,9 +82,11 @@ export async function POST(req: NextRequest) {
           planCode: result.planCode,
         },
         message:
-          result.status === 'PENDING'
-            ? `Code accepted — your subscription starts on ${result.validityStart.toISOString().slice(0, 10)} and runs until ${result.validityEnd.toISOString().slice(0, 10)}.`
-            : `Subscription active until ${result.validityEnd.toISOString().slice(0, 10)}.`,
+          result.status === 'SUSPENDED'
+            ? `Code accepted — the paid period is reserved until ${result.validityEnd.toISOString().slice(0, 10)}. Your subscription is currently suspended; it starts when your school reactivates it.`
+            : result.status === 'PENDING'
+              ? `Code accepted — your subscription starts on ${result.validityStart.toISOString().slice(0, 10)} and runs until ${result.validityEnd.toISOString().slice(0, 10)}.`
+              : `Subscription active until ${result.validityEnd.toISOString().slice(0, 10)}.`,
       }
     },
     { allowLockedSubscription: true },
