@@ -157,16 +157,19 @@ school's website, login and ERP live. A school never needs the platform plane.
 
 ## 10. Demo credentials (DEMO TENANT ONLY — sample data)
 
-Demo password families (env-driven seeds; rotate for anything beyond demo):
+Demo password families are env-driven seeds (rotate for anything beyond
+demo). **No credential values are inlined in this repository** (Phase 8A
+regression guard); the single value source is `prisma/seed-credentials.ts`
+(env-overridable, server/test-side only):
 
-| Role | Email | Password |
+| Role | Email | Password source |
 | --- | --- | --- |
-| Principal | `principal@hawkingshigh.edu` | `principal123` |
-| Teacher (featured) | `teacher1@hawkingshigh.edu` | `teacher123` |
-| Student (featured, 7-A) | featured student email (see `docs/HAWKINGS_DEMO_TENANT.md`) | `student123` |
-| Other staff/students | `<name>@hawkingshigh.edu` | `password123` |
-| Platform root | `admin@scholario.cloud` | see `prisma/seed-credentials.ts` defaults |
-| Clean tenant | `principal.b@greenvalley.test` | fixture password (same source) |
+| Principal | `principal@hawkingshigh.edu` | `prisma/seed-credentials.ts` (demo family) |
+| Teacher (featured) | `teacher1@hawkingshigh.edu` | `prisma/seed-credentials.ts` (demo family) |
+| Student (featured, 7-A) | featured student email (see `docs/HAWKINGS_DEMO_TENANT.md`) | `prisma/seed-credentials.ts` (demo family) |
+| Other staff/students | `<name>@hawkingshigh.edu` | `prisma/seed-credentials.ts` (demo family) |
+| Platform root | `admin@scholario.cloud` | `prisma/seed-credentials.ts` (platform defaults) |
+| Clean tenant | `principal.b@greenvalley.test` | `prisma/seed-credentials.ts` (tenant fixture) |
 
 **These are demonstration credentials for sample accounts.** Never reuse them
 for production tenants; production accounts get invitation passwords and

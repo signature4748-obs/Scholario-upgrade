@@ -252,9 +252,25 @@ describe('Schools-management overhaul · directory filters/sort/summary', () => 
       expect(names).toEqual(sorted)
 
       const res2 = await as(rootToken, '/api/platform/schools?sort=created_asc')
-      const body2 = (await res2.json()) as { data: { schools: Array<{ id: string }> } }
-      // Green Valley is the older seeded school (seed order).
-      expect(body2.data.schools[0]?.id).toBe(greenValleyId)
+      const body2 = (await res2.json()) as {
+        data: { schools: Array<{ id: string; createdAt: string }> }
+      }
+      // Seed-order-independent invariant: the API orders rows by DB
+      // createdAt ascending. Which school is OLDEST depends on corpus
+      // history (fresh CI: seed.ts plants Hawkings BEFORE green-valley
+      // arrives via seed-tenant-isolation's ensureCleanSchool; on a
+      // long-lived dev DB seed.ts's demo-tenant wipe re-mints Hawkings
+      // later) — so we assert against the DATABASE truth, not a
+      // hard-coded tenant identity. Tie-safe: equal createdAts satisfy
+      // the non-decreasing check.
+      const rows = body2.data.schools
+      const times = rows.map((r) => Date.parse(r.createdAt))
+      for (let i = 1; i < times.length; i++) {
+        expect(times[i]).toBeGreaterThanOrEqual(times[i - 1])
+      }
+      const dbMin = await db.school.aggregate({ _min: { createdAt: true } })
+      expect(dbMin._min.createdAt).not.toBeNull()
+      expect(Date.parse(rows[0]?.createdAt ?? '')).toBe(dbMin._min.createdAt!.getTime())
     },
     T,
   )
