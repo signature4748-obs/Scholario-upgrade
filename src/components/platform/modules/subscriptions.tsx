@@ -24,10 +24,15 @@
 
 import React, { useCallback, useEffect, useState } from 'react'
 import {
-  BookMarked, Building2, CalendarClock, CreditCard, Gift, KeyRound,
-  Loader2, Package, RefreshCw, Search, Settings2, ShieldAlert, Users, Wallet,
+  BookMarked, Building2, CalendarClock, CreditCard, KeyRound,
+  Loader2, Package, RefreshCw, Search, Settings2, ShieldAlert, Users,
 } from 'lucide-react'
-import { platformApi, type PlatformApiError } from '../platform-client'
+import { platformApi } from '../platform-client'
+import {
+  StateBadge, errMessage, money, dateStr,
+  AssignEntitlementDialog, StudentHistoryDialog,
+  type StudentRow, type PlanRow, type RegistryRow,
+} from './subscription-shared'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -46,50 +51,6 @@ import { toast } from 'sonner'
 
 // ── types ──────────────────────────────────────────────────────────────
 
-interface RegistryRow {
-  subscriptionId: string
-  school: { id: string; name: string; slug: string; code: string; status: string; isDemo: boolean }
-  billingModel: string
-  plan: string
-  planDef: { code: string; name: string } | null
-  interval: string | null
-  priceSnapshot: number | null
-  currencySnapshot: string
-  periodEnd: string | null
-  graceDays: number
-  overrideStatus: string | null
-  paymentCount: number
-  entitlement: { state: string; businessAllowed: boolean; renewalRequired: boolean }
-}
-interface StudentRow {
-  studentId: string
-  userId: string
-  name: string
-  email: string
-  admissionNo: string | null
-  class: string | null
-  accountLocked: boolean
-  billingModel: string
-  entitlement: {
-    id?: string
-    status?: string
-    computedState: string
-    validityStart?: string
-    validityEnd?: string
-    source?: string
-    planCode?: string
-    coveredBySchool?: boolean
-  }
-}
-interface PlanRow {
-  id: string; code: string; name: string; description: string | null
-  scope: string; interval: string
-  priceMonthly: number | null; priceAnnual: number | null; pricePerStudent: number | null
-  currency: string; graceDays: number
-  allowOnline: boolean; allowOffline: boolean
-  availableForNew: boolean; availableForRenewal: boolean
-  status: string; sortOrder: number
-}
 interface SubsConfig {
   models: { school: { enabled: boolean }; student: { enabled: boolean }; manual: { enabled: boolean } }
   defaultBillingModel: string
@@ -98,25 +59,6 @@ interface SubsConfig {
 }
 interface SchoolOption { id: string; name: string; slug: string }
 
-const money = (n: number | null, c = 'INR') => (n === null ? '—' : `${c === 'INR' ? '₹' : ''}${n.toLocaleString('en-IN')}${c === 'INR' ? '' : ' ' + c}`)
-const dateStr = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—')
-
-const STATE_BADGE: Record<string, string> = {
-  ACTIVE: 'bg-emerald-100 text-emerald-800', GRACE: 'bg-amber-100 text-amber-800',
-  RESTRICTED: 'bg-rose-100 text-rose-800', SUSPENDED: 'bg-rose-100 text-rose-800',
-  COVERED_BY_SCHOOL: 'bg-teal-100 text-teal-800', PENDING: 'bg-sky-100 text-sky-800',
-  EXPIRED: 'bg-zinc-200 text-zinc-700', REVOKED: 'bg-rose-100 text-rose-800',
-  NOT_SUBSCRIBED: 'bg-zinc-200 text-zinc-700', TENANT_RESTRICTED: 'bg-rose-100 text-rose-800',
-}
-const StateBadge = ({ state }: { state: string }) => (
-  <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATE_BADGE[state] ?? 'bg-zinc-200 text-zinc-700'}`}>
-    {state.replace(/_/g, ' ').toLowerCase()}
-  </span>
-)
-
-function errMessage(e: unknown): string {
-  return e instanceof Error ? e.message : (e as PlatformApiError)?.error ?? 'Request failed'
-}
 
 // ── module ─────────────────────────────────────────────────────────────
 
@@ -387,289 +329,10 @@ function StudentEntitlementsTab({ onAssigned }: { onAssigned: () => void }) {
   )
 }
 
-function AssignEntitlementDialog({ student, onClose, onDone }: { student: StudentRow; onClose: () => void; onDone: () => void }) {
-  const [saving, setSaving] = useState(false)
-  const [result, setResult] = useState<{
-    message: string
-    activationCode?: { publicRef: string; code: string; expiresAt: string }
-  } | null>(null)
-  const [form, setForm] = useState({
-    planCode: '', mode: 'CASH', amount: '', currency: 'INR', paymentDate: new Date().toISOString().slice(0, 10),
-    reference: '', notes: '', validityMonths: '12', validityStart: '', validityEnd: '',
-    issueActivationCode: true, claimWindowDays: '30',
-  })
 
-  const submit = async () => {
-    if (!form.planCode) { toast.error('Select a plan first.'); return }
-    if (form.mode === 'COMPLIMENTARY' && (!form.notes || form.notes.trim().length < 10)) {
-      toast.error('Complimentary grants require an audit note (at least 10 characters) explaining why.')
-      return
-    }
-    setSaving(true)
-    try {
-      const d = await platformApi<{ message: string; activationCode?: { publicRef: string; code: string; expiresAt: string } }>(
-        `/api/platform/students/${student.studentId}/subscription`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            planCode: form.planCode,
-            mode: form.mode,
-            amount: form.mode === 'COMPLIMENTARY' ? 0 : Number(form.amount || 0),
-            currency: form.currency,
-            paymentDate: form.paymentDate,
-            reference: form.reference || undefined,
-            notes: form.notes || undefined,
-            validityMonths: Number(form.validityMonths || 12),
-            validityStart: form.validityStart ? new Date(form.validityStart).toISOString() : undefined,
-            validityEnd: form.validityEnd ? new Date(form.validityEnd).toISOString() : undefined,
-            issueActivationCode: form.issueActivationCode,
-            claimWindowDays: Number(form.claimWindowDays || 30),
-          }),
-        },
-      )
-      setResult(d)
-      onDone()
-    } catch (e) {
-      toast.error('Assignment failed', { description: errMessage(e) })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o && !result) onClose() }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Assign student subscription</DialogTitle>
-          <DialogDescription>
-            {student.name} — record the payment and activate directly or issue a student activation code.
-            Complimentary assignments use the separate permission-protected workflow.
-          </DialogDescription>
-        </DialogHeader>
-        {result ? (
-          <div className="space-y-3">
-            <p className="text-sm">{result.message}</p>
-            {result.activationCode && (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-900"><KeyRound className="h-3.5 w-3.5" />{result.activationCode.publicRef}</div>
-                <div className="mt-2 select-all rounded bg-white p-2 font-mono text-lg tracking-widest">{result.activationCode.code}</div>
-                <p className="mt-2 text-xs text-amber-800">
-                  Show and copy the code now — it will not be visible again. Deliver it to the student out-of-band.
-                  Redeemable until {dateStr(result.activationCode.expiresAt)}.
-                </p>
-              </div>
-            )}
-            <DialogFooter><Button onClick={onClose}>Done</Button></DialogFooter>
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label className="text-xs">Plan</Label><PlanPicker scope="STUDENT" value={form.planCode} onChange={(v) => { setForm((f) => ({ ...f, planCode: v })) }} /></div>
-              <div>
-                <Label className="text-xs">Payment mode</Label>
-                <Select value={form.mode} onValueChange={(v) => setForm((f) => ({ ...f, mode: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {['CASH', 'BANK_TRANSFER', 'CHEQUE', 'OTHER', 'COMPLIMENTARY'].map((m) => <SelectItem key={m} value={m}>{m.replace(/_/g, ' ')}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            {form.mode !== 'COMPLIMENTARY' && (
-              <div className="grid grid-cols-3 gap-3">
-                <div><Label className="text-xs">Amount</Label><Input type="number" min="0" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} placeholder="0" /></div>
-                <div>
-                  <Label className="text-xs">Currency</Label>
-                  <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>{['INR', 'USD', 'EUR', 'GBP', 'AED'].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-                <div><Label className="text-xs">Payment date</Label><Input type="date" value={form.paymentDate} onChange={(e) => setForm((f) => ({ ...f, paymentDate: e.target.value }))} /></div>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label className="text-xs">Validity (months)</Label><Input type="number" min="1" max="36" value={form.validityMonths} onChange={(e) => setForm((f) => ({ ...f, validityMonths: e.target.value }))} /></div>
-              <div><Label className="text-xs">Start date (optional, future)</Label><Input type="date" value={form.validityStart} onChange={(e) => setForm((f) => ({ ...f, validityStart: e.target.value }))} /></div>
-            </div>
-            <div>
-              <Label className="text-xs">End date (optional — overrides months)</Label>
-              <Input type="date" value={form.validityEnd} onChange={(e) => setForm((f) => ({ ...f, validityEnd: e.target.value }))} />
-            </div>
-            <div><Label className="text-xs">Reference / receipt</Label><Input value={form.reference} onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))} placeholder="UTR / cheque no. (optional)" /></div>
-            <div><Label className="text-xs">Notes</Label><Textarea rows={2} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Audit note (optional)" /></div>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div>
-                <div className="flex items-center gap-1.5 text-sm font-medium"><KeyRound className="h-4 w-4" />Issue activation code</div>
-                <p className="text-xs text-muted-foreground">The student claims the code in their portal. Recommended for offline payments.</p>
-              </div>
-              <Switch checked={form.issueActivationCode} onCheckedChange={(v) => setForm((f) => ({ ...f, issueActivationCode: v }))} />
-            </div>
-            {form.issueActivationCode && (
-              <div><Label className="text-xs">Claim window (days)</Label><Input type="number" min="1" max="365" value={form.claimWindowDays} onChange={(e) => setForm((f) => ({ ...f, claimWindowDays: e.target.value }))} /></div>
-            )}
-            <DialogFooter>
-              <Button variant="outline" onClick={onClose}>Cancel</Button>
-              <Button onClick={() => void submit()} disabled={saving}>
-                {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-                {form.mode === 'COMPLIMENTARY' ? <Gift className="mr-1 h-4 w-4" /> : <Wallet className="mr-1 h-4 w-4" />}
-                {form.issueActivationCode ? 'Record + issue code' : 'Record + activate'}
-              </Button>
-            </DialogFooter>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function StudentHistoryDialog({ student, onClose }: { student: StudentRow; onClose: () => void }) {
-  const [data, setData] = useState<{
-    entitlements: Array<{ id: string; status: string; planCode: string | null; validityStart: string; validityEnd: string; source: string; revokeReason: string | null }>
-    payments: Array<{ id: string; receiptNo: string | null; amount: number; currency: string; mode: string; paymentDate: string; reference: string | null }>
-    codes: Array<{ id: string; publicRef: string; status: string; expiresAt: string; claimedAt: string | null }>
-  } | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-
-  useEffect(() => {
-    platformApi<typeof data>(`/api/platform/students/${student.studentId}/subscription`).then(setData).catch((e) => toast.error(errMessage(e)))
-  }, [student.studentId])
-
-  const act = async (action: 'revoke' | 'suspend' | 'reactivate') => {
-    // Server requires a reason (min 10) for every lifecycle action —
-    // withdrawing/adjusting a paid entitlement is destructive.
-    const reason =
-      action === 'reactivate'
-        ? 'Reactivated by operator'
-        : window.prompt(`Reason for ${action}? (at least 10 characters — recorded in the audit trail)`)
-    if (action !== 'reactivate' && (!reason || reason.trim().length < 10)) {
-      if (reason !== null) toast.error('A reason of at least 10 characters is required.')
-      return
-    }
-    setBusy(action)
-    try {
-      await platformApi(`/api/platform/students/${student.studentId}/subscription`, {
-        method: 'PATCH',
-        body: JSON.stringify({ action, reason: reason?.trim() }),
-      })
-      toast.success(`Entitlement ${action}d — financial records unchanged.`)
-      const d = await platformApi<typeof data>(`/api/platform/students/${student.studentId}/subscription`)
-      setData(d)
-    } catch (e) {
-      toast.error(`${action} failed`, { description: errMessage(e) })
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const reissue = async (codeId: string) => {
-    const reason = window.prompt('Reason for reissue? (the old code becomes unusable)')
-    if (!reason || reason.trim().length < 4) return
-    setBusy(codeId)
-    try {
-      const d = await platformApi<{ code: string; publicRef: string; message: string }>(`/api/platform/subscriptions/codes/${codeId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ action: 'reissue', reason: reason.trim() }),
-      })
-      toast.success(d.message)
-      window.alert(`New activation code (${d.publicRef}):\n\n${d.code}\n\nCopy it now — it will not be visible again.`)
-      const dd = await platformApi<typeof data>(`/api/platform/students/${student.studentId}/subscription`)
-      setData(dd)
-    } catch (e) {
-      toast.error('Reissue failed', { description: errMessage(e) })
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{student.name} — subscription history</DialogTitle>
-          <DialogDescription>Entitlements, payments and codes. Financial records are immutable.</DialogDescription>
-        </DialogHeader>
-        {!data ? (
-          <Skeleton className="h-48 w-full" />
-        ) : (
-          <Tabs defaultValue="entitlements">
-            <TabsList>
-              <TabsTrigger value="entitlements">Entitlements</TabsTrigger>
-              <TabsTrigger value="payments">Payments</TabsTrigger>
-              <TabsTrigger value="codes">Codes</TabsTrigger>
-            </TabsList>
-            <TabsContent value="entitlements" className="space-y-2">
-              {data.entitlements.map((e) => (
-                <div key={e.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2 text-sm">
-                  <div>
-                    <StateBadge state={e.status} /> <span className="ml-2 text-xs text-muted-foreground">{e.source} · {dateStr(e.validityStart)} → {dateStr(e.validityEnd)}</span>
-                    {e.revokeReason && <div className="text-xs text-rose-700">Revoked: {e.revokeReason}</div>}
-                  </div>
-                </div>
-              ))}
-              {data.entitlements.length === 0 && <p className="p-4 text-center text-sm text-muted-foreground">No entitlements yet.</p>}
-              <div className="flex gap-2 pt-1">
-                <Button size="sm" variant="outline" disabled={busy === 'revoke'} onClick={() => void act('revoke')}>Revoke live</Button>
-                <Button size="sm" variant="outline" disabled={busy === 'suspend'} onClick={() => void act('suspend')}>Suspend live</Button>
-                <Button size="sm" variant="outline" disabled={busy === 'reactivate'} onClick={() => void act('reactivate')}>Reactivate</Button>
-              </div>
-            </TabsContent>
-            <TabsContent value="payments" className="space-y-2">
-              {data.payments.map((p) => (
-                <div key={p.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2 text-sm">
-                  <span className="font-mono text-xs">{p.receiptNo}</span>
-                  <span>{money(p.amount, p.currency)} · {p.mode.replace(/_/g, ' ')}</span>
-                  <span className="text-xs text-muted-foreground">{dateStr(p.paymentDate)}</span>
-                </div>
-              ))}
-              {data.payments.length === 0 && <p className="p-4 text-center text-sm text-muted-foreground">No payments recorded.</p>}
-            </TabsContent>
-            <TabsContent value="codes" className="space-y-2">
-              {data.codes.map((c) => (
-                <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2 text-sm">
-                  <span className="font-mono text-xs">{c.publicRef}</span>
-                  <StateBadge state={c.status} />
-                  <span className="text-xs text-muted-foreground">expires {dateStr(c.expiresAt)}</span>
-                  {(c.status === 'ISSUED' || c.status === 'EXPIRED') && (
-                    <Button size="sm" variant="outline" disabled={busy === c.id} onClick={() => void reissue(c.id)}>
-                      {busy === c.id && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}Reissue
-                    </Button>
-                  )}
-                </div>
-              ))}
-              {data.codes.length === 0 && <p className="p-4 text-center text-sm text-muted-foreground">No codes issued.</p>}
-            </TabsContent>
-          </Tabs>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 // ── Plans & models tab ─────────────────────────────────────────────────
 
-interface PlanPickerProps { scope: 'SCHOOL' | 'STUDENT'; value: string; onChange: (code: string) => void }
-function PlanPicker({ scope, value, onChange }: PlanPickerProps) {
-  const [plans, setPlans] = useState<PlanRow[]>([])
-  useEffect(() => {
-    platformApi<{ plans: PlanRow[] }>('/api/platform/subscriptions/plans')
-      .then((d) => setPlans(d.plans.filter((p) => p.scope === scope && p.status === 'ACTIVE')))
-      .catch(() => {})
-  }, [scope])
-  return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger><SelectValue placeholder="Select plan…" /></SelectTrigger>
-      <SelectContent>
-        {plans.map((p) => (
-          <SelectItem key={p.code} value={p.code}>
-            {p.name} ({p.scope === 'STUDENT' ? money(p.pricePerStudent, p.currency) : p.interval === 'MONTHLY' ? money(p.priceMonthly, p.currency) : money(p.priceAnnual, p.currency)})
-          </SelectItem>
-        ))}
-        {plans.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">No active {scope.toLowerCase()} plans configured.</div>}
-      </SelectContent>
-    </Select>
-  )
-}
 
 function PlansTab({ plans, config, onChanged }: { plans: PlanRow[]; config: SubsConfig | null; onChanged: () => void }) {
   const [saving, setSaving] = useState(false)

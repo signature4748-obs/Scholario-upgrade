@@ -22,6 +22,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { db } from '../helpers/db'
 import { hashSessionToken } from '@/lib/auth'
+import { computeSetupReadiness } from '@/lib/school/setup-readiness'
 import { resetLoginBuckets } from '../helpers/login-buckets'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
@@ -100,6 +101,36 @@ describe('PHASE 8C-F · school setup-readiness (principal surface)', () => {
       // design — the honest incomplete state the Setup Guide surfaces).
       expect(body.data.summary.requiredComplete).toBe(false)
       expect(body.data.summary.usable).toBe(false)
+    },
+    T,
+  )
+
+  test(
+    'academic-section consistency: session year AND ≥1 class — a year with zero classes is NOT done (§7)',
+    async () => {
+      // Green Valley: session year 2026-2027 set, ZERO classes — the
+      // pre-fix bug counted this as done; admissions enrollment would
+      // fail closed with no class destination. The section must be
+      // honestly incomplete, with the live class count surfaced.
+      const gvSchool = await db.school.findUnique({
+        where: { id: gvId },
+        select: { academicYear: true },
+      })
+      const gv = await computeSetupReadiness(gvId)
+      expect(gv).not.toBeNull()
+      const gvAcademic = gv!.sections.find((s) => s.id === 'academic')!
+      const liveClasses = await db.class.count({ where: { schoolId: gvId } })
+      expect(gvAcademic.counts.classes).toBe(liveClasses)
+      expect(gvAcademic.done).toBe(Boolean(gvSchool?.academicYear) && liveClasses > 0)
+
+      // Hawkings (the demo corpus): year set AND classes exist → done.
+      const hawk = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
+      expect(hawk).not.toBeNull()
+      const hawkReadiness = await computeSetupReadiness(hawk!.id)
+      expect(hawkReadiness).not.toBeNull()
+      const hawkAcademic = hawkReadiness!.sections.find((s) => s.id === 'academic')!
+      const hawkClasses = await db.class.count({ where: { schoolId: hawk!.id } })
+      expect(hawkAcademic.done).toBe(Boolean(hawk?.academicYear) && hawkClasses > 0)
     },
     T,
   )

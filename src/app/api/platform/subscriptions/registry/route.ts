@@ -36,7 +36,13 @@ export async function GET(req: NextRequest) {
     const expiringBefore = expiringDays > 0 ? new Date(now.getTime() + expiringDays * 24 * 60 * 60 * 1000) : null
 
     // ── School (tenant) subscriptions ─────────────────────────────────────
+    const schoolId = url.searchParams.get('schoolId')?.trim() ?? ''
     const schoolWhere: Record<string, unknown> = {}
+    if (schoolId) {
+      // Precise per-school fetch (the school workspace's Subscription tab
+      // reads exactly one tenant's row — never a name-search guess).
+      schoolWhere.schoolId = schoolId
+    }
     if (q) {
       schoolWhere.school = {
         OR: [

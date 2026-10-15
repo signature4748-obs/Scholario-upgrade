@@ -19,7 +19,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { motion } from 'framer-motion'
 import {
   ArrowLeft,
@@ -56,6 +56,9 @@ import { SchoolSetupTab } from './school-setup'
 import { SchoolSubscriptionTab } from './school-subscription'
 import { SchoolIdentityRequestsTab } from './school-identity-requests'
 import { SchoolPaymentGatewayTab } from './school-payment-gateway'
+import { SchoolUsersTab } from './school-users'
+import { SchoolSupportTab } from './school-support'
+import { SchoolAuditTab } from './school-audit'
 import { saveSupportToken } from '@/lib/platform-session-token'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -159,7 +162,6 @@ interface AccessResponse {
 }
 
 const FLAGGABLE_MODULES = ['exams', 'fees', 'homework', 'library', 'transport'] as const
-const SCHOOL_PLANS = ['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'] as const
 
 // Admissions server-issuance control (Batch 1 / WS-C) — the API contract
 // of GET/PATCH /api/platform/schools/[id]/admissions-issuance.
@@ -926,6 +928,12 @@ function StatCard({
 
 export function SchoolDetailModule() {
   const { can } = usePlatformSession()
+  // Permission constants (stable across the render; the server
+  // re-authorizes every action regardless of what the UI shows).
+  const canManage = can('schools.manage')
+  const canBill = can('billing.manage')
+  const canSupport = can('support.access')
+  const canAudit = can('audit.read')
   const router = useRouter()
   const params = useParams()
   const rawId: unknown = params.id
@@ -936,6 +944,46 @@ export function SchoolDetailModule() {
         ? rawId[0]
         : undefined
   const { gate, node: stepUpNode } = useStepUpGate()
+  const searchParams = useSearchParams()
+
+  // ── Tab deep-linking (mission §3B): ?tab=<value> is the single
+  // source of truth for the active workspace section — navigation,
+  // refresh, and browser back/forward all preserve it. Unknown or
+  // permission-withheld values fall back to Overview (fail-safe, the
+  // server still authorizes every route). ──
+  const availableTabs = React.useMemo(() => {
+    const tabs = ['overview', 'setup']
+    if (canManage) tabs.push('metadata', 'identity')
+    tabs.push('plan')
+    if (canBill) tabs.push('subscription', 'gateway')
+    tabs.push('domains', 'users')
+    if (canSupport) tabs.push('support')
+    if (canAudit) tabs.push('audit')
+    if (canManage) tabs.push('danger')
+    return tabs
+  }, [canManage, canBill, canSupport, canAudit])
+
+  const urlTab = searchParams.get('tab')
+  const [activeTab, setActiveTab] = useState<string>(() =>
+    urlTab && availableTabs.includes(urlTab) ? urlTab : 'overview',
+  )
+  // URL → state (browser back/forward)
+  useEffect(() => {
+    const fromUrl = searchParams.get('tab') ?? 'overview'
+    setActiveTab(fromUrl)
+  }, [searchParams])
+
+  const navigateToTab = useCallback(
+    (tab: string) => {
+      setActiveTab(tab)
+      const next = new URLSearchParams(searchParams.toString())
+      if (tab === 'overview') next.delete('tab')
+      else next.set('tab', tab)
+      const qs = next.toString()
+      router.push(qs ? `?${qs}` : '?', { scroll: false })
+    },
+    [router, searchParams],
+  )
 
   const [data, setData] = useState<SchoolDetailData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -951,10 +999,6 @@ export function SchoolDetailModule() {
   const [meta, setMeta] = useState<MetaForm | null>(null)
   const [metaBusy, setMetaBusy] = useState(false)
   const [metaSavedFields, setMetaSavedFields] = useState<string[] | null>(null)
-
-  const [planChoice, setPlanChoice] = useState<string>('STANDARD')
-  const [planReason, setPlanReason] = useState('')
-  const [planBusy, setPlanBusy] = useState(false)
 
   const [flags, setFlags] = useState<Record<string, boolean>>({})
   const [flagBusy, setFlagBusy] = useState<string | null>(null)
@@ -1022,8 +1066,6 @@ export function SchoolDetailModule() {
   useEffect(() => {
     if (data) {
       setMeta(metaFromSchool(data.school))
-      setPlanChoice(data.school.plan)
-      setPlanReason('')
       setFlags(data.school.featureFlags)
     }
   }, [data])
@@ -1060,30 +1102,6 @@ export function SchoolDetailModule() {
       toast.error(err.error || 'Could not save the metadata')
     } finally {
       setMetaBusy(false)
-    }
-  }
-
-  const changePlan = async () => {
-    if (!id || !school) return
-    setPlanBusy(true)
-    try {
-      const res = await gate(() =>
-        platformApi(`/api/platform/schools/${id}/plan`, {
-          method: 'PATCH',
-          body: JSON.stringify({
-            plan: planChoice,
-            ...(planReason.trim() ? { reason: planReason.trim() } : {}),
-          }),
-        }),
-      )
-      if (!res) return // cancelled at the step-up prompt
-      toast.success(`Plan changed to ${planChoice}`)
-      await reload()
-    } catch (e) {
-      const err = e as PlatformApiError
-      toast.error(err.error || 'Plan change failed')
-    } finally {
-      setPlanBusy(false)
     }
   }
 
@@ -1288,10 +1306,6 @@ export function SchoolDetailModule() {
 
   if (!school || !data) return null
 
-  const canManage = can('schools.manage')
-  const canBill = can('billing.manage')
-  const canSupport = can('support.access')
-
   const profile: Array<{ icon: React.ReactNode; label: string; value: string }> = [
     { icon: <Globe className="h-3.5 w-3.5" />, label: 'Domain', value: school.domain ?? '—' },
     { icon: <MapPin className="h-3.5 w-3.5" />, label: 'City', value: school.city ?? '—' },
@@ -1413,7 +1427,11 @@ export function SchoolDetailModule() {
         ))}
       </motion.div>
 
-      <Tabs defaultValue="overview" className="space-y-4">
+      <Tabs
+          value={activeTab && availableTabs.includes(activeTab) ? activeTab : 'overview'}
+          onValueChange={(v) => navigateToTab(v)}
+          className="space-y-4"
+        >
         <TabsList className="w-full bg-slate-100 border border-slate-200 h-auto flex-wrap p-1 gap-1">
           <TabsTrigger
             value="overview"
@@ -1447,7 +1465,7 @@ export function SchoolDetailModule() {
             value="plan"
             className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
           >
-            Plan &amp; Modules
+            Modules
           </TabsTrigger>
           {canBill && (
             <TabsTrigger
@@ -1471,6 +1489,28 @@ export function SchoolDetailModule() {
           >
             Domains
           </TabsTrigger>
+          <TabsTrigger
+            value="users"
+            className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
+          >
+            Users
+          </TabsTrigger>
+          {canSupport && (
+            <TabsTrigger
+              value="support"
+              className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
+            >
+              Support
+            </TabsTrigger>
+          )}
+          {canAudit && (
+            <TabsTrigger
+              value="audit"
+              className="data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600 px-3 py-1.5 min-h-[36px]"
+            >
+              Audit history
+            </TabsTrigger>
+          )}
           {canManage && (
             <TabsTrigger
               value="danger"
@@ -1734,82 +1774,9 @@ export function SchoolDetailModule() {
 
         {/* ── Plan & Modules tab ───────────────────────────────────────── */}
         <TabsContent value="plan" className="space-y-4">
-          {/* Plan (billing.manage) */}
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
-              <h2 className="font-display text-sm font-bold text-slate-900">Subscription plan</h2>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Billing-impacting change — requires billing.manage and step-up verification.
-              </p>
-            </div>
-            <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-end sm:px-5">
-              <div className="shrink-0">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Current plan</p>
-                <p className="mt-1 flex items-center gap-2">
-                  <Badge
-                    variant="outline"
-                    className="border-emerald-200 bg-emerald-50 text-emerald-700 text-sm px-3 py-1"
-                  >
-                    {school.plan}
-                  </Badge>
-                </p>
-              </div>
-              {canBill ? (
-                <>
-                  <div className="flex-1 space-y-1.5">
-                    <Label htmlFor="plan-select" className="text-xs font-semibold text-slate-700">
-                      Change plan to
-                    </Label>
-                    <Select value={planChoice} onValueChange={setPlanChoice}>
-                      <SelectTrigger
-                        id="plan-select"
-                        className="h-11 w-full bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40 sm:w-56"
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-white border-slate-200 text-slate-900">
-                        {SCHOOL_PLANS.map((p) => (
-                          <SelectItem key={p} value={p} className="focus:bg-slate-100">
-                            {p}
-                            {p === school.plan ? ' (current)' : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Button
-                    onClick={() => void changePlan()}
-                    disabled={planBusy || planChoice === school.plan}
-                    className="h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
-                  >
-                    {planBusy ? 'Changing…' : 'Change plan'}
-                  </Button>
-                </>
-              ) : (
-                <p className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-500">
-                  You do not hold <span className="font-mono text-slate-600">billing.manage</span> — plan
-                  changes are read-only for you.
-                </p>
-              )}
-            </div>
-            {canBill && (
-              <div className="space-y-1.5 border-t border-slate-200 p-4 sm:px-5">
-                <Label htmlFor="plan-reason" className="text-xs font-semibold text-slate-700">
-                  Reason (optional, audited)
-                </Label>
-                <Textarea
-                  id="plan-reason"
-                  value={planReason}
-                  onChange={(e) => setPlanReason(e.target.value)}
-                  placeholder="e.g. Upgraded to PRO after the signed Q2 order #4412"
-                  rows={2}
-                  maxLength={400}
-                  className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40"
-                />
-              </div>
-            )}
-          </div>
-
+          {/* Module availability + admissions issuance. The subscription
+              plan card moved to the Subscription tab (single source —
+              mission §5: no duplicate plan surfaces). */}
           {/* Feature flags (schools.manage) */}
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
@@ -2013,10 +1980,14 @@ export function SchoolDetailModule() {
           </TabsContent>
         )}
 
-        {/* ── Subscription & billing ledger (billing.manage) — §3A ── */}
+        {/* ── Subscription (billing.manage) — the authoritative
+            subscription & entitlement system (mission §5): snapshot,
+            plan & billing, activation codes, student entitlements,
+            ledger. The legacy plan marker moved here from the old
+            Plan card (single surface, no duplicates). ── */}
         {canBill && (
           <TabsContent value="subscription" className="space-y-4">
-            <SchoolSubscriptionTab schoolId={id} />
+            <SchoolSubscriptionTab schoolId={id} onNavigateTab={navigateToTab} />
           </TabsContent>
         )}
 
@@ -2032,10 +2003,34 @@ export function SchoolDetailModule() {
           <SchoolDomainsTab schoolId={id} canManage={canManage} />
         </TabsContent>
 
-        {/* ── Setup readiness (PHASE 8C §12 — DB-computed progress) ──── */}
+        {/* ── Setup readiness (PHASE 8C §12 — DB-computed progress;
+            §7: actionable blockers deep-link to the fixing tab) ── */}
         <TabsContent value="setup" className="space-y-4">
-          <SchoolSetupTab schoolId={id} schoolStatus={data?.school.status ?? 'PENDING'} />
+          <SchoolSetupTab
+            schoolId={id}
+            schoolStatus={data?.school.status ?? 'PENDING'}
+            onNavigateTab={navigateToTab}
+          />
         </TabsContent>
+
+        {/* ── Users & Access (mission §9 — read-only roster) ─────────── */}
+        <TabsContent value="users" className="space-y-4">
+          <SchoolUsersTab schoolId={id ?? ''} />
+        </TabsContent>
+
+        {/* ── Support sessions (support.access — §9) ─────────────────── */}
+        {canSupport && (
+          <TabsContent value="support" className="space-y-4">
+            <SchoolSupportTab schoolId={id ?? ''} />
+          </TabsContent>
+        )}
+
+        {/* ── Audit history (audit.read — §9) ────────────────────────── */}
+        {canAudit && (
+          <TabsContent value="audit" className="space-y-4">
+            <SchoolAuditTab schoolId={id ?? ''} />
+          </TabsContent>
+        )}
 
         {/* ── Danger zone (schools.manage) ────────────────────────────── */}
         {canManage && (
@@ -2064,9 +2059,11 @@ export function SchoolDetailModule() {
                     '— users of this school cannot sign in until it is activated.'}
                   {school.status === 'ACTIVE' && '— suspending signs every user out immediately.'}
                   {school.status === 'SUSPENDED' && '— sign-in remains available but the workspace stays locked; reactivate to restore service.'}
+                  {school.status === 'TRIAL' && '— trial tenant; activate to make it a permanent ACTIVE school.'}
+                  {school.status === 'PENDING' && '— provisioned but not yet activated; nobody can sign in until activation.'}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-3">
-                  {school.status === 'PENDING' && (
+                  {(school.status === 'PENDING' || school.status === 'TRIAL') && (
                     <Button
                       onClick={() => void runStatusAction('activate')}
                       disabled={statusBusy !== null}
@@ -2098,7 +2095,7 @@ export function SchoolDetailModule() {
                   )}
                   {school.status === 'TRIAL' && (
                     <p className="text-xs text-slate-500">
-                      This school is in TRIAL state — status actions apply to PENDING, ACTIVE and SUSPENDED.
+                      This school is in TRIAL state — activating converts it to a fully ACTIVE tenant (audited).
                     </p>
                   )}
                 </div>

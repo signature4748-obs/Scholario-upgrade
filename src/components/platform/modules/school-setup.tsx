@@ -19,6 +19,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   CheckCircle2,
+  ChevronRight,
   CircleDashed,
   GraduationCap,
   RefreshCw,
@@ -96,7 +97,44 @@ function ProgressTrack({
   )
 }
 
-export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; schoolStatus: string }) {
+/**
+ * §7 actionable blockers: each incomplete section deep-links to the
+ * workspace tab where the platform operator can actually act on it.
+ * Sections whose prerequisites live on the school side (rosters,
+ * exams, timetable, website content) honestly point to the principal
+ * instead of a dead tab link.
+ */
+const SECTION_TARGET_TAB: Record<string, string> = {
+  identity: 'metadata',
+  principal: 'users',
+  branding: 'identity',
+  academic: 'metadata',
+  people: 'users',
+  fees: 'plan',
+  domain: 'domains',
+  website: 'domains',
+}
+
+const SECTION_HINT: Record<string, string> = {
+  people: 'Teachers and students are onboarded by the school’s principal (Users tab shows who exists today).',
+  rooms: 'Rooms are created by the school’s principal.',
+  exams: 'Exams are created by the school’s staff.',
+  timetable: 'The timetable is built by the school’s staff.',
+  academic: 'The session year is set here (Metadata); classes are created by the school’s principal.',
+  fees: 'Fee structures are published by the school’s principal — the Modules tab shows admissions readiness.',
+  website: 'Website content is managed by the school; the Domains tab handles the custom hostname.',
+}
+
+export function SchoolSetupTab({
+  schoolId,
+  schoolStatus,
+  onNavigateTab,
+}: {
+  schoolId: string
+  schoolStatus: string
+  /** Deep-link into the workspace tab that can act on a blocker. */
+  onNavigateTab?: (tab: string) => void
+}) {
   const [readiness, setReadiness] = useState<SetupReadiness | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -234,44 +272,74 @@ export function SchoolSetupTab({ schoolId, schoolStatus }: { schoolId: string; s
         </div>
       </div>
 
-      {/* Section list */}
+      {/* Section list — §7: incomplete sections with a platform-side
+          fix deep-link to the tab that can act on it (button semantics,
+          keyboard accessible); school-side prerequisites carry an
+          honest hint instead of a dead link. */}
       <ul className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        {sections.map((s, i) => (
-          <li
-            key={s.id}
-            className={`flex items-center gap-3 px-4 py-3 sm:px-5 ${
-              i > 0 ? 'border-t border-slate-200' : ''
-            } ${s.done ? '' : 'opacity-90'}`}
-          >
-            {s.done ? (
-              <CheckCircle2 className="h-4.5 w-4.5 shrink-0 text-emerald-600" aria-hidden="true" />
-            ) : (
-              <CircleDashed className="h-4.5 w-4.5 shrink-0 text-slate-400" aria-hidden="true" />
-            )}
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-slate-900">
-                  {SECTION_ICONS[s.id] ? (
-                    <span className="mr-1.5 inline-flex align-[-2px] text-slate-500" aria-hidden="true">
-                      {SECTION_ICONS[s.id]}
+        {sections.map((s, i) => {
+          const targetTab = !s.done ? SECTION_TARGET_TAB[s.id] : undefined
+          const hint = !s.done ? SECTION_HINT[s.id] : undefined
+          const row = (
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-slate-900">
+                    {SECTION_ICONS[s.id] ? (
+                      <span className="mr-1.5 inline-flex align-[-2px] text-slate-500" aria-hidden="true">
+                        {SECTION_ICONS[s.id]}
+                      </span>
+                    ) : null}
+                    {s.label}
+                  </span>
+                  <span
+                    className={`rounded-full border px-1.5 py-px text-[9px] font-bold uppercase tracking-wider ${
+                      s.required
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : 'border-slate-200 bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {s.required ? 'Required' : 'Optional'}
+                  </span>
+                  {targetTab && onNavigateTab && (
+                    <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-teal-700">
+                      Fix
+                      <ChevronRight className="h-3 w-3" aria-hidden="true" />
                     </span>
-                  ) : null}
-                  {s.label}
-                </span>
-                <span
-                  className={`rounded-full border px-1.5 py-px text-[9px] font-bold uppercase tracking-wider ${
-                    s.required
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                      : 'border-slate-200 bg-slate-100 text-slate-600'
-                  }`}
-                >
-                  {s.required ? 'Required' : 'Optional'}
-                </span>
+                  )}
+                </div>
+                <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">{s.detail}</p>
+                {hint && <p className="mt-1 text-[11px] leading-snug text-slate-400">{hint}</p>}
               </div>
-              <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">{s.detail}</p>
             </div>
-          </li>
-        ))}
+          )
+          return (
+            <li
+              key={s.id}
+              className={`flex items-center gap-3 px-4 py-3 sm:px-5 ${
+                i > 0 ? 'border-t border-slate-200' : ''
+              } ${s.done ? '' : 'opacity-90'}`}
+            >
+              {s.done ? (
+                <CheckCircle2 className="h-4.5 w-4.5 shrink-0 text-emerald-600" aria-hidden="true" />
+              ) : (
+                <CircleDashed className="h-4.5 w-4.5 shrink-0 text-slate-400" aria-hidden="true" />
+              )}
+              {targetTab && onNavigateTab ? (
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab(targetTab)}
+                  className="min-h-[44px] w-full flex-1 rounded-lg text-left transition-colors hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-100 focus-visible:ring-2 focus-visible:ring-teal-500/40"
+                  aria-label={`Open the ${targetTab} tab to act on ${s.label}`}
+                >
+                  {row}
+                </button>
+              ) : (
+                row
+              )}
+            </li>
+          )
+        })}
       </ul>
     </motion.section>
   )

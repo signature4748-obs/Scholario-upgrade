@@ -77,6 +77,16 @@ interface PrincipalSummary {
   invitation?: string
 }
 
+interface SubscriptionChip {
+  state: string
+  businessAllowed: boolean
+  renewalRequired: boolean
+  planCode: string | null
+  billingModel: string | null
+  periodEnd: string | null
+  graceDays: number | null
+}
+
 interface SchoolRow {
   id: string
   name: string
@@ -92,6 +102,8 @@ interface SchoolRow {
   isDemo: boolean
   createdAt: string
   counts: { users: number; students: number; teachers: number; classes: number }
+  /** The SAME computed entitlement state the school plane enforces. */
+  subscription: SubscriptionChip
   // The founding principal's access state (null only for hand-crafted
   // data — the wizard always provisions one).
   principal: PrincipalSummary | null
@@ -107,9 +119,48 @@ interface SchoolsData {
   page: number
   pageSize: number
   schools: SchoolRow[]
+  /** KPI aggregates for the CURRENT filter set (DB-derived). */
+  summary?: {
+    total: number
+    byStatus: Record<string, number>
+    bySubscriptionState: Record<string, number>
+    demo: number
+    production: number
+    onboardingReady: number | null
+    subscriptionsExpiringWithin30Days: number
+  }
 }
 
-type StatusFilter = 'ALL' | 'ACTIVE' | 'SUSPENDED' | 'PENDING'
+type StatusFilter = 'ALL' | 'ACTIVE' | 'SUSPENDED' | 'PENDING' | 'TRIAL'
+type SubStateFilter = 'ALL' | 'ACTIVE' | 'GRACE' | 'RESTRICTED' | 'SUSPENDED' | 'NOT_ACTIVATED'
+type BillingModelFilter = 'ALL' | 'SCHOOL_WIDE' | 'PER_STUDENT' | 'MIXED'
+type DemoFilter = 'ALL' | 'demo' | 'production'
+type ReadinessFilter = 'ALL' | 'ready' | 'incomplete'
+type SortKey = 'created_desc' | 'created_asc' | 'name_asc' | 'name_desc' | 'updated_desc'
+
+const SORT_LABELS: Record<SortKey, string> = {
+  created_desc: 'Newest first',
+  created_asc: 'Oldest first',
+  name_asc: 'Name A→Z',
+  name_desc: 'Name Z→A',
+  updated_desc: 'Recently updated',
+}
+
+const SUB_STATE_STYLES: Record<string, string> = {
+  ACTIVE: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  GRACE: 'border-amber-200 bg-amber-50 text-amber-700',
+  RESTRICTED: 'border-orange-200 bg-orange-50 text-orange-700',
+  SUSPENDED: 'border-red-200 bg-red-50 text-red-600',
+  NOT_ACTIVATED: 'border-slate-200 bg-slate-100 text-slate-600',
+}
+
+function SubStateBadge({ state }: { state: string }) {
+  return (
+    <Badge variant="outline" className={`normal-case ${SUB_STATE_STYLES[state] ?? SUB_STATE_STYLES['NOT_ACTIVATED']}`}>
+      {state.replace(/_/g, ' ')}
+    </Badge>
+  )
+}
 
 
 const num = new Intl.NumberFormat('en-IN')
@@ -322,12 +373,20 @@ export function SchoolsModule() {
   const [searchInput, setSearchInput] = useState('')
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<StatusFilter>('ALL')
+  const [subscriptionState, setSubscriptionState] = useState<SubStateFilter>('ALL')
+  const [billingModel, setBillingModel] = useState<BillingModelFilter>('ALL')
+  const [demo, setDemo] = useState<DemoFilter>('ALL')
+  const [readiness, setReadiness] = useState<ReadinessFilter>('ALL')
+  const [sort, setSort] = useState<SortKey>('created_desc')
   const [page, setPage] = useState(1)
   const [data, setData] = useState<SchoolsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [provisionOpen, setProvisionOpen] = useState(false)
   const requestId = useRef(0)
+
+  const filtersActive =
+    q !== '' || status !== 'ALL' || subscriptionState !== 'ALL' || billingModel !== 'ALL' || demo !== 'ALL' || readiness !== 'ALL'
 
   // Debounced search (~300ms) → resets to page 1.
   useEffect(() => {
@@ -346,7 +405,13 @@ export function SchoolsModule() {
       const params = new URLSearchParams()
       if (q) params.set('q', q)
       if (status !== 'ALL') params.set('status', status)
+      if (subscriptionState !== 'ALL') params.set('subscriptionState', subscriptionState)
+      if (billingModel !== 'ALL') params.set('billingModel', billingModel)
+      if (demo !== 'ALL') params.set('demo', demo)
+      if (readiness !== 'ALL') params.set('readiness', readiness)
+      if (sort !== 'created_desc') params.set('sort', sort)
       params.set('page', String(page))
+      params.set('summary', '1')
       const result = await platformApi<SchoolsData>(`/api/platform/schools?${params.toString()}`)
       if (id === requestId.current) setData(result)
     } catch (e) {
@@ -357,7 +422,7 @@ export function SchoolsModule() {
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [q, status, page])
+  }, [q, status, subscriptionState, billingModel, demo, readiness, sort, page])
 
   useEffect(() => {
     void load()
@@ -385,6 +450,51 @@ export function SchoolsModule() {
         </p>
       </div>
 
+      {/* KPI summary — every number DB-derived for the CURRENT filter
+          set (the same query that feeds the table below; zero records
+          and unavailable data are distinct from a failed load). */}
+      {data?.summary && (
+        <div
+          className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"
+          aria-label="Schools summary for the current filters"
+        >
+          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Schools</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-slate-900">{num.format(data.summary.total)}</p>
+            <p className="text-[10px] text-slate-400 tabular-nums">{data.summary.demo} demo · {data.summary.production} production</p>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-600">Active</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-800">{num.format(data.summary.byStatus.ACTIVE ?? 0)}</p>
+            <p className="text-[10px] text-emerald-600/80 tabular-nums">susp {data.summary.byStatus.SUSPENDED ?? 0} · pend {data.summary.byStatus.PENDING ?? 0}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Subscription active</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-slate-900">{num.format(data.summary.bySubscriptionState.ACTIVE ?? 0)}</p>
+            <p className="text-[10px] text-slate-400 tabular-nums">grace {data.summary.bySubscriptionState.GRACE ?? 0} · restr {data.summary.bySubscriptionState.RESTRICTED ?? 0}</p>
+          </div>
+          <div className="rounded-xl border border-amber-200 bg-amber-50/50 px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-600">Expiring ≤30d</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-amber-800">{num.format(data.summary.subscriptionsExpiringWithin30Days)}</p>
+            <p className="text-[10px] text-amber-600/80">subscriptions</p>
+          </div>
+          <div className="rounded-xl border border-teal-200 bg-teal-50/50 px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-teal-600">Setup complete</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-teal-800">
+              {data.summary.onboardingReady === null ? '—' : num.format(data.summary.onboardingReady)}
+            </p>
+            <p className="text-[10px] text-teal-600/80">all 5 required sections</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Lifecycle</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-slate-900">
+              {num.format((data.summary.byStatus.ACTIVE ?? 0) + (data.summary.byStatus.PENDING ?? 0) + (data.summary.byStatus.SUSPENDED ?? 0) + (data.summary.byStatus.TRIAL ?? 0))}
+            </p>
+            <p className="text-[10px] text-slate-400 tabular-nums">trial {data.summary.byStatus.TRIAL ?? 0}</p>
+          </div>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1 sm:max-w-xs">
@@ -401,34 +511,172 @@ export function SchoolsModule() {
             className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40 h-11 pl-9"
           />
         </div>
-        <Select
-          value={status}
-          onValueChange={(v) => {
-            setStatus(v as StatusFilter)
-            setPage(1)
-          }}
-        >
-          <SelectTrigger
-            aria-label="Filter by status"
-            className="h-11 w-full sm:w-40 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+          <Select
+            value={status}
+            onValueChange={(v) => {
+              setStatus(v as StatusFilter)
+              setPage(1)
+            }}
           >
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent className="bg-white border-slate-200 text-slate-900">
-            <SelectItem value="ALL" className="focus:bg-slate-100">
-              All statuses
-            </SelectItem>
-            <SelectItem value="ACTIVE" className="focus:bg-slate-100">
-              ACTIVE
-            </SelectItem>
-            <SelectItem value="SUSPENDED" className="focus:bg-slate-100">
-              SUSPENDED
-            </SelectItem>
-            <SelectItem value="PENDING" className="focus:bg-slate-100">
-              PENDING
-            </SelectItem>
-          </SelectContent>
-        </Select>
+            <SelectTrigger
+              aria-label="Filter by lifecycle status"
+              className="h-11 w-full sm:w-36 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
+            >
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent className="bg-white border-slate-200 text-slate-900">
+              <SelectItem value="ALL" className="focus:bg-slate-100">
+                All statuses
+              </SelectItem>
+              <SelectItem value="ACTIVE" className="focus:bg-slate-100">
+                ACTIVE
+              </SelectItem>
+              <SelectItem value="SUSPENDED" className="focus:bg-slate-100">
+                SUSPENDED
+              </SelectItem>
+              <SelectItem value="PENDING" className="focus:bg-slate-100">
+                PENDING
+              </SelectItem>
+              <SelectItem value="TRIAL" className="focus:bg-slate-100">
+                TRIAL
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={subscriptionState}
+            onValueChange={(v) => {
+              setSubscriptionState(v as SubStateFilter)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger
+              aria-label="Filter by subscription state"
+              className="h-11 w-full sm:w-40 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
+            >
+              <SelectValue placeholder="Subscription" />
+            </SelectTrigger>
+            <SelectContent className="bg-white border-slate-200 text-slate-900">
+              <SelectItem value="ALL" className="focus:bg-slate-100">
+                All subscriptions
+              </SelectItem>
+              <SelectItem value="ACTIVE" className="focus:bg-slate-100">
+                Active
+              </SelectItem>
+              <SelectItem value="GRACE" className="focus:bg-slate-100">
+                Grace
+              </SelectItem>
+              <SelectItem value="RESTRICTED" className="focus:bg-slate-100">
+                Restricted
+              </SelectItem>
+              <SelectItem value="SUSPENDED" className="focus:bg-slate-100">
+                Suspended
+              </SelectItem>
+              <SelectItem value="NOT_ACTIVATED" className="focus:bg-slate-100">
+                Not activated
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={billingModel}
+            onValueChange={(v) => {
+              setBillingModel(v as BillingModelFilter)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger
+              aria-label="Filter by billing model"
+              className="h-11 w-full sm:w-40 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
+            >
+              <SelectValue placeholder="Billing model" />
+            </SelectTrigger>
+            <SelectContent className="bg-white border-slate-200 text-slate-900">
+              <SelectItem value="ALL" className="focus:bg-slate-100">
+                All models
+              </SelectItem>
+              <SelectItem value="SCHOOL_WIDE" className="focus:bg-slate-100">
+                School-wide
+              </SelectItem>
+              <SelectItem value="PER_STUDENT" className="focus:bg-slate-100">
+                Per-student
+              </SelectItem>
+              <SelectItem value="MIXED" className="focus:bg-slate-100">
+                Mixed
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={demo}
+            onValueChange={(v) => {
+              setDemo(v as DemoFilter)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger
+              aria-label="Filter by demo or production classification"
+              className="h-11 w-full sm:w-36 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
+            >
+              <SelectValue placeholder="Type" />
+            </SelectTrigger>
+            <SelectContent className="bg-white border-slate-200 text-slate-900">
+              <SelectItem value="ALL" className="focus:bg-slate-100">
+                Demo + production
+              </SelectItem>
+              <SelectItem value="demo" className="focus:bg-slate-100">
+                Demo only
+              </SelectItem>
+              <SelectItem value="production" className="focus:bg-slate-100">
+                Production only
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={readiness}
+            onValueChange={(v) => {
+              setReadiness(v as ReadinessFilter)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger
+              aria-label="Filter by onboarding readiness"
+              className="h-11 w-full sm:w-40 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
+            >
+              <SelectValue placeholder="Readiness" />
+            </SelectTrigger>
+            <SelectContent className="bg-white border-slate-200 text-slate-900">
+              <SelectItem value="ALL" className="focus:bg-slate-100">
+                Any readiness
+              </SelectItem>
+              <SelectItem value="ready" className="focus:bg-slate-100">
+                Setup complete
+              </SelectItem>
+              <SelectItem value="incomplete" className="focus:bg-slate-100">
+                Setup incomplete
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={sort}
+            onValueChange={(v) => {
+              setSort(v as SortKey)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger
+              aria-label="Sort schools"
+              className="h-11 w-full sm:w-44 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
+            >
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+            <SelectContent className="bg-white border-slate-200 text-slate-900">
+              {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+                <SelectItem key={k} value={k} className="focus:bg-slate-100">
+                  {SORT_LABELS[k]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <div className="flex items-center gap-2 sm:ml-auto">
           {/* Refresh — re-fetches the live ledger (P0-B). */}
           <Button
@@ -494,17 +742,21 @@ export function SchoolsModule() {
             </div>
             <p className="mt-3 text-sm font-semibold text-slate-900">No schools match</p>
             <p className="mt-1 max-w-xs text-xs leading-snug text-slate-500">
-              {q || status !== 'ALL'
-                ? 'Nothing matches the current search and status filters — try clearing them.'
+              {filtersActive
+                ? 'Nothing matches the current search and filters — try clearing them.'
                 : 'No schools have been provisioned yet.'}
             </p>
-            {(q || status !== 'ALL') && (
+            {filtersActive && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => {
                   setSearchInput('')
                   setStatus('ALL')
+                  setSubscriptionState('ALL')
+                  setBillingModel('ALL')
+                  setDemo('ALL')
+                  setReadiness('ALL')
                   setPage(1)
                 }}
                 className="mt-4 h-9 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
@@ -522,7 +774,7 @@ export function SchoolsModule() {
                   <TableRow className="border-slate-200 hover:bg-transparent">
                     <TableHead className="text-slate-500 font-semibold h-11">School</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Status</TableHead>
-                    <TableHead className="text-slate-500 font-semibold">Plan</TableHead>
+                    <TableHead className="text-slate-500 font-semibold">Subscription</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Login URL</TableHead>
                     <TableHead className="text-slate-500 font-semibold">Website</TableHead>
                     <TableHead className="text-slate-500 font-semibold text-right">Users</TableHead>
@@ -561,10 +813,19 @@ export function SchoolsModule() {
                           <DemoBadge isDemo={s.isDemo} />
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-700">
-                          {s.plan}
-                        </Badge>
+                      <TableCell className="max-w-[12rem]">
+                        <div className="flex flex-col items-start gap-1">
+                          <SubStateBadge state={s.subscription.state} />
+                          <p className="max-w-full truncate font-mono text-[10px] text-slate-500" title={s.subscription.planCode ?? 'No registry plan applied'}>
+                            {s.subscription.planCode ?? s.plan.toLowerCase()}
+                            {s.subscription.billingModel ? ` · ${s.subscription.billingModel === 'SCHOOL_WIDE' ? 'school-wide' : s.subscription.billingModel === 'PER_STUDENT' ? 'per-student' : 'mixed'}` : ''}
+                          </p>
+                          {s.subscription.periodEnd && (
+                            <p className="text-[10px] text-slate-400 tabular-nums">
+                              until {new Date(s.subscription.periodEnd).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                            </p>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="max-w-[12rem] py-3">
                         <div className="flex min-w-0 items-center gap-0.5">
@@ -664,14 +925,16 @@ export function SchoolsModule() {
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <StatusBadge status={s.status} />
                     <DemoBadge isDemo={s.isDemo} />
-                    <Badge variant="outline" className="border-slate-200 bg-slate-100 text-slate-700">
-                      {s.plan}
-                    </Badge>
+                    <SubStateBadge state={s.subscription.state} />
                     <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 tabular-nums">
                       <MapPin className="h-3 w-3" aria-hidden="true" />
                       {s.city ?? '—'}
                     </span>
                   </div>
+                  <p className="mt-1 truncate font-mono text-[10px] text-slate-500">
+                    {s.subscription.planCode ?? s.plan.toLowerCase()}
+                    {s.subscription.periodEnd ? ` · until ${new Date(s.subscription.periodEnd).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : ''}
+                  </p>
                   <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
                     <span className="inline-flex items-center gap-1 tabular-nums">
                       <Users className="h-3 w-3" aria-hidden="true" />

@@ -134,6 +134,8 @@ interface WizardForm {
   contactPhone: string
   timezone: string
   plan: string
+  /// §4 — subscription billing model (SCHOOL_WIDE | PER_STUDENT | MIXED).
+  billingModel: string
   // STEP 2 — Branding
   themeColor: string
   accentColor: string
@@ -167,6 +169,7 @@ const EMPTY_FORM: WizardForm = {
   contactPhone: '',
   timezone: 'Asia/Kolkata',
   plan: 'STANDARD',
+  billingModel: 'SCHOOL_WIDE',
   themeColor: '#0f766e',
   accentColor: '#f59e0b',
   tagline: '',
@@ -470,6 +473,7 @@ export function ProvisionWizard({
       officialEmail: form.contactEmail.trim() || undefined,
       phone: form.contactPhone.trim() || undefined,
       plan: form.plan,
+      billingModel: form.billingModel,
       board: form.board,
       // STEP 2 — branding
       themeColor: form.themeColor,
@@ -969,6 +973,26 @@ export function ProvisionWizard({
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-billing-model" className="text-xs font-semibold text-slate-700">
+                    Billing model *
+                  </Label>
+                  <select
+                    id="pw-billing-model"
+                    value={form.billingModel}
+                    onChange={(e) => set('billingModel', e.target.value)}
+                    className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
+                    aria-describedby="pw-billing-model-hint"
+                  >
+                    <option value="SCHOOL_WIDE">School-wide (Model A)</option>
+                    <option value="PER_STUDENT">Per-student (Model B/C)</option>
+                    <option value="MIXED">Mixed</option>
+                  </select>
+                  <p id="pw-billing-model-hint" className="text-[11px] leading-snug text-slate-400">
+                    How this school pays for Scholario — one subscription for the whole school, per-student
+                    entitlements, or both. Changeable later with the first plan payment.
+                  </p>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-email" className="text-xs font-semibold text-slate-700">

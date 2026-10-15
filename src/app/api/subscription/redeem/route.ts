@@ -52,6 +52,10 @@ export async function POST(req: NextRequest) {
             planCode: opts.planCode,
             interval: opts.interval,
             amount: payment ? Number(payment.amount) : 0,
+            // The deferred payment was validated against the plan price at
+            // issuance (amount === plan price) — restoring the snapshot here
+            // keeps the registry's price column honest after redemption.
+            priceSnapshot: payment ? Number(payment.amount) : null,
             currency: payment?.currency ?? 'INR',
             mode: (payment?.mode ?? 'ONLINE_PAYMENT') as 'ONLINE_PAYMENT',
             paymentDate: payment?.paymentDate ?? new Date(),
