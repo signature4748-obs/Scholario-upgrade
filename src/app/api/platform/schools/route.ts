@@ -12,6 +12,11 @@ import { hostnameRejectionReason, normalizeHostname } from '@/lib/tenant/hostnam
 import { schoolLoginUrl, schoolPublicUrl } from '@/lib/plane'
 import { evaluateTenantEntitlement } from '@/lib/entitlement/entitlement'
 import {
+  isSubscriptionSchemaPendingError,
+  subscriptionSchemaPending as subscriptionSchemaPendingProbe,
+  SUBSCRIPTION_LEGACY_SELECT,
+} from '@/lib/platform/subscription-schema'
+import {
   inviteStateFromRowStatus,
   principalInviteDeliveryState,
   provisionInviteKey,
@@ -104,30 +109,81 @@ export async function GET(req: NextRequest) {
 
     // ── Light pass over the filtered set: id + the fields the computed
     // filters and the per-row subscription chip need (no joins/counts —
-    // one bounded query; every downstream number stays DB-derived). ──
-    const lightRows = await db.school.findMany({
-      where: baseWhere,
-      select: {
-        id: true,
-        name: true,
-        createdAt: true,
-        updatedAt: true,
-        status: true,
-        isDemo: true,
-        academicYear: true,
-        subscription: {
-          select: {
-            status: true,
-            plan: true,
-            planCode: true,
-            billingModel: true,
-            periodEnd: true,
-            graceDays: true,
-            overrideStatus: true,
+    // one bounded query; every downstream number stays DB-derived).
+    //
+    // SCHEMA-PENDING RESILIENCE — the directory is the control plane's
+    // primary surface: it must list REAL schools even when the deployed
+    // database has not yet applied the subscription-system migration
+    // (owner-gated). First attempt carries the post-migration chip
+    // columns; a pending-shape P2021/P2022 retries with the legacy
+    // select (entitlement computation needs only the legacy fields) and
+    // flags the response `subscriptionSchemaPending: true` so the UI can
+    // state exactly WHY plan/billing-model chips read “—” and the
+    // billingModel filter is not applied. No row, count or state is
+    // fabricated — only the unavailable columns degrade to null. ──
+    let subscriptionSchemaPending = false
+    let lightRows: Array<{
+      id: string
+      name: string
+      createdAt: Date
+      updatedAt: Date
+      status: string
+      isDemo: boolean
+      academicYear: string | null
+      subscription: {
+        status: string
+        plan: string
+        periodEnd: Date | null
+        graceDays: number
+        overrideStatus: string | null
+        planCode?: string | null
+        billingModel?: string | null
+      } | null
+    }>
+    try {
+      lightRows = await db.school.findMany({
+        where: baseWhere,
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          updatedAt: true,
+          status: true,
+          isDemo: true,
+          academicYear: true,
+          subscription: {
+            select: {
+              status: true,
+              plan: true,
+              planCode: true,
+              billingModel: true,
+              periodEnd: true,
+              graceDays: true,
+              overrideStatus: true,
+            },
           },
         },
-      },
-    })
+      })
+    } catch (e) {
+      if (!isSubscriptionSchemaPendingError(e)) throw e
+      subscriptionSchemaPending = true
+      // Pre-migration retry: legacy columns only; the billingModel filter
+      // (a pending column) cannot be served and is reported via the flag.
+      const { subscription: _drop, ...whereNoSubscription } = baseWhere as Record<string, unknown>
+      lightRows = await db.school.findMany({
+        where: whereNoSubscription,
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          updatedAt: true,
+          status: true,
+          isDemo: true,
+          academicYear: true,
+          subscription: { select: { ...SUBSCRIPTION_LEGACY_SELECT } },
+        },
+      })
+    }
 
     // ── Onboarding readiness inputs (5 required sections): grouped
     // counts over the filtered school set — bounded, one round. ──
@@ -324,6 +380,9 @@ export async function GET(req: NextRequest) {
       page,
       pageSize,
       ...(summary ? { summary } : {}),
+      // Honest schema-pending signal: subscription chip columns degrade to
+      // null and the billingModel filter is not applied (see above).
+      ...(subscriptionSchemaPending ? { subscriptionSchemaPending: true as const } : {}),
       schools: ordered.map((s) => {
         const founding = foundingBySchool.get(s.id)
         const light = pageRows.find((r) => r.id === s.id)
@@ -345,14 +404,15 @@ export async function GET(req: NextRequest) {
           counts: s._count,
           // The subscription chip: the SAME computed entitlement state the
           // school plane enforces + the authoritative plan/billing fields
-          // (nulls = legacy tenant without a registry plan yet).
+          // (nulls = legacy tenant without a registry plan yet, or the
+          // schema-pending flag explains why the columns are unavailable).
           subscription: light?.subscription
             ? {
                 state: entitlement?.state ?? 'NOT_ACTIVATED',
                 businessAllowed: entitlement?.businessAllowed ?? false,
                 renewalRequired: entitlement?.renewalRequired ?? false,
-                planCode: light.subscription.planCode,
-                billingModel: light.subscription.billingModel,
+                planCode: light.subscription.planCode ?? null,
+                billingModel: light.subscription.billingModel ?? null,
                 periodEnd: light.subscription.periodEnd?.toISOString() ?? null,
                 graceDays: light.subscription.graceDays,
               }
@@ -523,6 +583,9 @@ export async function POST(req: NextRequest) {
     async (ctx) => {
       const body = await parseJsonBody(req, provisionSchema)
       const ip = clientIpFromHeaders(req.headers)
+      // SCHEMA-PENDING RESILIENCE — probe once (TTL-cached); see the
+      // subscription-create note inside the transaction.
+      const subscriptionSchemaPending = await subscriptionSchemaPendingProbe()
       const principalEmail = body.principalEmail.toLowerCase()
 
       // HONEST capability gate — Google SSO is architected but NOT
@@ -719,16 +782,49 @@ export async function POST(req: NextRequest) {
           // SaaS-HARDENING — the tenant's subscription row is part of the
           // SAME transaction: ACTIVE (no expiry until the first recorded
           // payment — honest default: billing starts when billing starts).
-          await tx.schoolSubscription.create({
-            data: {
-              schoolId: createdSchool.id,
-              status: 'ACTIVE',
-              plan: body.plan,
-              billingModel: body.billingModel,
-              periodStart: new Date(),
-              periodEnd: null,
-            },
-          })
+          // SCHEMA-PENDING RESILIENCE — `billingModel` is a pending-migration
+          // column: provisioning is the control plane's PRIMARY workflow and
+          // must keep working on a pre-migration database. Under pending we
+          // omit the column (the migration's default SCHOOL_WIDE applies
+          // retroactively when the owner applies it) and flag the response;
+          // a non-default billing model choice is honestly refused — it
+          // could not be persisted yet and pretending otherwise would
+          // misstate the tenant's commercial model.
+          if (subscriptionSchemaPending && body.billingModel !== 'SCHOOL_WIDE') {
+            throw new AppError('SUBSCRIPTION_SYSTEM_PENDING', {
+              publicMessage:
+                'Per-student and mixed billing models require the pending subscription-system migration. Provision with the school-wide model (the default) — the platform owner can switch the model after the migration is applied.',
+              internalDetail: `provision: billingModel ${body.billingModel} refused (schema pending)`,
+            })
+          }
+          if (subscriptionSchemaPending) {
+            // RAW INSERT with the legacy column set only — the generated
+            // client's INSERT/RETURNING references the pending-migration
+            // columns (billingModel + snapshot fields) even when they are
+            // omitted from `data`, so model.create() cannot run at all on
+            // a pre-migration database. The migration's own default
+            // (billingModel 'SCHOOL_WIDE') applies to this row when the
+            // owner applies the migration.
+            await tx.$executeRawUnsafe(
+              `INSERT INTO "SchoolSubscription" ("id","schoolId","status","plan","periodStart","periodEnd","graceDays","updatedAt","createdAt")
+               VALUES ($1,$2,'ACTIVE',$3,$4,NULL,14,NOW(),NOW())`,
+              `sub-${randomBytes(12).toString('hex')}`,
+              createdSchool.id,
+              body.plan,
+              new Date(),
+            )
+          } else {
+            await tx.schoolSubscription.create({
+              data: {
+                schoolId: createdSchool.id,
+                status: 'ACTIVE',
+                plan: body.plan,
+                billingModel: body.billingModel,
+                periodStart: new Date(),
+                periodEnd: null,
+              },
+            })
+          }
           // Same transaction: a principal-creation failure (concurrent
           // email claim) rolls the School row back — no orphans, ever.
           //
@@ -924,6 +1020,13 @@ export async function POST(req: NextRequest) {
         // re-issue it from the school record).
         invitation,
         nextStep: 'activate',
+        ...(subscriptionSchemaPending
+          ? {
+              subscriptionSchemaPending: true as const,
+              subscriptionPendingNote:
+                'The tenant subscription row was created with the legacy schema fields; the billing model will default to school-wide until the pending subscription-system migration is applied.',
+            }
+          : {}),
       }
     },
     { method: 'POST' },

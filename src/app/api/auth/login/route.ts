@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { verifyPassword, createSession, setSessionCookie, burnPasswordTiming, isDevSessionBearerEnabled } from '@/lib/auth'
+import { SUBSCRIPTION_LEGACY_SELECT } from '@/lib/platform/subscription-schema'
 import { api } from '@/lib/api'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import {
@@ -64,10 +65,16 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ── Credential verification ─────────────────────────────────────────
+    // ── Credential verification ─────────────────────────────────────
+    // SCHEMA-PENDING RESILIENCE — select only the entitlement-snapshot
+    // fields this route consumes (all pre-migration columns), so school
+    // sign-in works on a database where the subscription-system
+    // migration is still pending.
     const user = await db.user.findUnique({
       where: { email: body.email },
-      include: { school: { include: { subscription: true } } },
+      include: {
+        school: { include: { subscription: { select: { ...SUBSCRIPTION_LEGACY_SELECT } } } },
+      },
     })
 
     // Anti-enumeration: burn one scrypt round when the user doesn't exist

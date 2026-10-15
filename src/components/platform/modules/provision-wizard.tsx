@@ -2,9 +2,9 @@
 
 // ============================================================
 // ProvisionWizard — the school onboarding workflow
-// (PRODUCT-DIRECTION RESET, Part 4)
+// (PRODUCT-DIRECTION RESET, Part 4 · §6.5 four-step consolidation)
 // ------------------------------------------------------------
-// Platform → Schools → Add School. SIX steps that collect everything
+// Platform → Schools → Add school. FOUR steps that collect everything
 // a new tenant needs, then ONE atomic POST /api/platform/schools call
 // that transactionally creates the tenant ecosystem:
 //
@@ -12,23 +12,31 @@
 //   TenantDomain record → founding Principal (+role) → academic
 //   session → initial classes/sections/subjects/rooms → config
 //
-//   · STEP 1  School basics      (name, code, address, board, session,
-//                                 contact email/phone)
-//   · STEP 2  Branding           (primary + accent color, name display,
-//                                 tagline; logo/favicon later in school
-//                                 settings — never invented)
-//   · STEP 3  Website            (enabled, slug, custom domain,
-//                                 temporary platform domain)
-//   · STEP 4  Initial admin      (founding Principal account)
-//   · STEP 5  Configuration      (classes + sections, subjects, rooms,
-//                                 working days)
-//   · STEP 6  Review → CREATE SCHOOL
+//   · STEP 1  School identity  (name, slug, code, board, plan,
+//                                 short name, contact basics)
+//   · STEP 2  Administrator    (founding Principal account +
+//                                 credential option)
+//   · STEP 3  Configuration    (billing model + working days; the
+//                                 optional bootstrap/branding/website/
+//                                 location fields behind collapsed
+//                                 progressive-disclosure sections —
+//                                 every POST field is preserved)
+//   · STEP 4  Review & create  (summary + missing-required
+//                                 indicators → CREATE SCHOOL)
 //
 // The SUCCESS panel is the school-access truth surface (PHASE 10):
 // the new tenant's canonical LOGIN URL (from SCHOOL_APP_BASE_URL —
 // never guessed, copy resolves relative URLs against the current
 // origin), the founding principal, and the one-time bootstrap
 // credential with the forced-change warning.
+//
+// SCHEMA-PENDING HONESTY (Task 4 wire contract): a POST on a
+// pending database either succeeds with subscriptionSchemaPending +
+// subscriptionPendingNote (rendered in the success panel), or fails
+// with code SUBSCRIPTION_SYSTEM_PENDING (503) when a non-SCHOOL_WIDE
+// billing model was chosen — the publicMessage renders INLINE and a
+// one-click fix switches the model to school-wide and retries; the
+// operator stays on the review step.
 //
 // One application · one database · many tenants: everything here is
 // DATA — no new deployment, repo, or code change per school. The
@@ -41,10 +49,10 @@ import {
   Building2,
   AlertTriangle,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   UserCog,
-  Palette,
   Globe2,
   GraduationCap,
   ClipboardCheck,
@@ -58,6 +66,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -114,85 +127,94 @@ const ACCENT_PRESETS = [
   { label: 'Slate', value: '#64748b' },
 ] as const
 
+const BILLING_MODEL_LABELS: Record<string, string> = {
+  SCHOOL_WIDE: 'school-wide',
+  PER_STUDENT: 'per-student',
+  MIXED: 'mixed',
+}
+
 interface ClassRow {
   name: string
   sections: string
 }
 
 interface WizardForm {
-  // STEP 1 — School basics
+  // STEP 1 — School identity
   name: string
   shortName: string
   code: string
+  slug: string
+  board: string
+  plan: string
+  contactEmail: string
+  contactPhone: string
+  // STEP 2 — Administrator (founding principal + credential option)
+  principalName: string
+  principalEmail: string
+  principalPassword: string
+  // STEP 3 — Configuration (required) + optional collapsed sections
+  /// §4 — subscription billing model (SCHOOL_WIDE | PER_STUDENT | MIXED).
+  billingModel: string
+  workingDays: string[]
+  // Optional: branding
+  themeColor: string
+  accentColor: string
+  tagline: string
+  // Optional: website & domain
+  websiteEnabled: boolean
+  customDomain: string
+  // Optional: location & academic session
   address: string
   city: string
   state: string
   country: string
-  board: string
-  academicYear: string
-  contactEmail: string
-  contactPhone: string
   timezone: string
-  plan: string
-  /// §4 — subscription billing model (SCHOOL_WIDE | PER_STUDENT | MIXED).
-  billingModel: string
-  // STEP 2 — Branding
-  themeColor: string
-  accentColor: string
-  tagline: string
-  // STEP 3 — Website
-  websiteEnabled: boolean
-  slug: string
-  customDomain: string
-  // STEP 4 — Initial admin (founding principal)
-  principalName: string
-  principalEmail: string
-  principalPassword: string
-  // STEP 5 — Initial configuration
+  academicYear: string
+  // Optional: academic bootstrap
   classRows: ClassRow[]
   subjectsText: string
   roomsText: string
-  workingDays: string[]
 }
 
 const EMPTY_FORM: WizardForm = {
   name: '',
   shortName: '',
   code: '',
-  address: '',
-  city: '',
-  state: '',
-  country: '',
+  slug: '',
   board: 'CBSE',
-  academicYear: '',
+  plan: 'STANDARD',
   contactEmail: '',
   contactPhone: '',
-  timezone: 'Asia/Kolkata',
-  plan: 'STANDARD',
+  principalName: '',
+  principalEmail: '',
+  principalPassword: '',
   billingModel: 'SCHOOL_WIDE',
+  workingDays: ['MON', 'TUE', 'WED', 'THU', 'FRI'],
   themeColor: '#0f766e',
   accentColor: '#f59e0b',
   tagline: '',
   websiteEnabled: true,
-  slug: '',
   customDomain: '',
-  principalName: '',
-  principalEmail: '',
-  principalPassword: '',
+  address: '',
+  city: '',
+  state: '',
+  country: '',
+  timezone: 'Asia/Kolkata',
+  academicYear: '',
   classRows: [{ name: '', sections: 'A' }],
   subjectsText: '',
   roomsText: '',
-  workingDays: ['MON', 'TUE', 'WED', 'THU', 'FRI'],
 }
 
 const STEPS = [
-  { id: 1, label: 'Basics', icon: Building2 },
-  { id: 2, label: 'Branding', icon: Palette },
-  { id: 3, label: 'Website', icon: Globe2 },
-  { id: 4, label: 'Admin', icon: UserCog },
-  { id: 5, label: 'Config', icon: GraduationCap },
-  { id: 6, label: 'Review', icon: ClipboardCheck },
+  { id: 1, label: 'School identity', icon: Building2 },
+  { id: 2, label: 'Administrator', icon: UserCog },
+  { id: 3, label: 'Configuration', icon: GraduationCap },
+  { id: 4, label: 'Review & create', icon: ClipboardCheck },
 ] as const
+
+/** The optional step-3 sections (progressive disclosure). */
+type ConfigSectionKey = 'bootstrap' | 'branding' | 'website' | 'location'
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const CODE_RE = /^[A-Z0-9-]+$/
@@ -230,6 +252,9 @@ interface ProvisionResult {
   // SENT | QUEUED | FAILED | NONE + optional transport/errorClass).
   invitation?: { state: string; transport?: string; errorClass?: string; at?: string }
   nextStep: string
+  // Task 4 wire contract — provisioned with the legacy schema fields.
+  subscriptionSchemaPending?: boolean
+  subscriptionPendingNote?: string
 }
 
 function StepDots({ step }: { step: number }) {
@@ -335,6 +360,51 @@ function CopyInlineButton({
   )
 }
 
+// ── Optional-configuration section (§6.5 progressive disclosure) ──────────
+
+/**
+ * A collapsed optional section of step 3. Every field the POST sends
+ * is preserved — the optional ones simply start collapsed so the
+ * required configuration stays visible. When a step-3 validation
+ * error points into a section, the wizard expands it.
+ */
+function OptionalSection({
+  title,
+  description,
+  open,
+  onOpenChange,
+  children,
+}: {
+  title: string
+  description: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  children: React.ReactNode
+}) {
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange} className="rounded-xl border border-slate-200 bg-white">
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-2 rounded-xl px-4 py-3 text-left transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+        >
+          <span className="min-w-0">
+            <span className="block text-xs font-semibold text-slate-700">{title}</span>
+            <span className="mt-0.5 block text-[10px] leading-snug text-slate-400">{description}</span>
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`}
+            aria-hidden="true"
+          />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="space-y-4 border-t border-slate-100 px-4 pb-4 pt-4">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
 export function ProvisionWizard({
   open,
   onOpenChange,
@@ -349,14 +419,23 @@ export function ProvisionWizard({
   const [form, setForm] = useState<WizardForm>(EMPTY_FORM)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [errorCode, setErrorCode] = useState<string | null>(null)
   const [result, setResult] = useState<ProvisionResult | null>(null)
+  const [openSections, setOpenSections] = useState<Record<ConfigSectionKey, boolean>>({
+    bootstrap: false,
+    branding: false,
+    website: false,
+    location: false,
+  })
 
   useEffect(() => {
     if (open) {
       setStep(1)
       setForm(EMPTY_FORM)
       setError(null)
+      setErrorCode(null)
       setResult(null)
+      setOpenSections({ bootstrap: false, branding: false, website: false, location: false })
     }
   }, [open])
 
@@ -391,59 +470,73 @@ export function ProvisionWizard({
   // link as the development fallback until custom domains are live.
   const tempDomain = form.slug && SLUG_RE.test(form.slug) ? `${form.slug}.scholario.cloud` : ''
 
-  const validateStep = (): string | null => {
-    if (step === 1) {
-      if (form.name.trim().length < 2) return 'School name is required (2+ characters)'
-      if (!CODE_RE.test(form.code) || form.code.length < 2)
-        return 'Code must be 2+ chars — uppercase letters, numbers and hyphens only'
-      if (form.contactEmail && !EMAIL_RE.test(form.contactEmail.trim()))
-        return 'Contact email must be a valid email address'
-      if (form.academicYear && !YEAR_RE.test(form.academicYear.trim()))
-        return 'Academic session must look like 2026-2027'
-      return null
-    }
-    if (step === 2) {
-      if (!HEX_RE.test(form.themeColor)) return 'Primary color must be a 6-digit hex value (e.g. #0f766e)'
-      if (!HEX_RE.test(form.accentColor)) return 'Accent color must be a 6-digit hex value (e.g. #f59e0b)'
-      return null
-    }
-    if (step === 3) {
-      if (!SLUG_RE.test(form.slug) || form.slug.length < 3)
-        return 'School slug must be 3+ chars — lowercase letters, numbers and hyphens only'
-      const cd = form.customDomain.trim().toLowerCase().replace(/^(https?:\/\/|www\.)+/, '').replace(/\/.*$/, '')
-      if (form.customDomain && !DOMAINISH_RE.test(cd))
-        return 'Custom domain must look like school.com (no protocol, no path)'
-      return null
-    }
-    if (step === 4) {
-      if (!form.principalName.trim()) return 'Principal name is required'
-      if (!EMAIL_RE.test(form.principalEmail.trim())) return 'A valid principal email is required'
-      if (form.principalPassword && form.principalPassword.length < 8)
-        return 'Password must be at least 8 characters (or leave it blank to auto-generate)'
-      return null
-    }
-    if (step === 5) {
-      for (const row of form.classRows) {
-        if (!row.name.trim() && row.sections.trim()) return 'Every class row needs a class name'
-      }
-      if (form.workingDays.length === 0) return 'Select at least one working day'
-      return null
-    }
+  // ── Per-step validation (same rules as the six-step wizard — the
+  //    POST contract is unchanged, only the screens are fewer). ──────
+
+  const validateIdentity = (): string | null => {
+    if (form.name.trim().length < 2) return 'School name is required (2+ characters)'
+    if (!CODE_RE.test(form.code) || form.code.length < 2)
+      return 'Code must be 2+ chars — uppercase letters, numbers and hyphens only'
+    if (!SLUG_RE.test(form.slug) || form.slug.length < 3)
+      return 'School slug must be 3+ chars — lowercase letters, numbers and hyphens only'
+    if (form.contactEmail && !EMAIL_RE.test(form.contactEmail.trim()))
+      return 'Contact email must be a valid email address'
     return null
   }
 
+  const validateAdmin = (): string | null => {
+    if (!form.principalName.trim()) return 'Principal name is required'
+    if (!EMAIL_RE.test(form.principalEmail.trim())) return 'A valid principal email is required'
+    if (form.principalPassword && form.principalPassword.length < 8)
+      return 'Password must be at least 8 characters (or leave it blank to auto-generate)'
+    return null
+  }
+
+  const validateConfiguration = (): { message: string | null; section?: ConfigSectionKey } => {
+    if (!HEX_RE.test(form.themeColor))
+      return { message: 'Primary color must be a 6-digit hex value (e.g. #0f766e)', section: 'branding' }
+    if (!HEX_RE.test(form.accentColor))
+      return { message: 'Accent color must be a 6-digit hex value (e.g. #f59e0b)', section: 'branding' }
+    const cd = form.customDomain.trim().toLowerCase().replace(/^(https?:\/\/|www\.)+/, '').replace(/\/.*$/, '')
+    if (form.customDomain && !DOMAINISH_RE.test(cd))
+      return { message: 'Custom domain must look like school.com (no protocol, no path)', section: 'website' }
+    if (form.academicYear && !YEAR_RE.test(form.academicYear.trim()))
+      return { message: 'Academic session must look like 2026-2027', section: 'location' }
+    for (const row of form.classRows) {
+      if (!row.name.trim() && row.sections.trim())
+        return { message: 'Every class row needs a class name', section: 'bootstrap' }
+    }
+    if (form.workingDays.length === 0) return { message: 'Select at least one working day' }
+    return { message: null }
+  }
+
+  const stepIssue = (s: number): { message: string | null; section?: ConfigSectionKey } => {
+    if (s === 1) return { message: validateIdentity() }
+    if (s === 2) return { message: validateAdmin() }
+    if (s === 3) return validateConfiguration()
+    return { message: null }
+  }
+
   const next = () => {
-    const invalid = validateStep()
-    if (invalid) {
-      setError(invalid)
+    const issue = stepIssue(step)
+    if (issue.message) {
+      setError(issue.message)
+      // A validation failure inside a collapsed optional section
+      // expands that section — the error is never invisible.
+      if (issue.section) {
+        const section = issue.section
+        setOpenSections((prev) => ({ ...prev, [section]: true }))
+      }
       return
     }
     setError(null)
+    setErrorCode(null)
     setStep((s) => Math.min(s + 1, STEPS.length))
   }
 
   const back = () => {
     setError(null)
+    setErrorCode(null)
     setStep((s) => Math.max(s - 1, 1))
   }
 
@@ -475,18 +568,18 @@ export function ProvisionWizard({
       plan: form.plan,
       billingModel: form.billingModel,
       board: form.board,
-      // STEP 2 — branding
+      // Branding (optional section)
       themeColor: form.themeColor,
       accentColor: form.accentColor,
       tagline: form.tagline.trim() || undefined,
-      // STEP 3 — website
+      // Website & domain (optional section)
       websiteEnabled: form.websiteEnabled,
       customDomain: form.customDomain.trim().toLowerCase() || undefined,
-      // STEP 4 — founding principal
+      // Founding principal
       principalName: form.principalName.trim(),
       principalEmail: form.principalEmail.trim(),
       principalPassword: form.principalPassword || undefined,
-      // STEP 5 — initial configuration
+      // Academic bootstrap (optional section)
       classes: classes.length > 0 ? classes : undefined,
       subjects: parsedSubjects.length > 0 ? parsedSubjects : undefined,
       rooms: parsedRooms.length > 0 ? parsedRooms : undefined,
@@ -494,13 +587,30 @@ export function ProvisionWizard({
     }
   }
 
-  const submit = async () => {
+  // Review-step missing-required indicators (defensive: per-step Next
+  // validation normally prevents reaching step 4 with issues).
+  const reviewIssues: string[] = STEPS.map((s) => {
+    const issue = stepIssue(s.id)
+    return issue.message ? `${s.label}: ${issue.message}` : null
+  }).filter((v): v is string => v !== null)
+
+  /**
+   * POST /api/platform/schools (unchanged contract). `billingOverride`
+   * powers the SUBSCRIPTION_SYSTEM_PENDING recovery: the same payload
+   * with the billing model switched to school-wide (the pending
+   * database's only servable model).
+   */
+  const submit = async (billingOverride?: string) => {
     setBusy(true)
     setError(null)
+    setErrorCode(null)
     try {
+      const payload = buildPayload()
       const res = await platformApi('/api/platform/schools', {
         method: 'POST',
-        body: JSON.stringify(buildPayload()),
+        body: JSON.stringify(
+          billingOverride ? { ...payload, billingModel: billingOverride } : payload,
+        ),
       })
       setResult(res as unknown as ProvisionResult)
       if ((res as unknown as ProvisionResult).replayed) {
@@ -511,6 +621,10 @@ export function ProvisionWizard({
       onProvisioned()
     } catch (e) {
       const err = e as PlatformApiError
+      // SUBSCRIPTION_SYSTEM_PENDING (503) is kept IN the wizard (review
+      // step) with its publicMessage + a one-click model fix — the
+      // operator can retry without losing any entered data.
+      setErrorCode(err.code || null)
       setError(err.error || 'Provisioning failed — please try again')
     } finally {
       setBusy(false)
@@ -563,6 +677,19 @@ export function ProvisionWizard({
                   {result.replayNote ??
                     'The one-time credential was shown only at the original creation — re-issue it from the school record (Access card) if it was lost.'}
                 </p>
+              </div>
+            ) : null}
+
+            {/* SCHEMA-PENDING honesty (Task 4): the tenant was created
+                with the legacy subscription fields; the billing model
+                defaults to school-wide until the migration is applied. */}
+            {result.subscriptionPendingNote ? (
+              <div
+                role="status"
+                className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <p>{result.subscriptionPendingNote}</p>
               </div>
             ) : null}
 
@@ -803,9 +930,8 @@ export function ProvisionWizard({
                 Add school
               </DialogTitle>
               <DialogDescription className="text-slate-500">
-                One workflow creates the tenant ecosystem — website, branding, domain, founding
-                principal and initial configuration. One platform, one database: the school is
-                data, not a deployment.
+                Four steps create the tenant ecosystem — identity, administrator, configuration and
+                review. One platform, one database: the school is data, not a deployment.
               </DialogDescription>
             </DialogHeader>
 
@@ -814,14 +940,34 @@ export function ProvisionWizard({
             {error ? (
               <div
                 role="alert"
-                className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600"
+                className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600"
               >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                {error}
+                <p className="flex items-start gap-2.5">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  {error}
+                </p>
+                {/* SCHEMA-PENDING recovery (Task 4): the pending database
+                    only accepts the school-wide billing model — switch it
+                    and retry without leaving the review step. */}
+                {errorCode === 'SUBSCRIPTION_SYSTEM_PENDING' && form.billingModel !== 'SCHOOL_WIDE' ? (
+                  <div className="mt-2.5 pl-6">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        set('billingModel', 'SCHOOL_WIDE')
+                        void submit('SCHOOL_WIDE')
+                      }}
+                      disabled={busy}
+                      className="h-9 bg-teal-600 font-semibold text-white hover:bg-teal-700 focus-ring"
+                    >
+                      {busy ? 'Retrying…' : 'Switch to school-wide billing and retry'}
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
-            {/* STEP 1 — SCHOOL BASICS */}
+            {/* STEP 1 — SCHOOL IDENTITY */}
             {step === 1 ? (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
@@ -838,7 +984,7 @@ export function ProvisionWizard({
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-shortname" className="text-xs font-semibold text-slate-700">
-                    Short name
+                    Short name <span className="font-normal text-slate-400">(optional)</span>
                   </Label>
                   <Input
                     id="pw-shortname"
@@ -849,6 +995,23 @@ export function ProvisionWizard({
                   />
                   <p className="text-[10px] text-slate-400">
                     Used for the crest label, footers and the login wordmark.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-slug" className="text-xs font-semibold text-slate-700">
+                    School slug *
+                  </Label>
+                  <Input
+                    id="pw-slug"
+                    value={form.slug}
+                    onChange={(e) => set('slug', e.target.value.toLowerCase())}
+                    placeholder="demo-international-school"
+                    className={`${field} font-mono`}
+                    aria-describedby="pw-slug-hint"
+                  />
+                  <p id="pw-slug-hint" className="text-[10px] text-slate-400">
+                    Lowercase letters, numbers and hyphens — the school&rsquo;s link identity across
+                    the platform (login and website URLs).
                   </p>
                 </div>
                 <div className="space-y-1.5">
@@ -880,83 +1043,6 @@ export function ProvisionWizard({
                     ))}
                   </select>
                 </div>
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor="pw-address" className="text-xs font-semibold text-slate-700">
-                    Address
-                  </Label>
-                  <Input
-                    id="pw-address"
-                    value={form.address}
-                    onChange={(e) => set('address', e.target.value)}
-                    placeholder="12 Education Avenue"
-                    className={field}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-city" className="text-xs font-semibold text-slate-700">
-                    City
-                  </Label>
-                  <Input
-                    id="pw-city"
-                    value={form.city}
-                    onChange={(e) => set('city', e.target.value)}
-                    placeholder="Pune"
-                    className={field}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-state" className="text-xs font-semibold text-slate-700">
-                    State
-                  </Label>
-                  <Input
-                    id="pw-state"
-                    value={form.state}
-                    onChange={(e) => set('state', e.target.value)}
-                    placeholder="Maharashtra"
-                    className={field}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-country" className="text-xs font-semibold text-slate-700">
-                    Country
-                  </Label>
-                  <Input
-                    id="pw-country"
-                    value={form.country}
-                    onChange={(e) => set('country', e.target.value)}
-                    placeholder="India"
-                    className={field}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-tz" className="text-xs font-semibold text-slate-700">
-                    Timezone
-                  </Label>
-                  <select
-                    id="pw-tz"
-                    value={form.timezone}
-                    onChange={(e) => set('timezone', e.target.value)}
-                    className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
-                  >
-                    {TIMEZONES.map((tz) => (
-                      <option key={tz} value={tz}>
-                        {tz}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-year" className="text-xs font-semibold text-slate-700">
-                    Academic session
-                  </Label>
-                  <Input
-                    id="pw-year"
-                    value={form.academicYear}
-                    onChange={(e) => set('academicYear', e.target.value)}
-                    placeholder="2026-2027"
-                    className={field}
-                  />
-                </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-plan" className="text-xs font-semibold text-slate-700">
                     Platform plan *
@@ -975,28 +1061,8 @@ export function ProvisionWizard({
                   </select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="pw-billing-model" className="text-xs font-semibold text-slate-700">
-                    Billing model *
-                  </Label>
-                  <select
-                    id="pw-billing-model"
-                    value={form.billingModel}
-                    onChange={(e) => set('billingModel', e.target.value)}
-                    className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
-                    aria-describedby="pw-billing-model-hint"
-                  >
-                    <option value="SCHOOL_WIDE">School-wide (Model A)</option>
-                    <option value="PER_STUDENT">Per-student (Model B/C)</option>
-                    <option value="MIXED">Mixed</option>
-                  </select>
-                  <p id="pw-billing-model-hint" className="text-[11px] leading-snug text-slate-400">
-                    How this school pays for Scholario — one subscription for the whole school, per-student
-                    entitlements, or both. Changeable later with the first plan payment.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
                   <Label htmlFor="pw-email" className="text-xs font-semibold text-slate-700">
-                    Contact email
+                    Contact email <span className="font-normal text-slate-400">(optional)</span>
                   </Label>
                   <Input
                     id="pw-email"
@@ -1009,7 +1075,7 @@ export function ProvisionWizard({
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-phone" className="text-xs font-semibold text-slate-700">
-                    Contact phone
+                    Contact phone <span className="font-normal text-slate-400">(optional)</span>
                   </Label>
                   <Input
                     id="pw-phone"
@@ -1022,190 +1088,8 @@ export function ProvisionWizard({
               </div>
             ) : null}
 
-            {/* STEP 2 — BRANDING */}
+            {/* STEP 2 — ADMINISTRATOR (founding principal) */}
             {step === 2 ? (
-              <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-color" className="text-xs font-semibold text-slate-700">
-                    Primary color *
-                  </Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="pw-color"
-                      value={form.themeColor}
-                      onChange={(e) => set('themeColor', e.target.value.toLowerCase())}
-                      placeholder="#0f766e"
-                      className={`${field} font-mono w-36`}
-                    />
-                    <span
-                      className="h-10 w-10 shrink-0 rounded-lg border border-slate-200"
-                      style={{ backgroundColor: form.themeColor }}
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {PRIMARY_PRESETS.map((preset) => (
-                      <button
-                        key={preset.value}
-                        type="button"
-                        onClick={() => set('themeColor', preset.value)}
-                        className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors focus-ring ${
-                          form.themeColor === preset.value
-                            ? 'border-slate-900 bg-white text-slate-900'
-                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                        }`}
-                        aria-pressed={form.themeColor === preset.value}
-                      >
-                        <span
-                          className="h-3.5 w-3.5 rounded-sm border border-slate-200"
-                          style={{ backgroundColor: preset.value }}
-                          aria-hidden="true"
-                        />
-                        {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-accent" className="text-xs font-semibold text-slate-700">
-                    Secondary / accent color *
-                  </Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="pw-accent"
-                      value={form.accentColor}
-                      onChange={(e) => set('accentColor', e.target.value.toLowerCase())}
-                      placeholder="#f59e0b"
-                      className={`${field} font-mono w-36`}
-                    />
-                    <span
-                      className="h-10 w-10 shrink-0 rounded-lg border border-slate-200"
-                      style={{ backgroundColor: form.accentColor }}
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {ACCENT_PRESETS.map((preset) => (
-                      <button
-                        key={preset.value}
-                        type="button"
-                        onClick={() => set('accentColor', preset.value)}
-                        className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors focus-ring ${
-                          form.accentColor === preset.value
-                            ? 'border-slate-900 bg-white text-slate-900'
-                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                        }`}
-                        aria-pressed={form.accentColor === preset.value}
-                      >
-                        <span
-                          className="h-3.5 w-3.5 rounded-sm border border-slate-200"
-                          style={{ backgroundColor: preset.value }}
-                          aria-hidden="true"
-                        />
-                        {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-tagline" className="text-xs font-semibold text-slate-700">
-                    Tagline (if the school provides one)
-                  </Label>
-                  <Input
-                    id="pw-tagline"
-                    value={form.tagline}
-                    onChange={(e) => set('tagline', e.target.value)}
-                    placeholder="Leave blank — never invented"
-                    className={field}
-                  />
-                  <p className="text-[10px] text-slate-400">
-                    Only what the school actually provides. Empty is honest — the website shows a
-                    clean placeholder until the school writes its own content.
-                  </p>
-                </div>
-                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
-                  School name display uses the name and short name from step 1. Logo and favicon
-                  are uploaded by the school itself from its settings after activation — the
-                  platform never invents branding.
-                </p>
-              </div>
-            ) : null}
-
-            {/* STEP 3 — WEBSITE */}
-            {step === 3 ? (
-              <div className="space-y-4">
-                <label className="flex items-start gap-3 rounded-xl border border-teal-300 bg-teal-50/60 p-4 focus-ring">
-                  <input
-                    type="checkbox"
-                    checked={form.websiteEnabled}
-                    onChange={(e) => set('websiteEnabled', e.target.checked)}
-                    className="mt-0.5 h-4 w-4 shrink-0 accent-teal-600"
-                    aria-label="Website enabled"
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-slate-900">
-                      Website enabled
-                    </span>
-                    <span className="mt-0.5 block text-xs text-slate-600">
-                      The school gets its public website — home, about, academics, admissions,
-                      contact and its own login — as soon as it is activated.
-                    </span>
-                  </span>
-                </label>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-slug" className="text-xs font-semibold text-slate-700">
-                    School slug *
-                  </Label>
-                  <Input
-                    id="pw-slug"
-                    value={form.slug}
-                    onChange={(e) => set('slug', e.target.value.toLowerCase())}
-                    placeholder="demo-international-school"
-                    className={`${field} font-mono`}
-                  />
-                  <p className="text-[10px] text-slate-400">
-                    Lowercase letters, numbers and hyphens — the school&rsquo;s link identity
-                    across the platform.
-                  </p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-customdomain" className="text-xs font-semibold text-slate-700">
-                    Custom domain
-                  </Label>
-                  <Input
-                    id="pw-customdomain"
-                    value={form.customDomain}
-                    onChange={(e) => set('customDomain', e.target.value.toLowerCase())}
-                    placeholder="www.demoschool.edu"
-                    className={`${field} font-mono`}
-                  />
-                  <p className="text-[10px] text-slate-400">
-                    Optional. Recorded as PENDING with a verification token — the school proves
-                    ownership with a DNS TXT record before it routes traffic. Nothing is faked.
-                  </p>
-                </div>
-
-                <div className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-semibold text-slate-700">Temporary platform domain</p>
-                  <p className="font-mono text-sm text-slate-900">
-                    {tempDomain || 'derived from the slug (fill it above)'}
-                  </p>
-                  <p className="text-[10px] leading-relaxed text-slate-400">
-                    The school&rsquo;s platform subdomain. Until DNS is configured, the website is
-                    reachable through the tenant link{' '}
-                    <span className="font-mono text-slate-600">
-                      /?tenant={form.slug || 'school-slug'}
-                    </span>{' '}
-                    — a development fallback, never the final customer URL.
-                  </p>
-                </div>
-              </div>
-            ) : null}
-
-            {/* STEP 4 — INITIAL ADMIN (founding principal) */}
-            {step === 4 ? (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-pname" className="text-xs font-semibold text-slate-700">
@@ -1234,7 +1118,8 @@ export function ProvisionWizard({
                 </div>
                 <div className="space-y-1.5 sm:col-span-2">
                   <Label htmlFor="pw-ppass" className="text-xs font-semibold text-slate-700">
-                    Temporary password
+                    Temporary password{' '}
+                    <span className="font-normal text-slate-400">(optional — auto-generated when blank)</span>
                   </Label>
                   <Input
                     id="pw-ppass"
@@ -1254,123 +1139,32 @@ export function ProvisionWizard({
               </div>
             ) : null}
 
-            {/* STEP 5 — SCHOOL CONFIGURATION */}
-            {step === 5 ? (
+            {/* STEP 3 — CONFIGURATION (required visible, optional collapsed) */}
+            {step === 3 ? (
               <div className="space-y-4">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs font-semibold text-slate-700">
-                      Classes &amp; sections
-                    </Label>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() =>
-                          set('classRows', Array.from({ length: 12 }, (_, i) => ({
-                            name: `Class ${i + 1}`,
-                            sections: 'A',
-                          })))
-                        }
-                        className="h-7 border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:bg-slate-100 focus-ring"
-                      >
-                        Preset: Class 1–12
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() =>
-                          setForm((f) => ({
-                            ...f,
-                            classRows: [...f.classRows, { name: '', sections: 'A' }],
-                          }))
-                        }
-                        className="h-7 border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:bg-slate-100 focus-ring"
-                      >
-                        + Add class
-                      </Button>
-                    </div>
-                  </div>
-                  {form.classRows.map((row, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <Input
-                        value={row.name}
-                        onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            classRows: f.classRows.map((r, j) =>
-                              j === i ? { ...r, name: e.target.value } : r,
-                            ),
-                          }))
-                        }
-                        placeholder="Class 1"
-                        className={`${field} h-9 flex-1`}
-                        aria-label={`Class ${i + 1} name`}
-                      />
-                      <Input
-                        value={row.sections}
-                        onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            classRows: f.classRows.map((r, j) =>
-                              j === i ? { ...r, sections: e.target.value } : r,
-                            ),
-                          }))
-                        }
-                        placeholder="A, B"
-                        className={`${field} h-9 w-28`}
-                        aria-label={`Class ${i + 1} sections (comma-separated)`}
-                      />
-                      {form.classRows.length > 1 ? (
-                        <Button
-                          variant="ghost"
-                          onClick={() =>
-                            setForm((f) => ({
-                              ...f,
-                              classRows: f.classRows.filter((_, j) => j !== i),
-                            }))
-                          }
-                          className="h-9 px-2 text-slate-400 hover:text-red-600 focus-ring"
-                          aria-label={`Remove class row ${i + 1}`}
-                        >
-                          ×
-                        </Button>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="pw-subjects" className="text-xs font-semibold text-slate-700">
-                    Subjects
+                  <Label htmlFor="pw-billing-model" className="text-xs font-semibold text-slate-700">
+                    Billing model *
                   </Label>
-                  <textarea
-                    id="pw-subjects"
-                    value={form.subjectsText}
-                    onChange={(e) => set('subjectsText', e.target.value)}
-                    placeholder="English, Mathematics, Science, Hindi, Social Studies, Computer Science"
-                    rows={3}
-                    className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500/40"
-                  />
-                  <p className="text-[10px] text-slate-400">
-                    Comma-separated · {parsedSubjects.length}/60 · optional — the principal can add
-                    these later in the school&rsquo;s ERP.
+                  <select
+                    id="pw-billing-model"
+                    value={form.billingModel}
+                    onChange={(e) => set('billingModel', e.target.value)}
+                    className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
+                    aria-describedby="pw-billing-model-hint"
+                  >
+                    <option value="SCHOOL_WIDE">School-wide (recommended)</option>
+                    <option value="PER_STUDENT">Per-student</option>
+                    <option value="MIXED">Mixed</option>
+                  </select>
+                  <p id="pw-billing-model-hint" className="text-[11px] leading-snug text-slate-400">
+                    How this school pays for Scholario — one subscription for the whole school,
+                    per-student entitlements, or both. Changeable later with the first plan payment.
                   </p>
                 </div>
+
                 <div className="space-y-1.5">
-                  <Label htmlFor="pw-rooms" className="text-xs font-semibold text-slate-700">
-                    Rooms
-                  </Label>
-                  <Input
-                    id="pw-rooms"
-                    value={form.roomsText}
-                    onChange={(e) => set('roomsText', e.target.value)}
-                    placeholder="Room 101, Room 102, Science Lab, Computer Lab"
-                    className={field}
-                  />
-                  <p className="text-[10px] text-slate-400">
-                    Comma-separated · {parsedRooms.length}/40 · optional.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-slate-700">Working days</Label>
+                  <Label className="text-xs font-semibold text-slate-700">Working days *</Label>
                   <div className="flex flex-wrap gap-1.5">
                     {WEEKDAYS.map((d) => {
                       const active = form.workingDays.includes(d.key)
@@ -1403,16 +1197,417 @@ export function ProvisionWizard({
                     ERP — every detail is not required here.
                   </p>
                 </div>
+
+                {/* Optional academic bootstrap */}
+                <OptionalSection
+                  title="Optional settings — classes, subjects, rooms"
+                  description="Bootstrap the academic setup now, or leave it to the principal in the school's ERP."
+                  open={openSections.bootstrap}
+                  onOpenChange={(v) => setOpenSections((prev) => ({ ...prev, bootstrap: v }))}
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Classes &amp; sections
+                      </Label>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() =>
+                            set('classRows', Array.from({ length: 12 }, (_, i) => ({
+                              name: `Class ${i + 1}`,
+                              sections: 'A',
+                            })))
+                          }
+                          className="h-7 border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:bg-slate-100 focus-ring"
+                        >
+                          Preset: Class 1–12
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() =>
+                            setForm((f) => ({
+                              ...f,
+                              classRows: [...f.classRows, { name: '', sections: 'A' }],
+                            }))
+                          }
+                          className="h-7 border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:bg-slate-100 focus-ring"
+                        >
+                          + Add class
+                        </Button>
+                      </div>
+                    </div>
+                    {form.classRows.map((row, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <Input
+                          value={row.name}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              classRows: f.classRows.map((r, j) =>
+                                j === i ? { ...r, name: e.target.value } : r,
+                              ),
+                            }))
+                          }
+                          placeholder="Class 1"
+                          className={`${field} h-9 flex-1`}
+                          aria-label={`Class ${i + 1} name`}
+                        />
+                        <Input
+                          value={row.sections}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              classRows: f.classRows.map((r, j) =>
+                                j === i ? { ...r, sections: e.target.value } : r,
+                              ),
+                            }))
+                          }
+                          placeholder="A, B"
+                          className={`${field} h-9 w-28`}
+                          aria-label={`Class ${i + 1} sections (comma-separated)`}
+                        />
+                        {form.classRows.length > 1 ? (
+                          <Button
+                            variant="ghost"
+                            onClick={() =>
+                              setForm((f) => ({
+                                ...f,
+                                classRows: f.classRows.filter((_, j) => j !== i),
+                              }))
+                            }
+                            className="h-9 px-2 text-slate-400 hover:text-red-600 focus-ring"
+                            aria-label={`Remove class row ${i + 1}`}
+                          >
+                            ×
+                          </Button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-subjects" className="text-xs font-semibold text-slate-700">
+                      Subjects
+                    </Label>
+                    <textarea
+                      id="pw-subjects"
+                      value={form.subjectsText}
+                      onChange={(e) => set('subjectsText', e.target.value)}
+                      placeholder="English, Mathematics, Science, Hindi, Social Studies, Computer Science"
+                      rows={3}
+                      className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500/40"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Comma-separated · {parsedSubjects.length}/60 · optional — the principal can add
+                      these later in the school&rsquo;s ERP.
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-rooms" className="text-xs font-semibold text-slate-700">
+                      Rooms
+                    </Label>
+                    <Input
+                      id="pw-rooms"
+                      value={form.roomsText}
+                      onChange={(e) => set('roomsText', e.target.value)}
+                      placeholder="Room 101, Room 102, Science Lab, Computer Lab"
+                      className={field}
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Comma-separated · {parsedRooms.length}/40 · optional.
+                    </p>
+                  </div>
+                </OptionalSection>
+
+                {/* Branding (optional) */}
+                <OptionalSection
+                  title="Branding"
+                  description="Primary/accent colors and the school-provided tagline — refined later in school settings."
+                  open={openSections.branding}
+                  onOpenChange={(v) => setOpenSections((prev) => ({ ...prev, branding: v }))}
+                >
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-color" className="text-xs font-semibold text-slate-700">
+                      Primary color *
+                    </Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="pw-color"
+                        value={form.themeColor}
+                        onChange={(e) => set('themeColor', e.target.value.toLowerCase())}
+                        placeholder="#0f766e"
+                        className={`${field} font-mono w-36`}
+                      />
+                      <span
+                        className="h-10 w-10 shrink-0 rounded-lg border border-slate-200"
+                        style={{ backgroundColor: form.themeColor }}
+                        aria-hidden="true"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {PRIMARY_PRESETS.map((preset) => (
+                        <button
+                          key={preset.value}
+                          type="button"
+                          onClick={() => set('themeColor', preset.value)}
+                          className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors focus-ring ${
+                            form.themeColor === preset.value
+                              ? 'border-slate-900 bg-white text-slate-900'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                          }`}
+                          aria-pressed={form.themeColor === preset.value}
+                        >
+                          <span
+                            className="h-3.5 w-3.5 rounded-sm border border-slate-200"
+                            style={{ backgroundColor: preset.value }}
+                            aria-hidden="true"
+                          />
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-accent" className="text-xs font-semibold text-slate-700">
+                      Secondary / accent color *
+                    </Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="pw-accent"
+                        value={form.accentColor}
+                        onChange={(e) => set('accentColor', e.target.value.toLowerCase())}
+                        placeholder="#f59e0b"
+                        className={`${field} font-mono w-36`}
+                      />
+                      <span
+                        className="h-10 w-10 shrink-0 rounded-lg border border-slate-200"
+                        style={{ backgroundColor: form.accentColor }}
+                        aria-hidden="true"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {ACCENT_PRESETS.map((preset) => (
+                        <button
+                          key={preset.value}
+                          type="button"
+                          onClick={() => set('accentColor', preset.value)}
+                          className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors focus-ring ${
+                            form.accentColor === preset.value
+                              ? 'border-slate-900 bg-white text-slate-900'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                          }`}
+                          aria-pressed={form.accentColor === preset.value}
+                        >
+                          <span
+                            className="h-3.5 w-3.5 rounded-sm border border-slate-200"
+                            style={{ backgroundColor: preset.value }}
+                            aria-hidden="true"
+                          />
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-tagline" className="text-xs font-semibold text-slate-700">
+                      Tagline (if the school provides one)
+                    </Label>
+                    <Input
+                      id="pw-tagline"
+                      value={form.tagline}
+                      onChange={(e) => set('tagline', e.target.value)}
+                      placeholder="Leave blank — never invented"
+                      className={field}
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Only what the school actually provides. Empty is honest — the website shows a
+                      clean placeholder until the school writes its own content.
+                    </p>
+                  </div>
+                  <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+                    School name display uses the name and short name from step 1. Logo and favicon
+                    are uploaded by the school itself from its settings after activation — the
+                    platform never invents branding.
+                  </p>
+                </OptionalSection>
+
+                {/* Website & domain (optional) */}
+                <OptionalSection
+                  title="Website & domain"
+                  description="Public website toggle, custom domain (PENDING until DNS verification) and the temporary platform domain."
+                  open={openSections.website}
+                  onOpenChange={(v) => setOpenSections((prev) => ({ ...prev, website: v }))}
+                >
+                  <label className="flex items-start gap-3 rounded-xl border border-teal-300 bg-teal-50/60 p-4 focus-ring">
+                    <input
+                      type="checkbox"
+                      checked={form.websiteEnabled}
+                      onChange={(e) => set('websiteEnabled', e.target.checked)}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-teal-600"
+                      aria-label="Website enabled"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold text-slate-900">
+                        Website enabled
+                      </span>
+                      <span className="mt-0.5 block text-xs text-slate-600">
+                        The school gets its public website — home, about, academics, admissions,
+                        contact and its own login — as soon as it is activated.
+                      </span>
+                    </span>
+                  </label>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-customdomain" className="text-xs font-semibold text-slate-700">
+                      Custom domain
+                    </Label>
+                    <Input
+                      id="pw-customdomain"
+                      value={form.customDomain}
+                      onChange={(e) => set('customDomain', e.target.value.toLowerCase())}
+                      placeholder="www.demoschool.edu"
+                      className={`${field} font-mono`}
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Optional. Recorded as PENDING with a verification token — the school proves
+                      ownership with a DNS TXT record before it routes traffic. Nothing is faked.
+                    </p>
+                  </div>
+                  <div className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-semibold text-slate-700">Temporary platform domain</p>
+                    <p className="font-mono text-sm text-slate-900">
+                      {tempDomain || 'derived from the slug (fill it in step 1)'}
+                    </p>
+                    <p className="text-[10px] leading-relaxed text-slate-400">
+                      The school&rsquo;s platform subdomain. Until DNS is configured, the website is
+                      reachable through the tenant link{' '}
+                      <span className="font-mono text-slate-600">
+                        /?tenant={form.slug || 'school-slug'}
+                      </span>{' '}
+                      — a development fallback, never the final customer URL.
+                    </p>
+                  </div>
+                </OptionalSection>
+
+                {/* Location & academic session (optional) */}
+                <OptionalSection
+                  title="Location & academic session"
+                  description="Address, city, state, country, timezone and the academic year (e.g. 2026-2027)."
+                  open={openSections.location}
+                  onOpenChange={(v) => setOpenSections((prev) => ({ ...prev, location: v }))}
+                >
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label htmlFor="pw-address" className="text-xs font-semibold text-slate-700">
+                        Address
+                      </Label>
+                      <Input
+                        id="pw-address"
+                        value={form.address}
+                        onChange={(e) => set('address', e.target.value)}
+                        placeholder="12 Education Avenue"
+                        className={field}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pw-city" className="text-xs font-semibold text-slate-700">
+                        City
+                      </Label>
+                      <Input
+                        id="pw-city"
+                        value={form.city}
+                        onChange={(e) => set('city', e.target.value)}
+                        placeholder="Pune"
+                        className={field}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pw-state" className="text-xs font-semibold text-slate-700">
+                        State
+                      </Label>
+                      <Input
+                        id="pw-state"
+                        value={form.state}
+                        onChange={(e) => set('state', e.target.value)}
+                        placeholder="Maharashtra"
+                        className={field}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pw-country" className="text-xs font-semibold text-slate-700">
+                        Country
+                      </Label>
+                      <Input
+                        id="pw-country"
+                        value={form.country}
+                        onChange={(e) => set('country', e.target.value)}
+                        placeholder="India"
+                        className={field}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pw-tz" className="text-xs font-semibold text-slate-700">
+                        Timezone
+                      </Label>
+                      <select
+                        id="pw-tz"
+                        value={form.timezone}
+                        onChange={(e) => set('timezone', e.target.value)}
+                        className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
+                      >
+                        {TIMEZONES.map((tz) => (
+                          <option key={tz} value={tz}>
+                            {tz}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label htmlFor="pw-year" className="text-xs font-semibold text-slate-700">
+                        Academic session
+                      </Label>
+                      <Input
+                        id="pw-year"
+                        value={form.academicYear}
+                        onChange={(e) => set('academicYear', e.target.value)}
+                        placeholder="2026-2027"
+                        className={field}
+                      />
+                    </div>
+                  </div>
+                </OptionalSection>
               </div>
             ) : null}
 
-            {/* STEP 6 — REVIEW */}
-            {step === 6 ? (
+            {/* STEP 4 — REVIEW & CREATE */}
+            {step === 4 ? (
               <div className="space-y-3">
+                {/* Missing-required indicators — defensive (per-step Next
+                    validation normally prevents reaching review with
+                    issues); Create stays disabled until they are fixed. */}
+                {reviewIssues.length > 0 ? (
+                  <div
+                    role="alert"
+                    className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+                  >
+                    <p className="flex items-start gap-2 font-semibold">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      Required information still missing:
+                    </p>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-9">
+                      {reviewIssues.map((issue) => (
+                        <li key={issue}>{issue}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
                   {[
                     ['School', `${form.name}${form.shortName ? ` (${form.shortName})` : ''}`],
-                    ['Code · Board · Plan', `${form.code} · ${form.board} · ${form.plan}`],
+                    ['Slug · code', `${form.slug} · ${form.code}`],
+                    [
+                      'Board · plan · billing',
+                      `${form.board} · ${form.plan} · ${BILLING_MODEL_LABELS[form.billingModel] ?? form.billingModel}`,
+                    ],
                     [
                       'Location',
                       [form.city, form.state, form.country].filter(Boolean).join(', ') || '—',
@@ -1479,7 +1674,7 @@ export function ProvisionWizard({
               ) : (
                 <Button
                   onClick={() => void submit()}
-                  disabled={busy}
+                  disabled={busy || reviewIssues.length > 0}
                   className="bg-teal-600 hover:bg-teal-700 text-white font-semibold h-10 focus-ring"
                 >
                   {busy ? 'Creating…' : 'Create school'}

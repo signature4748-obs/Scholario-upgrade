@@ -1,6 +1,11 @@
 import { db } from './db'
 import { createHash, randomBytes } from 'crypto'
 import { cookies, headers } from 'next/headers'
+import {
+  isSubscriptionSchemaPendingError,
+  SUBSCRIPTION_SESSION_SELECT,
+  SUBSCRIPTION_LEGACY_SELECT,
+} from './platform/subscription-schema'
 
 // Lightweight password hashing using Node's scrypt (no external deps)
 import { scryptSync, timingSafeEqual } from 'crypto'
@@ -335,15 +340,42 @@ export type AuthUser = {
   } | null
 }
 
+/* SCHEMA-PENDING RESILIENCE — load a session + user + school with a
+ * subscription select that matches the deployed schema (see
+ * lib/platform/subscription-schema.ts). Kept local + typed so the two
+ * select shapes share one query definition. */
+async function loadSessionWithSchool(
+  tokenHash: string,
+  subscriptionSelect: typeof SUBSCRIPTION_SESSION_SELECT | typeof SUBSCRIPTION_LEGACY_SELECT,
+) {
+  return db.session.findUnique({
+    where: { tokenHash },
+    include: {
+      user: {
+        include: { school: { include: { subscription: { select: { ...subscriptionSelect } } } } },
+      },
+    },
+  })
+}
+
 export async function getCurrentUser(): Promise<AuthUser | null> {
   const token = await getSessionToken()
   if (!token) return null
-  const session = await db.session.findUnique({
-    where: { tokenHash: hashSessionToken(token) },
-    include: {
-      user: { include: { school: { include: { subscription: true } } } },
-    },
-  })
+  // SCHEMA-PENDING RESILIENCE — `subscription: true` selects the FULL
+  // SchoolSubscription row, which on a pre-migration database includes
+  // columns that do not exist yet (P2022 — school sign-in itself would
+  // 500). The AuthUser mapping below consumes exactly the entitlement
+  // snapshot fields (+ billingModel for the per-student gate), so we
+  // select exactly those; under the pending migration the retry drops
+  // billingModel and the mapping defaults it to SCHOOL_WIDE (the
+  // documented pre-migration behavior).
+  let session: Awaited<ReturnType<typeof loadSessionWithSchool>> | null = null
+  try {
+    session = await loadSessionWithSchool(hashSessionToken(token), SUBSCRIPTION_SESSION_SELECT)
+  } catch (e) {
+    if (!isSubscriptionSchemaPendingError(e)) throw e
+    session = await loadSessionWithSchool(hashSessionToken(token), SUBSCRIPTION_LEGACY_SELECT)
+  }
   if (!session) return null
   if (session.expiresAt < new Date()) {
     await db.session.delete({ where: { id: session.id } }).catch(() => {})
@@ -381,7 +413,9 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
                 periodEnd: u.school.subscription.periodEnd,
                 graceDays: u.school.subscription.graceDays,
                 overrideStatus: u.school.subscription.overrideStatus,
-                billingModel: u.school.subscription.billingModel ?? 'SCHOOL_WIDE',
+                billingModel:
+                  (u.school.subscription as { billingModel?: string | null }).billingModel ??
+                  'SCHOOL_WIDE',
               }
             : null,
         }

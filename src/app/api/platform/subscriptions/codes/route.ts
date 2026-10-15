@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withPlatform } from '@/lib/platform/authz'
+import { isSubscriptionSchemaPendingError } from '@/lib/platform/subscription-schema'
 
 export const runtime = 'nodejs'
 
@@ -10,6 +11,13 @@ export const runtime = 'nodejs'
  * (only sha256 hashes exist) — publicRef + status + scope + linkage.
  *
  * Query: ?status=&scope=&schoolId=&studentId=&page=&pageSize=&q= (publicRef or plan code)
+ *
+ * SCHEMA-PENDING RESILIENCE — activation codes live in pending-migration
+ * tables. On a pre-migration database the honest answer is an empty
+ * registry + `schemaPending: true` (the UI explains that the code system
+ * is not provisioned on this database yet); issuing/revoke mutations fail
+ * through the central classifier with the typed SUBSCRIPTION_SYSTEM_PENDING
+ * error. No fabricated codes, ever.
  */
 export async function GET(req: NextRequest) {
   return withPlatform({ permission: 'billing.manage' }, async () => {
@@ -34,30 +42,43 @@ export async function GET(req: NextRequest) {
       ]
     }
 
-    const [codes, total, rejectedEvents] = await Promise.all([
-      db.activationCode.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        take: pageSize,
-        skip: (page - 1) * pageSize,
-        include: {
-          school: { select: { id: true, name: true, slug: true } },
-          student: { select: { id: true, admissionNo: true, user: { select: { name: true } } } },
-          events: { orderBy: { createdAt: 'desc' }, take: 5 },
-          replacedByCode: { select: { publicRef: true } },
-        },
-      }),
-      db.activationCode.count({ where }),
-      // Failed-claim diagnostics: rejection reason classes over the window.
-      db.activationCodeEvent.findMany({
-        where: { type: 'CLAIM_REJECTED' },
-        orderBy: { createdAt: 'desc' },
-        take: 50,
-        include: { code: { select: { publicRef: true, scope: true, status: true } } },
-      }),
-    ])
+    const load = () =>
+      Promise.all([
+        db.activationCode.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: pageSize,
+          skip: (page - 1) * pageSize,
+          include: {
+            school: { select: { id: true, name: true, slug: true } },
+            student: { select: { id: true, admissionNo: true, user: { select: { name: true } } } },
+            events: { orderBy: { createdAt: 'desc' }, take: 5 },
+            replacedByCode: { select: { publicRef: true } },
+          },
+        }),
+        db.activationCode.count({ where }),
+        // Failed-claim diagnostics: rejection reason classes over the window.
+        db.activationCodeEvent.findMany({
+          where: { type: 'CLAIM_REJECTED' },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+          include: { code: { select: { publicRef: true, scope: true, status: true } } },
+        }),
+      ])
+
+    let schemaPending = false
+    let loaded: Awaited<ReturnType<typeof load>>
+    try {
+      loaded = await load()
+    } catch (e) {
+      if (!isSubscriptionSchemaPendingError(e)) throw e
+      schemaPending = true
+      loaded = [[], 0, []] as unknown as Awaited<ReturnType<typeof load>>
+    }
+    const [codes, total, rejectedEvents] = loaded
 
     return {
+      ...(schemaPending ? { subscriptionSchemaPending: true as const } : {}),
       codes: codes.map((c) => ({
         id: c.id,
         publicRef: c.publicRef,

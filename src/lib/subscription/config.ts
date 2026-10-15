@@ -18,6 +18,7 @@
  *   }
  */
 import { db } from '@/lib/db'
+import { isSubscriptionSchemaPendingError } from '@/lib/platform/subscription-schema'
 import { AppError } from '@/lib/security/errors'
 
 export const BILLING_MODELS = ['SCHOOL_WIDE', 'PER_STUDENT', 'MIXED'] as const
@@ -84,11 +85,24 @@ export function parseSubscriptionConfig(raw: string | null | undefined): Subscri
 /** Load the effective config (creating the global setting row if absent —
  *  same ensure-semantics as the platform settings route). */
 export async function loadSubscriptionConfig(): Promise<SubscriptionConfig> {
-  let setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
-  if (!setting) {
-    setting = await db.platformSetting.create({ data: { id: 'global' } })
+  // SCHEMA-PENDING RESILIENCE — the subscriptionConfig column is added by
+  // the pending subscription-system migration. On a pre-migration database
+  // the row cannot be read (the generated select references the missing
+  // column); this module's documented contract already covers "config
+  // unavailable": fall back to DEFAULT_SUBSCRIPTION_CONFIG (evaluation
+  // must never throw on missing config). Writes (saveSubscriptionConfig)
+  // fail through the central classifier with the honest
+  // SUBSCRIPTION_SYSTEM_PENDING error on such a database.
+  try {
+    let setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+    if (!setting) {
+      setting = await db.platformSetting.create({ data: { id: 'global' } })
+    }
+    return parseSubscriptionConfig(setting.subscriptionConfig)
+  } catch (e) {
+    if (!isSubscriptionSchemaPendingError(e)) throw e
+    return { ...DEFAULT_SUBSCRIPTION_CONFIG }
   }
-  return parseSubscriptionConfig(setting.subscriptionConfig)
 }
 
 /** Validate an incoming PATCH body and persist the new config atomically.

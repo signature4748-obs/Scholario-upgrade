@@ -6,6 +6,7 @@ import { parseJsonBody, strictBody } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { validatePlanInput, PLAN_SCOPES, PLAN_INTERVALS } from '@/lib/subscription/plans'
 import { loadSubscriptionConfig } from '@/lib/subscription/config'
+import { isSubscriptionSchemaPendingError } from '@/lib/platform/subscription-schema'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -18,11 +19,25 @@ export const runtime = 'nodejs'
  */
 export async function GET() {
   return withPlatform({ permission: 'billing.manage' }, async () => {
-    const [plans, config] = await Promise.all([
-      db.subscriptionPlan.findMany({ orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] }),
-      loadSubscriptionConfig(),
-    ])
+    // SCHEMA-PENDING RESILIENCE — the plan registry lives in a pending-
+    // migration table. On a pre-migration database there are genuinely NO
+    // plans (the table does not exist) — the honest answer is an empty
+    // registry + `schemaPending: true` so the UI says “plan registry not
+    // provisioned on this database yet” instead of “no plans configured”.
+    // The commercial-model CONFIG lives in PlatformSetting (pre-migration)
+    // and is always served. Plan writes fail through the central
+    // classifier with SUBSCRIPTION_SYSTEM_PENDING (honest, actionable).
+    let schemaPending = false
+    let plans: Awaited<ReturnType<typeof db.subscriptionPlan.findMany>> = []
+    try {
+      plans = await db.subscriptionPlan.findMany({ orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] })
+    } catch (e) {
+      if (!isSubscriptionSchemaPendingError(e)) throw e
+      schemaPending = true
+    }
+    const config = await loadSubscriptionConfig()
     return {
+      ...(schemaPending ? { subscriptionSchemaPending: true as const } : {}),
       plans: plans.map((p) => ({
         id: p.id,
         code: p.code,

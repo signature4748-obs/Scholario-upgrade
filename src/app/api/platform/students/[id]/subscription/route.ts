@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
+import { SUBSCRIPTION_SESSION_SELECT } from '@/lib/platform/subscription-schema'
 import { AppError } from '@/lib/security/errors'
 import { withPlatform } from '@/lib/platform/authz'
 import { platformAuditEvent } from '@/lib/platform/audit'
@@ -21,10 +22,14 @@ export const runtime = 'nodejs'
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withPlatform({ permission: 'billing.manage' }, async () => {
+    // SCHEMA-PENDING RESILIENCE — snapshot select on the school read; the
+    // entitlements/payments/codes this surface exists for genuinely require
+    // the pending migration and fail through the central classifier with
+    // the typed SUBSCRIPTION_SYSTEM_PENDING error (honest, actionable).
     const student = await db.student.findUnique({
       where: { id },
       include: {
-        school: { select: { id: true, name: true, slug: true, subscription: true } },
+        school: { select: { id: true, name: true, slug: true, subscription: { select: { ...SUBSCRIPTION_SESSION_SELECT } } } },
         user: { select: { id: true, name: true, email: true, subscriptionStatus: true } },
         class: { select: { name: true } },
         studentEntitlements: { orderBy: { createdAt: 'desc' }, take: 20 },
@@ -49,7 +54,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       }),
     ])
 
-    const billingModel = student.school.subscription?.billingModel ?? 'SCHOOL_WIDE'
+    const billingModel =
+      (student.school.subscription as { billingModel?: string } | null)?.billingModel ?? 'SCHOOL_WIDE'
     return {
       student: {
         id: student.id,

@@ -57,6 +57,9 @@
  * names. Legacy sentinels classify to the canonical codes.
  */
 import { newRequestId } from '@/lib/observability/http'
+// Schema-pending classifier (no static dependency cycle: that module only
+// dynamically imports the db client).
+import { isSubscriptionSchemaPendingError } from '@/lib/platform/subscription-schema'
 
 export { newRequestId }
 
@@ -117,6 +120,13 @@ export type AppErrorCode =
   | 'ADMISSION_NUMBER_COLLISION' // 409 — bounded collision-retry loop failed
   | 'EMAIL_TAKEN' // 409 — login email already exists (User.email global unique)
   | 'CREDENTIAL_EXPIRED' // 401 — bootstrap credential expired; request a new one
+  // SUBSCRIPTION-SYSTEM SCHEMA GATE — the deployed code is ahead of the
+  // database: migration 20261013183000_subscription_entitlement_system is
+  // still pending (owner-gated). Hardened GET surfaces degrade honestly
+  // (subscriptionSchemaPending flag); anything that genuinely REQUIRES the
+  // missing objects (activation codes, plan writes, receipt-numbered
+  // payments…) fails with THIS typed, safe error instead of a raw 500.
+  | 'SUBSCRIPTION_SYSTEM_PENDING' // 503 — capability needs the pending migration
   // SUPABASE AUTH PHASE 1 — provider-identity exchange codes (stable,
   // machine-readable; the client drives its linking/verification UX from
   // these — see src/app/api/auth/supabase/exchange/route.ts).
@@ -185,6 +195,7 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   ADMISSION_NUMBER_COLLISION: 409,
   EMAIL_TAKEN: 409,
   CREDENTIAL_EXPIRED: 401,
+  SUBSCRIPTION_SYSTEM_PENDING: 503,
   DATABASE_FAILURE: 500,
   INTERNAL_ERROR: 500,
   EXTERNAL_SERVICE_FAILURE: 503,
@@ -238,6 +249,8 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   EMAIL_TAKEN: 'This email address is already in use.',
   CREDENTIAL_EXPIRED:
     'This sign-in credential has expired. Ask your school office to issue a new one.',
+  SUBSCRIPTION_SYSTEM_PENDING:
+    'This capability is not available yet: the platform database has a pending subscription-system migration. The platform owner must apply it before this action can be used. Core school management remains fully available.',
   DATABASE_FAILURE: 'Internal server error',
   INTERNAL_ERROR: 'Internal server error',
   EXTERNAL_SERVICE_FAILURE: 'An external service is temporarily unavailable',
@@ -307,6 +320,18 @@ function classifyPrisma(e: unknown): AppError | null {
         internalDetail: `P2003: ${err.message}`,
       })
     default:
+      // SCHEMA-PENDING GATE — a missing subscription-system object
+      // (table/column introduced by the owner-gated pending migration)
+      // becomes the typed, honest SUBSCRIPTION_SYSTEM_PENDING error
+      // (503) instead of a raw DATABASE_FAILURE 500: the client can
+      // explain exactly what is wrong and the operator keeps every
+      // capability the legacy schema serves. Everything else keeps the
+      // generic engine classification.
+      if (isSubscriptionSchemaPendingError(e)) {
+        return new AppError('SUBSCRIPTION_SYSTEM_PENDING', {
+          internalDetail: `Prisma ${err.code}: ${err.message}`,
+        })
+      }
       // Phase 4: DB engine failures carry the diagnostic DATABASE_FAILURE
       // code (envelope stays generic — internals never reach the client).
       return new AppError('DATABASE_FAILURE', {

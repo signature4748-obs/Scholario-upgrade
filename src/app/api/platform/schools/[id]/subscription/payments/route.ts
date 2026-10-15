@@ -13,6 +13,7 @@ import {
   type PaymentMode,
 } from '@/lib/platform/billing'
 import { resolvePlanForPurchase, planPrice } from '@/lib/subscription/plans'
+import { SUBSCRIPTION_SESSION_SELECT } from '@/lib/platform/subscription-schema'
 import { BILLING_MODELS } from '@/lib/subscription/config'
 import { issueActivationCode } from '@/lib/subscription/codes'
 import { z } from 'zod'
@@ -62,7 +63,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const body = await parseJsonBody(req, recordSchema)
       const ip = clientIpFromHeaders(req.headers)
 
-      const school = await db.school.findUnique({ where: { id }, select: { id: true, name: true, subscription: true } })
+      // SCHEMA-PENDING RESILIENCE — snapshot fields only (billingModel
+      // reads default to SCHOOL_WIDE on a pre-migration database; the
+      // payment/plan machinery below then fails honestly through the
+      // central classifier with SUBSCRIPTION_SYSTEM_PENDING).
+      const school = await db.school.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          name: true,
+          subscription: { select: { ...SUBSCRIPTION_SESSION_SELECT } },
+        },
+      })
       if (!school) {
         throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
       }
@@ -74,7 +86,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // is applied INSIDE (or after) the successful payment path — never
       // committed on a request that fails plan/price validation first.
       const modelChange =
-        body.billingModel && body.billingModel !== (school.subscription?.billingModel ?? 'SCHOOL_WIDE')
+        body.billingModel &&
+        body.billingModel !== ((school.subscription as { billingModel?: string } | null)?.billingModel ?? 'SCHOOL_WIDE')
           ? body.billingModel
           : null
 

@@ -19,6 +19,25 @@
 import { db } from '@/lib/db'
 import type { Prisma } from '@prisma/client'
 import { AppError } from '@/lib/security/errors'
+import { SUBSCRIPTION_LEGACY_SELECT } from '@/lib/platform/subscription-schema'
+
+/** SCHEMA-PENDING RESILIENCE — every read here selects only
+ *  pre-migration SchoolSubscription columns, so manual overrides and
+ *  period math keep working on a pre-migration database. Payment
+ *  application paths additionally need the receipt sequence + snapshot
+ *  columns (pending migration objects) — those fail through the central
+ *  classifier as the honest SUBSCRIPTION_SYSTEM_PENDING error. */
+type SubscriptionSnapshot = {
+  id: string
+  status: string
+  plan: string
+  periodStart: Date | null
+  periodEnd: Date | null
+  graceDays: number
+  overrideStatus: string | null
+  notes: string | null
+  billingModel?: string
+}
 
 export const PAYMENT_MODES = ['ONLINE_PAYMENT', 'CASH', 'BANK_TRANSFER', 'CHEQUE', 'OTHER'] as const
 export type PaymentMode = (typeof PAYMENT_MODES)[number]
@@ -88,7 +107,11 @@ export async function recordPlatformPayment(
 
   const school = await db.school.findUnique({
     where: { id: input.schoolId },
-    select: { id: true, status: true, subscription: true },
+    select: {
+      id: true,
+      status: true,
+      subscription: { select: { id: true, ...SUBSCRIPTION_LEGACY_SELECT } },
+    },
   })
   if (!school) {
     throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
@@ -192,7 +215,7 @@ export async function applySubscriptionOverride(opts: {
 }): Promise<{ overrideStatus: string | null }> {
   const school = await db.school.findUnique({
     where: { id: opts.schoolId },
-    select: { id: true, subscription: true },
+    select: { id: true, subscription: { select: { id: true, ...SUBSCRIPTION_LEGACY_SELECT } } },
   })
   if (!school) {
     throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
@@ -230,7 +253,7 @@ export async function recordDeferredSchoolPaymentInTx(
 ): Promise<{ paymentId: string; receiptNo: string | null }> {
   const school = await tx.school.findUnique({
     where: { id: opts.schoolId },
-    select: { id: true, subscription: true },
+    select: { id: true, subscription: { select: { id: true, ...SUBSCRIPTION_LEGACY_SELECT } } },
   })
   if (!school) {
     throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
@@ -260,7 +283,7 @@ export async function recordDeferredSchoolPaymentInTx(
   })
   // Optional billing-model switch rides the SAME transaction (a failed
   // request must never flip the tenant's model).
-  if (opts.billingModel && opts.billingModel !== (current?.billingModel ?? 'SCHOOL_WIDE')) {
+  if (opts.billingModel && opts.billingModel !== ((current as SubscriptionSnapshot | null)?.billingModel ?? 'SCHOOL_WIDE')) {
     await tx.schoolSubscription.upsert({
       where: { schoolId: opts.schoolId },
       create: {
@@ -343,7 +366,7 @@ export async function applySchoolSubscriptionPeriodInTx(
 ): Promise<{ paymentId: string | null; receiptNo: string | null; subscriptionId: string; statusAfter: string; periodEndAfter: Date }> {
   const school = await tx.school.findUnique({
     where: { id: opts.schoolId },
-    select: { id: true, subscription: true },
+    select: { id: true, subscription: { select: { id: true, ...SUBSCRIPTION_LEGACY_SELECT } } },
   })
   if (!school) {
     throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
@@ -393,7 +416,8 @@ export async function applySchoolSubscriptionPeriodInTx(
       schoolId: opts.schoolId,
       status: 'ACTIVE',
       plan: opts.planCode ?? current?.plan ?? 'STANDARD',
-      billingModel: opts.billingModel ?? current?.billingModel ?? 'SCHOOL_WIDE',
+      billingModel:
+        opts.billingModel ?? (current as SubscriptionSnapshot | null)?.billingModel ?? 'SCHOOL_WIDE',
       planId: opts.planId ?? null,
       planCode: opts.planCode ?? null,
       interval: opts.interval ?? null,

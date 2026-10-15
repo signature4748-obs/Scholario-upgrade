@@ -22,9 +22,10 @@
 //   GET    /api/platform/subscriptions/plans
 // ============================================================
 
-import React, { useEffect, useState } from 'react'
-import { Gift, KeyRound, Loader2, Wallet } from 'lucide-react'
+import React, { useCallback, useEffect, useState } from 'react'
+import { Gift, KeyRound, Loader2, RefreshCw, Wallet } from 'lucide-react'
 import { platformApi, type PlatformApiError } from '../platform-client'
+import { isSubscriptionSchemaPending } from './pending-banner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -190,12 +191,18 @@ export function OneTimeCodeBlock({ code, hint }: { code: OneTimeCode; hint?: str
 
 // ── plan picker ─────────────────────────────────────────────────────────
 
-/** Scope-filtered select over the ACTIVE plan registry (live fetch). */
+/** Scope-filtered select over the ACTIVE plan registry (live fetch).
+ *  Honest empty states: schema-pending (registry table absent) is NOT
+ *  the same message as "no active plans configured". */
 export function PlanPicker({ scope, value, onChange }: { scope: 'SCHOOL' | 'STUDENT'; value: string; onChange: (code: string) => void }) {
   const [plans, setPlans] = useState<PlanRow[]>([])
+  const [pending, setPending] = useState(false)
   useEffect(() => {
-    platformApi<{ plans: PlanRow[] }>('/api/platform/subscriptions/plans')
-      .then((d) => setPlans(d.plans.filter((p) => p.scope === scope && p.status === 'ACTIVE')))
+    platformApi<{ subscriptionSchemaPending?: boolean; plans: PlanRow[] }>('/api/platform/subscriptions/plans')
+      .then((d) => {
+        setPlans(d.plans.filter((p) => p.scope === scope && p.status === 'ACTIVE'))
+        setPending(isSubscriptionSchemaPending(d))
+      })
       .catch(() => {})
   }, [scope])
   return (
@@ -207,7 +214,11 @@ export function PlanPicker({ scope, value, onChange }: { scope: 'SCHOOL' | 'STUD
             {p.name} ({p.scope === 'STUDENT' ? money(p.pricePerStudent, p.currency) : p.interval === 'MONTHLY' ? money(p.priceMonthly, p.currency) : money(p.priceAnnual, p.currency)})
           </SelectItem>
         ))}
-        {plans.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">No active {scope.toLowerCase()} plans configured.</div>}
+        {plans.length === 0 && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            {pending ? 'Plan registry is not provisioned on this database yet.' : `No active ${scope.toLowerCase()} plans configured.`}
+          </div>
+        )}
       </SelectContent>
     </Select>
   )
@@ -223,6 +234,9 @@ export function PlanPicker({ scope, value, onChange }: { scope: 'SCHOOL' | 'STUD
 export function AssignEntitlementDialog({ student, onClose, onDone }: { student: StudentRow; onClose: () => void; onDone: () => void }) {
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<{ message: string; activationCode?: OneTimeCode } | null>(null)
+  /** Inline submit error — the durable surface for API failures (incl.
+   *  the honest SUBSCRIPTION_SYSTEM_PENDING publicMessage). */
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [form, setForm] = useState({
     planCode: '', mode: 'CASH', amount: '', currency: 'INR', paymentDate: new Date().toISOString().slice(0, 10),
     reference: '', notes: '', validityMonths: '12', validityStart: '', validityEnd: '',
@@ -236,6 +250,7 @@ export function AssignEntitlementDialog({ student, onClose, onDone }: { student:
       return
     }
     setSaving(true)
+    setSubmitError(null)
     try {
       const d = await platformApi<{ message: string; activationCode?: OneTimeCode }>(
         `/api/platform/students/${student.studentId}/subscription`,
@@ -260,7 +275,9 @@ export function AssignEntitlementDialog({ student, onClose, onDone }: { student:
       setResult(d)
       onDone()
     } catch (e) {
-      toast.error('Assignment failed', { description: errMessage(e) })
+      // Inline (durable) instead of a transient toast — the operator
+      // keeps the form state and can retry after fixing the cause.
+      setSubmitError(errMessage(e))
     } finally {
       setSaving(false)
     }
@@ -289,6 +306,11 @@ export function AssignEntitlementDialog({ student, onClose, onDone }: { student:
           </div>
         ) : (
           <div className="grid gap-3">
+            {submitError && (
+              <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                Assignment failed: {submitError}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div><Label className="text-xs">Plan</Label><PlanPicker scope="STUDENT" value={form.planCode} onChange={(v) => { setForm((f) => ({ ...f, planCode: v })) }} /></div>
               <div>
@@ -351,22 +373,36 @@ export function AssignEntitlementDialog({ student, onClose, onDone }: { student:
 
 // ── student history dialog ──────────────────────────────────────────────
 
+/** GET /api/platform/students/[id]/subscription response shape. */
+interface StudentHistoryData {
+  entitlements: Array<{ id: string; status: string; planCode: string | null; validityStart: string; validityEnd: string; source: string; revokeReason: string | null }>
+  payments: Array<{ id: string; receiptNo: string | null; amount: number; currency: string; mode: string; paymentDate: string; reference: string | null }>
+  codes: Array<{ id: string; publicRef: string; status: string; expiresAt: string; claimedAt: string | null }>
+}
+
 /**
  * Per-student subscription history: entitlements / payments / codes,
  * with the lifecycle actions (revoke/suspend/reactivate — reason ≥ 10
  * chars, audited server-side) and code reissue (plaintext ONCE).
+ * A failed load renders a retryable error panel — NEVER a skeleton
+ * forever and never a fake "no history" empty state.
  */
 export function StudentHistoryDialog({ student, onClose }: { student: StudentRow; onClose: () => void }) {
-  const [data, setData] = useState<{
-    entitlements: Array<{ id: string; status: string; planCode: string | null; validityStart: string; validityEnd: string; source: string; revokeReason: string | null }>
-    payments: Array<{ id: string; receiptNo: string | null; amount: number; currency: string; mode: string; paymentDate: string; reference: string | null }>
-    codes: Array<{ id: string; publicRef: string; status: string; expiresAt: string; claimedAt: string | null }>
-  } | null>(null)
+  const [data, setData] = useState<StudentHistoryData | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
-  useEffect(() => {
-    platformApi<typeof data>(`/api/platform/students/${student.studentId}/subscription`).then(setData).catch((e) => toast.error(errMessage(e)))
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      setData(await platformApi<StudentHistoryData>(`/api/platform/students/${student.studentId}/subscription`))
+    } catch (e) {
+      // ERROR ≠ EMPTY — the history panel must not look like "no data".
+      setError(errMessage(e))
+    }
   }, [student.studentId])
+
+  useEffect(() => { void load() }, [load])
 
   const act = async (action: 'revoke' | 'suspend' | 'reactivate') => {
     // Server requires a reason (min 10) for every lifecycle action —
@@ -386,8 +422,7 @@ export function StudentHistoryDialog({ student, onClose }: { student: StudentRow
         body: JSON.stringify({ action, reason: reason?.trim() }),
       })
       toast.success(`Entitlement ${action}d — financial records unchanged.`)
-      const d = await platformApi<typeof data>(`/api/platform/students/${student.studentId}/subscription`)
-      setData(d)
+      await load()
     } catch (e) {
       toast.error(`${action} failed`, { description: errMessage(e) })
     } finally {
@@ -406,8 +441,7 @@ export function StudentHistoryDialog({ student, onClose }: { student: StudentRow
       })
       toast.success(d.message)
       window.alert(`New activation code (${d.publicRef}):\n\n${d.code}\n\nCopy it now — it will not be visible again.`)
-      const dd = await platformApi<typeof data>(`/api/platform/students/${student.studentId}/subscription`)
-      setData(dd)
+      await load()
     } catch (e) {
       toast.error('Reissue failed', { description: errMessage(e) })
     } finally {
@@ -422,7 +456,14 @@ export function StudentHistoryDialog({ student, onClose }: { student: StudentRow
           <DialogTitle>{student.name} — subscription history</DialogTitle>
           <DialogDescription>Entitlements, payments and codes. Financial records are immutable.</DialogDescription>
         </DialogHeader>
-        {!data ? (
+        {error && !data ? (
+          <div role="alert" className="flex flex-col gap-2 rounded-lg border border-red-200 bg-red-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-red-700">Could not load the subscription history: {error}</p>
+            <Button variant="outline" size="sm" onClick={() => void load()} className="shrink-0">
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Retry
+            </Button>
+          </div>
+        ) : !data ? (
           <Skeleton className="h-48 w-full" />
         ) : (
           <Tabs defaultValue="entitlements">

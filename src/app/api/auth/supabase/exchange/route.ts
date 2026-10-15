@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { createSession, setSessionCookie, isDevSessionBearerEnabled } from '@/lib/auth'
+import { SUBSCRIPTION_LEGACY_SELECT } from '@/lib/platform/subscription-schema'
 import { api } from '@/lib/api'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import {
@@ -188,9 +189,13 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 5. Full login invariant set (identical to /api/auth/login) ─────
+    // SCHEMA-PENDING RESILIENCE — legacy-entitlement columns only (see
+    // login route); provider exchange must not 500 on a pre-migration DB.
     const user = await db.user.findUnique({
       where: { id: userId! },
-      include: { school: { include: { subscription: true } } },
+      include: {
+        school: { include: { subscription: { select: { ...SUBSCRIPTION_LEGACY_SELECT } } } },
+      },
     })
     if (!user) throw new AppError('AUTH_REQUIRED', { internalDetail: 'supabase exchange: account vanished after resolution' })
 

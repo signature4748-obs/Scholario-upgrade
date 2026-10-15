@@ -5,13 +5,19 @@
 // ------------------------------------------------------------
 // Scholario production design system — LIGHT (slate canvas, white
 // chrome, teal/emerald accents — same light identity as /platform/login).
+// SIMPLIFIED IA (super-admin simplification mission): the sidebar is
+// TWO tiers only — six primary destinations straight under the logo
+// (Overview · Schools · Subscriptions · Support · Audit log · Settings,
+// no group header) + one de-emphasized "Administration" group
+// (Announcements · Users · My Sessions).
 // Provides:
 //   · session gate (401 → /platform/login via the provider),
 //   · permission-filtered navigation (hiding is UX; the server
 //     authorizes every route),
 //   · step-up pill: amber when the destructive-action window is stale,
 //     emerald live countdown when fresh; "Verify" opens the TOTP
-//     dialog (POST /api/platform/auth/step-up),
+//     dialog (POST /api/platform/auth/step-up) — dormant while
+//     platform MFA is stood down (mfaEnabled stays false),
 //   · sign-out.
 // ============================================================
 
@@ -54,31 +60,24 @@ interface NavItem {
   permission?: string
 }
 
-const NAV: NavItem[] = [
+/** SIMPLIFIED IA — tier 1: the six primary daily destinations. They
+ *  render directly under the logo WITHOUT a group header. */
+const PRIMARY_NAV: NavItem[] = [
   { href: '/platform', label: 'Overview', icon: LayoutDashboard },
   { href: '/platform/schools', label: 'Schools', icon: Building2, permission: 'schools.read' },
   { href: '/platform/subscriptions', label: 'Subscriptions', icon: Wallet, permission: 'billing.manage' },
   { href: '/platform/support', label: 'Support', icon: LifeBuoy, permission: 'support.access' },
-  { href: '/platform/audit', label: 'Audit Log', icon: ScrollText, permission: 'audit.read' },
-  { href: '/platform/announcements', label: 'Announcements', icon: Megaphone, permission: 'announcements.manage' },
+  { href: '/platform/audit', label: 'Audit log', icon: ScrollText, permission: 'audit.read' },
   { href: '/platform/settings', label: 'Settings', icon: Settings2, permission: 'settings.manage' },
-  { href: '/platform/admins', label: 'Users', icon: Users, permission: 'admins.manage' },
-  { href: '/platform/sessions', label: 'My Sessions', icon: MonitorSmartphone },
 ]
 
-/** ARCHITECTURE RESET — grouped control-plane IA (premium console nav):
- *  honest modules that ACTUALLY exist. The SUBSCRIPTION & ENTITLEMENT
- *  SYSTEM added the Billing group (Subscriptions — plans/models registry,
- *  per-student entitlements, codes, reconciliation; billing.manage-gated).
- *  School detail keeps per-tenant plan/subscription management. */
-const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
-  { label: 'Platform', items: [NAV[0]] },
-  { label: 'Tenants', items: [NAV[1]] },
-  { label: 'Billing', items: [NAV[2]] },
-  { label: 'Operations', items: [NAV[3], NAV[5]] },
-  { label: 'Governance', items: [NAV[4]] },
-  { label: 'Administration', items: [NAV[6], NAV[7]] },
-  { label: 'Account', items: [NAV[8]] },
+/** SIMPLIFIED IA — tier 2: ONE de-emphasized "Administration" group for
+ *  the long-tail admin/account surfaces (announcements, directory of
+ *  platform admins, own sessions). */
+const ADMIN_NAV: NavItem[] = [
+  { href: '/platform/announcements', label: 'Announcements', icon: Megaphone, permission: 'announcements.manage' },
+  { href: '/platform/admins', label: 'Users', icon: Users, permission: 'admins.manage' },
+  { href: '/platform/sessions', label: 'My Sessions', icon: MonitorSmartphone },
 ]
 
 function initials(name: string): string {
@@ -88,6 +87,36 @@ function initials(name: string): string {
     .slice(0, 2)
     .join('')
     .toUpperCase()
+}
+
+/** One sidebar link — shared by both tiers. `secondary` = the
+ *  de-emphasized Administration tier (smaller, quieter text); the
+ *  ACTIVE state (aria-current + teal) stays IDENTICAL for both. */
+function SidebarLink({
+  item,
+  pathname,
+  secondary = false,
+}: {
+  item: NavItem
+  pathname: string
+  secondary?: boolean
+}) {
+  const active = pathname === item.href || (item.href !== '/platform' && pathname.startsWith(item.href))
+  const Icon = item.icon
+  return (
+    <Link
+      href={item.href}
+      aria-current={active ? 'page' : undefined}
+      className={`flex items-center gap-3 rounded-lg ${secondary ? 'py-1.5 text-[13px]' : 'py-2 text-sm'} font-medium transition-colors focus-ring ${
+        active
+          ? 'bg-teal-50 text-teal-700 border border-teal-200'
+          : `${secondary ? 'text-slate-500' : 'text-slate-600'} border border-transparent hover:text-slate-900 hover:bg-slate-50`
+      }`}
+    >
+      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+      {item.label}
+    </Link>
+  )
 }
 
 /** Live countdown for the step-up window ("4m 32s"). */
@@ -221,42 +250,30 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     )
   }
 
-  const nav = NAV.filter((item) => !item.permission || can(item.permission))
-  const navGroups = NAV_GROUPS.map((g) => ({
-    label: g.label,
-    items: g.items.filter((item) => nav.includes(item)),
-  })).filter((g) => g.items.length > 0)
+  const primaryNav = PRIMARY_NAV.filter((item) => !item.permission || can(item.permission))
+  const adminNav = ADMIN_NAV.filter((item) => !item.permission || can(item.permission))
 
   const SidebarContent = (
-    <nav aria-label="Platform navigation" className="flex-1 space-y-4 px-3 py-4 overflow-y-auto custom-scrollbar">
-      {navGroups.map((group) => (
-        <div key={group.label}>
+    <nav aria-label="Platform navigation" className="flex-1 px-3 py-4 overflow-y-auto custom-scrollbar">
+      {/* Tier 1 — primary destinations, straight under the logo (no header). */}
+      <div className="space-y-0.5">
+        {primaryNav.map((item) => (
+          <SidebarLink key={item.href} item={item} pathname={pathname} />
+        ))}
+      </div>
+      {/* Tier 2 — the one de-emphasized Administration group. */}
+      {adminNav.length > 0 && (
+        <div className="mt-5 border-t border-slate-200 pt-4">
           <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-            {group.label}
+            Administration
           </p>
           <div className="space-y-0.5">
-            {group.items.map((item) => {
-              const active = pathname === item.href || (item.href !== '/platform' && pathname.startsWith(item.href))
-              const Icon = item.icon
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? 'page' : undefined}
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-ring ${
-                    active
-                      ? 'bg-teal-50 text-teal-700 border border-teal-200'
-                      : 'text-slate-600 border border-transparent hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                >
-                  <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  {item.label}
-                </Link>
-              )
-            })}
+            {adminNav.map((item) => (
+              <SidebarLink key={item.href} item={item} pathname={pathname} secondary />
+            ))}
           </div>
         </div>
-      ))}
+      )}
     </nav>
   )
 

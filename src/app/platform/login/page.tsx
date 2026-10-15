@@ -33,7 +33,7 @@
 import React, { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { Cloud, Lock, AlertTriangle, ShieldCheck } from 'lucide-react'
+import { Cloud, Lock, AlertTriangle, ShieldCheck, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { savePlatformToken } from '@/lib/platform-session-token'
@@ -56,6 +56,12 @@ export default function PlatformLoginPage() {
   const searchParams = useSearchParams()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  // Password visibility toggle (accessibility requirement): the input is
+  // type="password" by default; the eye button switches to text and back.
+  // The entered value is preserved across toggles and the button never
+  // submits the form (type="button"). The password is never displayed
+  // anywhere outside the input and never logged.
+  const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
   // AUTH GATE — structured failure model (src/lib/auth-failure.ts):
   // server rejections carry a safe message + stable code + requestId;
@@ -283,21 +289,48 @@ export default function PlatformLoginPage() {
                     Forgot password?
                   </a>
                 </div>
-                <Input
-                  id="pf-password"
-                  type="password"
-                  autoComplete="current-password"
-                  placeholder="••••••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40 h-11"
-                />
+                <div className="relative">
+                  <Input
+                    id="pf-password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete={showPassword ? 'off' : 'current-password'}
+                    placeholder="••••••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40 h-11 pr-12"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 transition-colors"
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-4.5 w-4.5" style={{ height: 18, width: 18 }} aria-hidden="true" />
+                    ) : (
+                      <Eye className="h-4.5 w-4.5" style={{ height: 18, width: 18 }} aria-hidden="true" />
+                    )}
+                    <span className="sr-only">{showPassword ? 'Hide password' : 'Show password'}</span>
+                  </button>
+                </div>
               </div>
 
               <Button
                 type="submit"
                 disabled={busy || !email || !password}
+                title={
+                  busy
+                    ? 'Verifying your credentials…'
+                    : !email
+                      ? 'Enter your email to continue'
+                      : !password
+                        ? 'Enter your password to continue'
+                        : undefined
+                }
+                aria-busy={busy}
                 className="w-full h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
               >
                 <Lock className="h-4 w-4" aria-hidden="true" />
