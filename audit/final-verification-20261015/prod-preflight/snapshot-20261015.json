@@ -1,0 +1,274 @@
+{
+  "capturedAt": "2026-10-15T01:20:48.715Z",
+  "gitSha": "f430ab336573c6b972f4e9a4fc2b285bf26029f5",
+  "tableCounts": {
+    "ActivityLog": 682,
+    "AdmissionApplication": 0,
+    "AdmissionApplicationEvent": 0,
+    "AdmissionFeeSnapshot": 0,
+    "AdmissionSequence": 0,
+    "AdmitCardConfig": 0,
+    "Assignment": 0,
+    "Attendance": 3240,
+    "AttendanceAuditLog": 0,
+    "AttendanceDraft": 0,
+    "AttendanceSetting": 0,
+    "BehaviorCategory": 10,
+    "BehaviorRecord": 31,
+    "BookIssue": 0,
+    "Class": 15,
+    "ClassSubjectAssignment": 101,
+    "CurriculumTopic": 518,
+    "DirectThreadState": 0,
+    "Driver": 0,
+    "EmailDelivery": 32,
+    "Exam": 4,
+    "ExamAttendance": 74,
+    "ExamAuditLog": 0,
+    "ExamClass": 45,
+    "ExamMark": 645,
+    "ExamPaper": 0,
+    "ExamResultOutcome": 0,
+    "ExamRule": 0,
+    "ExamScheduleItem": 219,
+    "ExamSeatAssignment": 243,
+    "ExamSubjectConfig": 124,
+    "ExamTypeConfig": 2,
+    "Fee": 324,
+    "FeeDiscountRule": 0,
+    "FeeHead": 0,
+    "FeeStructure": 0,
+    "FeeStructureVersion": 0,
+    "FeeTransaction": 226,
+    "FlashcardCard": 32,
+    "FlashcardDeck": 4,
+    "FlashcardReviewState": 0,
+    "GalleryAlbum": 1,
+    "GalleryImage": 0,
+    "GradeScale": 14,
+    "GrowthEvalRun": 0,
+    "GrowthEvent": 17,
+    "GrowthRule": 0,
+    "GrowthSetting": 0,
+    "Homework": 11,
+    "HomeworkAuditLog": 0,
+    "HomeworkPolicy": 0,
+    "HomeworkSubmission": 0,
+    "HomeworkSurvey": 0,
+    "JobRun": 0,
+    "LearningActivity": 2,
+    "LearningBookmark": 1,
+    "LessonTopicCompletion": 419,
+    "LibraryBook": 12,
+    "MarksScanDraft": 0,
+    "MasterFeeHead": 0,
+    "Message": 9,
+    "MessageTemplate": 6,
+    "NoHomeworkDate": 0,
+    "Notification": 25,
+    "NotificationRead": 0,
+    "ParentConversation": 5,
+    "ParentGrievance": 0,
+    "ParentMessage": 11,
+    "Payment": 218,
+    "PlatformAdmin": 2,
+    "PlatformAdminSession": 15,
+    "PlatformAnnouncement": 1,
+    "PlatformAuditLog": 717,
+    "PlatformPasswordReset": 4,
+    "PlatformPayment": 0,
+    "PlatformPermission": 5,
+    "PlatformRecoveryTicket": 0,
+    "PlatformSetting": 1,
+    "QuestionBank": 1,
+    "RateLimitBucket": 95,
+    "Reconciliation": 0,
+    "ReportCardConfig": 0,
+    "Result": 30,
+    "Room": 23,
+    "Route": 0,
+    "SalaryPayment": 30,
+    "SalaryStructure": 15,
+    "School": 2,
+    "SchoolEvent": 11,
+    "SchoolPaymentGateway": 0,
+    "SchoolProfileChangeRequest": 0,
+    "SchoolSubscription": 2,
+    "Session": 30,
+    "Settlement": 0,
+    "Student": 83,
+    "StudyGroup": 3,
+    "StudyGroupMember": 15,
+    "StudyGroupQuestion": 4,
+    "StudyMaterial": 11,
+    "StudyMaterialTarget": 0,
+    "StudyTask": 4,
+    "Subject": 14,
+    "SupportSession": 17,
+    "Teacher": 16,
+    "TeacherFollowUp": 5,
+    "TenantDomain": 0,
+    "Timetable": 396,
+    "UploadedFile": 0,
+    "User": 187,
+    "UserPreference": 0,
+    "Vehicle": 0,
+    "WebhookEvent": 2,
+    "WebsiteAdmission": 0,
+    "WebsiteMedia": 0,
+    "WebsiteNotice": 0,
+    "WebsiteSocialLink": 0,
+    "_prisma_migrations": 23
+  },
+  "userState": {
+    "total": 187,
+    "byRole": {
+      "MANAGEMENT": 1,
+      "PARENT": 77,
+      "PRINCIPAL": 4,
+      "STUDENT": 85,
+      "SUPER_ADMIN": 3,
+      "TEACHER": 17
+    },
+    "schoolPlane": 184,
+    "principals": 4,
+    "principalsFlagged": 2,
+    "principalsNeverSetOwnPassword": 2,
+    "principalsNeverSetAndFlagged": 2,
+    "schoolPlaneNeverSetOwnPassword": 180,
+    "schoolPlaneNeverSetAndFlagged": 180,
+    "schoolPlaneInvariantViolations": 0,
+    "neverSetOwnPasswordUnflagged": 0
+  },
+  "adminState": {
+    "total": 2,
+    "active": 1,
+    "suspended": 1,
+    "googleLinked": 0,
+    "withPassword": 2
+  },
+  "financialIntegrity": {
+    "cutoff": "2026-10-15 01:20:47.964196+00",
+    "rows": 226,
+    "feeIdNotNull": 226,
+    "amountSum": "602480.00",
+    "ledgerDigest": "a87ebe601cdf03d3929ddefe33353ffb"
+  },
+  "appliedMigrations": [
+    {
+      "name": "0_init",
+      "checksum": "883215f02688a8b475a26fc23804ffcd0f2be174841e07098e3ab7d0c501a570",
+      "finished": true
+    },
+    {
+      "name": "00000000000001_pg_domain_guards",
+      "checksum": "ae10a27a25aec358bb1fac256e65b26dfa6ab2e36ba55aa19827486f8040077a",
+      "finished": true
+    },
+    {
+      "name": "00000000000002_pg_rls_search",
+      "checksum": "64752c5bb03ae4cd4f78ff4e31dc15e4535a28ffa72082cf6f9de99a0be74bba",
+      "finished": true
+    },
+    {
+      "name": "00000000000003_rate_limit_backend",
+      "checksum": "1c06aa56d881ec0f1d32a20cf0d1f727b7a6f1224a15ca4afb3719f4d297a8b9",
+      "finished": true
+    },
+    {
+      "name": "20261002000000_phase8b_domains_salary_email",
+      "checksum": "2caacb95fdd832407f6460244a57a8298ff68265d82b02a493d6b32d2665443a",
+      "finished": true
+    },
+    {
+      "name": "20261002000100_8c_rls_close_8b_gap",
+      "checksum": "564d394cdd19b440c50daba0287ed1105739017a75c2f8dce270d3f5ca979f30",
+      "finished": true
+    },
+    {
+      "name": "20261002000200_8c_hot_path_indexes",
+      "checksum": "6a9be358ac6488a9486767710501247ad955c1ff541d459abcfdc56052d2d4b8",
+      "finished": true
+    },
+    {
+      "name": "20261002000300_8c_n_function_security_closure",
+      "checksum": "0b9c5bb5e78b0e1bfaac17824fefed999fcab03e585ade88c44751c3cbcad419",
+      "finished": true
+    },
+    {
+      "name": "20261003000000_account_subscription_lock",
+      "checksum": "a626a4e114c2d246c1a6dbdbd524f53de573249dbde0cf7ba6425512de98448a",
+      "finished": true
+    },
+    {
+      "name": "20261004090000_saas_hardening_entitlement",
+      "checksum": "63aa8a87cfc239d4eb3ba33279d5026c64af68d4518a2be5208de63da17b5120",
+      "finished": true
+    },
+    {
+      "name": "20261004150000_credential_neutralization",
+      "checksum": "af26febf285f4d2da340dc1545a4a493c7764f3f3a9176ed16a14c81f8fd6b16",
+      "finished": true
+    },
+    {
+      "name": "20261004153000_restore_trgm_search_indexes",
+      "checksum": "1dff1af0d7d294627f38e01d2187db28d3b669c71b37b34d310d18fccc335f37",
+      "finished": true
+    },
+    {
+      "name": "20261004154000_schoolid_indexes_tenant_tables",
+      "checksum": "5ffd602bbf1ffe42b8796ca5e871f7e0f9739bebb400b975d90e322858946d95",
+      "finished": true
+    },
+    {
+      "name": "20261005060000_platform_account_recovery",
+      "checksum": "a68cd34aadecd99aafc74518d274a4605809a810ff89148ed21ebf815bcba51b",
+      "finished": true
+    },
+    {
+      "name": "20261006123000_least_privilege_grants",
+      "checksum": "01e6e09e17efff53eb3ac2c9c50141389365e4da547d549d4dd563ce4a23b1a8",
+      "finished": true
+    },
+    {
+      "name": "20261007090000_timetable_room_conflict_guard",
+      "checksum": "cc97dabeb3af4bb6620c58c2f6cfad6d3fe4523567352f33ce90d4047330d77d",
+      "finished": true
+    },
+    {
+      "name": "20261008071751_fk_hotpath_indexes_settlement_exam_schedule",
+      "checksum": "b5b29572cc90a8f890a049d8b429943d96666ca440d344ad536ed44b88d96fc5",
+      "finished": true
+    },
+    {
+      "name": "20261010040148_fee_admissions_mvp",
+      "checksum": "221d6de899846cfc45259bf87a2af6680d9737cfde938e4070e9a21b78f5d0c7",
+      "finished": true
+    },
+    {
+      "name": "20261011140000_supabase_auth_identity_linking",
+      "checksum": "b1aa4836194c138a3b0a2777a0d5376fb0c50128d59ed49a4a5c1b399bd20553",
+      "finished": true
+    },
+    {
+      "name": "20261011200000_authlinkedat_precision_fix",
+      "checksum": "c13f8cb70b172f31cdff5f1708b7b1a0e4890087a2a02f328beb3fc3296ae10c",
+      "finished": true
+    },
+    {
+      "name": "20261012063641_school_event_start_time",
+      "checksum": "5f4199f788319a18f1244467c3fb97861d4f62e416f5b5f1a5636d91a4ae1b5a",
+      "finished": true
+    },
+    {
+      "name": "20261013120000_fee_transaction_student_fk",
+      "checksum": "34ab07725573f1fdca7845f8587ee4cfbd963921e30cdb4e86b988286611091d",
+      "finished": true
+    },
+    {
+      "name": "20261013130000_flag_never_changed_bootstrap_users",
+      "checksum": "3fc4e723d2168d2f4758dbe3fc197a9c4d47544ed09a265446614cdb0075793f",
+      "finished": true
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { isResultDeclared, examStatusIs } from '@/lib/exams/types'
+import { isResultDeclared } from '@/lib/exams/types'
 import { withUser } from '@/lib/api'
 import { audienceAllows, audienceLabel } from '@/lib/notices'
 import {
