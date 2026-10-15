@@ -47,6 +47,45 @@ export const RESULT_STATUSES = [
 ] as const
 export type ResultStatus = (typeof RESULT_STATUSES)[number]
 
+// ─── Canonical status comparison helpers (2026-10-15 result-status fix) ──
+//
+// WHY THESE EXIST: Exam.resultStatus / Exam.status are free `String` columns
+// (prisma schema), not Prisma enums — the value set is enforced by the
+// write paths only. Two write lineages produced drift:
+//   · the exam lifecycle (src/lib/exams/service.ts) writes the canonical
+//     RESULT_STATUSES / EXAM_STATUSES values ('Result Declared', …), and
+//   · the legacy demo seeds planted 'Declared' / 'COMPLETED' (a shorter
+//     alias + upper-case) — historical rows in long-lived databases.
+// Raw `===` comparisons therefore silently disagreed across surfaces
+// (the principal overview counted 0/4 declared with 2 declared exams).
+// The canonical representation is the enum value; every read compares
+// through these helpers, which are case/whitespace-tolerant and accept
+// the documented legacy alias. Write paths stay canonical (never write
+// the alias).
+
+/** Case/whitespace-insensitive exam-status equality ('COMPLETED' ≡ 'Completed'). */
+export function examStatusIs(status: string | null | undefined, expected: ExamStatus): boolean {
+  return (status ?? '').trim().toLowerCase() === expected.trim().toLowerCase()
+}
+
+/** Case/whitespace-insensitive result-status equality against a canonical value. */
+export function resultStatusIs(resultStatus: string | null | undefined, expected: ResultStatus): boolean {
+  return (resultStatus ?? '').trim().toLowerCase() === expected.trim().toLowerCase()
+}
+
+/** Legacy alias set: 'Declared' is a historical spelling of 'Result Declared'. */
+const RESULT_DECLARED_LEGACY_ALIASES = new Set(['result declared', 'declared'])
+
+/**
+ * True when the exam's results are declared — canonical 'Result Declared'
+ * OR the legacy 'Declared' alias (case/whitespace-tolerant). This is THE
+ * single declared-check every read site must use; never compare raw
+ * strings against either spelling.
+ */
+export function isResultDeclared(resultStatus: string | null | undefined): boolean {
+  return RESULT_DECLARED_LEGACY_ALIASES.has((resultStatus ?? '').trim().toLowerCase())
+}
+
 export const MARK_STATUSES = ['PRESENT', 'ABSENT', 'MEDICAL', 'EXEMPTED'] as const
 export type MarkStatus = (typeof MARK_STATUSES)[number]
 

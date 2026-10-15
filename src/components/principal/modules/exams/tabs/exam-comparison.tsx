@@ -17,6 +17,7 @@ import { GitCompare, TrendingUp, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CollapsibleSection } from '../collapsible-section'
 import type { ExamDTO } from '@/lib/exams/types'
+import { isResultDeclared, examStatusIs } from '@/lib/exams/types'
 
 interface Props {
   exams: ExamDTO[]
@@ -29,8 +30,8 @@ export function ExamComparison({ exams, onSelectExam }: Props) {
       const totalStudents = exam.classes.reduce((s: number, c: any) => s + c.studentCount, 0)
       const marksPct = exam.markSummary.total > 0 ? Math.round((exam.markSummary.entered / exam.markSummary.total) * 100) : 0
       const lockedPct = exam.markSummary.total > 0 ? Math.round((exam.markSummary.locked / exam.markSummary.total) * 100) : 0
-      const isCompleted = exam.status === 'Completed'
-      const isDeclared = exam.resultStatus === 'Result Declared'
+      const isCompleted = examStatusIs(exam.status, 'Completed')
+      const isDeclared = isResultDeclared(exam.resultStatus)
       return {
         id: exam.id,
         name: exam.name,

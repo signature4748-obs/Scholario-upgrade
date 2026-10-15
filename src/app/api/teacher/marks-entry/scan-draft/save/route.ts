@@ -1,4 +1,5 @@
 import { db } from '@/lib/db'
+import { isResultDeclared, examStatusIs } from '@/lib/exams/types'
 import { withUser, schoolScoped } from '@/lib/api'
 import {
   authorizeScanScope,
@@ -60,7 +61,7 @@ export async function POST(request: Request) {
         where: { id: body.examId },
         select: { status: true, resultStatus: true },
       })
-      const examClosed = existing || examRow?.resultStatus === 'Declared' || examRow?.status === 'COMPLETED'
+      const examClosed = existing || isResultDeclared(examRow?.resultStatus) || examStatusIs(examRow?.status, 'Completed')
       if (examClosed) {
         throw new Error('Marks already submitted — corrections flow through the exam office')
       }

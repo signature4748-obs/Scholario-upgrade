@@ -6,6 +6,7 @@
 
 import 'server-only'
 import { db, trackedTransaction } from '@/lib/db'
+import { isResultDeclared, resultStatusIs } from './types'
 import { AppError } from '@/lib/security/errors'
 import {
   type ExamDTO,
@@ -542,7 +543,7 @@ export async function deleteExam(examId: string, schoolId: string, _user: AuthUs
   // Phase 3 — declared results are auditable history: the exam (and its
   // cascading marks/results rows) must survive for report cards and
   // compliance. Refuse with 409 CONFLICT — archive instead.
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new AppError('CONFLICT', {
       publicMessage:
         'Results for this examination have been declared — it is part of the auditable academic record and cannot be deleted. Archive it instead.',
@@ -727,7 +728,7 @@ export async function setMark(
 ): Promise<ExamMarkDTO> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot modify marks after results are declared')
   }
 
@@ -865,7 +866,7 @@ export async function setMark(
     await db.exam.update({ where: { id: examId }, data: { status: 'Ongoing' } })
   }
   // Update exam resultStatus to "Marks Entry" if it was "Not Started"
-  if (exam.resultStatus === 'Not Started') {
+  if (resultStatusIs(exam.resultStatus, 'Not Started')) {
     await db.exam.update({ where: { id: examId }, data: { resultStatus: 'Marks Entry' } })
   }
 
@@ -955,7 +956,7 @@ export async function submitMarks(
 ): Promise<{ submitted: number }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot modify marks after results are declared')
   }
   // ── IQ3000 Phase 8 — CSA scope for TEACHER (audit 3-b MEDIUM) ────────
@@ -1009,7 +1010,7 @@ export async function verifyMarks(
 ): Promise<{ verified: number }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot modify marks after results are declared')
   }
   const result = await db.examMark.updateMany({
@@ -1044,7 +1045,7 @@ export async function lockMarks(
 ): Promise<{ locked: number }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot modify marks after results are declared')
   }
   // Lock everything matching filter (DRAFT/SUBMITTED/VERIFIED → LOCKED)
@@ -1145,7 +1146,7 @@ export async function declareResults(
 ): Promise<{ declared: boolean }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus !== 'Result Ready') {
+  if (!resultStatusIs(exam.resultStatus, 'Result Ready')) {
     throw new Error('Results can only be declared from Result Ready state')
   }
   await db.exam.update({

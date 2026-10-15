@@ -36,6 +36,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { isResultDeclared } from '@/lib/exams/types'
 import { SectionCard } from '../shared/section-card'
 import { HubEmptyState } from '../shared/hub-stat-cards'
 import type { ClassHubClass, HubDetailPayload } from './types'
@@ -400,7 +401,7 @@ export function AcademicsTab({
                 <p className="text-[11px] text-muted-foreground">
                   {m.studentsScored} scored · {m.subjectsWithMarks} subject{m.subjectsWithMarks === 1 ? '' : 's'}
                   {m.avgPct != null && ` · avg ${m.avgPct}%`}
-                  {m.resultStatus === 'Declared' && ' · results declared'}
+                  {isResultDeclared(m.resultStatus) && ' · results declared'}
                 </p>
               </div>
               <Button

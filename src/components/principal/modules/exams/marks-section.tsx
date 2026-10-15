@@ -52,7 +52,9 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import {
   getGradeForPercentage,
+  isResultDeclared,
   MARK_STATUSES,
+  resultStatusIs,
   type AuditLogDTO,
   type ExamDTO,
   type ExamMarkDTO,
@@ -374,7 +376,7 @@ export function MarksSection({ exam, onReload }: { exam: ExamDTO; onReload: () =
 
   const bulkVerifyCount = filteredSubjectRows.filter((r) => r.status === 'SUBMITTED').length
   const bulkLockCount = filteredSubjectRows.filter((r) => r.status === 'VERIFIED').length
-  const examDeclared = exam.resultStatus === 'Result Declared'
+  const examDeclared = isResultDeclared(exam.resultStatus)
   const readyClasses = classReadiness.filter((c) => c.isReady).length
 
   // First load — show an honest loader instead of zeroed stats.
@@ -596,7 +598,7 @@ export function MarksSection({ exam, onReload }: { exam: ExamDTO; onReload: () =
               <p className="text-[9px] text-muted-foreground mt-0.5">
                 {examDeclared
                   ? 'Results declared — publish to notify students and parents.'
-                  : exam.resultStatus === 'Result Ready'
+                  : resultStatusIs(exam.resultStatus, 'Result Ready')
                     ? 'All marks locked — ready to declare.'
                     : `Result status: ${exam.resultStatus} · ${readyClasses}/${classReadiness.length} classes fully locked`}
               </p>
@@ -607,7 +609,7 @@ export function MarksSection({ exam, onReload }: { exam: ExamDTO; onReload: () =
                 <span className="text-[9px] font-medium text-emerald-600 flex items-center gap-0.5"><CheckCircle2 className="h-2.5 w-2.5" /> Published</span>
               ) : examDeclared ? (
                 <button onClick={handlePublish} disabled={busy} className="text-[9px] text-primary hover:underline flex items-center gap-0.5"><Megaphone className="h-2.5 w-2.5" /> Publish &amp; Notify</button>
-              ) : exam.resultStatus === 'Result Ready' ? (
+              ) : resultStatusIs(exam.resultStatus, 'Result Ready') ? (
                 <button onClick={handleDeclare} disabled={busy} className="text-[9px] text-primary hover:underline flex items-center gap-0.5"><Award className="h-2.5 w-2.5" /> Declare Results</button>
               ) : (
                 <span className="text-[9px] text-amber-600" title="Declaration requires every paper to be locked (Result Ready)">Pending</span>

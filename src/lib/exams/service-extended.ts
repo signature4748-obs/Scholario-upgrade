@@ -16,6 +16,7 @@ import {
   type WorkflowStatus,
 } from './types'
 import { toScheduleDTO, toMarkDTO, audit, deleteScheduleItem } from './service'
+import { isResultDeclared } from './types'
 import { computeAllResults } from './result-engine'
 import { getTeacherPreferences } from '@/lib/user-preferences'
 import { classLabelOf } from '@/lib/teacher-hub'
@@ -697,7 +698,7 @@ export async function applyGraceMarks(
 ): Promise<ExamMarkDTO> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared' && user?.role !== 'PRINCIPAL') {
+  if (isResultDeclared(exam.resultStatus) && user?.role !== 'PRINCIPAL') {
     throw new Error('Grace marks after declaration require Principal override')
   }
   if (input.graceMarks <= 0) throw new Error('Grace marks must be positive')
@@ -1041,7 +1042,7 @@ export async function importMarksCsv(
     },
   })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot import marks after results are declared')
   }
 
@@ -1189,7 +1190,7 @@ export async function publishResults(
 ): Promise<{ published: boolean; notificationsSent: number }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus !== 'Result Declared') {
+  if (!isResultDeclared(exam.resultStatus)) {
     throw new Error('Results must be declared before publishing')
   }
 

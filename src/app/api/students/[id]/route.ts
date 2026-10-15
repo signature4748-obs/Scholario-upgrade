@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
+import { isResultDeclared } from '@/lib/exams/types'
 import { withUser, schoolScoped } from '@/lib/api'
 import { classLabelOf } from '@/lib/teacher-hub'
 import { AppError } from '@/lib/security/errors'
@@ -212,7 +213,7 @@ export async function GET(
               }
             }
             const subjectsTotal = required.length
-            const isDeclared = exam.resultStatus === 'Declared' || exam.resultStatus === 'Result Declared'
+            const isDeclared = isResultDeclared(exam.resultStatus)
             const state: StudentExamStateDto['state'] =
               submitted === 0 || subjectsTotal === 0
                 ? 'NOT_STARTED'

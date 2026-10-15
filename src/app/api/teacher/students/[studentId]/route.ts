@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
+import { isResultDeclared } from '@/lib/exams/types'
 import { withUser } from '@/lib/api'
 import {
   requireTeacher,
@@ -252,7 +253,7 @@ export async function GET(
             // the canonical declare flow writes "Result Declared"; the
             // seeded/student-results convention is "Declared" — both mean
             // the official final result is out
-            const isDeclared = exam.resultStatus === 'Declared' || exam.resultStatus === 'Result Declared'
+            const isDeclared = isResultDeclared(exam.resultStatus)
             const state: StudentExamStateDto['state'] =
               submitted === 0 || subjectsTotal === 0
                 ? 'NOT_STARTED'
