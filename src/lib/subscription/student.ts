@@ -12,6 +12,15 @@
  *   · ONE live entitlement per student (DB partial-unique backstop).
  *   · Revocation changes entitlement status ONLY — financial rows are
  *     immutable history.
+ *   · SUSPENSION FREEZE (the approved product rule): a suspended student
+ *     CAN complete a payment, but a payment NEVER lifts an admin
+ *     suspension. Payments BANK onto the suspended row in WINDOW time
+ *     (the validity clock is frozen while suspended); the purchased
+ *     period starts counting ONLY when an authorized operator
+ *     reactivates the entitlement (which re-anchors the remaining window
+ *     at the reactivation moment). Dated grants onto a suspended
+ *     entitlement are refused — reactivation (explicit authorization)
+ *     comes first.
  */
 import { db } from '@/lib/db'
 import type { Prisma } from '@prisma/client'
@@ -75,7 +84,7 @@ export interface RecordStudentPaymentResult {
   entitlementId: string | null
   validityStart: Date
   validityEnd: Date
-  statusAfter: 'ACTIVE' | 'PENDING'
+  statusAfter: 'ACTIVE' | 'PENDING' | 'SUSPENDED'
 }
 
 /**
@@ -205,12 +214,86 @@ export interface ActivateEntitlementOpts {
 export async function activateEntitlementInTx(
   tx: Tx,
   opts: ActivateEntitlementOpts,
-): Promise<{ entitlementId: string; validityStart: Date; validityEnd: Date; statusAfter: 'ACTIVE' | 'PENDING' }> {
+): Promise<{ entitlementId: string; validityStart: Date; validityEnd: Date; statusAfter: 'ACTIVE' | 'PENDING' | 'SUSPENDED' }> {
   const now = new Date()
-  const anchor = await tx.studentEntitlement.findFirst({
+  let anchor = await tx.studentEntitlement.findFirst({
     where: { studentId: opts.studentId, status: { in: ['PENDING', 'ACTIVE'] } },
     orderBy: { validityEnd: 'desc' },
   })
+
+  // ── SUSPENSION BANKING (the approved product rule) ───────────────────
+  // No live row but a SUSPENDED row: the student is under an admin
+  // suspension. A payment (or undated code claim / operator assignment)
+  // MUST NOT create a live entitlement — that would lift the suspension.
+  // It BANKS instead: the purchased months stack onto the suspended
+  // row's validityEnd in WINDOW time (never real time — the clock is
+  // frozen while suspended), and the status stays SUSPENDED. The banked
+  // period starts counting only at the authorized reactivation
+  // (applyEntitlementLifecycle 'reactivate' re-anchors the window).
+  if (!anchor) {
+    const suspendedRow = await tx.studentEntitlement.findFirst({
+      where: { studentId: opts.studentId, status: 'SUSPENDED' },
+      orderBy: { validityEnd: 'desc' },
+    })
+    if (suspendedRow) {
+      if (opts.validityStartOverride || opts.validityEndOverride) {
+        // A dated grant onto a frozen clock is meaningless (the picked
+        // dates assume the window runs in real time) — refuse honestly:
+        // reactivation (explicit operator authorization) comes first.
+        throw new AppError('CONFLICT', {
+          publicMessage:
+            'This student\u2019s entitlement is suspended — reactivate it first, then apply dated grants. Suspended students can still pay: the paid period is reserved and starts at reactivation.',
+          internalDetail: 'activateEntitlementInTx: dated grant onto a SUSPENDED entitlement refused',
+        })
+      }
+      let current = suspendedRow
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const bankedEnd = addMonths(current.validityEnd, Math.max(1, opts.validityMonths))
+        const banked = await tx.studentEntitlement.updateMany({
+          where: { id: current.id, status: 'SUSPENDED', validityEnd: current.validityEnd },
+          data: {
+            validityEnd: bankedEnd,
+            planId: opts.planId ?? current.planId,
+            planCode: opts.planCode ?? current.planCode,
+            paymentId: opts.paymentId ?? current.paymentId,
+            activationCodeId: opts.activationCodeId ?? current.activationCodeId,
+          },
+        })
+        if (banked.count === 1) {
+          return {
+            entitlementId: current.id,
+            validityStart: current.validityStart,
+            validityEnd: bankedEnd,
+            statusAfter: 'SUSPENDED' as const,
+          }
+        }
+        // Lost the optimistic-concurrency race — re-read and stack on
+        // whatever a concurrent banking produced (both payments bank).
+        const reloaded = await tx.studentEntitlement.findUnique({ where: { id: current.id } })
+        if (!reloaded) break
+        current = reloaded
+        if (reloaded.status === 'PENDING' || reloaded.status === 'ACTIVE') {
+          // Reactivated concurrently (explicit authorization happened
+          // mid-payment) — this activation becomes a normal renewal on
+          // the now-live row: fall through to the renewal path.
+          anchor = reloaded
+          break
+        }
+        if (reloaded.status !== 'SUSPENDED') break // revoked/expired concurrently → first-activation
+      }
+      if (!anchor && current.status === 'SUSPENDED') {
+        // Retries exhausted without banking and without a state
+        // transition — honest retry (never an unsuspending fallback).
+        throw new AppError('CONFLICT', {
+          publicMessage: 'The subscription was updated by another payment at the same moment — please retry.',
+          internalDetail: 'activateEntitlementInTx: banking optimistic-concurrency retries exhausted',
+        })
+      }
+      // current REVOKED/EXPIRED (revoked while suspended mid-payment):
+      // nothing suspended remains — the real money falls through to a
+      // fresh first-activation grant below.
+    }
+  }
 
   // ── Renewal: extend the live row in place (optimistic-concurrency
   //    guarded — the conditional UPDATE requires the anchor's exact
@@ -346,14 +429,20 @@ export async function activateEntitlementInTx(
 
 export type EntitlementLifecycleAction = 'revoke' | 'suspend' | 'reactivate' | 'adjust-validity'
 
+export interface EntitlementLifecycleResult {
+  status: string
+  /** reactivate only — the re-anchored window (frozen-clock resume). */
+  reanchored?: { validityStart: Date; validityEnd: Date }
+}
+
 export async function applyEntitlementLifecycle(opts: {
   entitlementId: string
   adminId: string
   action: EntitlementLifecycleAction
   reason?: string
   validityEnd?: Date | null
-}): Promise<{ status: string }> {
-  const row = await db.studentEntitlement.findUnique({ where: { id: opts.entitlementId } })
+}): Promise<EntitlementLifecycleResult> {
+  let row = await db.studentEntitlement.findUnique({ where: { id: opts.entitlementId } })
   if (!row) {
     throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Entitlement not found' })
   }
@@ -374,30 +463,79 @@ export async function applyEntitlementLifecycle(opts: {
     return { status: 'SUSPENDED' }
   }
   if (opts.action === 'reactivate') {
-    if (row.validityEnd.getTime() <= now.getTime()) {
-      throw new AppError('CONFLICT', {
-        publicMessage: 'This entitlement has already expired — record a renewal payment instead of reactivating.',
-        internalDetail: 'applyEntitlementLifecycle: reactivate past validityEnd',
-      })
-    }
-    try {
-      await db.studentEntitlement.update({
-        where: { id: row.id },
-        data: { status: row.validityStart.getTime() > now.getTime() ? 'PENDING' : 'ACTIVE', suspendedAt: null, suspendReason: null },
-      })
-    } catch (e: unknown) {
-      if ((e as { code?: string }).code === 'P2002') {
-        // Reactivating a SUSPENDED row while a live (PENDING|ACTIVE) row
-        // exists would violate the one-live-per-student index — answer an
-        // honest conflict instead of a raw 500.
+    if (row.status !== 'SUSPENDED') {
+      // Reactivate only transitions SUSPENDED rows. The caller's live-row
+      // resolution prefers PENDING|ACTIVE — a live row here means there
+      // is nothing to resume (idempotent no-op; expired keeps the legacy
+      // honest refusal below).
+      if (row.validityEnd.getTime() <= now.getTime()) {
         throw new AppError('CONFLICT', {
-          publicMessage: 'This student already has a live entitlement — the suspended row cannot be reactivated.',
-          internalDetail: 'applyEntitlementLifecycle: reactivate hit one-live-per-student index',
+          publicMessage: 'This entitlement has already expired — record a renewal payment instead of reactivating.',
+          internalDetail: 'applyEntitlementLifecycle: reactivate past validityEnd',
         })
       }
-      throw e
+      return { status: row.status }
     }
-    return { status: row.validityStart.getTime() > now.getTime() ? 'PENDING' : 'ACTIVE' }
+    // ── FROZEN-CLOCK RESUME (the approved product rule) ────────────────
+    // While suspended the validity window is FROZEN: payments bank onto
+    // the row in window-time (activateEntitlementInTx), so the stored
+    // window may be arbitrarily behind real time. The remaining window
+    // is everything not consumed when the suspension began PLUS every
+    // period banked since:
+    //     remaining = validityEnd − max(validityStart, suspendedAt)
+    // Reactivation — the explicit authorized unsuspension — re-anchors
+    // that remaining window at THIS moment: purchased-during-suspension
+    // validity starts counting only now; pre-existing unconsumed time
+    // resumes now. Optimistic-concurrency guarded: a payment banking
+    // onto the row mid-reactivation makes this re-read and resume the
+    // LARGER window (both the payment and the reactivation land).
+    let suspended = row
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const frozenFrom = new Date(
+        Math.max(suspended.validityStart.getTime(), suspended.suspendedAt?.getTime() ?? suspended.validityStart.getTime()),
+      )
+      const remainingMs = suspended.validityEnd.getTime() - frozenFrom.getTime()
+      if (remainingMs <= 0) {
+        throw new AppError('CONFLICT', {
+          publicMessage: 'This entitlement has no remaining validity — record a renewal payment instead of reactivating.',
+          internalDetail: 'applyEntitlementLifecycle: reactivate with no remaining window',
+        })
+      }
+      const newStart = new Date()
+      const newEnd = new Date(newStart.getTime() + remainingMs)
+      try {
+        const updated = await db.studentEntitlement.updateMany({
+          where: { id: suspended.id, status: 'SUSPENDED', validityEnd: suspended.validityEnd },
+          data: { status: 'ACTIVE', validityStart: newStart, validityEnd: newEnd, suspendedAt: null, suspendReason: null },
+        })
+        if (updated.count === 1) {
+          return { status: 'ACTIVE', reanchored: { validityStart: newStart, validityEnd: newEnd } }
+        }
+      } catch (e: unknown) {
+        if ((e as { code?: string }).code === 'P2002') {
+          // Reactivating a SUSPENDED row while a live (PENDING|ACTIVE) row
+          // exists would violate the one-live-per-student index — answer an
+          // honest conflict instead of a raw 500.
+          throw new AppError('CONFLICT', {
+            publicMessage: 'This student already has a live entitlement — the suspended row cannot be reactivated.',
+            internalDetail: 'applyEntitlementLifecycle: reactivate hit one-live-per-student index',
+          })
+        }
+        throw e
+      }
+      // Lost the optimistic race (a concurrent payment banked onto the
+      // row): re-read and resume the enlarged remaining window.
+      const reloaded = await db.studentEntitlement.findUnique({ where: { id: suspended.id } })
+      if (!reloaded || reloaded.status !== 'SUSPENDED') {
+        // Revoked or already reactivated concurrently — report the truth.
+        return { status: reloaded?.status ?? suspended.status }
+      }
+      suspended = reloaded
+    }
+    throw new AppError('CONFLICT', {
+      publicMessage: 'The subscription changed while reactivation was being applied — please retry.',
+      internalDetail: 'applyEntitlementLifecycle: reactivate optimistic-concurrency retries exhausted',
+    })
   }
   // adjust-validity — EXTEND-ONLY on live rows: an adjustment may never
   // shorten or end a paid period (the symmetric guarantee of the renewal

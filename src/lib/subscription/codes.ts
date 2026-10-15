@@ -273,7 +273,10 @@ export interface StudentClaimResult {
   entitlementId: string
   validityStart: Date
   validityEnd: Date
-  status: 'ACTIVE' | 'PENDING'
+  /** ACTIVE | PENDING | SUSPENDED — SUSPENDED when the claim BANKED onto a
+   *  suspended entitlement (a code claim never lifts an admin suspension;
+   *  the banked period starts at the authorized reactivation). */
+  status: 'ACTIVE' | 'PENDING' | 'SUSPENDED'
   planCode: string | null
   publicRef: string
 }

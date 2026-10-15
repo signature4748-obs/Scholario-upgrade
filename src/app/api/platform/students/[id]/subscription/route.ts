@@ -312,7 +312,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           validityStart: result.validityStart.toISOString(),
           validityEnd: result.validityEnd.toISOString(),
         },
-        message: `Entitlement ${result.statusAfter === 'PENDING' ? 'scheduled (starts ' + result.validityStart.toISOString().slice(0, 10) + ')' : 'activated'} until ${result.validityEnd.toISOString().slice(0, 10)} (receipt ${result.receiptNo}).`,
+        message:
+          result.statusAfter === 'SUSPENDED'
+            ? `Payment recorded (receipt ${result.receiptNo}). The entitlement is suspended — the paid period is reserved until ${result.validityEnd.toISOString().slice(0, 10)} and starts when it is reactivated.`
+            : result.statusAfter === 'PENDING'
+              ? `Entitlement scheduled (starts ${result.validityStart.toISOString().slice(0, 10)}) until ${result.validityEnd.toISOString().slice(0, 10)} (receipt ${result.receiptNo}).`
+              : `Entitlement activated until ${result.validityEnd.toISOString().slice(0, 10)} (receipt ${result.receiptNo}).`,
       }
     },
     { method: 'POST' },
@@ -340,11 +345,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const body = await parseJsonBody(req, lifecycleSchema)
       // "Live" resolution prefers the (single) PENDING|ACTIVE row — the
       // one-live-per-student index guarantees at most one exists. A
-      // SUSPENDED row is only picked when NO live row exists (the normal
-      // suspend case), so a suspended + newly-paid pair never targets the
-      // stale row while access stays live (fail-open revoke) and never
-      // shadows the live row in the gate (alphabetical status ordering:
-      // ACTIVE < PENDING < SUSPENDED).
+      // SUSPENDED row is only picked when NO live row exists: payments on
+      // a suspended student BANK onto the suspended row (never mint a
+      // live row), so the normal state is exactly ONE row in any of the
+      // three states. Reactivate on a SUSPENDED row re-anchors the frozen
+      // validity window at the reactivation moment (payments during the
+      // suspension start counting only then).
       const live = await db.studentEntitlement.findFirst({
         where: { studentId: id, status: { in: ['PENDING', 'ACTIVE', 'SUSPENDED'] } },
         orderBy: [{ status: 'asc' }, { validityEnd: 'desc' }],
@@ -375,7 +381,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           result: result.status,
           // Before/after window — the trail shows exactly what changed.
           validityEndBefore: live.validityEnd.toISOString(),
-          validityEndAfter: body.validityEnd ?? null,
+          validityEndAfter: body.validityEnd ?? result.reanchored?.validityEnd.toISOString() ?? null,
+          // reactivate: the re-anchored frozen window (evidence for the
+          // suspension-freeze rule — purchased-during-suspension validity
+          // starts at the reactivation moment).
+          ...(result.reanchored
+            ? { reanchoredStart: result.reanchored.validityStart.toISOString(), reanchoredEnd: result.reanchored.validityEnd.toISOString() }
+            : {}),
         },
       }).catch(() => {})
       return { ok: true, status: result.status, message: `Entitlement ${result.status.toLowerCase().replace('_', ' ')} — financial records unchanged.` }

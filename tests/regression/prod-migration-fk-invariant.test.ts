@@ -51,6 +51,10 @@ import {
   MIGRATION_EXPECTATIONS,
   HistoryGate,
   RepoMigration,
+  SUBSCRIPTION_SYSTEM_MIGRATION,
+  SUBSCRIPTION_SYSTEM_TABLES,
+  SUBSCRIPTION_SYSTEM_INDEXES,
+  SUBSCRIPTION_SYSTEM_CONSTRAINTS,
 } from '../../scripts/prod-migration/lib'
 
 const ROOT = resolve(__dirname, '../..')
@@ -612,5 +616,217 @@ describe('financialIntegrity() — mocked Management API', () => {
     const now = await dbNow()
     expect(now).toBe('2026-10-13 01:00:00.654321+00')
     expect(capturedQuery).toContain('clock_timestamp()')
+  })
+})
+
+// ─── 11. SUBSCRIPTION & ENTITLEMENT SYSTEM (PR #30, 20261013183000) —
+// release-gate object coverage: the pipeline's pre-flight/verify stages
+// must cover the whole commercial lane (drift STOP + silent-non-apply),
+// and the registered object set can never drift from the migration SQL.
+
+const SUB_SQL = readFileSync(
+  join(ROOT, 'prisma/migrations/20261013183000_subscription_entitlement_system/migration.sql'),
+  'utf8',
+)
+
+
+describe('subscription system — expectation mapping (no drift)', () => {
+  test('the migration is mapped with the full object set', () => {
+    const exp = MIGRATION_EXPECTATIONS[SUBSCRIPTION_SYSTEM_MIGRATION]
+    expect(exp).toBeDefined()
+    expect([...(exp?.tables ?? [])].sort()).toEqual([...SUBSCRIPTION_SYSTEM_TABLES].sort())
+    expect([...(exp?.indexes ?? [])].sort()).toEqual([...SUBSCRIPTION_SYSTEM_INDEXES].sort())
+    expect([...(exp?.constraints ?? [])].sort()).toEqual([...SUBSCRIPTION_SYSTEM_CONSTRAINTS].sort())
+    expect(exp?.tableColumns).toEqual({
+      PlatformPayment: ['orderId'],
+      PlatformSetting: ['subscriptionConfig'],
+      SchoolSubscription: ['billingModel', 'currencySnapshot', 'interval', 'planCode', 'planId', 'priceSnapshot'],
+    })
+  })
+
+  test('EXHAUSTIVE: every CREATE TABLE in the SQL is mapped', () => {
+    const created = [...SUB_SQL.matchAll(/CREATE TABLE "(\w+)"/g)].map((m) => m[1])
+    expect(created.sort()).toEqual([...SUBSCRIPTION_SYSTEM_TABLES].sort())
+  })
+
+  test('EXHAUSTIVE: every CREATE INDEX in the SQL is mapped', () => {
+    const created = [...SUB_SQL.matchAll(/CREATE (?:UNIQUE )?INDEX "(\w+)"/g)].map((m) => m[1])
+    expect(created.sort()).toEqual([...SUBSCRIPTION_SYSTEM_INDEXES].sort())
+  })
+
+  test('EXHAUSTIVE: every ADD CONSTRAINT in the SQL is mapped', () => {
+    const created = [...SUB_SQL.matchAll(/ADD CONSTRAINT "(\w+)"/g)].map((m) => m[1])
+    expect(created.sort()).toEqual([...SUBSCRIPTION_SYSTEM_CONSTRAINTS].sort())
+  })
+
+  test('the one-live-per-student PARTIAL unique backstop is declared with the PENDING|ACTIVE predicate', () => {
+    expect(SUBSCRIPTION_SYSTEM_INDEXES).toContain('StudentEntitlement_one_live_per_student')
+    expect(SUB_SQL).toContain('StudentEntitlement_one_live_per_student')
+    expect(SUB_SQL).toMatch(/WHERE "status" IN \('PENDING', 'ACTIVE'\)/)
+  })
+
+  test('the load-bearing exactly-once backstops are all mapped', () => {
+    for (const idx of [
+      'SubscriptionOrder_providerPaymentId_key',
+      'SubscriptionOrder_providerOrderId_key',
+      'StudentSubscriptionPayment_orderId_key',
+      'PlatformPayment_orderId_key',
+    ]) {
+      expect(SUBSCRIPTION_SYSTEM_INDEXES).toContain(idx)
+    }
+  })
+
+  test('the migration is ADDITIVE-ONLY: every statement is an additive DDL shape', () => {
+    // Statement-shape allowlist (mirrors assertAdditiveOnly in the
+    // pipeline): ALTER TABLE ADD COLUMN/CONSTRAINT, CREATE TABLE, CREATE
+    // (UNIQUE) INDEX, CREATE SEQUENCE. FK referential clauses (ON DELETE
+    // SET NULL ON UPDATE CASCADE) are DDL predicates, not data statements.
+    const stripped = SUB_SQL
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .split('\n')
+      .map((l) => l.replace(/--.*$/, ''))
+      .join('\n')
+    const statements = stripped
+      .split(';')
+      .map((s) => s.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+    expect(statements.length).toBeGreaterThan(60)
+    const additive = [
+      /^ALTER TABLE "\w+" ADD COLUMN/i,
+      /^ALTER TABLE "\w+" ADD CONSTRAINT/i,
+      /^CREATE TABLE "/i,
+      /^CREATE UNIQUE INDEX "/i,
+      /^CREATE INDEX "/i,
+      /^CREATE SEQUENCE/i,
+    ]
+    for (const s of statements) {
+      expect(additive.some((re) => re.test(s))).toBe(true)
+    }
+  })
+})
+
+describe('evaluateExpectations — subscription object gate (both directions)', () => {
+  // A configurable mock: exists === true → every subscription object is
+  // reported present (tables, indexes, constraints, added columns);
+  // exists === false → nothing is present.
+  const realFetchSub = globalThis.fetch
+  let subscriptionObjectsExist = false
+
+  function installSubscriptionMock(): void {
+    process.env.SUPABASE_ACCESS_TOKEN = 'test-token'
+    process.env.SUPABASE_PROJECT_REF = 'test-ref'
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String((input as Request).url)
+      if (!url.includes('/database/query')) return realFetchSub(input as RequestInfo, init)
+      const body = JSON.parse(String(init?.body ?? '{}')) as { query: string }
+      const q = body.query
+      const exists = () =>
+        subscriptionObjectsExist
+          ? [
+              ...SUBSCRIPTION_SYSTEM_TABLES.map((t) => ({ table_name: t })),
+              { table_name: 'User' },
+            ]
+          : [{ table_name: 'User' }]
+      if (q.includes('FROM pg_constraint') && q.includes('conname')) {
+        return new Response(
+          JSON.stringify(
+            subscriptionObjectsExist
+              ? SUBSCRIPTION_SYSTEM_CONSTRAINTS.map((c) => ({ conname: c }))
+              : [],
+          ),
+          { status: 200 },
+        )
+      }
+      if (q.includes('indexdef')) return new Response(JSON.stringify([]), { status: 200 })
+      if (q.includes('FROM pg_indexes')) {
+        return new Response(
+          JSON.stringify(
+            subscriptionObjectsExist ? SUBSCRIPTION_SYSTEM_INDEXES.map((i) => ({ indexname: i })) : [],
+          ),
+          { status: 200 },
+        )
+      }
+      if (q.includes('information_schema.columns')) {
+        const table = (q.match(/table_name = '([^']+)'/) ?? [])[1]
+        const wanted: Record<string, string[]> = {
+          PlatformPayment: ['orderId'],
+          PlatformSetting: ['subscriptionConfig'],
+          SchoolSubscription: ['billingModel', 'currencySnapshot', 'interval', 'planCode', 'planId', 'priceSnapshot'],
+        }
+        if (subscriptionObjectsExist && table && wanted[table]) {
+          return new Response(
+            JSON.stringify(wanted[table].map((c) => ({ column_name: c, data_type: 'text', is_nullable: 'YES' }))),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (q.includes('information_schema.tables')) {
+        return new Response(JSON.stringify(exists()), { status: 200 })
+      }
+      if (q.includes('count(*)') && q.includes('pg_class')) return new Response(JSON.stringify([{ n: 0 }]), { status: 200 })
+      if (q.startsWith('SELECT count')) return new Response(JSON.stringify([{ n: 0 }]), { status: 200 })
+      // tableCounts' batched UNION ALL count statement.
+      if (q.includes('AS tbl')) {
+        return new Response(
+          JSON.stringify(exists().map((t) => ({ tbl: t.table_name, n: 1 }))),
+          { status: 200 },
+        )
+      }
+      return new Response(JSON.stringify([]), { status: 200 })
+    }) as typeof fetch
+  }
+
+  beforeEach(() => installSubscriptionMock())
+  afterEach(() => {
+    globalThis.fetch = realFetchSub
+    delete process.env.SUPABASE_ACCESS_TOKEN
+    delete process.env.SUPABASE_PROJECT_REF
+  })
+
+  test('subscription objects MISSING while migration is PENDING → clean (no drift)', async () => {
+    subscriptionObjectsExist = false
+    const gate = makeGate([SUBSCRIPTION_SYSTEM_MIGRATION], [])
+    const result = await evaluateExpectations(gate)
+    expect(result.pendingViolations).toEqual([])
+    expect(result.appliedViolations).toEqual([])
+  })
+
+  test('subscription objects EXIST while migration is PENDING → drift violations (STOP)', async () => {
+    subscriptionObjectsExist = true
+    const gate = makeGate([SUBSCRIPTION_SYSTEM_MIGRATION], [])
+    const result = await evaluateExpectations(gate)
+    expect(result.pendingViolations.length).toBe(
+      SUBSCRIPTION_SYSTEM_TABLES.length +
+        SUBSCRIPTION_SYSTEM_INDEXES.length +
+        SUBSCRIPTION_SYSTEM_CONSTRAINTS.length +
+        8, // 8 mapped added columns (1 + 1 + 6)
+    )
+    expect(result.pendingViolations[0]).toContain(SUBSCRIPTION_SYSTEM_MIGRATION)
+    expect(result.pendingViolations[0]).toContain('PENDING')
+    expect(result.pendingViolations.some((v) => v.includes('StudentEntitlement_one_live_per_student'))).toBe(true)
+    expect(result.appliedViolations).toEqual([])
+  })
+
+  test('subscription objects MISSING although migration is APPLIED → violations (silent non-apply)', async () => {
+    subscriptionObjectsExist = false
+    const gate = makeGate([], [SUBSCRIPTION_SYSTEM_MIGRATION])
+    const result = await evaluateExpectations(gate)
+    expect(result.appliedViolations.length).toBe(
+      SUBSCRIPTION_SYSTEM_TABLES.length +
+        SUBSCRIPTION_SYSTEM_INDEXES.length +
+        SUBSCRIPTION_SYSTEM_CONSTRAINTS.length +
+        8,
+    )
+    expect(result.appliedViolations.some((v) => v.includes('missing although migration is APPLIED'))).toBe(true)
+    expect(result.pendingViolations).toEqual([])
+  })
+
+  test('subscription objects EXIST and migration is APPLIED → clean', async () => {
+    subscriptionObjectsExist = true
+    const gate = makeGate([], [SUBSCRIPTION_SYSTEM_MIGRATION])
+    const result = await evaluateExpectations(gate)
+    expect(result.pendingViolations).toEqual([])
+    expect(result.appliedViolations).toEqual([])
   })
 })
