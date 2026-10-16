@@ -1245,6 +1245,15 @@ export function SchoolDetailModule() {
   // sub-section anchor before the scroll lands.
   const lastWrittenTab = useRef<string | null>(null)
 
+  // §7 tab bar — after a plain group switch the operator must land back
+  // at the TOP of the new tab content. Keeping the previous scroll
+  // position leaves the tab bar hidden under the sticky console header
+  // (h-16, z-30) — the row becomes unclickable until the user scrolls
+  // manually (reproduced: clicking "Advanced" while scrolled into the
+  // Support & audit content hit the header instead). scroll-mt-20 on the
+  // TabsList makes scrollIntoView account for that header.
+  const tabsBarRef = useRef<HTMLDivElement | null>(null)
+
   // URL → state (initial load, refresh, browser back/forward). A
   // legacy ?tab= value selects its mapped group AND normalizes the
   // URL to the canonical §7 group key (replace — no history entry),
@@ -1311,6 +1320,13 @@ export function SchoolDetailModule() {
       else next.set('tab', resolved.group)
       const qs = next.toString()
       router.push(qs ? `?${qs}` : '?', { scroll: false })
+      // Plain group switch (no sub-section anchor): bring the operator
+      // back to the tab bar — the top of the newly-mounted content.
+      if (!resolved.anchor) {
+        window.setTimeout(() => {
+          tabsBarRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }, 60)
+      }
     },
     [router, searchParams, availableGroups],
   )
@@ -1774,8 +1790,9 @@ export function SchoolDetailModule() {
             390px). Radix keeps aria-selected + roving keyboard focus on
             the triggers (arrow-key navigation). */}
         <TabsList
+          ref={tabsBarRef}
           aria-label="School workspace sections"
-          className="w-full bg-slate-100 border border-slate-200 h-auto p-1 gap-1 overflow-x-auto no-scrollbar justify-start"
+          className="w-full bg-slate-100 border border-slate-200 h-auto p-1 gap-1 overflow-x-auto no-scrollbar justify-start scroll-mt-20"
         >
           <TabsTrigger
             value="overview"

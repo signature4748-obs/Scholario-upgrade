@@ -1039,7 +1039,18 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
           <h3 id="plans-registry-heading" className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
             <Package className="h-4 w-4" aria-hidden="true" />Plan registry
           </h3>
-          <Button size="sm" onClick={() => setCreating(true)} className="bg-teal-600 font-semibold text-white hover:bg-teal-700">
+          {/* Consistent with the entitlements dialog's disabled Assign
+              buttons: while the plan registry table itself is pending,
+              a submit would only fail with the typed 503 — surface that
+              up front instead of letting the operator fill the form
+              first. */}
+          <Button
+            size="sm"
+            onClick={() => setCreating(true)}
+            disabled={pending}
+            title={pending ? 'The plan registry is created by the pending subscription-system migration — new plans become available once it is applied.' : undefined}
+            className="bg-teal-600 font-semibold text-white hover:bg-teal-700"
+          >
             <CreditCard className="h-4 w-4" aria-hidden="true" />New plan
           </Button>
         </div>

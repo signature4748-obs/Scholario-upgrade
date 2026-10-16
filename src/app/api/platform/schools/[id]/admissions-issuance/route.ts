@@ -76,7 +76,15 @@ async function flagResolution(schoolId: string): Promise<{
   if (typeof schoolFlags[ADMISSIONS_ISSUANCE_FLAG] === 'boolean') {
     return { enabled, source: 'school' }
   }
-  const setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+  // Legacy-compatible column select (see PLATFORM_MODULE_FLAGS_SELECT):
+  // only `modules` is consumed; a full-row read P2022s on a
+  // pre-migration database. With the flag + readiness reads both
+  // legacy-safe, this route serves its real state on BOTH schema
+  // states (previously it 503'd on pre-migration databases).
+  const setting = await db.platformSetting.findUnique({
+    where: { id: 'global' },
+    select: { modules: true },
+  })
   const master = parseFlags(setting?.modules ?? '{}')
   if (typeof master[ADMISSIONS_ISSUANCE_FLAG] === 'boolean') {
     return { enabled, source: 'platform' }

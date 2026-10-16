@@ -2,11 +2,35 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withPlatform } from '@/lib/platform/authz'
 import { platformAuditEvent } from '@/lib/platform/audit'
-import { validateFlagPatch, FLAGGABLE_MODULES, parseFlags } from '@/lib/platform/module-flags'
+import {
+  validateFlagPatch,
+  FLAGGABLE_MODULES,
+  parseFlags,
+} from '@/lib/platform/module-flags'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { AppError } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
+
+/**
+ * LEGACY-COMPATIBLE SELECT for the platform settings route. This route
+ * serves the console Settings page — a CORE control-plane surface — and
+ * consumes ONLY the legacy columns (showDemoSchool, modules,
+ * supportMaxDuration). A full-row platformSetting read also selects
+ * `subscriptionConfig` (added by the owner-gated pending subscription
+ * migration) and P2022s on a pre-migration database, turning the
+ * Settings page's own endpoint into a typed 503
+ * SUBSCRIPTION_SYSTEM_PENDING — exactly the failure the acceptance
+ * matrix reported. Selecting exactly these columns works on both
+ * schema states; the commercial-model config surface (which genuinely
+ * requires the pending column) is served separately by
+ * /api/platform/subscriptions/config with its own honest degradation.
+ */
+const PLATFORM_SETTINGS_SELECT = {
+  showDemoSchool: true,
+  modules: true,
+  supportMaxDuration: true,
+} as const
 
 /**
  * GET /api/platform/settings — platform settings + module master
@@ -15,9 +39,15 @@ export const runtime = 'nodejs'
  */
 export async function GET() {
   return withPlatform({}, async () => {
-    let setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+    let setting = await db.platformSetting.findUnique({
+      where: { id: 'global' },
+      select: PLATFORM_SETTINGS_SELECT,
+    })
     if (!setting) {
-      setting = await db.platformSetting.create({ data: { id: 'global' } })
+      setting = await db.platformSetting.create({
+        data: { id: 'global' },
+        select: PLATFORM_SETTINGS_SELECT,
+      })
     }
     return {
       showDemoSchool: setting.showDemoSchool,
@@ -40,9 +70,15 @@ export async function PATCH(req: NextRequest) {
       const body = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
 
       const changes: Record<string, unknown> = {}
-      let setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+      let setting = await db.platformSetting.findUnique({
+        where: { id: 'global' },
+        select: PLATFORM_SETTINGS_SELECT,
+      })
       if (!setting) {
-        setting = await db.platformSetting.create({ data: { id: 'global' } })
+        setting = await db.platformSetting.create({
+          data: { id: 'global' },
+          select: PLATFORM_SETTINGS_SELECT,
+        })
       }
 
       if (typeof body.showDemoSchool === 'boolean' && body.showDemoSchool !== setting.showDemoSchool) {

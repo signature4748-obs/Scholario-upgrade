@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { AppError } from '@/lib/security/errors'
-import { parseFlags } from '@/lib/platform/module-flags'
+import { parseFlags, PLATFORM_MODULE_FLAGS_SELECT } from '@/lib/platform/module-flags'
 
 /**
  * admissionsServerIssuance — the feature flag gating the ENTIRE new
@@ -32,7 +32,14 @@ export async function isAdmissionsIssuanceEnabled(schoolId: string): Promise<boo
   if (typeof schoolFlags[ADMISSIONS_ISSUANCE_FLAG] === 'boolean') {
     return schoolFlags[ADMISSIONS_ISSUANCE_FLAG]
   }
-  const setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+  // Legacy-compatible column select (see PLATFORM_MODULE_FLAGS_SELECT):
+  // a full-row read would P2022 on a pre-migration database (missing
+  // subscriptionConfig) and 503 the flag read — only `modules` is
+  // consumed here, and it exists in both schema states.
+  const setting = await db.platformSetting.findUnique({
+    where: { id: 'global' },
+    select: PLATFORM_MODULE_FLAGS_SELECT,
+  })
   const master = parseFlags(setting?.modules ?? '{}')
   if (typeof master[ADMISSIONS_ISSUANCE_FLAG] === 'boolean') {
     return master[ADMISSIONS_ISSUANCE_FLAG]

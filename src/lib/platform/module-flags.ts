@@ -37,6 +37,21 @@ export function parseFlags(json: string): Record<string, boolean> {
   return {}
 }
 
+/**
+ * LEGACY-COMPATIBLE COLUMN SELECT for the platform master switch read.
+ * A FULL-row platformSetting select also asks for columns added by the
+ * owner-gated pending subscription migration (subscriptionConfig) — on
+ * a pre-migration database that throws P2022 and, through the central
+ * classifier, turns EVERY module-guarded school route (exams, fees,
+ * homework, library, transport) and the school-settings read into a
+ * 503 SUBSCRIPTION_SYSTEM_PENDING — breaking core school surfaces that
+ * have nothing to do with the subscription system. This module consumes
+ * ONLY `modules` (present in both schema states), so selecting exactly
+ * that column serves the real master switches everywhere, migrated or
+ * not, with zero behavioral change post-migration.
+ */
+export const PLATFORM_MODULE_FLAGS_SELECT = { modules: true } as const
+
 /** Resolve the effective switch (school override → platform master → on). */
 export async function isModuleEnabled(schoolId: string, module: FlaggableModule): Promise<boolean> {
   const school = await db.school.findUnique({
@@ -46,7 +61,10 @@ export async function isModuleEnabled(schoolId: string, module: FlaggableModule)
   if (!school) return true
   const schoolFlags = parseFlags(school.featureFlags)
   if (typeof schoolFlags[module] === 'boolean') return schoolFlags[module]
-  const setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+  const setting = await db.platformSetting.findUnique({
+    where: { id: 'global' },
+    select: PLATFORM_MODULE_FLAGS_SELECT,
+  })
   const master = parseFlags(setting?.modules ?? '{}')
   if (typeof master[module] === 'boolean') return master[module]
   return true
@@ -62,7 +80,10 @@ export async function effectiveModuleFlags(schoolId: string): Promise<Record<str
     select: { featureFlags: true },
   })
   const schoolFlags = school ? parseFlags(school.featureFlags) : {}
-  const setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+  const setting = await db.platformSetting.findUnique({
+    where: { id: 'global' },
+    select: PLATFORM_MODULE_FLAGS_SELECT,
+  })
   const master = parseFlags(setting?.modules ?? '{}')
   const out: Record<string, boolean> = {}
   for (const m of FLAGGABLE_MODULES) {
