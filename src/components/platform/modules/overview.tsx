@@ -34,10 +34,11 @@ import {
   ChevronRight,
   Clock,
   LifeBuoy,
+  Plus,
   RefreshCw,
   ScrollText,
 } from 'lucide-react'
-import { platformApi, type PlatformApiError } from '../platform-client'
+import { platformApi, usePlatformSession, type PlatformApiError } from '../platform-client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -162,6 +163,7 @@ function MetricCard({
   valueClass,
   children,
   delay,
+  href,
 }: {
   label: string
   value: string
@@ -169,13 +171,12 @@ function MetricCard({
   valueClass?: string
   children?: React.ReactNode
   delay?: number
+  /** When set, the whole card links to the filtered list (the metric
+   *  is the summary; the list is the evidence). */
+  href?: string
 }) {
-  return (
-    <motion.div
-      {...fadeUp}
-      transition={{ duration: 0.35, delay }}
-      className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm"
-    >
+  const card = (
+    <>
       <div className="flex items-center justify-between gap-2">
         <p className="min-w-0 flex-1 truncate text-xs font-medium uppercase tracking-wide text-slate-500">
           {label}
@@ -191,6 +192,25 @@ function MetricCard({
         {value}
       </p>
       {children && <div className="mt-2 text-xs text-slate-500">{children}</div>}
+    </>
+  )
+  const frame = 'min-w-0 rounded-xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm'
+  if (href) {
+    return (
+      <motion.div {...fadeUp} transition={{ duration: 0.35, delay }}>
+        <Link
+          href={href}
+          className={`group block ${frame} transition-colors hover:border-teal-300 focus-ring`}
+          aria-label={`${label}: ${value} — view the filtered list`}
+        >
+          {card}
+        </Link>
+      </motion.div>
+    )
+  }
+  return (
+    <motion.div {...fadeUp} transition={{ duration: 0.35, delay }} className={frame}>
+      {card}
     </motion.div>
   )
 }
@@ -208,6 +228,7 @@ function MetricSkeleton() {
 // ── Module ────────────────────────────────────────────────────────────────
 
 export function OverviewModule() {
+  const { can } = usePlatformSession()
   const [schools, setSchools] = useState<SchoolsSummaryData | null>(null)
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -295,16 +316,32 @@ export function OverviewModule() {
           </h1>
           <p className="mt-1 text-sm text-slate-500">Platform health and schools at a glance.</p>
         </div>
-        <Button
-          asChild
-          size="sm"
-          className="h-10 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
-        >
-          <Link href="/platform/schools">
-            View schools
-            <ArrowRight className="h-4 w-4" aria-hidden="true" />
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Direct shortcut — the primary daily workflow. */}
+          {can('schools.provision') && (
+            <Button
+              asChild
+              size="sm"
+              className="h-10 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
+            >
+              <Link href="/platform/schools?new=1">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Add school
+              </Link>
+            </Button>
+          )}
+          <Button
+            asChild
+            size="sm"
+            variant="outline"
+            className="h-10 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 font-semibold focus-ring"
+          >
+            <Link href="/platform/schools">
+              View schools
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* Honest schema-pending banner — exactly once, metrics still render */}
@@ -350,6 +387,7 @@ export function OverviewModule() {
                 value={num.format(summary?.total ?? 0)}
                 icon={<Building2 className="h-4 w-4" />}
                 delay={0}
+                href="/platform/schools"
               />
               <MetricCard
                 label="Active schools"
@@ -357,6 +395,7 @@ export function OverviewModule() {
                 valueClass="text-teal-600"
                 icon={<CheckCircle2 className="h-4 w-4" />}
                 delay={0.05}
+                href="/platform/schools?status=ACTIVE"
               />
               <MetricCard
                 label="Needs attention"
@@ -364,6 +403,7 @@ export function OverviewModule() {
                 valueClass="text-amber-600"
                 icon={<AlertTriangle className="h-4 w-4" />}
                 delay={0.1}
+                href="/platform/schools?status=ATTENTION"
               >
                 <span className="tabular-nums">
                   {expiringSoon} subscription{expiringSoon === 1 ? '' : 's'} expiring within 30 days
@@ -375,6 +415,7 @@ export function OverviewModule() {
                 valueClass="text-red-600"
                 icon={<Ban className="h-4 w-4" />}
                 delay={0.15}
+                href="/platform/schools?status=SUSPENDED"
               />
             </>
           )}

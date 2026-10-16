@@ -33,7 +33,10 @@ const SCHOOL_PLANS = ['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'] as const
 
 const listQuerySchema = z.object({
   q: z.string().max(120).optional(),
-  status: z.enum(['ACTIVE', 'SUSPENDED', 'PENDING', 'TRIAL']).optional(),
+  /** ATTENTION is the overview's needs-attention rule: schools whose
+   *  lifecycle is PENDING (setup not completed) or TRIAL — the same
+   *  two statuses the Overview metric counts. */
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'PENDING', 'TRIAL', 'ATTENTION']).optional(),
   /** Legacy tenant plan marker (school.plan). */
   plan: z.enum(['FREE', 'STANDARD', 'PRO', 'ENTERPRISE']).optional(),
   /** Subscription billing model (SchoolSubscription.billingModel). */
@@ -99,7 +102,11 @@ export async function GET(req: NextRequest) {
             ],
           }
         : {}),
-      ...(query.status ? { status: query.status } : {}),
+      ...(query.status
+        ? query.status === 'ATTENTION'
+          ? { status: { in: ['PENDING', 'TRIAL'] } }
+          : { status: query.status }
+        : {}),
       ...(query.plan ? { plan: query.plan } : {}),
       ...(query.demo ? { isDemo: query.demo === 'demo' } : {}),
       ...(query.billingModel ? { subscription: { billingModel: query.billingModel } } : {}),

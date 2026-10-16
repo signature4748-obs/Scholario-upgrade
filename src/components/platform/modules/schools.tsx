@@ -151,7 +151,7 @@ interface SchoolsData {
   subscriptionSchemaPending?: boolean
 }
 
-type StatusFilter = 'ALL' | 'ACTIVE' | 'SUSPENDED' | 'PENDING' | 'TRIAL'
+type StatusFilter = 'ALL' | 'ACTIVE' | 'SUSPENDED' | 'PENDING' | 'TRIAL' | 'ATTENTION'
 type SubStateFilter = 'ALL' | 'ACTIVE' | 'GRACE' | 'RESTRICTED' | 'SUSPENDED' | 'NOT_ACTIVATED'
 type BillingModelFilter = 'ALL' | 'SCHOOL_WIDE' | 'PER_STUDENT' | 'MIXED'
 type PlanFilter = 'ALL' | 'FREE' | 'STANDARD' | 'PRO' | 'ENTERPRISE'
@@ -455,6 +455,7 @@ const STATUS_OPTIONS: readonly FilterOption[] = [
   { value: 'SUSPENDED', label: 'Suspended' },
   { value: 'PENDING', label: 'Pending' },
   { value: 'TRIAL', label: 'Trial' },
+  { value: 'ATTENTION', label: 'Needs attention (pending or trial)' },
 ]
 
 const PLAN_OPTIONS: readonly FilterOption[] = [
@@ -564,6 +565,11 @@ export function SchoolsModule() {
   const [error, setError] = useState<string | null>(null)
   const [provisionOpen, setProvisionOpen] = useState(false)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  /** URL-param ingestion gate — the first fetch waits until the
+   *  mount-time URL has been parsed (deep links like
+   *  /platform/schools?status=ATTENTION or ?new=1 must apply before
+   *  the initial request fires, not after). */
+  const [urlParsed, setUrlParsed] = useState(false)
   const requestId = useRef(0)
 
   // Honest schema-pending signal from the LAST successful response.
@@ -588,6 +594,37 @@ export function SchoolsModule() {
     }, 300)
     return () => clearTimeout(t)
   }, [searchInput])
+
+  // Mount-time URL params (deep links from the Overview metric cards
+  // and the add-school shortcut): `status=<filter>` and `new=1`
+  // (auto-open the provision wizard). Read once from
+  // window.location.search (client-only — no prerender involvement);
+  // a ref guard keeps it one-shot even if the session identity
+  // refreshes (the wizard must not re-open on its own).
+  const urlParamsParsed = useRef(false)
+  useEffect(() => {
+    if (urlParamsParsed.current) return
+    urlParamsParsed.current = true
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      const st = sp.get('status')
+      if (
+        st === 'ACTIVE' ||
+        st === 'SUSPENDED' ||
+        st === 'PENDING' ||
+        st === 'TRIAL' ||
+        st === 'ATTENTION'
+      ) {
+        setStatus(st)
+      }
+      if (sp.get('new') === '1' && can('schools.provision')) {
+        setProvisionOpen(true)
+      }
+    } catch {
+      /* no usable location — defaults apply */
+    }
+    setUrlParsed(true)
+  }, [can])
 
   // SCHEMA-PENDING honesty: the server cannot serve the billingModel
   // filter (and the popover disables both subscription filters with
@@ -643,8 +680,9 @@ export function SchoolsModule() {
   }, [q, status, plan, subscriptionState, billingModel, demo, readiness, expiringDays, sort, page])
 
   useEffect(() => {
+    if (!urlParsed) return
     void load()
-  }, [load])
+  }, [load, urlParsed])
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1
   const canProvision = can('schools.provision')

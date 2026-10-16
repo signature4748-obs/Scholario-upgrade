@@ -1,15 +1,20 @@
 'use client'
 
 // ============================================================
-// ConsoleShell — the /platform control-plane chrome (PHASE 6)
+// ConsoleShell — the /platform control-plane chrome
 // ------------------------------------------------------------
 // Scholario production design system — LIGHT (slate canvas, white
-// chrome, teal/emerald accents — same light identity as /platform/login).
-// SIMPLIFIED IA (super-admin simplification mission): the sidebar is
-// TWO tiers only — six primary destinations straight under the logo
-// (Overview · Schools · Subscriptions · Support · Audit log · Settings,
-// no group header) + one de-emphasized "Administration" group
-// (Announcements · Users · My Sessions).
+// chrome, teal accents — same light identity as /platform/login).
+// SUPER-ADMIN CONTROL PANEL IA (2026-10 simplification):
+//   · ONE flat primary navigation, exactly nine destinations in a
+//     fixed order (Overview · Schools · Subscriptions · Users &
+//     Access · Support · Announcements · Audit Log · Settings ·
+//     My Sessions) — no group headers, no submenus.
+//   · Compact desktop sidebar with an OPTIONAL collapsed icon-only
+//     state (persisted in localStorage; icon links keep accessible
+//     names; mobile drawer always shows full labels).
+//   · Account identity + sign-out live in ONE compact account area
+//     at the sidebar foot (no duplicate sign-out in the top bar).
 // Provides:
 //   · session gate (401 → /platform/login via the provider),
 //   · permission-filtered navigation (hiding is UX; the server
@@ -17,8 +22,7 @@
 //   · step-up pill: amber when the destructive-action window is stale,
 //     emerald live countdown when fresh; "Verify" opens the TOTP
 //     dialog (POST /api/platform/auth/step-up) — dormant while
-//     platform MFA is stood down (mfaEnabled stays false),
-//   · sign-out.
+//     platform MFA is stood down (mfaEnabled stays false).
 // ============================================================
 
 import React, { useEffect, useState } from 'react'
@@ -41,6 +45,8 @@ import {
   Wallet,
   ServerCrash,
   RefreshCw,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from './platform-client'
 import { Button } from '@/components/ui/button'
@@ -62,25 +68,21 @@ interface NavItem {
   permission?: string
 }
 
-/** SIMPLIFIED IA — tier 1: the six primary daily destinations. They
- *  render directly under the logo WITHOUT a group header. */
-const PRIMARY_NAV: NavItem[] = [
+/** FLAT IA — the nine primary destinations, fixed order, no groups. */
+const NAV: NavItem[] = [
   { href: '/platform', label: 'Overview', icon: LayoutDashboard },
   { href: '/platform/schools', label: 'Schools', icon: Building2, permission: 'schools.read' },
   { href: '/platform/subscriptions', label: 'Subscriptions', icon: Wallet, permission: 'billing.manage' },
+  { href: '/platform/admins', label: 'Users & Access', icon: Users, permission: 'admins.manage' },
   { href: '/platform/support', label: 'Support', icon: LifeBuoy, permission: 'support.access' },
-  { href: '/platform/audit', label: 'Audit log', icon: ScrollText, permission: 'audit.read' },
-  { href: '/platform/settings', label: 'Settings', icon: Settings2, permission: 'settings.manage' },
-]
-
-/** SIMPLIFIED IA — tier 2: ONE de-emphasized "Administration" group for
- *  the long-tail admin/account surfaces (announcements, directory of
- *  platform admins, own sessions). */
-const ADMIN_NAV: NavItem[] = [
   { href: '/platform/announcements', label: 'Announcements', icon: Megaphone, permission: 'announcements.manage' },
-  { href: '/platform/admins', label: 'Users', icon: Users, permission: 'admins.manage' },
+  { href: '/platform/audit', label: 'Audit Log', icon: ScrollText, permission: 'audit.read' },
+  { href: '/platform/settings', label: 'Settings', icon: Settings2, permission: 'settings.manage' },
   { href: '/platform/sessions', label: 'My Sessions', icon: MonitorSmartphone },
 ]
+
+/** localStorage key for the desktop collapsed-sidebar preference. */
+const SIDEBAR_PREF_KEY = 'scholario.platform.sidebar'
 
 function initials(name: string): string {
   return name
@@ -91,28 +93,36 @@ function initials(name: string): string {
     .toUpperCase()
 }
 
-/** One sidebar link — shared by both tiers. `secondary` = the
- *  de-emphasized Administration tier (smaller, quieter text); the
- *  ACTIVE state (aria-current + teal) stays IDENTICAL for both. */
-function SidebarLink({
-  item,
-  pathname,
-  secondary = false,
-}: {
-  item: NavItem
-  pathname: string
-  secondary?: boolean
-}) {
+/** One sidebar link. `collapsed` renders the icon-only compact form —
+ *  the accessible name stays the full label (aria-label + title). */
+function SidebarLink({ item, pathname, collapsed }: { item: NavItem; pathname: string; collapsed: boolean }) {
   const active = pathname === item.href || (item.href !== '/platform' && pathname.startsWith(item.href))
   const Icon = item.icon
+  if (collapsed) {
+    return (
+      <Link
+        href={item.href}
+        aria-current={active ? 'page' : undefined}
+        aria-label={item.label}
+        title={item.label}
+        className={`flex h-10 w-10 items-center justify-center rounded-lg transition-colors focus-ring ${
+          active
+            ? 'bg-teal-50 text-teal-700 border border-teal-200'
+            : 'text-slate-500 border border-transparent hover:text-slate-900 hover:bg-slate-50'
+        }`}
+      >
+        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+      </Link>
+    )
+  }
   return (
     <Link
       href={item.href}
       aria-current={active ? 'page' : undefined}
-      className={`flex items-center gap-3 rounded-lg ${secondary ? 'py-1.5 text-[13px]' : 'py-2 text-sm'} font-medium transition-colors focus-ring ${
+      className={`flex items-center gap-3 rounded-lg py-2 px-3 text-sm font-medium transition-colors focus-ring ${
         active
           ? 'bg-teal-50 text-teal-700 border border-teal-200'
-          : `${secondary ? 'text-slate-500' : 'text-slate-600'} border border-transparent hover:text-slate-900 hover:bg-slate-50`
+          : 'text-slate-600 border border-transparent hover:text-slate-900 hover:bg-slate-50'
       }`}
     >
       <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -276,6 +286,28 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [stepUpOpen, setStepUpOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
+
+  // Restore the desktop sidebar preference (client-only — the SSR
+  // render always starts expanded to avoid hydration mismatches).
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(SIDEBAR_PREF_KEY) === 'collapsed') setCollapsed(true)
+    } catch {
+      /* preference unavailable — stay expanded */
+    }
+  }, [])
+
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      try {
+        window.localStorage.setItem(SIDEBAR_PREF_KEY, c ? 'expanded' : 'collapsed')
+      } catch {
+        /* ignore persistence failures */
+      }
+      return !c
+    })
+  }
 
   const countdown = useCountdown(me?.session.stepUpUntil ?? null)
   const stepUpActive = Boolean(me?.session.stepUpActive && countdown)
@@ -306,65 +338,154 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     return <ConsoleUnavailable onRetry={() => void refresh()} onSignOut={() => void logout()} />
   }
 
-  const primaryNav = PRIMARY_NAV.filter((item) => !item.permission || can(item.permission))
-  const adminNav = ADMIN_NAV.filter((item) => !item.permission || can(item.permission))
+  const nav = NAV.filter((item) => !item.permission || can(item.permission))
 
-  const SidebarContent = (
-    <nav aria-label="Platform navigation" className="flex-1 px-3 py-4 overflow-y-auto custom-scrollbar">
-      {/* Tier 1 — primary destinations, straight under the logo (no header). */}
-      <div className="space-y-0.5">
-        {primaryNav.map((item) => (
-          <SidebarLink key={item.href} item={item} pathname={pathname} />
+  /** Navigation links — one flat list. Render helper (plain element,
+   *  matching the original SidebarContent pattern — no component is
+   *  created during render). `compact` = desktop collapsed. */
+  const renderNavLinks = (compact: boolean) => (
+    <nav
+      aria-label="Platform navigation"
+      className="flex-1 px-3 py-4 overflow-y-auto custom-scrollbar"
+    >
+      <ul className={compact ? 'space-y-1' : 'space-y-0.5'}>
+        {nav.map((item) => (
+          <li key={item.href} className={compact ? 'flex justify-center' : undefined}>
+            <SidebarLink item={item} pathname={pathname} collapsed={compact} />
+          </li>
         ))}
-      </div>
-      {/* Tier 2 — the one de-emphasized Administration group. */}
-      {adminNav.length > 0 && (
-        <div className="mt-5 border-t border-slate-200 pt-4">
-          <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-            Administration
-          </p>
-          <div className="space-y-0.5">
-            {adminNav.map((item) => (
-              <SidebarLink key={item.href} item={item} pathname={pathname} secondary />
-            ))}
+      </ul>
+    </nav>
+  )
+
+  /** The compact account area — identity + sign-out in one place.
+   *  Render helper. `compact` = icon-only (desktop collapsed sidebar). */
+  const renderAccountArea = (compact: boolean) => (
+    <div className={`border-t border-slate-200 ${compact ? 'p-3 space-y-2' : 'p-4'}`}>
+      {compact ? (
+        <>
+          <div
+            className="flex h-9 w-9 mx-auto items-center justify-center rounded-full bg-slate-100 border border-slate-200 text-xs font-bold text-teal-700"
+            title={me.admin.name}
+          >
+            {initials(me.admin.name)}
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void logout()}
+            aria-label="Sign out"
+            title="Sign out"
+            className="h-9 w-9 mx-auto flex text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+          >
+            <LogOut className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </>
+      ) : (
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-xs font-bold text-teal-700 shrink-0">
+            {initials(me.admin.name)}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-slate-900 truncate">{me.admin.name}</p>
+            <p className="text-[10px] text-slate-500 truncate">{me.admin.isRoot ? 'Root admin' : 'Platform admin'}</p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void logout()}
+            aria-label="Sign out"
+            title="Sign out"
+            className="h-8 w-8 shrink-0 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          >
+            <LogOut className="h-4 w-4" aria-hidden="true" />
+          </Button>
         </div>
       )}
-    </nav>
+      {/* Step-up status — only while platform MFA is enabled (dormant
+          while TOTP is stood down). Rendered inline in the account area. */}
+      {mfaEnabled && (stepUpActive ? (
+        <button
+          onClick={() => setStepUpOpen(true)}
+          className="mt-2 flex w-full items-center justify-center gap-2 h-8 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-semibold focus-ring"
+          title="Destructive-action window"
+        >
+          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="tabular-nums">{countdown}</span>
+        </button>
+      ) : (
+        <button
+          onClick={() => setStepUpOpen(true)}
+          className="mt-2 flex w-full items-center justify-center gap-2 h-8 rounded-full border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold focus-ring"
+          title="Step-up verification required for destructive actions"
+        >
+          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+          Verify step-up
+        </button>
+      ))}
+    </div>
   )
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 selection:bg-emerald-100 selection:text-emerald-900">
-      {/* Desktop sidebar */}
-      <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 flex-col border-r border-slate-200 bg-white z-40">
-        <div className="flex items-center gap-3 h-20 px-5 border-b border-slate-200">
-          <div className="h-10 w-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-sm">
+      {/* Desktop sidebar — w-64 expanded, icon-only when collapsed */}
+      <aside
+        className={`hidden lg:flex fixed inset-y-0 left-0 flex-col border-r border-slate-200 bg-white z-40 transition-[width] ${
+          collapsed ? 'w-[68px]' : 'w-64'
+        }`}
+      >
+        <div
+          className={
+            collapsed
+              ? 'flex flex-col items-center gap-1 border-b border-slate-200 py-4'
+              : 'flex items-center gap-3 h-20 px-5 border-b border-slate-200'
+          }
+        >
+          <div
+            className="h-10 w-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-sm shrink-0"
+            title="SCHOLARIO Control Plane"
+          >
             <Cloud className="h-5 w-5" aria-hidden="true" />
           </div>
-          <div className="min-w-0">
-            <p className="font-display font-extrabold text-base tracking-tight text-slate-900 leading-none">
-              SCHOLARIO
-            </p>
-            <p className="text-[10px] font-semibold tracking-[0.22em] text-teal-600 uppercase mt-1">
-              Control Plane
-            </p>
-          </div>
+          {collapsed ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleCollapsed}
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              className="h-8 w-8 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          ) : (
+            <>
+              <div className="min-w-0 flex-1">
+                <p className="font-display font-extrabold text-base tracking-tight text-slate-900 leading-none">
+                  SCHOLARIO
+                </p>
+                <p className="text-[10px] font-semibold tracking-[0.22em] text-teal-600 uppercase mt-1">
+                  Control Plane
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleCollapsed}
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+                className="h-8 w-8 shrink-0 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </>
+          )}
         </div>
-        {SidebarContent}
-        <div className="border-t border-slate-200 p-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-xs font-bold text-teal-700 shrink-0">
-              {initials(me.admin.name)}
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-slate-900 truncate">{me.admin.name}</p>
-              <p className="text-[10px] text-slate-500 truncate">{me.admin.isRoot ? 'Root admin' : 'Platform admin'}</p>
-            </div>
-          </div>
-        </div>
+        {renderNavLinks(collapsed)}
+        {renderAccountArea(collapsed)}
       </aside>
 
-      {/* Mobile drawer */}
+      {/* Mobile drawer — always full labels (never the collapsed form) */}
       {drawerOpen && (
         <div className="lg:hidden fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Platform navigation">
           <div className="absolute inset-0 bg-slate-900/40" onClick={() => setDrawerOpen(false)} />
@@ -386,61 +507,38 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
                 <X className="h-5 w-5" aria-hidden="true" />
               </Button>
             </div>
-            {SidebarContent}
+            {renderNavLinks(false)}
+            {renderAccountArea(false)}
           </div>
         </div>
       )}
 
-      {/* Main column */}
-      <div className="lg:pl-64 flex flex-col min-h-screen">
-        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white">
-          <div className="h-16 px-4 sm:px-6 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
+      {/* Main column — padding tracks the sidebar width */}
+      <div
+        className={`flex flex-col min-h-screen transition-[padding] ${
+          collapsed ? 'lg:pl-[68px]' : 'lg:pl-64'
+        }`}
+      >
+        {/* Simple top bar (mobile only — the desktop sidebar carries
+            identity; every page renders its own header) */}
+        <header className="lg:hidden sticky top-0 z-30 border-b border-slate-200 bg-white">
+          <div className="h-14 px-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
               <Button
                 variant="ghost"
                 size="icon"
-                className="lg:hidden text-slate-700 hover:bg-slate-100 h-11 w-11"
+                className="text-slate-700 hover:bg-slate-100 h-10 w-10"
                 onClick={() => setDrawerOpen(true)}
                 aria-label="Open navigation"
               >
                 <Menu className="h-5 w-5" aria-hidden="true" />
               </Button>
-              <p className="text-sm font-semibold text-slate-700 hidden sm:block truncate">
-                Multi-tenant school infrastructure
-              </p>
-            </div>
-            <div className="flex items-center gap-2 sm:gap-3">
-              {/* Step-up status — only while platform MFA is enabled */}
-              {mfaEnabled && stepUpActive ? (
-                <button
-                  onClick={() => setStepUpOpen(true)}
-                  className="hidden sm:inline-flex items-center gap-2 h-9 px-3.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-semibold focus-ring"
-                  title="Destructive-action window"
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="tabular-nums">{countdown}</span>
-                </button>
-              ) : mfaEnabled ? (
-                <button
-                  onClick={() => setStepUpOpen(true)}
-                  className="inline-flex items-center gap-2 h-9 px-3.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold focus-ring"
-                  title="Step-up verification required for destructive actions"
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="hidden sm:inline">Verify step-up</span>
-                  <span className="sm:hidden" aria-hidden="true">MFA</span>
-                </button>
-              ) : null}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void logout()}
-                className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 focus-ring"
-              >
-                <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="hidden sm:inline">Sign out</span>
-                <span className="sr-only sm:hidden">Sign out</span>
-              </Button>
+              <span className="font-display font-bold text-sm text-slate-900 truncate">
+                SCHOLARIO
+              </span>
+              <span className="text-[10px] font-semibold tracking-[0.18em] text-teal-600 uppercase">
+                Control Plane
+              </span>
             </div>
           </div>
         </header>

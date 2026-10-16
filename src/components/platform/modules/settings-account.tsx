@@ -143,7 +143,7 @@ export function SettingsAccountCard() {
       <CardHeader>
         <CardTitle className="text-slate-900 text-base font-semibold flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-teal-600" aria-hidden="true" />
-          Account &amp; sign-in
+          Account &amp; security
         </CardTitle>
         <CardDescription className="text-slate-500 text-xs">
           Your platform administrator credentials and optional Google identity.
