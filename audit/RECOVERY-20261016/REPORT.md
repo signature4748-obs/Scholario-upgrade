@@ -57,7 +57,7 @@
 ## 5. Environment facts for Stage B
 
 - **Dev server:** `/home/z/feature-worktree` → `next dev --webpack -p 3000` (spawned via `spawn-detached.mjs`, log `dev.log`); health `http://localhost:3000/health/ready`.
-- **Every tool shell must run `source scripts/dev-env.sh` first** (RC3) — DATABASE_ENV/REALTIME_MODE included.
+- **Every tool shell must run `source /home/z/feature-worktree/scripts/dev-env.sh` first** (RC3) — DATABASE_ENV/REALTIME_MODE included.
 - **Typecheck invocation:** `NODE_OPTIONS=--max-old-space-size=2600 bun run typecheck`.
 - **CI parity env for test runs** (from `.github/workflows/ci.yml`, non-secret fixtures): `RATE_LIMIT_DB_SYNC=on`, fake `GOOGLE_OAUTH_CLIENT_{ID,SECRET}`, `RAZORPAY_WEBHOOK_SECRET=batch2-test-webhook-secret`, `PAYMENTS_SANDBOX=1`, `PAYMENTS_SANDBOX_SECRET=local-sandbox-secret`, `PLATFORM_PAYMENT_WEBHOOK_SECRET=platform-webhook-test-secret`.
 - **Memory:** 3.9 Gi total; run heavy gates sequentially.
@@ -71,14 +71,14 @@
 cd /home/z/my-project && git worktree prune
 git worktree add /home/z/feature-worktree feat/super-admin-schools-management
 # 2) Deps + env + Prisma client:
-cd /home/z/feature-worktree && source scripts/dev-env.sh
+cd /home/z/feature-worktree && source /home/z/feature-worktree/scripts/dev-env.sh
 bun install && bunx prisma generate
 # 3) PostgreSQL — self-contained (ICU soname aliases are created in-package on boot):
 (cd mini-services/postgres-db && bun install)
 bun /home/z/my-project/spawn-detached.mjs --cwd /home/z/feature-worktree/mini-services/postgres-db bun run dev
 #    (embedded cluster auto-inits at db/pg and creates database `scholario`)
 # 4) Migrations + canonical seed corpus (CI sequence, local DB only):
-source scripts/dev-env.sh && bunx prisma migrate deploy
+source /home/z/feature-worktree/scripts/dev-env.sh && bunx prisma migrate deploy
 for s in prisma/seed.ts prisma/seed-platform.ts prisma/seed-learning.ts \
          prisma/seed-teacher-academics.ts prisma/seed-roster-150.ts \
          prisma/seed-student-dashboard.ts prisma/seed-teacher-hub.ts \
