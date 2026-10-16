@@ -1114,12 +1114,20 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
                       {p.availableForNew ? ' new' : ''}{p.availableForRenewal ? ' renewal' : ''}
                     </td>
                     <td className="px-3 py-2.5 text-right">
-                      <Button
-                        size="sm" variant="outline" className="border-slate-300 text-slate-700"
-                        onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
-                      >
-                        Archive
-                      </Button>
+                      {p.status === 'ACTIVE' ? (
+                        <Button
+                          size="sm" variant="outline" className="border-slate-300 text-slate-700"
+                          onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
+                        >
+                          Archive
+                        </Button>
+                      ) : (
+                        // Archived rows carry no action — archive is
+                        // irreversible (no unarchive route, PATCH refuses
+                        // archived plans). The status column already says
+                        // ARCHIVED; a dead "Archive" button would be a lie.
+                        <span className="text-xs text-slate-400" title="Archive is irreversible — create a successor plan instead">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1148,12 +1156,16 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
                 <div className="mt-1.5 text-xs text-slate-500">
                   {p.availableForNew ? 'new' : '—'} · {p.availableForRenewal ? 'renewal' : '—'} · {p.allowOnline ? 'online' : '—'} · {p.allowOffline ? 'offline' : '—'}
                 </div>
-                <Button
-                  size="sm" variant="outline" className="mt-2 w-full border-slate-300 text-slate-700"
-                  onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
-                >
-                  Archive
-                </Button>
+                {p.status === 'ACTIVE' ? (
+                  <Button
+                    size="sm" variant="outline" className="mt-2 w-full border-slate-300 text-slate-700"
+                    onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
+                  >
+                    Archive
+                  </Button>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-400">Archived — irreversible; create a successor plan to replace it.</p>
+                )}
               </div>
             ))}
           </div>
@@ -1265,10 +1277,10 @@ function PlanCreateDialog({ onClose, onCreated }: { onClose: () => void; onCreat
           </div>
           <div><Label className="text-xs" htmlFor="plan-description">Description</Label><Textarea id="plan-description" className="border-slate-300 bg-white" rows={2} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
           <div className="grid gap-2 sm:grid-cols-2">
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow online payment</span><Switch checked={form.allowOnline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOnline: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow offline payment</span><Switch checked={form.allowOffline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOffline: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for new</span><Switch checked={form.availableForNew} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForNew: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for renewal</span><Switch checked={form.availableForRenewal} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForRenewal: v }))} /></div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow online payment</span><Switch aria-label="Allow online payment" checked={form.allowOnline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOnline: v }))} /></div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow offline payment</span><Switch aria-label="Allow offline payment" checked={form.allowOffline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOffline: v }))} /></div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for new</span><Switch aria-label="Available for new" checked={form.availableForNew} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForNew: v }))} /></div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for renewal</span><Switch aria-label="Available for renewal" checked={form.availableForRenewal} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForRenewal: v }))} /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={onClose} className="border-slate-300 bg-white text-slate-700">Cancel</Button>
