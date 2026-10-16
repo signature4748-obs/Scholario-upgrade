@@ -18,7 +18,7 @@
  * respawns it; kill patterns never match the postgres process itself.
  */
 import EmbeddedPostgres from 'embedded-postgres'
-import { existsSync, readFileSync } from 'fs'
+import { copyFileSync, existsSync, readFileSync, symlinkSync } from 'fs'
 import net from 'net'
 import path from 'path'
 
@@ -26,8 +26,38 @@ const ROOT = '/home/z/my-project'
 const CLUSTER = `${ROOT}/db/pg`
 const PORT = 5432
 
-// The embedded PG binaries link ICU 60; Debian 13 ships ICU 76. A locally
-// extracted libicu60 (dpkg -x, outside the repo) provides it — no root needed.
+// The embedded PG binaries link against the ICU 60 sonames (libicu*.so.60),
+// but @embedded-postgres ships only the versioned files (libicu*.so.60.2),
+// and the dynamic linker resolves by exact filename — Debian 13's ICU 76
+// cannot satisfy them. Fixed reproducibly INSIDE the service: create the
+// .so.60 soname aliases next to the real files (idempotent — `bun install`
+// recreates the package tree on every boot and this recreates the aliases),
+// then prepend the package lib dir to LD_LIBRARY_PATH. No external library
+// directories: after a container reset, `bun install && bun run dev` in this
+// directory brings PostgreSQL back with zero manual library steps.
+const SERVICE_DIR = import.meta.dir
+const EMBEDDED_LIB = path.join(SERVICE_DIR, 'node_modules', '@embedded-postgres', 'linux-x64', 'native', 'lib')
+if (existsSync(EMBEDDED_LIB)) {
+  for (const base of ['libicudata', 'libicui18n', 'libicuuc']) {
+    const soname = path.join(EMBEDDED_LIB, `${base}.so.60`)
+    const versioned = `${soname}.2`
+    if (existsSync(versioned) && !existsSync(soname)) {
+      try {
+        symlinkSync(versioned, soname)
+      } catch {
+        // Some sandbox shells forbid symlink creation — fall back to a copy
+        // (32 MB inside the ephemeral node_modules tree; recreated per boot).
+        try {
+          copyFileSync(versioned, soname)
+        } catch {
+          /* give up quietly — postgres will fail loudly with its loader error */
+        }
+      }
+    }
+  }
+  process.env.LD_LIBRARY_PATH = [EMBEDDED_LIB, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':')
+}
+// Legacy fallback (harmless if absent): a pre-existing external icu60 shim.
 const ICU60 = '/home/z/.local/icu60/usr/lib/x86_64-linux-gnu'
 if (existsSync(ICU60)) {
   process.env.LD_LIBRARY_PATH = [ICU60, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':')
