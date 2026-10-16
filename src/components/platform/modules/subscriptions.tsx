@@ -929,6 +929,8 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [creating, setCreating] = useState(false)
+  /** The ACTIVE plan being edited (null = dialog closed). */
+  const [editing, setEditing] = useState<PlanRow | null>(null)
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
@@ -1115,12 +1117,20 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
                     </td>
                     <td className="px-3 py-2.5 text-right">
                       {p.status === 'ACTIVE' ? (
-                        <Button
-                          size="sm" variant="outline" className="border-slate-300 text-slate-700"
-                          onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
-                        >
-                          Archive
-                        </Button>
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            size="sm" variant="outline" className="border-slate-300 text-slate-700"
+                            onClick={() => setEditing(p)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm" variant="outline" className="border-slate-300 text-slate-700"
+                            onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
+                          >
+                            Archive
+                          </Button>
+                        </div>
                       ) : (
                         // Archived rows carry no action — archive is
                         // irreversible (no unarchive route, PATCH refuses
@@ -1157,12 +1167,20 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
                   {p.availableForNew ? 'new' : '—'} · {p.availableForRenewal ? 'renewal' : '—'} · {p.allowOnline ? 'online' : '—'} · {p.allowOffline ? 'offline' : '—'}
                 </div>
                 {p.status === 'ACTIVE' ? (
-                  <Button
-                    size="sm" variant="outline" className="mt-2 w-full border-slate-300 text-slate-700"
-                    onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
-                  >
-                    Archive
-                  </Button>
+                  <div className="mt-2 flex gap-2">
+                    <Button
+                      size="sm" variant="outline" className="flex-1 border-slate-300 text-slate-700"
+                      onClick={() => setEditing(p)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm" variant="outline" className="flex-1 border-slate-300 text-slate-700"
+                      onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
+                    >
+                      Archive
+                    </Button>
+                  </div>
                 ) : (
                   <p className="mt-2 text-xs text-slate-400">Archived — irreversible; create a successor plan to replace it.</p>
                 )}
@@ -1173,6 +1191,13 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
       </section>
 
       {creating && <PlanCreateDialog onClose={() => setCreating(false)} onCreated={() => { setCreating(false); void load() }} />}
+      {editing && (
+        <PlanEditDialog
+          plan={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); void load() }}
+        />
+      )}
     </div>
   )
 }
@@ -1286,6 +1311,189 @@ function PlanCreateDialog({ onClose, onCreated }: { onClose: () => void; onCreat
             <Button variant="outline" onClick={onClose} className="border-slate-300 bg-white text-slate-700">Cancel</Button>
             <Button onClick={() => void submit()} disabled={saving} className="bg-teal-600 font-semibold text-white hover:bg-teal-700">
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}Create plan
+            </Button>
+          </DialogFooter>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * Edit an ACTIVE plan — PATCH /api/platform/subscriptions/plans/[id].
+ * Mirrors PlanCreateDialog's field layout, styles and error surface so
+ * the two dialogs read as one control. `code` and `scope` are immutable
+ * server-side (purchase snapshots reference the code; scope is the
+ * commercial model) and render as read-only text, not inputs. The price
+ * field follows the plan's FIXED scope exactly like the create dialog:
+ * STUDENT plans carry the per-student price, SCHOOL plans the price for
+ * the selected interval — the plan's other SCHOOL price is resolved from
+ * the row and re-sent so the server merge never drops it. ARCHIVED plans
+ * are refused server-side with 409 CONFLICT — surfaced honestly here.
+ */
+function PlanEditDialog({ plan, onClose, onSaved }: { plan: PlanRow; onClose: () => void; onSaved: () => void }) {
+  const [saving, setSaving] = useState(false)
+  /** Inline submit error — the durable surface (mirrors PlanCreateDialog). */
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [submitPending, setSubmitPending] = useState(false)
+  const [form, setForm] = useState(() => ({
+    name: plan.name,
+    description: plan.description ?? '',
+    interval: plan.interval,
+    price: plan.scope === 'STUDENT'
+      ? (plan.pricePerStudent?.toString() ?? '')
+      : plan.interval === 'MONTHLY'
+        ? (plan.priceMonthly?.toString() ?? '')
+        : (plan.priceAnnual?.toString() ?? ''),
+    currency: plan.currency,
+    graceDays: String(plan.graceDays),
+    allowOnline: plan.allowOnline,
+    allowOffline: plan.allowOffline,
+    availableForNew: plan.availableForNew,
+    availableForRenewal: plan.availableForRenewal,
+  }))
+
+  /**
+   * Client-side validation mirroring the server's validatePlanInput for
+   * the merged plan (name 2–80, description ≤400, grace 0–90, price
+   * positive). The scope-applicable price is always required server-side
+   * (STUDENT → per-student, SCHOOL → the interval price), so a cleared
+   * price is rejected up front with the server's own wording instead of
+   * a guaranteed 422 round-trip.
+   */
+  const validate = (): string | null => {
+    if (form.name.trim().length < 2 || form.name.trim().length > 80) return 'Name must be 2–80 characters.'
+    if (form.description.length > 400) return 'Description must be 400 characters or fewer.'
+    const grace = Number(form.graceDays)
+    if (form.graceDays.trim() === '' || !Number.isInteger(grace) || grace < 0 || grace > 90) return 'Grace days must be 0–90.'
+    if (form.price.trim() === '') {
+      if (plan.scope === 'STUDENT') return 'Student plans need a per-student annual price.'
+      return form.interval === 'MONTHLY' ? 'Monthly price is required for this plan.' : 'Annual price is required for this plan.'
+    }
+    const price = Number(form.price)
+    if (!(price > 0) || price > 100_000_000) return 'Price must be greater than zero and under 100,000,000.'
+    return null
+  }
+
+  const submit = async () => {
+    const problem = validate()
+    if (problem) {
+      setSubmitPending(false)
+      setSubmitError(problem)
+      return
+    }
+    setSaving(true)
+    setSubmitError(null)
+    setSubmitPending(false)
+    try {
+      // Always send resolved values for every editable field — an
+      // explicit payload cannot drift from what this dialog shows (the
+      // server would merge undefined → keep existing, but "always send"
+      // is safer than remembering which fields were touched).
+      const price = form.price.trim() === '' ? null : Number(form.price)
+      await platformApi(`/api/platform/subscriptions/plans/${plan.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: form.name.trim(),
+          description: form.description.trim() || null,
+          interval: form.interval,
+          ...(plan.scope === 'STUDENT'
+            ? { pricePerStudent: price }
+            : {
+                priceMonthly: form.interval === 'MONTHLY' ? price : plan.priceMonthly,
+                priceAnnual: form.interval === 'ANNUAL' ? price : plan.priceAnnual,
+              }),
+          currency: form.currency,
+          graceDays: Number(form.graceDays),
+          allowOnline: form.allowOnline,
+          allowOffline: form.allowOffline,
+          availableForNew: form.availableForNew,
+          availableForRenewal: form.availableForRenewal,
+        }),
+      })
+      toast.success(`Plan ${plan.code} updated`)
+      onSaved()
+    } catch (e) {
+      // Same treatment as PlanCreateDialog (durable inline surface for
+      // the publicMessage, incl. a 409's "archived plans cannot be
+      // edited") plus the section-standard transient toast.
+      const code = (e as PlatformApiError)?.code
+      setSubmitPending(code === 'SUBSCRIPTION_SYSTEM_PENDING')
+      setSubmitError(errMessage(e))
+      toast.error('Plan update failed', { description: errMessage(e) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Edit plan — {plan.code}</DialogTitle>
+          <DialogDescription>Code and scope are fixed — purchase snapshots reference them. Everything else updates in place.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          {submitError && (
+            <div role="alert" className={`rounded-lg border p-3 text-sm ${submitPending ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
+              {submitPending ? 'Plan editing is unavailable on this database: ' : 'Plan update failed: '}
+              {submitError}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs" htmlFor="plan-edit-code">Code</Label>
+              <div
+                id="plan-edit-code"
+                title="Immutable — purchase snapshots reference the plan code"
+                className="flex h-9 items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50 px-3 font-mono text-sm text-slate-700"
+              >
+                {plan.code}
+              </div>
+            </div>
+            <div><Label className="text-xs" htmlFor="plan-edit-name">Name</Label><Input id="plan-edit-name" className="border-slate-300 bg-white" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Student Annual" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs" htmlFor="plan-edit-scope">Scope</Label>
+              <div
+                id="plan-edit-scope"
+                title="Immutable — the commercial model is fixed at creation"
+                className="flex h-9 items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700"
+              >
+                {plan.scope === 'SCHOOL' ? 'SCHOOL (Model A)' : 'STUDENT (Model B/C)'}
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs" htmlFor="plan-edit-interval">Interval</Label>
+              <Select value={form.interval} onValueChange={(v) => setForm((f) => ({ ...f, interval: v }))} disabled={plan.scope === 'STUDENT'}>
+                <SelectTrigger id="plan-edit-interval" className="border-slate-300 bg-white"><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="MONTHLY">MONTHLY</SelectItem><SelectItem value="ANNUAL">ANNUAL</SelectItem></SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div><Label className="text-xs" htmlFor="plan-edit-price">{plan.scope === 'STUDENT' ? 'Per-student price' : form.interval === 'MONTHLY' ? 'Monthly price' : 'Annual price'}</Label><Input id="plan-edit-price" className="border-slate-300 bg-white" type="number" min="0" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} /></div>
+            <div>
+              <Label className="text-xs" htmlFor="plan-edit-currency">Currency</Label>
+              <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
+                <SelectTrigger id="plan-edit-currency" className="border-slate-300 bg-white"><SelectValue /></SelectTrigger>
+                <SelectContent>{['INR', 'USD', 'EUR', 'GBP', 'AED'].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div><Label className="text-xs" htmlFor="plan-edit-grace">Grace days</Label><Input id="plan-edit-grace" className="border-slate-300 bg-white" type="number" min="0" max="90" value={form.graceDays} onChange={(e) => setForm((f) => ({ ...f, graceDays: e.target.value }))} /></div>
+          </div>
+          <div><Label className="text-xs" htmlFor="plan-edit-description">Description</Label><Textarea id="plan-edit-description" className="border-slate-300 bg-white" rows={2} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow online payment</span><Switch aria-label="Allow online payment" checked={form.allowOnline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOnline: v }))} /></div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow offline payment</span><Switch aria-label="Allow offline payment" checked={form.allowOffline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOffline: v }))} /></div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for new</span><Switch aria-label="Available for new" checked={form.availableForNew} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForNew: v }))} /></div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for renewal</span><Switch aria-label="Available for renewal" checked={form.availableForRenewal} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForRenewal: v }))} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose} className="border-slate-300 bg-white text-slate-700">Cancel</Button>
+            <Button onClick={() => void submit()} disabled={saving} className="bg-teal-600 font-semibold text-white hover:bg-teal-700">
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}Save changes
             </Button>
           </DialogFooter>
         </div>

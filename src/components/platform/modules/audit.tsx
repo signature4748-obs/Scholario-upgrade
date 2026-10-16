@@ -383,16 +383,22 @@ export function AuditModule() {
                   className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <ActionBadge action={ev.action} />
+                    {/* min-w-0 wrapper: the badge (base shrink-0) and the
+                        one-line timestamp otherwise refuse to share the
+                        row — long action names pushed the card past the
+                        viewport on small screens. */}
+                    <div className="min-w-0">
+                      <ActionBadge action={ev.action} />
+                    </div>
                     <span className="text-[10px] text-slate-500 tabular-nums shrink-0">
                       {when(ev.at)}
                     </span>
                   </div>
                   <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1.5 text-xs">
                     <dt className="text-slate-500">Admin</dt>
-                    <dd className="text-slate-700 truncate">{ev.admin?.name ?? 'system'}</dd>
+                    <dd className="text-slate-700 truncate min-w-0">{ev.admin?.name ?? 'system'}</dd>
                     <dt className="text-slate-500">Target</dt>
-                    <dd className="text-slate-700">
+                    <dd className="text-slate-700 min-w-0">
                       {ev.targetType ?? '—'}
                       {ev.targetId && (
                         <span className="text-slate-500 font-mono ml-1.5" title={ev.targetId}>
@@ -403,17 +409,19 @@ export function AuditModule() {
                     {ev.schoolId && (
                       <>
                         <dt className="text-slate-500">School</dt>
-                        <dd className="text-slate-600 font-mono" title={ev.schoolId}>
+                        <dd className="text-slate-600 font-mono min-w-0" title={ev.schoolId}>
                           {shortId(ev.schoolId)}
                         </dd>
                       </>
                     )}
                     <dt className="text-slate-500">Reason</dt>
-                    <dd className="text-slate-600 col-span-1" title={ev.reason ?? undefined}>
+                    <dd className="text-slate-600 col-span-1 min-w-0" title={ev.reason ?? undefined}>
                       <span className="block truncate">{ev.reason ?? '—'}</span>
                     </dd>
                     <dt className="text-slate-500">IP</dt>
-                    <dd className="text-slate-500 font-mono">{ev.ip ?? '—'}</dd>
+                    <dd className="text-slate-500 font-mono truncate min-w-0" title={ev.ip ?? undefined}>
+                      {ev.ip ?? '—'}
+                    </dd>
                   </dl>
                   {hasMeta && (
                     <Button

@@ -606,12 +606,14 @@ export function ProvisionWizard({
     setErrorCode(null)
     try {
       const payload = buildPayload()
+      // 90s timeout: provisioning is a heavy multi-table transaction plus
+      // the invite email — well beyond platformApi's 30s default.
       const res = await platformApi('/api/platform/schools', {
         method: 'POST',
         body: JSON.stringify(
           billingOverride ? { ...payload, billingModel: billingOverride } : payload,
         ),
-      })
+      }, 90_000)
       setResult(res as unknown as ProvisionResult)
       if ((res as unknown as ProvisionResult).replayed) {
         toast.info('Matched an existing PENDING provision — no duplicate created')

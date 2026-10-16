@@ -172,8 +172,11 @@ export function SupportToolsModule() {
     setSupportLoading(true)
     setSupportError(null)
     try {
+      // includeRevoked=true — the registry copy promises "live, expired
+      // or revoked"; the API default silently hides revoked sessions,
+      // making a just-exited session disappear from the record.
       const body = await platformApi<{ sessions: SupportSessionRow[] }>(
-        '/api/platform/support/sessions',
+        '/api/platform/support/sessions?includeRevoked=true',
       )
       setSupportSessions(body.sessions)
     } catch (e) {

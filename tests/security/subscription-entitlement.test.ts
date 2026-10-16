@@ -914,6 +914,68 @@ describe('SUBSCRIPTION · PR-30 review regressions', () => {
     expect(after.allowOffline).toBe(true) // untouched
   }, T)
 
+  test('plan PATCH edit flow: name + graceDays + price persist (registry + audit trail), then values are restored', async () => {
+    // 2026-10-16 fix-batch regression (FIX 3 — the PlanEditDialog
+    // backend contract). The dialog PATCHes an ACTIVE plan with the
+    // resolved editable fields; this pins the multi-field edit end to
+    // end on a plan the test itself owns (never the QATESTPLAN row
+    // other flows depend on): PATCH → registry shows the persisted
+    // values → platform.billing.plan_updated lands in the audit trail
+    // → a second PATCH restores the original posture.
+    const planCode = `EDITTEST-${RUN}`
+    const created = await asPlatform(rootToken, '/api/platform/subscriptions/plans', {
+      method: 'POST',
+      body: JSON.stringify({ code: planCode, name: 'Edit Flow Plan', scope: 'SCHOOL', interval: 'MONTHLY', priceMonthly: 500, currency: 'INR' }),
+    })
+    expect(created.status).toBe(200)
+    const plan = await db.subscriptionPlan.findUniqueOrThrow({ where: { code: planCode } })
+    expect(plan.status).toBe('ACTIVE')
+    // afterAll deletes every plan whose code contains RUN — the row is
+    // suite-owned regardless of any assertion failure below.
+
+    // EDIT: name + graceDays + the interval price in one PATCH (the
+    // exact field trio the edit dialog's happy path sends).
+    const edited = await asPlatform(rootToken, `/api/platform/subscriptions/plans/${plan.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Edit Flow Plan Edited', graceDays: 30, priceMonthly: 600 }),
+    })
+    expect(edited.status).toBe(200)
+
+    // The REGISTRY (what the plans table renders) persists all three.
+    const registry = await asPlatform(rootToken, '/api/platform/subscriptions/plans')
+    expect(registry.status).toBe(200)
+    const plans = ((await body(registry))?.data?.plans ?? []) as Array<{
+      code: string
+      name: string
+      graceDays: number
+      priceMonthly: number | null
+    }>
+    const row = plans.find((p) => p.code === planCode)
+    expect(row).toBeDefined()
+    expect(row?.name).toBe('Edit Flow Plan Edited')
+    expect(row?.graceDays).toBe(30)
+    expect(Number(row?.priceMonthly)).toBe(600)
+
+    // The AUDIT TRAIL records the edit (the route awaits the
+    // fire-and-forget write before its 200, so the row is there).
+    const audits = await db.platformAuditLog.findMany({
+      where: { action: 'platform.billing.plan_updated', targetId: plan.id },
+    })
+    expect(audits.length).toBeGreaterThanOrEqual(1)
+
+    // RESTORE the original values (the registry posture other flows
+    // see is never disturbed by the regression).
+    const restored = await asPlatform(rootToken, `/api/platform/subscriptions/plans/${plan.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Edit Flow Plan', graceDays: 14, priceMonthly: 500 }),
+    })
+    expect(restored.status).toBe(200)
+    const afterRestore = await db.subscriptionPlan.findUniqueOrThrow({ where: { code: planCode } })
+    expect(afterRestore.name).toBe('Edit Flow Plan')
+    expect(afterRestore.graceDays).toBe(14)
+    expect(Number(afterRestore.priceMonthly)).toBe(500)
+  }, T)
+
   test('billingModel switch is ATOMIC with the payment (a failing request never flips the tenant model)', async () => {
     const before = await db.schoolSubscription.findUnique({ where: { schoolId: schoolA.id } })
     const modelBefore = before?.billingModel ?? 'SCHOOL_WIDE'

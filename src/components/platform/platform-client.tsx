@@ -10,7 +10,10 @@
 //     exposes refresh/stepUp/logout actions;
 //   · usePlatformSession() — admin, permissions, step-up state;
 //   · platformApi() — envelope-aware fetch (all requests carry the
-//     platform token via the shared interceptor).
+//     platform token via the shared interceptor). Every call is bounded
+//     by an AbortController-based timeout (default 30s, per-call
+//     override) so a hung request surfaces a typed TIMEOUT error
+//     instead of leaving busy states stuck forever.
 // ============================================================
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
@@ -157,25 +160,74 @@ export function usePlatformSession(): PlatformSessionContextValue {
   return useContext(PlatformSessionContext)
 }
 
-/** Typed fetch for platform APIs (throws PlatformApiError on failure). */
+/** Default request timeout — hung fetches must settle as typed errors. */
+const PLATFORM_API_TIMEOUT_MS = 30_000
+
+/**
+ * Typed fetch for platform APIs (throws PlatformApiError on failure).
+ *
+ * Every request is bounded by `timeoutMs` (default 30 000 ms) via an
+ * AbortController: a hung request (server stall, dropped connection)
+ * otherwise never settles and every busy state in the caller stays
+ * stuck forever. On timeout the fetch is aborted and a PlatformApiError
+ * with code `TIMEOUT` is thrown — the server may still be processing, so
+ * callers should check the current state before blindly retrying.
+ * Slow mutations (e.g. school provisioning) pass a larger timeout as the
+ * third argument. A caller-supplied `init.signal` is chained — whichever
+ * abort fires first wins.
+ */
 export async function platformApi<T>(
   path: string,
   init?: RequestInit,
+  timeoutMs: number = PLATFORM_API_TIMEOUT_MS,
 ): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-    cache: 'no-store',
-  })
-  const body = (await res.json().catch(() => null)) as
-    | { ok: true; data: T }
-    | PlatformApiError
-    | null
-  if (!body || !body.ok) {
-    const err = (body ?? { ok: false, error: 'Network error', code: 'NETWORK_ERROR' }) as PlatformApiError
-    throw err
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  // Chain the caller's signal (if any) onto the same controller.
+  const callerSignal = init?.signal
+  const onCallerAbort = () => controller.abort()
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort()
+    else callerSignal.addEventListener('abort', onCallerAbort, { once: true })
   }
-  return body.data
+  try {
+    const res = await fetch(path, {
+      ...init,
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      cache: 'no-store',
+    })
+    const body = (await res.json().catch(() => null)) as
+      | { ok: true; data: T }
+      | PlatformApiError
+      | null
+    if (!body || !body.ok) {
+      const err = (body ?? { ok: false, error: 'Network error', code: 'NETWORK_ERROR' }) as PlatformApiError
+      throw err
+    }
+    return body.data
+  } catch (e) {
+    if (timedOut) {
+      // The timer fired — without this the promise would never settle.
+      // Deliberately shaped like every other API error so callers' UI
+      // states resolve honestly.
+      const err: PlatformApiError = {
+        ok: false,
+        error: 'The request timed out — the server may still be processing. Check the current state before retrying.',
+        code: 'TIMEOUT',
+      }
+      throw err
+    }
+    // Caller-aborted or network failure — rethrow untouched.
+    throw e
+  } finally {
+    clearTimeout(timer)
+    callerSignal?.removeEventListener('abort', onCallerAbort)
+  }
 }
 
 /** Exit a support session (used by the oversight banner). */
