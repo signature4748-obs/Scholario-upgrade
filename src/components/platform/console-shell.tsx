@@ -39,6 +39,8 @@ import {
   X,
   Cloud,
   Wallet,
+  ServerCrash,
+  RefreshCw,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from './platform-client'
 import { Button } from '@/components/ui/button'
@@ -221,8 +223,56 @@ function StepUpDialog({
   )
 }
 
+/**
+ * ConsoleUnavailable — the session gate's retryable failure state.
+ *
+ * Rendered when /api/platform/auth/me could not be served (database or
+ * control-plane failure, network exception) AND no session is loaded.
+ * The operator's session may still be valid server-side — so this is a
+ * retry surface, never a redirect to login and never a bare skeleton.
+ */
+function ConsoleUnavailable({ onRetry, onSignOut }: { onRetry: () => void; onSignOut: () => void }) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <div role="alert" className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100">
+            <ServerCrash className="h-5 w-5 text-slate-500" aria-hidden="true" />
+          </div>
+          <h1 className="text-lg font-semibold text-slate-900">Control plane unavailable</h1>
+        </div>
+        <p className="mt-3 text-sm text-slate-600">
+          The platform session service could not be reached. Your session may still be valid —
+          retry once the service responds. Nothing was changed.
+        </p>
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <Button
+            onClick={() => {
+              setBusy(true)
+              onRetry()
+              // Busy is cleared by the next render (success unmounts this
+              // state); a timeout keeps the button honest on a slow retry.
+              setTimeout(() => setBusy(false), 10_000)
+            }}
+            disabled={busy}
+            className="bg-teal-600 hover:bg-teal-700 text-white"
+          >
+            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+            {busy ? 'Retrying…' : 'Retry'}
+          </Button>
+          <Button variant="outline" onClick={onSignOut} className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100">
+            <LogOut className="mr-2 h-4 w-4" aria-hidden="true" />
+            Sign out
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ConsoleShell({ children }: { children: React.ReactNode }) {
-  const { me, loading, can, refresh, logout } = usePlatformSession()
+  const { me, loading, unavailable, can, refresh, logout } = usePlatformSession()
   const pathname = usePathname()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [stepUpOpen, setStepUpOpen] = useState(false)
@@ -241,13 +291,19 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
   }, [pathname])
 
   // Full-screen boot skeleton until the session resolves (401 redirect
-  // happens inside the provider).
-  if (loading || !me) {
+  // happens inside the provider). A 5xx/network failure resolves to the
+  // explicit unavailable state below — never an unlabelled skeleton.
+  if (loading || (!me && !unavailable)) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="h-12 w-12 rounded-2xl bg-slate-200 animate-pulse" />
       </div>
     )
+  }
+
+  if (!me) {
+    // Passed the gate above ⇒ !me implies `unavailable` (auth/me 5xx/network).
+    return <ConsoleUnavailable onRetry={() => void refresh()} onSignOut={() => void logout()} />
   }
 
   const primaryNav = PRIMARY_NAV.filter((item) => !item.permission || can(item.permission))

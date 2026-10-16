@@ -20,6 +20,7 @@ import {
   clearPlatformToken,
   clearSupportToken,
 } from '@/lib/platform-session-token'
+import { classifyAuthMe } from '@/lib/platform/session-gate'
 
 // Install once — attaches x-platform-token / x-support-token to
 // /api/platform/* requests (dev iframe cookie fallback).
@@ -66,6 +67,8 @@ export interface PlatformApiError {
 interface PlatformSessionContextValue {
   me: PlatformMe | null
   loading: boolean
+  /** auth/me could not be served (5xx/network) while no session is loaded — the shell renders a retryable unavailable state instead of a skeleton. */
+  unavailable: boolean
   /** Permission check (root implies all server-side; list already resolved). */
   can: (permission: string) => boolean
   refresh: () => Promise<void>
@@ -76,6 +79,7 @@ interface PlatformSessionContextValue {
 const PlatformSessionContext = createContext<PlatformSessionContextValue>({
   me: null,
   loading: true,
+  unavailable: false,
   can: () => false,
   refresh: async () => {},
   logout: async () => {},
@@ -86,19 +90,31 @@ export function PlatformSessionProvider({ children }: { children: React.ReactNod
   const router = useRouter()
   const [me, setMe] = useState<PlatformMe | null>(null)
   const [loading, setLoading] = useState(true)
+  const [unavailable, setUnavailable] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
       const res = await fetch('/api/platform/auth/me', { cache: 'no-store' })
-      if (res.status === 401) {
+      const body = (await res.json().catch(() => null)) as { ok?: boolean; data?: PlatformMe } | null
+      const outcome = classifyAuthMe(res.status, Boolean(body?.ok))
+      if (outcome === 'unauthenticated') {
         setMe(null)
+        setUnavailable(false)
         router.replace('/platform/login')
         return
       }
-      const body = (await res.json()) as { ok: boolean; data?: PlatformMe }
-      if (body.ok && body.data) setMe(body.data)
+      if (outcome === 'authenticated' && body?.data) {
+        setMe(body.data)
+        setUnavailable(false)
+        return
+      }
+      // unavailable (5xx / broken envelope): keep whatever session we
+      // already have — it may still be valid server-side; the flag only
+      // drives the shell's error state while nothing is loaded.
+      setUnavailable(true)
     } catch {
-      // Network hiccup — keep whatever we have.
+      // Network exception — same treatment: keep data, surface the state.
+      setUnavailable(true)
     } finally {
       setLoading(false)
     }
@@ -131,7 +147,7 @@ export function PlatformSessionProvider({ children }: { children: React.ReactNod
   )
 
   return (
-    <PlatformSessionContext.Provider value={{ me, loading, can, refresh, logout, logoutAll }}>
+    <PlatformSessionContext.Provider value={{ me, loading, unavailable, can, refresh, logout, logoutAll }}>
       {children}
     </PlatformSessionContext.Provider>
   )
