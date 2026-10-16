@@ -18,7 +18,8 @@
  * respawns it; kill patterns never match the postgres process itself.
  */
 import EmbeddedPostgres from 'embedded-postgres'
-import { copyFileSync, existsSync, readFileSync, symlinkSync } from 'fs'
+import { copyFileSync, existsSync, symlinkSync } from 'fs'
+import { firstPostgresUrlFrom } from './env-resolution'
 import net from 'net'
 import path from 'path'
 
@@ -65,20 +66,21 @@ if (existsSync(ICU60)) {
 
 const log = (m: string) => console.log(`[postgres-db ${new Date().toISOString()}] ${m}`)
 
-/** Parse the app DATABASE_URL from the repo .env (values never logged). */
+/** Parse the app DATABASE_URL from the repo .env (values never logged).
+ *
+ * 2026-10-16 (post-reset hardening): resolution order is
+ *   1. the OWNING WORKTREE's .env (../../.env — the same single source of
+ *      truth the dev app in this worktree uses);
+ *   2. /home/z/my-project/.env (legacy fallback).
+ * The sandbox boot script clobbers the MAIN .env with the SQLite template
+ * on every container reset; the worktree .env is reconstructed by
+ * scripts/dev-env.sh. Pure logic extracted to ./env-resolution.ts
+ * (unit-tested in tests/unit/pg-service-env-resolution.test.ts).
+ */
 function parseDatabaseUrl(): { user: string; password: string; database: string } {
-  const env: Record<string, string> = {}
-  try {
-    for (const line of readFileSync(`${ROOT}/.env`, 'utf8').split('\n')) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/)
-      if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '')
-    }
-  } catch {
-    throw new Error('no .env — cannot source database credentials')
-  }
-  const raw = env.DATABASE_URL
-  if (!raw || !raw.startsWith('postgresql://')) {
-    throw new Error('.env DATABASE_URL is not a postgresql:// URL')
+  const raw = firstPostgresUrlFrom([path.resolve(SERVICE_DIR, '..', '..', '.env'), `${ROOT}/.env`])
+  if (!raw) {
+    throw new Error('no .env with a postgresql:// DATABASE_URL found (worktree .env or /home/z/my-project/.env)')
   }
   const u = new URL(raw)
   return {
