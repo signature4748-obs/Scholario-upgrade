@@ -29,6 +29,7 @@
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 import { REPO_ROOT } from '../helpers/repo-root'
 
@@ -71,11 +72,7 @@ describe('PlatformSetting legacy-compatible select contract', () => {
     // Walk the tracked source and find every file that touches
     // platformSetting — the contract list must stay exhaustive, so a
     // NEW consumer cannot silently appear with a full-row read.
-    const git = (args: string[]): string => {
-      const { spawnSync } = require('node:child_process') as typeof import('node:child_process')
-      const r = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' })
-      return (r.stdout ?? '').trim()
-    }
+    const git = (args: string[]): string => spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).stdout?.trim() ?? ''
     const tracked = git(['ls-files', 'src/']).split('\n').filter(Boolean)
     const consumers = tracked.filter((f) => {
       const text = readFileSync(join(REPO_ROOT, f), 'utf8')
