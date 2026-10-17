@@ -79,6 +79,25 @@ beforeAll(async () => {
   if (!pa) throw new Error('fixture users missing (run bun run db:seed-tenant-isolation)')
   if (!tb) throw new Error('green-valley teacher fixture user missing (run bun run seed:clean)')
 
+  // INTERRUPTION SELF-HEAL (2026-10-17 local-gate lesson): a run that is
+  // killed mid-file (OOM / timeout / Ctrl-C) never executes afterAll, so
+  // its GV-SAL-PROBE-* cross-tenant teacher row survives in the CLEAN
+  // tenant — and every later run's tenant-isolation assertions read
+  // "teachers: 1" where the corpus promises an honest 0 (observed live:
+  // tests/security/tenant-isolation.test.ts §PHASE-2 failed on exactly
+  // this). Sweep ONLY this suite's own namespace prefixes (both the
+  // A-side SAL-PROBE- and the cross-tenant GV-SAL-PROBE- markers), in
+  // FK-safe order (salary rows → teachers → users) — never a broad
+  // delete over the corpus.
+  for (const probePrefix of ['SAL-PROBE-', 'GV-SAL-PROBE-']) {
+    await db.salaryStructure.deleteMany({ where: { teacher: { employeeId: { startsWith: probePrefix } } } }).catch(() => {})
+    await db.salaryPayment.deleteMany({ where: { teacher: { employeeId: { startsWith: probePrefix } } } }).catch(() => {})
+    await db.teacher.deleteMany({ where: { employeeId: { startsWith: probePrefix } } }).catch(() => {})
+  }
+  // The dedicated probe Users (email carries the lowercased marker) —
+  // their Teacher rows are gone by now, so the FK is clear.
+  await db.user.deleteMany({ where: { email: { startsWith: 'salary.probe.sp-' } } }).catch(() => {})
+
   // Dedicated test teacher in the PRINCIPAL'S tenant (this suite's own rows).
   const teacherUser = await db.user.create({
     data: {
