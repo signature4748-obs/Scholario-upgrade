@@ -124,7 +124,11 @@ export function ActionItemsWidget({ exam, onNavigate }: { exam: ExamDTO; onNavig
   if (examStatusIs(exam.status, 'Completed') && isResultDeclared(exam.resultStatus)) {
     items.push({
       label: 'Review grade analytics',
-      description: 'Results are published. Review grade distribution and student performance.',
+      // Honest copy: this item appears as soon as results are DECLARED —
+      // publish status is not tracked on the exam row (publishResults
+      // only fans out notifications + audit), so claiming "published"
+      // here would overstate the state pre-publish.
+      description: 'Results are declared. Review grade distribution and student performance.',
       action: 'View Grades',
       tab: 'grade',
       priority: 'low',
