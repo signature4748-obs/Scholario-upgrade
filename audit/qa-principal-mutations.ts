@@ -254,27 +254,63 @@ async function main() {
     failed.forEach((f) => console.log(` - ${f.check}: ${f.detail}`))
   }
 
-  // ── cleanup (QA rows only) ───────────────────────────────────────────
+  // ── cleanup (QA rows only, FK-ordered) ────────────────────────────────
+  // Order matters: FeeTransaction rows FK-reference Fee (delete txns
+  // first), NotificationRead rows FK-reference Notification (clear read
+  // acks first), and Fee/Attendance FK-reference Student (delete those
+  // before the student). A bare child-first delete silently no-ops via
+  // the catch — this ordering keeps the corpus pristine across runs.
   try {
-    if (feeId) await db.fee.delete({ where: { id: feeId } }).catch(() => {})
+    if (feeId) {
+      await db.feeTransaction.deleteMany({ where: { feeId } }).catch(() => {})
+      await db.fee.deleteMany({ where: { id: feeId } }).catch(() => {})
+    }
     if (headId) await db.masterFeeHead.delete({ where: { id: headId } }).catch(() => {})
     if (studentId) {
-      const s = await db.student.findUnique({ where: { id: studentId } })
+      const s = await db.student.findUnique({ where: { id: studentId } }).catch(() => null)
+      await db.attendance.deleteMany({ where: { studentId } }).catch(() => {})
+      await db.feeTransaction.deleteMany({ where: { studentId } }).catch(() => {})
+      await db.fee.deleteMany({ where: { studentId } }).catch(() => {})
+      await db.student.deleteMany({ where: { id: studentId } }).catch(() => {})
       if (s?.userId) await db.user.delete({ where: { id: s.userId } }).catch(() => {})
-      await db.student.delete({ where: { id: studentId } }).catch(() => {})
     }
     if (teacherId) {
-      const t = await db.teacher.findUnique({ where: { id: teacherId } })
+      const t = await db.teacher.findUnique({ where: { id: teacherId } }).catch(() => null)
+      await db.teacher.deleteMany({ where: { id: teacherId } }).catch(() => {})
       if (t?.userId) await db.user.delete({ where: { id: t.userId } }).catch(() => {})
-      await db.teacher.delete({ where: { id: teacherId } }).catch(() => {})
     }
     if (classId) {
+      // relation-safe sweep (a bare class.delete can be blocked by FK rows
+      // created between create and cleanup — clear every child table first)
       await db.attendance.deleteMany({ where: { classId } }).catch(() => {})
+      await db.subject.deleteMany({ where: { classId } }).catch(() => {})
+      await db.student.updateMany({ where: { classId }, data: { classId: null } }).catch(() => {})
+      await db.timetable.deleteMany({ where: { classId } }).catch(() => {})
       await db.class.delete({ where: { id: classId } }).catch(() => {})
+      const still = await db.class.findUnique({ where: { id: classId } }).catch(() => null)
+      if (still) console.log('cleanup WARNING: QA class still present — manual sweep needed')
     }
-    if (announcementId) await db.notification.delete({ where: { id: announcementId } }).catch(() => {})
+    if (announcementId) {
+      await db.notificationRead.deleteMany({ where: { notificationId: announcementId } }).catch(() => {})
+      await db.notification.deleteMany({ where: { id: announcementId } }).catch(() => {})
+    }
     if (eventId) await db.schoolEvent.delete({ where: { id: eventId } }).catch(() => {})
-    console.log('cleanup done (QA rows removed)')
+    // final sweep — anything left with this run's marker means a FK path we
+    // missed; surface it loudly instead of leaking QA rows into the corpus
+    const strays = await Promise.all([
+      db.class.findMany({ where: { name: { contains: MARKER } }, select: { id: true } }),
+      db.user.findMany({ where: { email: { contains: MARKER } }, select: { id: true, email: true } }),
+      db.notification.findMany({ where: { title: { contains: MARKER } }, select: { id: true } }),
+      db.fee.findMany({ where: { title: { contains: MARKER } }, select: { id: true } }),
+      db.feeTransaction.findMany({ where: { note: { contains: RUN } }, select: { id: true } }),
+      db.masterFeeHead.findMany({ where: { name: { contains: MARKER } }, select: { id: true } }),
+      db.schoolEvent.findMany({ where: { title: { contains: MARKER } }, select: { id: true } }),
+    ]).then((lists) => lists.flat())
+    if (strays.length) {
+      console.log('cleanup WARNING — strays remain:', JSON.stringify(strays))
+    } else {
+      console.log('cleanup done (QA rows removed; final sweep clean)')
+    }
   } catch (e: any) {
     console.log('cleanup warning:', e?.message)
   }

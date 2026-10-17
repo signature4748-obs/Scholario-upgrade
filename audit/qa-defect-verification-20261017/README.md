@@ -106,3 +106,38 @@ repeated runs — the final re-run uses a single login budget.
 - Downloads module lacks the sidebar DEMO tag but carries the in-module
   DemoModuleNotice banner (Phase 7-I honest-labeling decision — banner is
   the sanctioned mechanism).
+
+---
+
+# Teacher Panel Functional Audit — addendum (same session)
+
+Teacher session: `teacher1@hawkingshigh.edu` (Smt. Kavita Singh, class teacher
+of 1-A, Room 10A). Deep-links (`?module=<key>`) used where dev-mode module
+churn interfered with click delivery — the sanctioned bookmark path.
+
+## Browser-verified
+
+| Module | Result |
+| --- | --- |
+| Dashboard | Live Today's Schedule (real periods: Hindi/Mathematics 1-A Room 10A), Pending Actions, follow-ups with real students, Notice Board showing the exam-publish notification fan-out end-to-end |
+| Class Attendance | Class list from real DB ids; board GET (roster 6 + baseline state); marking flow E2E: POST `/api/teacher/class-attendance/baseline` → 200 → 6 DB rows with correct statuses (then QA-cleaned); honest validation: partial roster → 400 "Every student needs a valid status"; day history (12–16 Oct marked) |
+| Marks Entry | Real duty "1-A · English · Half-Yearly Examination — Marks submitted"; honest locked state ("Scanning is locked — marks already submitted") |
+| My Class (Class Teacher Hub) | Live cross-module KPIs: 6 students, attendance 97% (30d · 22 days), class average 70% (Half-Yearly), growth 98 (5/6 scored), fee collection 58%, outstanding ₹22,600 (3 overdue), open concerns 3; honest cross-reference "Attendance is marked in Class Attendance — this workspace reports on the same records" |
+| My Salary & Payments | ₹12,000/month effective 1 Apr 2026, latest payment Sept 2026 · UPI, per-month payslips with View/Download PDF, payment history |
+| Communication Hub | Live counters: 3 unread (2 parents · 1 direct), 6 active conversations, 5 needs-reply, 3 follow-ups (2 due today); Messages/Announcements/Sent tabs + parent/staff filters |
+| Nav | 10 modules + Class Teacher Hub + In-charge Duties + relieved-staff restricted views (registry-driven, permission-filtered) |
+
+## Verdict
+
+No app defects found in the teacher plane. All write paths behave honestly
+(fail-closed 404/400 with truthful messages); all read surfaces render live
+server data.
+
+Dev-environment artifacts observed (documented, NOT app defects):
+- agent-browser coordinate-clicks intermittently miss React handlers during
+  dev-mode re-render churn (DOM `.click()` dispatch works; the flow itself is
+  sound) — CI Playwright is the authoritative UI runner.
+- Zombie sessions of deleted QA users produced 404 attendance POSTs during
+  the audit window (server correctly fail-closed on the deleted class ids).
+- localStorage demo-store keys (`::t:t-dsg-gur-01`) retain the sanctioned
+  demo-tenant corpus; live sessions fetch server truth independently.
