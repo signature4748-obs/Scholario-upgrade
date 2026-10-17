@@ -1,0 +1,32 @@
+{
+  "cookies": [
+    {
+      "name": "scholario_platform_session",
+      "value": "32fb35fe360eb66d2a4f17d27bbf0b9b28c9b4bf984a436e0434b75a2f2ee13a",
+      "domain": "localhost",
+      "path": "/",
+      "expires": 1792049244.792573,
+      "size": 90,
+      "httpOnly": true,
+      "secure": false,
+      "session": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "http://localhost:3000",
+      "localStorage": [
+        {
+          "name": "scholario-platform-token",
+          "value": "32fb35fe360eb66d2a4f17d27bbf0b9b28c9b4bf984a436e0434b75a2f2ee13a"
+        },
+        {
+          "name": "scholario-theme",
+          "value": "{\"state\":{\"theme\":\"light\",\"accentColor\":\"teal\",\"reduceMotion\":false,\"textSize\":\"default\",\"hydrated\":true},\"version\":2}"
+        }
+      ],
+      "sessionStorage": []
+    }
+  ]
+}

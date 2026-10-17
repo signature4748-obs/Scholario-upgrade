@@ -222,6 +222,49 @@ async function main() {
   })
   console.log('  + notices: 2 (1 HIGH, audience-scoped)')
 
+  // ── 8. Materialize the declared exams' Result rows (gap-fill) ─────
+  // Student-panel audit 2026-10-17: the declare contract (Result schema
+  // comment + student-results-store doc — "the staff publish/declare flow
+  // writes the rows") is now enforced by declareResults(), but the SEEDED
+  // corpus declared PA1/Half-Yearly directly without ever writing rows —
+  // a declared exam whose marks exist was invisible in every student's
+  // Results module ("No published results yet"). This final pass mirrors
+  // the declare flow's materialization for EVERY declared exam of the
+  // school: non-null, non-DRAFT ExamMark → Result row keyed by
+  // (studentId, examId, subjectId) with skipDuplicates — the curated
+  // legacy rows written above are preserved, only the GAPS are filled,
+  // and re-runs are idempotent.
+  const declaredExams = await db.exam.findMany({
+    where: { schoolId: school.id, resultStatus: { in: ['Result Declared', 'Declared'] } },
+    select: { id: true, name: true },
+  })
+  for (const ex of declaredExams) {
+    const marks = await db.examMark.findMany({
+      where: { examId: ex.id, marksObtained: { not: null }, workflowStatus: { not: 'DRAFT' } },
+      select: { studentId: true, classId: true, subjectId: true, marksObtained: true },
+    })
+    if (!marks.length) continue
+    const configs = await db.examSubjectConfig.findMany({
+      where: { examId: ex.id },
+      select: { classId: true, subjectId: true, maxMarks: true },
+    })
+    const maxBy = new Map(configs.map((c) => [`${c.classId}:${c.subjectId}`, c.maxMarks]))
+    const rows = marks.map((m) => {
+      const total = maxBy.get(`${m.classId}:${m.subjectId}`) ?? 100
+      const value = m.marksObtained ?? 0
+      return {
+        studentId: m.studentId,
+        examId: ex.id,
+        subjectId: m.subjectId,
+        marks: value,
+        totalMarks: total,
+        grade: gradeFor(value, total),
+      }
+    })
+    const created = await db.result.createMany({ data: rows, skipDuplicates: true })
+    console.log(`  + results materialized: ${created.count} rows gap-filled for declared exam "${ex.name}"`)
+  }
+
   console.log('\nDashboard demo seed complete.')
 }
 

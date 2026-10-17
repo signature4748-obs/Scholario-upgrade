@@ -1,36 +1,75 @@
 'use client'
 
-/**
- * SAAS-HARDENING (§3A) — platform console · school detail · Subscription tab.
- *
- * The tenant's entitlement snapshot (the SAME evaluation the school plane
- * enforces), the offline payment recording form (the verified-ledger
- * activation path), the manual entitlement override, and the full
- * platform billing ledger (School pays SCHOLARIO — disjoint from student
- * fees). Mutations are step-up-gated (gate() convention) and audited
- * server-side.
- */
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+// ============================================================
+// SchoolSubscriptionTab — school workspace · Subscription tab
+// (REBUILT on the authoritative SUBSCRIPTION & ENTITLEMENT SYSTEM)
+// ------------------------------------------------------------
+// This is §5 of the Schools-management mission: the clearly
+// discoverable subscription section INSIDE each school's workspace.
+//
+// Internal structure (sub-tabs):
+//   Snapshot      — the enforced entitlement state + manual override
+//                   (the same evaluation the school plane enforces —
+//                   console and locked shell can never disagree).
+//   Plan & billing— the authoritative registry row (plan, interval,
+//                   price snapshot, period, expiry, billing model),
+//                   plan-driven payment recording with DIRECT or
+//                   CODE-GATED activation, and the legacy plan marker.
+//   Codes         — the school's activation codes: metadata, issuance
+//                   status, expiry, redemption state, reissue chain,
+//                   revoke — plaintext ONLY at the issuance moment.
+//   Students      — per-student entitlements (Model B/C): assign,
+//                   lifecycle actions, per-student history.
+//   Ledger        — the immutable platform-payment ledger.
+//
+// PLATFORM SUBSCRIPTION ≠ SCHOOL FEE COLLECTION: the banner on every
+// sub-tab states which side of that boundary the operator is on (the
+// school's own fee gateway lives in the "Fee gateway" tab).
+//
+// All mutations reuse the authoritative endpoints (no second
+// redemption system): the same APIs /platform/subscriptions uses.
+// Billing mutations are step-up-gated (gate() convention — dormant
+// while platform TOTP is stood down) and audited server-side with the
+// operator's reason.
+// ============================================================
+
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
-  BadgeCheck,
-  CalendarDays,
-  CreditCard,
-  History,
-  IndianRupee,
   Info,
+  KeyRound,
+  ListOrdered,
+  Loader2,
+  Package,
   RefreshCw,
+  Search,
   ShieldAlert,
+  Users,
   Wallet,
 } from 'lucide-react'
 import { platformApi, type PlatformApiError } from '../platform-client'
 import { useStepUpGate } from '../step-up-gate'
+import {
+  StateBadge as SharedStateBadge,
+  money,
+  dateStr,
+  errMessage,
+  OneTimeCodeBlock,
+  PlanPicker,
+  AssignEntitlementDialog,
+  StudentHistoryDialog,
+  type ActivationCodeRow,
+  type PlanRow,
+  type RegistryRow,
+  type StudentRow,
+} from './subscription-shared'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import {
   Select,
   SelectContent,
@@ -46,25 +85,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
 
-// ── Types (API contract — GET /api/platform/schools/[id]/subscription) ────
+// ── Types (API contracts) ────────────────────────────────────────────────
 
 interface PaymentRow {
   id: string
@@ -108,8 +132,9 @@ type GateFn = <T>(action: () => Promise<T>) => Promise<T | undefined>
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'] as const
 const PAYMENT_MODES = ['ONLINE_PAYMENT', 'CASH', 'BANK_TRANSFER', 'CHEQUE', 'OTHER'] as const
 const OVERRIDE_STATES = ['ACTIVE', 'GRACE', 'RESTRICTED', 'SUSPENDED'] as const
+const CODE_STATUS_FILTERS = ['ALL', 'ISSUED', 'CLAIMED', 'EXPIRED', 'REVOKED', 'REPLACED'] as const
 
-// ── Small local helpers ───────────────────────────────────────────────────
+// ── Small local helpers ──────────────────────────────────────────────────
 
 function errText(e: unknown): string {
   const pae = e as PlatformApiError
@@ -124,33 +149,11 @@ function fmtDate(iso: string | null): string {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-function fmtMoney(amount: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency,
-      maximumFractionDigits: 2,
-    }).format(amount)
-  } catch {
-    return `${currency} ${amount}`
-  }
-}
-
 function todayISO(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-/** Same extension math the server applies (max(now, periodEnd) + 30-day months). */
-function projectPeriodEnd(periodEnd: string | null, months: number): Date {
-  const current = periodEnd ? new Date(periodEnd) : null
-  const base = current && current.getTime() > Date.now() ? current : new Date()
-  return new Date(base.getTime() + months * 30 * 24 * 60 * 60 * 1000)
-}
-
-const num = new Intl.NumberFormat('en-IN')
-
-/** State-specific badge colors — emerald ACTIVE · amber GRACE · orange RESTRICTED · red SUSPENDED. */
 const STATE_STYLES: Record<string, string> = {
   ACTIVE: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   GRACE: 'border-amber-200 bg-amber-50 text-amber-700',
@@ -159,58 +162,248 @@ const STATE_STYLES: Record<string, string> = {
   NOT_ACTIVATED: 'border-slate-200 bg-slate-100 text-slate-600',
 }
 
-function StateBadge({ state, className }: { state: string; className?: string }) {
+function EntitlementStateBadge({ state }: { state: string }) {
   return (
-    <Badge
-      variant="outline"
-      className={`normal-case ${STATE_STYLES[state] ?? STATE_STYLES['NOT_ACTIVATED']} ${className ?? ''}`}
-    >
-      {state}
+    <Badge variant="outline" className={`normal-case ${STATE_STYLES[state] ?? STATE_STYLES['NOT_ACTIVATED']}`}>
+      {state.replace(/_/g, ' ')}
     </Badge>
   )
 }
 
-/** The evaluator message strip mirrors the school plane's honest copy. */
-function messageTone(state: string): string {
-  if (state === 'ACTIVE') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
-  if (state === 'GRACE') return 'border-amber-200 bg-amber-50 text-amber-800'
-  return 'border-red-200 bg-red-50 text-red-700'
+/** The platform-vs-fee-collection boundary banner (mission §5D). */
+function BoundaryBanner() {
+  return (
+    <div
+      className="flex items-start gap-2.5 rounded-xl border border-teal-200 bg-teal-50/60 px-4 py-3 text-xs text-teal-900"
+      role="note"
+    >
+      <Info className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" aria-hidden="true" />
+      <p>
+        <span className="font-semibold">Platform subscription</span> — what this school pays SCHOLARIO to use the
+        platform. This is separate from the <span className="font-semibold">school fee gateway</span> (what the school
+        collects from its own students/parents — configured in the Fee gateway tab). Records, credentials and revenue
+        of the two never mix.
+      </p>
+    </div>
+  )
 }
 
-// ── Record Payment dialog (the §3A offline ledger entry) ──────────────────
+// ── Snapshot card (the enforced state + override) ─────────────────────────
 
-interface RecordPaymentForm {
-  amount: string
-  currency: string
-  mode: string
-  paymentDate: string
-  periodMonths: string
-  reference: string
-  notes: string
-}
+function SnapshotCard({
+  data,
+  registryRow,
+  gate,
+  onReload,
+}: {
+  data: SubscriptionResponse
+  registryRow: RegistryRow | null
+  gate: GateFn
+  onReload: () => void
+}) {
+  const [overrideOpen, setOverrideOpen] = useState(false)
+  const [overrideState, setOverrideState] = useState<string>('clear')
+  const [overrideReason, setOverrideReason] = useState('')
+  const [busy, setBusy] = useState(false)
 
-function emptyPaymentForm(): RecordPaymentForm {
-  return {
-    amount: '',
-    currency: 'INR',
-    mode: 'BANK_TRANSFER',
-    paymentDate: todayISO(),
-    periodMonths: '12',
-    reference: '',
-    notes: '',
+  const sub = data.subscription
+  const ent = data.entitlement
+
+  const applyOverride = async () => {
+    setBusy(true)
+    try {
+      const res = await gate(() =>
+        platformApi<{ ok: true; overrideStatus: string | null }>(
+          `/api/platform/schools/${data.school.id}/subscription`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({
+              overrideStatus: overrideState === 'clear' ? null : overrideState,
+              reason: overrideReason.trim() || undefined,
+            }),
+          },
+        ),
+      )
+      if (!res) return
+      toast.success(
+        res.overrideStatus
+          ? `Manual override set to ${res.overrideStatus} — applies immediately, audited.`
+          : 'Manual override cleared — the computed period state applies again.',
+      )
+      setOverrideOpen(false)
+      setOverrideReason('')
+      onReload()
+    } catch (e) {
+      toast.error('Override failed', { description: errText(e) })
+    } finally {
+      setBusy(false)
+    }
   }
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm" aria-label="Subscription snapshot">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5 sm:px-5">
+        <div>
+          <h3 className="font-display text-sm font-bold text-slate-900">Subscription & entitlement snapshot</h3>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            The same evaluation the school plane enforces — the console and the school&apos;s locked shell can never
+            disagree about this state.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setOverrideOpen(true)}
+          className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
+        >
+          <ShieldAlert className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+          Manual override…
+        </Button>
+      </div>
+      <div className="space-y-4 p-4 sm:px-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <EntitlementStateBadge state={ent.state} />
+          <span className="text-xs text-slate-600">
+            business modules {ent.businessAllowed ? 'unlocked' : 'locked'} · sign-in{' '}
+            {data.school.status === 'PENDING' ? 'blocked (PENDING)' : 'allowed'}
+          </span>
+          {sub?.overrideStatus && (
+            <Badge variant="outline" className="normal-case border-orange-200 bg-orange-50 text-orange-700">
+              override: {sub.overrideStatus}
+            </Badge>
+          )}
+          {registryRow?.planCode && (
+            <Badge variant="outline" className="normal-case border-slate-200 bg-slate-100 text-slate-700">
+              {registryRow.planCode}
+            </Badge>
+          )}
+          {registryRow && (
+            <Badge variant="outline" className="normal-case border-slate-200 bg-slate-100 text-slate-700">
+              {registryRow.billingModel.replace(/_/g, ' ')}
+            </Badge>
+          )}
+        </div>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Plan</dt>
+            <dd className="mt-0.5 text-slate-900">
+              {registryRow?.planDef ? registryRow.planDef.name : sub?.plan ?? '—'}
+              {registryRow?.interval && (
+                <span className="ml-1 text-[11px] text-slate-500">{registryRow.interval.toLowerCase()}</span>
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Period</dt>
+            <dd className="mt-0.5 text-slate-900">
+              {fmtDate(sub?.periodStart ?? registryRow?.periodStart ?? null)} → {sub?.periodEnd ? fmtDate(sub.periodEnd) : 'No expiry set'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Grace days</dt>
+            <dd className="mt-0.5 text-slate-900">{sub?.graceDays ?? registryRow?.graceDays ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Renewal required</dt>
+            <dd className="mt-0.5 text-slate-900">{ent.renewalRequired ? 'yes' : 'no'}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Payments</dt>
+            <dd className="mt-0.5 text-slate-900 tabular-nums">{registryRow?.paymentCount ?? data.payments.length}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">School lifecycle</dt>
+            <dd className="mt-0.5 text-slate-900">{data.school.status}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Stored snapshot status</dt>
+            <dd className="mt-0.5 text-slate-900">{sub?.status ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Manual override</dt>
+            <dd className="mt-0.5 text-slate-900">{sub?.overrideStatus ?? 'none — computed state'}</dd>
+          </div>
+        </dl>
+        {ent.message && (
+          <p className={`rounded-lg border px-3 py-2 text-xs ${ent.state === 'ACTIVE' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : ent.state === 'GRACE' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
+            {ent.message}
+          </p>
+        )}
+      </div>
+
+      {/* Override dialog */}
+      <Dialog open={overrideOpen} onOpenChange={setOverrideOpen}>
+        <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display">Manual entitlement override</DialogTitle>
+            <DialogDescription>
+              A platform decision that forces the entitlement state, regardless of the computed period. School
+              lifecycle (activate/suspend) is never touched here. Applies immediately, lasts until cleared, step-up
+              gated and audited with your reason.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Current override</Label>
+              <p className="text-sm text-slate-700">{sub?.overrideStatus ?? 'none — computed period state applies'}</p>
+            </div>
+            <div>
+              <Label className="text-xs" htmlFor="override-state">
+                New override
+              </Label>
+              <Select value={overrideState} onValueChange={setOverrideState}>
+                <SelectTrigger id="override-state" className="bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-white">
+                  <SelectItem value="clear">Clear — computed state applies</SelectItem>
+                  {OVERRIDE_STATES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      Force {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs" htmlFor="override-reason">
+                Reason (audited)
+              </Label>
+              <Textarea
+                id="override-reason"
+                rows={3}
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+                placeholder="Why is this override being applied?"
+                className="bg-white"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOverrideOpen(false)} className="border-slate-300">
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void applyOverride()}
+                disabled={busy}
+                className="bg-teal-600 hover:bg-teal-700 text-white"
+              >
+                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+                Apply override
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </section>
+  )
 }
 
-function validatePaymentForm(f: RecordPaymentForm): string | null {
-  const amount = Number(f.amount)
-  if (!Number.isFinite(amount) || amount <= 0) return 'Amount must be greater than zero'
-  if (amount > 100_000_000) return 'Amount exceeds the accepted maximum (10,00,00,000)'
-  const months = Number(f.periodMonths)
-  if (!Number.isInteger(months) || months < 1 || months > 60) {
-    return 'Subscription period must be a whole number of months between 1 and 60'
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(f.paymentDate)) return 'Payment date is required'
-  return null
+// ── Record payment dialog (plan-driven + legacy) ──────────────────────────
+
+interface RecordPaymentResult {
+  message: string
+  payment?: { receiptNo: string; statusAfter?: string; periodEndAfter?: string }
+  activationCode?: { publicRef: string; code: string; expiresAt: string }
 }
 
 function RecordPaymentDialog({
@@ -218,7 +411,7 @@ function RecordPaymentDialog({
   onOpenChange,
   schoolId,
   schoolName,
-  periodEnd,
+  currentBillingModel,
   gate,
   onRecorded,
 }: {
@@ -226,61 +419,94 @@ function RecordPaymentDialog({
   onOpenChange: (v: boolean) => void
   schoolId: string
   schoolName: string
-  periodEnd: string | null
+  currentBillingModel: string
   gate: GateFn
   onRecorded: () => void
 }) {
-  const [form, setForm] = useState<RecordPaymentForm>(emptyPaymentForm)
+  const [usePlan, setUsePlan] = useState(true)
+  const [form, setForm] = useState({
+    planCode: '',
+    amount: '',
+    currency: 'INR',
+    mode: 'BANK_TRANSFER',
+    paymentDate: todayISO(),
+    periodMonths: '12',
+    reference: '',
+    notes: '',
+    issueActivationCode: false,
+    claimWindowDays: '30',
+    billingModel: '',
+  })
+  const [plans, setPlans] = useState<PlanRow[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<RecordPaymentResult | null>(null)
 
   useEffect(() => {
     if (open) {
-      setForm(emptyPaymentForm())
+      setForm((f) => ({
+        ...f,
+        planCode: '',
+        amount: '',
+        reference: '',
+        notes: '',
+        issueActivationCode: false,
+        billingModel: currentBillingModel,
+      }))
       setError(null)
+      setResult(null)
     }
+  }, [open, currentBillingModel])
+
+  useEffect(() => {
+    if (!open) return
+    platformApi<{ plans: PlanRow[] }>('/api/platform/subscriptions/plans')
+      .then((d) => setPlans(d.plans.filter((p) => p.scope === 'SCHOOL' && p.status === 'ACTIVE' && p.allowOffline)))
+      .catch(() => {})
   }, [open])
 
-  const setField = <K extends keyof RecordPaymentForm>(key: K, value: string) =>
-    setForm((f) => ({ ...f, [key]: value }))
-
-  const months = Number(form.periodMonths)
-  const previewEnd = Number.isInteger(months) && months >= 1 && months <= 60
-    ? projectPeriodEnd(periodEnd, months)
-    : null
+  // Auto-fill the amount from the selected plan's price (editable — the
+  // server rejects a mismatch with an honest error).
+  const selectedPlan = plans.find((p) => p.code === form.planCode)
+  useEffect(() => {
+    if (usePlan && selectedPlan) {
+      const price = selectedPlan.interval === 'MONTHLY' ? selectedPlan.priceMonthly : selectedPlan.priceAnnual
+      setForm((f) => ({ ...f, amount: price != null ? String(price) : f.amount, currency: selectedPlan.currency }))
+    }
+  }, [selectedPlan, usePlan])
 
   const submit = async () => {
-    const problem = validatePaymentForm(form)
-    if (problem) {
-      setError(problem)
-      return
-    }
+    const amount = Number(form.amount)
+    if (!Number.isFinite(amount) || amount <= 0) return setError('Amount must be greater than zero')
+    if (amount > 100_000_000) return setError('Amount exceeds the accepted maximum')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.paymentDate)) return setError('Payment date is required')
+    if (usePlan && !form.planCode) return setError('Select a plan (or switch to the legacy free-form amount)')
     setBusy(true)
     setError(null)
     try {
+      const payload: Record<string, unknown> = {
+        amount,
+        currency: form.currency,
+        mode: form.mode,
+        paymentDate: form.paymentDate,
+        periodMonths: Number(form.periodMonths),
+        ...(form.reference.trim() ? { reference: form.reference.trim() } : {}),
+        ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
+      }
+      if (usePlan) {
+        payload.planCode = form.planCode
+        payload.issueActivationCode = form.issueActivationCode
+        if (form.issueActivationCode) payload.claimWindowDays = Number(form.claimWindowDays || 30)
+        if (form.billingModel && form.billingModel !== currentBillingModel) payload.billingModel = form.billingModel
+      }
       const res = await gate(() =>
-        platformApi<{
-          ok: true
-          payment: { id: string; receiptNo: string; statusAfter: string; periodEndAfter: string }
-          message: string
-        }>(`/api/platform/schools/${schoolId}/subscription/payments`, {
+        platformApi<RecordPaymentResult>(`/api/platform/schools/${schoolId}/subscription/payments`, {
           method: 'POST',
-          body: JSON.stringify({
-            amount: Number(form.amount),
-            currency: form.currency,
-            mode: form.mode,
-            paymentDate: form.paymentDate,
-            periodMonths: Number(form.periodMonths),
-            ...(form.reference.trim() ? { reference: form.reference.trim() } : {}),
-            ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
-          }),
+          body: JSON.stringify(payload),
         }),
       )
       if (!res) return // cancelled at the step-up prompt
-      toast.success(
-        `Payment recorded — receipt ${res.payment.receiptNo}. Subscription ${res.payment.statusAfter} until ${fmtDate(res.payment.periodEndAfter)}.`,
-      )
-      onOpenChange(false)
+      setResult(res)
       onRecorded()
     } catch (e) {
       setError(errText(e))
@@ -290,733 +516,1017 @@ function RecordPaymentDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-lg">
+    <Dialog open={open} onOpenChange={(v) => { if (!result) onOpenChange(v) }}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto bg-white border-slate-200 text-slate-900 sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
+          <DialogTitle className="flex items-center gap-2 font-display">
             <Wallet className="h-4 w-4 text-teal-600" aria-hidden="true" />
             Record subscription payment — {schoolName}
           </DialogTitle>
-          <DialogDescription className="text-slate-500">
-            Records what the school actually paid SCHOLARIO (offline collection — the school
-            pays the platform; this never touches student fees). A verified entry is the only
-            cause of activation: the subscription extends{' '}
-            {Number.isInteger(months) && months > 0 ? `by ${months} month${months === 1 ? '' : 's'}` : ''}{' '}
-            and the tenant unlocks immediately, for this school only. Step-up gated and audited.
+          <DialogDescription>
+            A VERIFIED offline payment enters the immutable ledger. With a plan selected this snapshots the plan and
+            either activates the subscription directly or (with a code) activates it when the school redeems the code.
           </DialogDescription>
         </DialogHeader>
-
-        {error && (
-          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            {error}
+        {result ? (
+          <div className="space-y-3">
+            <p className="text-sm">{result.message}</p>
+            {result.activationCode && (
+              <OneTimeCodeBlock
+                code={result.activationCode}
+                hint="Show and copy the code now — it will not be visible again. Deliver it to the school's principal out-of-band; the subscription activates on redemption."
+              />
+            )}
+            <DialogFooter>
+              <Button onClick={() => onOpenChange(false)} className="bg-teal-600 hover:bg-teal-700 text-white">
+                Done
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
+              <div>
+                <div className="flex items-center gap-1.5 text-sm font-medium">
+                  <Package className="h-4 w-4" aria-hidden="true" />
+                  Plan-driven payment
+                </div>
+                <p className="text-xs text-slate-500">
+                  Off = legacy free-form amount/months (the pre-registry flow, kept for compatibility).
+                </p>
+              </div>
+              <Switch checked={usePlan} onCheckedChange={setUsePlan} />
+            </div>
+            {usePlan && (
+              <div>
+                <Label className="text-xs">Plan (school scope, offline-enabled)</Label>
+                <PlanPicker scope="SCHOOL" value={form.planCode} onChange={(v) => setForm((f) => ({ ...f, planCode: v }))} />
+                {selectedPlan && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {selectedPlan.name} · {selectedPlan.interval.toLowerCase()} ·{' '}
+                    {money(
+                      selectedPlan.interval === 'MONTHLY' ? selectedPlan.priceMonthly : selectedPlan.priceAnnual,
+                      selectedPlan.currency,
+                    )}{' '}
+                    · grace {selectedPlan.graceDays}d
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label className="text-xs">Amount</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  value={form.amount}
+                  onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+                  className="bg-white"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Currency</Label>
+                <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white">
+                    {CURRENCIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Payment date</Label>
+                <Input
+                  type="date"
+                  value={form.paymentDate}
+                  onChange={(e) => setForm((f) => ({ ...f, paymentDate: e.target.value }))}
+                  className="bg-white"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Mode</Label>
+                <Select value={form.mode} onValueChange={(v) => setForm((f) => ({ ...f, mode: v }))}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white">
+                    {PAYMENT_MODES.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {m.replace(/_/g, ' ')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {!usePlan && (
+                <div>
+                  <Label className="text-xs">Period (months)</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={form.periodMonths}
+                    onChange={(e) => setForm((f) => ({ ...f, periodMonths: e.target.value }))}
+                    className="bg-white"
+                  />
+                </div>
+              )}
+            </div>
+            {usePlan && (
+              <div>
+                <Label className="text-xs">Billing model (rides this payment)</Label>
+                <Select value={form.billingModel || currentBillingModel} onValueChange={(v) => setForm((f) => ({ ...f, billingModel: v }))}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white">
+                    {['SCHOOL_WIDE', 'PER_STUDENT', 'MIXED'].map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {m.replace(/_/g, ' ')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Current: {currentBillingModel.replace(/_/g, ' ')} — the model switch is applied inside the successful
+                  payment transaction, never on its own.
+                </p>
+              </div>
+            )}
+            <div>
+              <Label className="text-xs">Reference / receipt</Label>
+              <Input
+                value={form.reference}
+                onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))}
+                placeholder="UTR / cheque no. (optional)"
+                className="bg-white"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Notes (audited)</Label>
+              <Textarea
+                rows={2}
+                value={form.notes}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                placeholder="Audit note (optional)"
+                className="bg-white"
+              />
+            </div>
+            {usePlan && (
+              <>
+                <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
+                  <div>
+                    <div className="flex items-center gap-1.5 text-sm font-medium">
+                      <KeyRound className="h-4 w-4" aria-hidden="true" />
+                      Issue activation code
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      The VERIFIED payment is recorded now; the subscription activates when the school redeems the code
+                      (offline handshake — nothing activates before redemption).
+                    </p>
+                  </div>
+                  <Switch
+                    checked={form.issueActivationCode}
+                    onCheckedChange={(v) => setForm((f) => ({ ...f, issueActivationCode: v }))}
+                  />
+                </div>
+                {form.issueActivationCode && (
+                  <div>
+                    <Label className="text-xs">Claim window (days)</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="365"
+                      value={form.claimWindowDays}
+                      onChange={(e) => setForm((f) => ({ ...f, claimWindowDays: e.target.value }))}
+                      className="bg-white"
+                    />
+                  </div>
+                )}
+              </>
+            )}
+            {error && (
+              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+                {error}
+              </p>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)} className="border-slate-300">
+                Cancel
+              </Button>
+              <Button onClick={() => void submit()} disabled={busy} className="bg-teal-600 hover:bg-teal-700 text-white">
+                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+                {usePlan && form.issueActivationCode ? 'Record + issue code' : 'Record payment'}
+              </Button>
+            </DialogFooter>
           </div>
         )}
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="pay-amount" className="text-xs font-semibold text-slate-700">
-              Amount *
-            </Label>
-            <Input
-              id="pay-amount"
-              type="number"
-              inputMode="decimal"
-              min="0.01"
-              step="0.01"
-              value={form.amount}
-              onChange={(e) => setField('amount', e.target.value)}
-              placeholder="24000"
-              className="h-11 bg-white border-slate-200 text-slate-900 tabular-nums focus-visible:ring-teal-500/40"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="pay-currency" className="text-xs font-semibold text-slate-700">
-              Currency
-            </Label>
-            <Select value={form.currency} onValueChange={(v) => setField('currency', v)}>
-              <SelectTrigger id="pay-currency" className="h-11 w-full bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200 text-slate-900">
-                {CURRENCIES.map((c) => (
-                  <SelectItem key={c} value={c} className="focus:bg-slate-100">
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="pay-mode" className="text-xs font-semibold text-slate-700">
-              Payment mode *
-            </Label>
-            <Select value={form.mode} onValueChange={(v) => setField('mode', v)}>
-              <SelectTrigger id="pay-mode" className="h-11 w-full bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200 text-slate-900">
-                {PAYMENT_MODES.map((m) => (
-                  <SelectItem key={m} value={m} className="focus:bg-slate-100">
-                    {m.replace(/_/g, ' ')}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="pay-date" className="text-xs font-semibold text-slate-700">
-              Payment date *
-            </Label>
-            <Input
-              id="pay-date"
-              type="date"
-              value={form.paymentDate}
-              onChange={(e) => setField('paymentDate', e.target.value)}
-              className="h-11 bg-white border-slate-200 text-slate-900 focus-visible:ring-teal-500/40"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="pay-months" className="text-xs font-semibold text-slate-700">
-              Period covered (months) *
-            </Label>
-            <Input
-              id="pay-months"
-              type="number"
-              inputMode="numeric"
-              min="1"
-              max="60"
-              step="1"
-              value={form.periodMonths}
-              onChange={(e) => setField('periodMonths', e.target.value)}
-              className="h-11 bg-white border-slate-200 text-slate-900 tabular-nums focus-visible:ring-teal-500/40"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="pay-reference" className="text-xs font-semibold text-slate-700">
-              Reference (UTR / cheque no.)
-            </Label>
-            <Input
-              id="pay-reference"
-              value={form.reference}
-              onChange={(e) => setField('reference', e.target.value)}
-              placeholder="UTR123456789"
-              maxLength={120}
-              className="h-11 bg-white border-slate-200 text-slate-900 font-mono focus-visible:ring-teal-500/40"
-            />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="pay-notes" className="text-xs font-semibold text-slate-700">
-              Notes (optional, audited)
-            </Label>
-            <Textarea
-              id="pay-notes"
-              value={form.notes}
-              onChange={(e) => setField('notes', e.target.value)}
-              placeholder="e.g. Annual renewal — cheque #4412 deposited at the Mumbai branch…"
-              rows={2}
-              maxLength={600}
-              className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40 min-h-[72px]"
-            />
-          </div>
-        </div>
-
-        {previewEnd && (
-          <div
-            role="note"
-            className="flex items-start gap-2.5 rounded-xl border border-teal-200 bg-teal-50 p-3 text-xs leading-relaxed text-teal-800"
-          >
-            <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>
-              On submit: receipt numbered automatically (SCH-RCP-…), subscription becomes{' '}
-              <strong>ACTIVE until {fmtDate(previewEnd.toISOString())}</strong> —{' '}
-              {months} month{months === 1 ? '' : 's'} extended from{' '}
-              {periodEnd && new Date(periodEnd).getTime() > Date.now()
-                ? `the current period end (${fmtDate(periodEnd)})`
-                : 'today'}
-              .
-            </span>
-          </div>
-        )}
-
-        <DialogFooter className="gap-2">
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-            className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() => void submit()}
-            disabled={busy}
-            className="h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
-          >
-            {busy ? 'Recording…' : 'Record payment'}
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
 
-// ── Manual override control ───────────────────────────────────────────────
+// ── Plan & billing card ──────────────────────────────────────────────────
 
-function OverrideControl({
+function PlanBillingCard({
   schoolId,
-  currentOverride,
+  schoolName,
+  registryRow,
+  legacyPlan,
   gate,
-  onApplied,
+  onReload,
 }: {
   schoolId: string
-  currentOverride: string | null
+  schoolName: string
+  registryRow: RegistryRow | null
+  legacyPlan: string
   gate: GateFn
-  onApplied: () => void
+  onReload: () => void
 }) {
-  const [choice, setChoice] = useState<string>('none')
+  const [paymentOpen, setPaymentOpen] = useState(false)
+  const [legacyPlanChoice, setLegacyPlanChoice] = useState(legacyPlan)
+  const [planReason, setPlanReason] = useState('')
+  const [planBusy, setPlanBusy] = useState(false)
+
+  useEffect(() => setLegacyPlanChoice(legacyPlan), [legacyPlan])
+
+  const changeLegacyPlan = async () => {
+    if (legacyPlanChoice === legacyPlan) return
+    setPlanBusy(true)
+    try {
+      const res = await gate(() =>
+        platformApi<{ ok: true; plan: string }>(`/api/platform/schools/${schoolId}/plan`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            plan: legacyPlanChoice,
+            ...(planReason.trim() ? { reason: planReason.trim() } : {}),
+          }),
+        }),
+      )
+      if (!res) return
+      toast.success(`Tenant plan marker set to ${res.plan} (audited).`)
+      setPlanReason('')
+      onReload()
+    } catch (e) {
+      toast.error('Plan marker change failed', { description: errText(e) })
+    } finally {
+      setPlanBusy(false)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm" aria-label="Plan and billing">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5 sm:px-5">
+        <div>
+          <h3 className="font-display text-sm font-bold text-slate-900">Plan & billing</h3>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            The authoritative registry plan, period and billing model — plus the offline payment recording that
+            activates, renews or extends it.
+          </p>
+        </div>
+        <Button
+          onClick={() => setPaymentOpen(true)}
+          className="h-9 bg-teal-600 hover:bg-teal-700 text-white focus-ring"
+        >
+          <Wallet className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+          Record payment / renew
+        </Button>
+      </div>
+      <div className="space-y-4 p-4 sm:px-5">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Registry plan</dt>
+            <dd className="mt-0.5 text-slate-900">
+              {registryRow?.planDef ? (
+                <>
+                  {registryRow.planDef.name} <span className="font-mono text-[11px] text-slate-500">{registryRow.planCode}</span>
+                </>
+              ) : (
+                <span className="text-slate-500">no registry plan applied yet</span>
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Billing model</dt>
+            <dd className="mt-0.5 text-slate-900">{(registryRow?.billingModel ?? 'SCHOOL_WIDE').replace(/_/g, ' ')}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Price snapshot</dt>
+            <dd className="mt-0.5 text-slate-900">{registryRow ? money(registryRow.priceSnapshot, registryRow.currencySnapshot) : '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Interval</dt>
+            <dd className="mt-0.5 text-slate-900">{registryRow?.interval ? registryRow.interval.toLowerCase() : '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Valid until</dt>
+            <dd className="mt-0.5 text-slate-900">{fmtDate(registryRow?.periodEnd ?? null)}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Renewal payments</dt>
+            <dd className="mt-0.5 text-slate-900 tabular-nums">{registryRow?.paymentCount ?? 0}</dd>
+          </div>
+        </dl>
+
+        {/* Legacy plan marker — display field, separate from the registry plan */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-[160px]">
+              <Label className="text-xs" htmlFor="legacy-plan">
+                Tenant plan marker (legacy field)
+              </Label>
+              <Select value={legacyPlanChoice} onValueChange={setLegacyPlanChoice}>
+                <SelectTrigger id="legacy-plan" className="bg-white h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-white">
+                  {['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'].map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-[200px] flex-1">
+              <Label className="text-xs" htmlFor="legacy-plan-reason">
+                Reason (audited)
+              </Label>
+              <Input
+                id="legacy-plan-reason"
+                value={planReason}
+                onChange={(e) => setPlanReason(e.target.value)}
+                placeholder="Why is the marker changing?"
+                className="bg-white h-9"
+              />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={legacyPlanChoice === legacyPlan || planBusy}
+              onClick={() => void changeLegacyPlan()}
+              className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+            >
+              {planBusy && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+              Save marker
+            </Button>
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            Display marker only — the enforced entitlement comes from the snapshot above, and commercial terms from the
+            registry plan. Changing the marker does not activate anything.
+          </p>
+        </div>
+      </div>
+
+      <RecordPaymentDialog
+        open={paymentOpen}
+        onOpenChange={setPaymentOpen}
+        schoolId={schoolId}
+        schoolName={schoolName}
+        currentBillingModel={registryRow?.billingModel ?? 'SCHOOL_WIDE'}
+        gate={gate}
+        onRecorded={onReload}
+      />
+    </section>
+  )
+}
+
+// ── Codes card ───────────────────────────────────────────────────────────
+
+function RevokeReissueDialog({
+  code,
+  action,
+  onClose,
+  onDone,
+  gate,
+}: {
+  code: ActivationCodeRow
+  action: 'revoke' | 'reissue'
+  onClose: () => void
+  onDone: () => void
+  gate: GateFn
+}) {
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [issued, setIssued] = useState<{ publicRef: string; code: string; expiresAt: string; message: string } | null>(null)
 
-  const apply = async () => {
-    if (reason.trim().length < 10) {
-      setError('A reason of at least 10 characters is required — it goes into the platform audit trail')
+  const submit = async () => {
+    if (reason.trim().length < 4) {
+      toast.error('A reason of at least 4 characters is required (audited).')
       return
     }
     setBusy(true)
-    setError(null)
     try {
       const res = await gate(() =>
-        platformApi<{ ok: true; overrideStatus: string | null; message: string }>(
-          `/api/platform/schools/${schoolId}/subscription`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({
-              overrideStatus: choice === 'none' ? null : choice,
-              reason: reason.trim(),
-            }),
-          },
+        platformApi<{ ok: true; publicRef: string; message: string; code?: string; expiresAt?: string }>(
+          `/api/platform/subscriptions/codes/${code.id}`,
+          { method: 'PATCH', body: JSON.stringify({ action, reason: reason.trim() }) },
         ),
       )
-      if (!res) return // cancelled at the step-up prompt
-      toast.success(res.message)
-      setReason('')
-      setConfirmOpen(false)
-      onApplied()
+      if (!res) return
+      if (action === 'reissue' && res.code && res.expiresAt) {
+        setIssued({ publicRef: res.publicRef, code: res.code, expiresAt: res.expiresAt, message: res.message })
+        onDone()
+      } else {
+        toast.success(res.message)
+        onDone()
+        onClose()
+      }
     } catch (e) {
-      setError(errText(e))
-      setConfirmOpen(false)
+      toast.error(`${action} failed`, { description: errText(e) })
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
-        <h2 className="font-display text-sm font-bold text-slate-900 flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4 text-amber-600" aria-hidden="true" />
-          Manual entitlement override
-        </h2>
-        <p className="mt-1 text-xs text-slate-500">
-          A platform decision that forces the entitlement state, regardless of the computed
-          period. School lifecycle (activate/suspend) is never touched here. Applies
-          immediately, lasts until cleared, step-up gated and audited with your reason.
-        </p>
-      </div>
-
-      <div className="space-y-4 p-4 sm:px-5">
-        {error && (
-          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            {error}
+    <Dialog open onOpenChange={(o) => { if (!o && !issued) onClose() }}>
+      <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="font-display">
+            {action === 'revoke' ? 'Revoke activation code' : 'Reissue activation code'}
+          </DialogTitle>
+          <DialogDescription>
+            {action === 'revoke'
+              ? `${code.publicRef} becomes permanently unusable. Financial records are unchanged.`
+              : `${code.publicRef} becomes REPLACED and a fresh code is issued inheriting the same plan/validity. The plaintext is shown exactly once.`}
+          </DialogDescription>
+        </DialogHeader>
+        {issued ? (
+          <div className="space-y-3">
+            <p className="text-sm">{issued.message}</p>
+            <OneTimeCodeBlock code={issued} />
+            <DialogFooter>
+              <Button onClick={onClose} className="bg-teal-600 hover:bg-teal-700 text-white">
+                Done
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs" htmlFor="code-action-reason">
+                Reason (audited)
+              </Label>
+              <Textarea
+                id="code-action-reason"
+                rows={3}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder={action === 'revoke' ? 'Why is this code being revoked?' : 'Why is this code being reissued?'}
+                className="bg-white"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose} className="border-slate-300">
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void submit()}
+                disabled={busy}
+                variant={action === 'revoke' ? 'destructive' : 'default'}
+                className={action === 'reissue' ? 'bg-teal-600 hover:bg-teal-700 text-white' : undefined}
+              >
+                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+                {action === 'revoke' ? 'Revoke code' : 'Reissue code'}
+              </Button>
+            </DialogFooter>
           </div>
         )}
-
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          <span className="font-semibold uppercase tracking-wider">Current override:</span>
-          {currentOverride ? (
-            <StateBadge state={currentOverride} />
-          ) : (
-            <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-500 normal-case">
-              none — computed period state applies
-            </Badge>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="override-select" className="text-xs font-semibold text-slate-700">
-              Set override to
-            </Label>
-            <Select value={choice} onValueChange={setChoice}>
-              <SelectTrigger id="override-select" className="h-11 w-full bg-white border-slate-200 text-slate-900 focus-visible:ring-amber-500/40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-white border-slate-200 text-slate-900">
-                <SelectItem value="none" className="focus:bg-slate-100">
-                  Clear override (computed state)
-                </SelectItem>
-                {OVERRIDE_STATES.map((s) => (
-                  <SelectItem key={s} value={s} className="focus:bg-slate-100">
-                    {s}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="override-reason" className="text-xs font-semibold text-slate-700">
-              Reason (required) *
-            </Label>
-            <Textarea
-              id="override-reason"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder={
-                choice === 'none'
-                  ? 'e.g. Billing dispute resolved — returning the tenant to its computed period state…'
-                  : 'e.g. Goodwill 7-day extension while the cheque clears (order #4412)…'
-              }
-              rows={2}
-              maxLength={400}
-              className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-amber-500/40 min-h-[72px]"
-            />
-            <p className="text-[10px] text-slate-400 tabular-nums">{reason.trim().length}/400 · minimum 10</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-end border-t border-slate-200 p-4 sm:px-5">
-        <Button
-          onClick={() => setConfirmOpen(true)}
-          disabled={busy}
-          className="h-11 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold focus-ring"
-        >
-          {busy ? 'Applying…' : choice === 'none' ? 'Clear override' : `Set override to ${choice}`}
-        </Button>
-      </div>
-
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-md">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="font-display text-slate-900">
-              {choice === 'none'
-                ? 'Clear the manual override?'
-                : `Set manual override to ${choice}?`}
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-slate-500">
-              {choice === 'none' ? (
-                <>
-                  The entitlement returns to its computed period state — the override no longer
-                  applies. Audited with your reason.
-                </>
-              ) : (
-                <>
-                  This immediately forces the school&apos;s entitlement state to{' '}
-                  <StateBadge state={choice} /> — overriding the computed period state until the
-                  override is cleared. {choice === 'SUSPENDED' || choice === 'RESTRICTED'
-                    ? 'Business modules lock for this school the moment it applies.'
-                    : 'Business modules unlock for this school the moment it applies.'}{' '}
-                  Audited with your reason.
-                </>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setConfirmOpen(false)}
-              disabled={busy}
-              className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void apply()}
-              disabled={busy}
-              className={
-                choice === 'SUSPENDED' || choice === 'RESTRICTED'
-                  ? 'h-11 bg-red-600 hover:bg-red-500 text-white font-semibold focus-ring'
-                  : 'h-11 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold focus-ring'
-              }
-            >
-              {busy
-                ? 'Applying…'
-                : choice === 'none'
-                  ? 'Clear override'
-                  : `Force ${choice}`}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
-// ── Ledger row (shared by table + mobile card) ────────────────────────────
+function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow[]; total: number; onChanged: () => void; gate: GateFn }) {
+  const [statusFilter, setStatusFilter] = useState<string>('ALL')
+  const [scopeFilter, setScopeFilter] = useState<string>('ALL')
+  const [act, setAct] = useState<{ code: ActivationCodeRow; action: 'revoke' | 'reissue' } | null>(null)
 
-function ModeLabel({ mode }: { mode: string }) {
-  return <span className="text-xs text-slate-600">{mode.replace(/_/g, ' ').toLowerCase()}</span>
-}
+  const filtered = codes.filter(
+    (c) =>
+      (statusFilter === 'ALL' || c.status === statusFilter) &&
+      (scopeFilter === 'ALL' || c.scope === scopeFilter),
+  )
 
-function ResultCell({ statusAfter, periodEndAfter }: { statusAfter: string | null; periodEndAfter: string | null }) {
-  if (!statusAfter) return <span className="text-slate-400">—</span>
   return (
-    <span className="flex flex-col gap-0.5">
-      <StateBadge state={statusAfter} />
-      {periodEndAfter && (
-        <span className="text-[10px] tabular-nums text-slate-500">until {fmtDate(periodEndAfter)}</span>
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm" aria-label="Activation codes">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5 sm:px-5">
+        <div>
+          <h3 className="font-display text-sm font-bold text-slate-900">Activation codes</h3>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Issued for this school — metadata only; the plaintext exists solely at the issuance moment (hash-at-rest,
+            one-time redemption, tenant-bound).
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-9 w-[130px] bg-white" aria-label="Filter codes by status">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-white">
+              {CODE_STATUS_FILTERS.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s === 'ALL' ? 'All statuses' : s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={scopeFilter} onValueChange={setScopeFilter}>
+            <SelectTrigger className="h-9 w-[150px] bg-white" aria-label="Filter codes by scope">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-white">
+              <SelectItem value="ALL">All scopes</SelectItem>
+              <SelectItem value="SCHOOL_SUBSCRIPTION">School subscription</SelectItem>
+              <SelectItem value="STUDENT_ENTITLEMENT">Student entitlement</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="overflow-x-auto custom-scrollbar">
+        <table className="w-full min-w-[760px] text-xs">
+          <thead>
+            <tr className="border-b border-slate-200 text-left text-[10px] uppercase tracking-wider text-slate-400">
+              <th className="px-4 py-2 font-semibold">Code</th>
+              <th className="px-3 py-2 font-semibold">Scope</th>
+              <th className="px-3 py-2 font-semibold">Plan</th>
+              <th className="px-3 py-2 font-semibold">Validity</th>
+              <th className="px-3 py-2 font-semibold">Status</th>
+              <th className="px-3 py-2 font-semibold">Claim</th>
+              <th className="px-3 py-2 text-right font-semibold">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((c) => (
+              <tr key={c.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
+                <td className="px-4 py-2.5">
+                  <p className="font-mono text-[11px] font-medium text-slate-900">{c.publicRef}</p>
+                  <p className="text-[10px] text-slate-400">issued {dateStr(c.issuedAt)}</p>
+                </td>
+                <td className="px-3 py-2.5 text-slate-600">
+                  {c.scope === 'SCHOOL_SUBSCRIPTION' ? 'school' : 'student'}
+                  {c.student && <p className="text-[10px] text-slate-400">{c.student.user?.name ?? c.student.user?.email}</p>}
+                </td>
+                <td className="px-3 py-2.5 text-slate-600">
+                  {c.planCode ?? '—'}
+                  {c.interval && <p className="text-[10px] text-slate-400">{c.interval.toLowerCase()}</p>}
+                </td>
+                <td className="px-3 py-2.5 text-slate-600 tabular-nums">
+                  {c.validityMonths ? `${c.validityMonths}mo` : '—'}
+                  {c.claimWindowDays && <p className="text-[10px] text-slate-400">window {c.claimWindowDays}d</p>}
+                </td>
+                <td className="px-3 py-2.5">
+                  <SharedStateBadge state={c.status} />
+                  {c.replacedBy && <p className="mt-0.5 text-[10px] text-slate-400">→ {c.replacedBy.publicRef}</p>}
+                </td>
+                <td className="px-3 py-2.5 text-slate-600">
+                  {c.claimedAt ? dateStr(c.claimedAt) : c.expiresAt ? `by ${dateStr(c.expiresAt)}` : '—'}
+                  {c.revokedAt && <p className="text-[10px] text-rose-500">revoked {dateStr(c.revokedAt)}</p>}
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="flex justify-end gap-1">
+                    {(c.status === 'ISSUED' || c.status === 'EXPIRED') && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
+                          onClick={() => setAct({ code: c, action: 'reissue' })}
+                        >
+                          Reissue
+                        </Button>
+                        {c.status === 'ISSUED' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 border-red-200 bg-white text-red-600 hover:bg-red-50"
+                            onClick={() => setAct({ code: c, action: 'revoke' })}
+                          >
+                            Revoke
+                          </Button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                  No activation codes match — codes are issued when recording a plan payment with the code option
+                  (school scope) or assigning a student entitlement (student scope).
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400">
+        {filtered.length} of {total} code{total === 1 ? '' : 's'} on record for this school · guessing is rate-limited
+        server-side (5 attempts / 15 min)
+      </p>
+
+      {act && (
+        <RevokeReissueDialog
+          code={act.code}
+          action={act.action}
+          gate={gate}
+          onClose={() => setAct(null)}
+          onDone={onChanged}
+        />
       )}
-    </span>
+    </section>
   )
 }
 
-// ── Module ────────────────────────────────────────────────────────────────
+// ── Students card ────────────────────────────────────────────────────────
 
-export function SchoolSubscriptionTab({ schoolId }: { schoolId: string }) {
+function StudentsCard({
+  students,
+  billingModel,
+  loading,
+  onSearch,
+  onChanged,
+}: {
+  students: StudentRow[]
+  billingModel: string
+  loading: boolean
+  onSearch: (q: string) => void
+  onChanged: () => void
+}) {
+  const [q, setQ] = useState('')
+  const [assignFor, setAssignFor] = useState<StudentRow | null>(null)
+  const [detailFor, setDetailFor] = useState<StudentRow | null>(null)
+
+  const covered = billingModel === 'SCHOOL_WIDE'
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm" aria-label="Student entitlements">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5 sm:px-5">
+        <div>
+          <h3 className="font-display text-sm font-bold text-slate-900">Student entitlements</h3>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            {covered
+              ? 'Billing model is SCHOOL-WIDE — students are covered by the tenant subscription; per-student rows are informational here.'
+              : 'Per-student entitlements (Model B/C) — assign, suspend/reactivate/revoke, and view each student\u2019s full history.'}
+          </p>
+        </div>
+        <div className="relative w-full sm:w-64">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <Input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') onSearch(q) }}
+            placeholder="Search name / email / admission no…"
+            aria-label="Search students"
+            className="bg-white h-9 pl-9"
+          />
+        </div>
+      </div>
+      <div className="overflow-x-auto custom-scrollbar">
+        <table className="w-full min-w-[700px] text-xs">
+          <thead>
+            <tr className="border-b border-slate-200 text-left text-[10px] uppercase tracking-wider text-slate-400">
+              <th className="px-4 py-2 font-semibold">Student</th>
+              <th className="px-3 py-2 font-semibold">Class</th>
+              <th className="px-3 py-2 font-semibold">Entitlement</th>
+              <th className="px-3 py-2 font-semibold">Valid until</th>
+              <th className="px-3 py-2 font-semibold">Source</th>
+              <th className="px-3 py-2 text-right font-semibold">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin" aria-label="Loading students" />
+                </td>
+              </tr>
+            ) : (
+              <>
+                {students.map((s) => (
+                  <tr key={s.studentId} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
+                    <td className="px-4 py-2.5">
+                      <p className="font-medium text-slate-900">{s.name}</p>
+                      <p className="text-[10px] text-slate-400">{s.email}</p>
+                      {s.accountLocked && (
+                        <Badge variant="outline" className="mt-0.5 normal-case border-orange-200 bg-orange-50 text-[9px] text-orange-700">
+                          account locked
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-600">{s.class ?? '—'}</td>
+                    <td className="px-3 py-2.5">
+                      <SharedStateBadge state={s.entitlement.computedState} />
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-600 tabular-nums">{dateStr(s.entitlement.validityEnd ?? null)}</td>
+                    <td className="px-3 py-2.5 text-slate-500">{s.entitlement.source ?? '—'}</td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
+                          onClick={() => setDetailFor(s)}
+                        >
+                          History
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-8 bg-teal-600 hover:bg-teal-700 text-white"
+                          onClick={() => setAssignFor(s)}
+                        >
+                          <KeyRound className="mr-1 h-3 w-3" aria-hidden="true" />
+                          Assign
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {students.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
+                      No students match.
+                    </td>
+                  </tr>
+                )}
+              </>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {assignFor && (
+        <AssignEntitlementDialog
+          student={assignFor}
+          onClose={() => setAssignFor(null)}
+          onDone={() => {
+            setAssignFor(null)
+            onSearch(q)
+            onChanged()
+          }}
+        />
+      )}
+      {detailFor && <StudentHistoryDialog student={detailFor} onClose={() => setDetailFor(null)} />}
+    </section>
+  )
+}
+
+// ── Ledger card ──────────────────────────────────────────────────────────
+
+function LedgerCard({ payments }: { payments: PaymentRow[] }) {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm" aria-label="Payment ledger">
+      <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+        <h3 className="font-display text-sm font-bold text-slate-900">Payment ledger</h3>
+        <p className="mt-0.5 text-[11px] text-slate-500">
+          Every VERIFIED platform payment this school has made to SCHOLARIO (immutable financial records — receipts
+          never rewritten).
+        </p>
+      </div>
+      <div className="overflow-x-auto custom-scrollbar">
+        <table className="w-full min-w-[720px] text-xs">
+          <thead>
+            <tr className="border-b border-slate-200 text-left text-[10px] uppercase tracking-wider text-slate-400">
+              <th className="px-4 py-2 font-semibold">Receipt</th>
+              <th className="px-3 py-2 font-semibold">Amount</th>
+              <th className="px-3 py-2 font-semibold">Mode</th>
+              <th className="px-3 py-2 font-semibold">Date</th>
+              <th className="px-3 py-2 font-semibold">Period</th>
+              <th className="px-3 py-2 font-semibold">Recorded by</th>
+            </tr>
+          </thead>
+          <tbody>
+            {payments.map((p) => (
+              <tr key={p.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
+                <td className="px-4 py-2.5 font-mono text-[11px] text-slate-900">
+                  {p.receiptNo ?? '—'}
+                  {p.verification !== 'VERIFIED' && (
+                    <Badge variant="outline" className="ml-2 normal-case border-amber-200 bg-amber-50 text-[9px] text-amber-700">
+                      {p.verification}
+                    </Badge>
+                  )}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-slate-900">
+                  {new Intl.NumberFormat('en-IN', { style: 'currency', currency: p.currency, maximumFractionDigits: 0 }).format(p.amount)}
+                </td>
+                <td className="px-3 py-2.5 text-slate-600">{p.mode.replace(/_/g, ' ').toLowerCase()}</td>
+                <td className="px-3 py-2.5 text-slate-600 tabular-nums">{fmtDate(p.paymentDate)}</td>
+                <td className="px-3 py-2.5 text-slate-600 tabular-nums">{p.periodMonths}mo</td>
+                <td className="px-3 py-2.5 text-slate-500">{p.recordedBy?.name ?? '—'}</td>
+              </tr>
+            ))}
+            {payments.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
+                  No platform payments recorded yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+// ── Main tab component ───────────────────────────────────────────────────
+
+export function SchoolSubscriptionTab({
+  schoolId,
+  onNavigateTab,
+}: {
+  schoolId: string
+  /** Deep-link helper — e.g. the boundary banner's "Fee gateway" link. */
+  onNavigateTab?: (tab: string) => void
+}) {
   const { gate, node: stepUpNode } = useStepUpGate()
   const [data, setData] = useState<SubscriptionResponse | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [recordOpen, setRecordOpen] = useState(false)
+  const hasDataRef = useRef(false)
+  const [registryRow, setRegistryRow] = useState<RegistryRow | null>(null)
+  const [codes, setCodes] = useState<ActivationCodeRow[]>([])
+  const [codesTotal, setCodesTotal] = useState(0)
+  const [students, setStudents] = useState<StudentRow[]>([])
+  const [studentsLoading, setStudentsLoading] = useState(false)
+  const [billingModel, setBillingModel] = useState('SCHOOL_WIDE')
+  const [legacyPlan, setLegacyPlan] = useState('STANDARD')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [subTab, setSubTab] = useState('snapshot')
 
   const load = useCallback(async () => {
-    setLoadError(null)
+    // Stale-while-revalidate: the first load shows the skeleton; later
+    // refreshes keep the current content mounted (an open one-time-code
+    // result dialog must NEVER unmount mid-display).
+    if (!hasDataRef.current) setLoading(true)
+    setError(null)
     try {
-      setData(
-        await platformApi<SubscriptionResponse>(`/api/platform/schools/${schoolId}/subscription`),
-      )
+      const [sub, reg, cod] = await Promise.all([
+        platformApi<SubscriptionResponse>(`/api/platform/schools/${schoolId}/subscription`),
+        platformApi<{ schools: { rows: RegistryRow[] } }>(`/api/platform/subscriptions/registry?schoolId=${schoolId}`),
+        platformApi<{ codes: ActivationCodeRow[]; total: number }>(
+          `/api/platform/subscriptions/codes?schoolId=${schoolId}&pageSize=100`,
+        ),
+      ])
+      hasDataRef.current = true
+      setData(sub)
+      setRegistryRow(reg.schools.rows[0] ?? null)
+      setCodes(cod.codes)
+      setCodesTotal(cod.total)
+      setLegacyPlan(sub.subscription?.plan ?? 'STANDARD')
+      setBillingModel(reg.schools.rows[0]?.billingModel ?? 'SCHOOL_WIDE')
     } catch (e) {
-      setLoadError(errText(e))
+      setError(errText(e))
+    } finally {
+      setLoading(false)
     }
   }, [schoolId])
+
+  const loadStudents = useCallback(
+    async (q = '') => {
+      setStudentsLoading(true)
+      try {
+        const d = await platformApi<{ school: { billingModel: string }; students: StudentRow[] }>(
+          `/api/platform/schools/${schoolId}/students?q=${encodeURIComponent(q)}&pageSize=50`,
+        )
+        setStudents(d.students)
+        if (d.school.billingModel) setBillingModel(d.school.billingModel)
+      } catch (e) {
+        toast.error('Could not load students', { description: errMessage(e) })
+      } finally {
+        setStudentsLoading(false)
+      }
+    },
+    [schoolId],
+  )
 
   useEffect(() => {
     void load()
   }, [load])
 
-  const payments = useMemo(
-    () =>
-      (data?.payments ?? []).slice().sort((a, b) => {
-        const pd = new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime()
-        return pd !== 0 ? pd : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      }),
-    [data],
-  )
+  useEffect(() => {
+    void loadStudents()
+  }, [loadStudents])
 
-  const sub = data?.subscription ?? null
-  const ent = data?.entitlement
+  if (loading && !data) {
+    return (
+      <div className="space-y-3" aria-busy="true" aria-label="Loading subscription">
+        <Skeleton className="h-20 w-full rounded-xl" />
+        <Skeleton className="h-40 w-full rounded-xl" />
+        <Skeleton className="h-32 w-full rounded-xl" />
+      </div>
+    )
+  }
+
+  if (error || !data) {
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50 p-6" role="alert">
+        <div className="flex items-center gap-2.5">
+          <AlertTriangle className="h-5 w-5 text-red-600" aria-hidden="true" />
+          <h2 className="font-display text-sm font-bold text-red-700">Subscription state unavailable</h2>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">{error ?? 'No data'}</p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void load()}
+          className="mt-4 h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+        >
+          <RefreshCw className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+          Retry
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">
-      {stepUpNode}
+      <BoundaryBanner />
 
-      {loadError && (
-        <div
-          role="alert"
-          className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <p className="flex items-start gap-2.5 text-sm text-red-600">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            {loadError}
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void load()}
-            className="h-9 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
-          >
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-            Retry
-          </Button>
-        </div>
-      )}
+      <Tabs value={subTab} onValueChange={setSubTab}>
+        <TabsList className="w-full bg-slate-100 border border-slate-200 h-auto flex-wrap p-1 gap-1">
+          <TabsTrigger value="snapshot" className="data-[state=active]:bg-white data-[state=active]:text-slate-900 text-slate-600 text-xs">
+            Snapshot
+          </TabsTrigger>
+          <TabsTrigger value="plan" className="data-[state=active]:bg-white data-[state=active]:text-slate-900 text-slate-600 text-xs">
+            Plan &amp; billing
+          </TabsTrigger>
+          <TabsTrigger value="codes" className="data-[state=active]:bg-white data-[state=active]:text-slate-900 text-slate-600 text-xs">
+            <KeyRound className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+            Codes
+          </TabsTrigger>
+          <TabsTrigger value="students" className="data-[state=active]:bg-white data-[state=active]:text-slate-900 text-slate-600 text-xs">
+            <Users className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+            Students
+          </TabsTrigger>
+          <TabsTrigger value="ledger" className="data-[state=active]:bg-white data-[state=active]:text-slate-900 text-slate-600 text-xs">
+            <ListOrdered className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+            Ledger
+          </TabsTrigger>
+        </TabsList>
 
-      {data === null && loadError === null && (
-        <div className="space-y-4" aria-busy="true" aria-label="Loading subscription">
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4 sm:p-5 space-y-3">
-            <Skeleton className="h-5 w-56 bg-slate-200" />
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="space-y-2">
-                  <Skeleton className="h-3 w-16 bg-slate-200" />
-                  <Skeleton className="h-5 w-24 bg-slate-200" />
-                </div>
-              ))}
-            </div>
-          </div>
-          <Skeleton className="h-40 w-full rounded-xl bg-slate-100" />
-          <Skeleton className="h-64 w-full rounded-xl bg-slate-100" />
-        </div>
-      )}
+        <TabsContent value="snapshot" className="space-y-4">
+          <SnapshotCard data={data} registryRow={registryRow} gate={gate} onReload={() => void load()} />
+        </TabsContent>
 
-      {data && (
-        <>
-          {/* ── Entitlement snapshot ─────────────────────────────────── */}
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-              <div>
-                <h2 className="font-display text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <CreditCard className="h-4 w-4 text-teal-600" aria-hidden="true" />
-                  Subscription &amp; entitlement snapshot
-                </h2>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  The same evaluation the school plane enforces — the console and the school&apos;s
-                  locked shell can never disagree about this state.
-                </p>
-              </div>
-              <Button
-                onClick={() => setRecordOpen(true)}
-                className="h-11 shrink-0 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
-              >
-                <IndianRupee className="h-4 w-4" aria-hidden="true" />
-                Record payment
-              </Button>
-            </div>
-
-            <div className="p-4 sm:px-5">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <StateBadge state={ent?.state ?? '—'} className="px-3 py-1 text-sm" />
-                {sub?.overrideStatus && (
-                  <span className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700">
-                    <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
-                    override in effect — {sub.overrideStatus}
-                  </span>
-                )}
-                {ent && (
-                  <span className="text-[11px] text-slate-500">
-                    business modules {ent.businessAllowed ? 'unlocked' : 'locked'} · sign-in{' '}
-                    {ent.state === 'NOT_ACTIVATED' ? 'blocked' : 'allowed'}
-                  </span>
-                )}
-              </div>
-
-              {ent?.message && (
-                <div
-                  role="note"
-                  className={`mt-3 flex items-start gap-2.5 rounded-xl border p-3 text-xs leading-relaxed ${messageTone(ent.state)}`}
-                >
-                  <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                  {ent.message}
-                </div>
-              )}
-
-              <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3.5 sm:grid-cols-2 lg:grid-cols-4">
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Plan</dt>
-                  <dd className="mt-1 text-sm text-slate-700">{sub?.plan ?? '—'}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Period start</dt>
-                  <dd className="mt-1 text-sm tabular-nums text-slate-700">{fmtDate(sub?.periodStart ?? null)}</dd>
-                </div>
-                <div>
-                  <dt className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                    <CalendarDays className="h-3 w-3 text-slate-400" aria-hidden="true" />
-                    Period end
-                  </dt>
-                  <dd className="mt-1 text-sm tabular-nums text-slate-700">
-                    {sub ? (sub.periodEnd ? fmtDate(sub.periodEnd) : 'No expiry set') : '—'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Grace days</dt>
-                  <dd className="mt-1 text-sm tabular-nums text-slate-700">{sub?.graceDays ?? '—'}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Stored snapshot status</dt>
-                  <dd className="mt-1 text-sm text-slate-700">{sub?.status ?? '—'}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Manual override</dt>
-                  <dd className="mt-1 text-sm text-slate-700">
-                    {sub?.overrideStatus ? (
-                      <span className="font-semibold text-amber-700">{sub.overrideStatus}</span>
-                    ) : (
-                      'none — computed state'
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">School lifecycle</dt>
-                  <dd className="mt-1 text-sm text-slate-700">{data.school.status}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Renewal required</dt>
-                  <dd className="mt-1 text-sm text-slate-700">{ent?.renewalRequired ? 'yes' : 'no'}</dd>
-                </div>
-              </dl>
-
-              {!sub && (
-                <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-500">
-                  No subscription record exists for this school yet — the entitlement currently
-                  evaluates with no period set. Recording the first verified payment creates the
-                  subscription row atomically.
-                </p>
-              )}
-              {sub?.notes && (
-                <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-500">
-                  <span className="font-semibold text-slate-600">Notes:</span> {sub.notes}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* ── Manual override ───────────────────────────────────────── */}
-          <OverrideControl
-            schoolId={schoolId}
-            currentOverride={sub?.overrideStatus ?? null}
-            gate={gate}
-            onApplied={() => void load()}
-          />
-
-          {/* ── Payments ledger ───────────────────────────────────────── */}
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
-              <h2 className="font-display text-sm font-bold text-slate-900 flex items-center gap-2">
-                <History className="h-4 w-4 text-teal-600" aria-hidden="true" />
-                Payments ledger
-                <span className="font-normal text-xs text-slate-500 tabular-nums">
-                  ({payments.length} entr{payments.length === 1 ? 'y' : 'ies'})
-                </span>
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Every activation and extension traces to a VERIFIED entry here (offline
-                admin-recorded or signature-verified webhook) — a browser report of payment
-                success is never sufficient. Newest first.
-              </p>
-            </div>
-
-            {payments.length === 0 ? (
-              <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500 ring-1 ring-slate-200">
-                  <IndianRupee className="h-5 w-5" aria-hidden="true" />
-                </div>
-                <p className="mt-3 text-sm font-semibold text-slate-900">No payments recorded yet</p>
-                <p className="mt-1 max-w-xs text-xs leading-snug text-slate-500">
-                  This school&apos;s subscription has no ledger entries — activation requires a
-                  verified payment. Record one with the button above.
-                </p>
-              </div>
-            ) : (
-              <>
-                {/* Table (≥ sm) */}
-                <div className="hidden sm:block">
-                  <div className="max-h-[26rem] overflow-auto custom-scrollbar">
-                    <Table className="text-slate-700">
-                      <TableHeader>
-                        <TableRow className="border-slate-200 hover:bg-transparent sticky top-0 bg-white z-10">
-                          <TableHead className="text-slate-500 font-medium">Receipt</TableHead>
-                          <TableHead className="text-slate-500 font-medium">Date</TableHead>
-                          <TableHead className="text-slate-500 font-medium">Amount</TableHead>
-                          <TableHead className="text-slate-500 font-medium">Mode</TableHead>
-                          <TableHead className="text-slate-500 font-medium">Period</TableHead>
-                          <TableHead className="text-slate-500 font-medium">Reference</TableHead>
-                          <TableHead className="text-slate-500 font-medium">Recorded by</TableHead>
-                          <TableHead className="text-slate-500 font-medium">Result</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {payments.map((p) => (
-                          <TableRow key={p.id} className="border-slate-200">
-                            <TableCell className="font-mono text-xs text-slate-700">
-                              {p.receiptNo ?? <span className="text-slate-400" title="No receipt number on this entry">—</span>}
-                              {p.verification === 'VERIFIED' && (
-                                <span
-                                  className="ml-1.5 inline-flex items-center rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700"
-                                  title="Verified entry — only VERIFIED rows activate a subscription"
-                                >
-                                  verified
-                                </span>
-                              )}
-                            </TableCell>
-                            <TableCell className="whitespace-nowrap tabular-nums text-xs text-slate-600">
-                              {fmtDate(p.paymentDate)}
-                            </TableCell>
-                            <TableCell className="whitespace-nowrap tabular-nums text-sm font-semibold text-slate-800">
-                              {fmtMoney(p.amount, p.currency)}
-                            </TableCell>
-                            <TableCell>
-                              <ModeLabel mode={p.mode} />
-                            </TableCell>
-                            <TableCell className="whitespace-nowrap tabular-nums text-xs text-slate-600">
-                              {num.format(p.periodMonths)} mo
-                            </TableCell>
-                            <TableCell className="max-w-[10rem]">
-                              {p.reference ? (
-                                <span className="block truncate font-mono text-xs text-slate-600" title={p.reference}>
-                                  {p.reference}
-                                </span>
-                              ) : (
-                                <span className="text-slate-400">—</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="max-w-[9rem]">
-                              {p.recordedBy ? (
-                                <span className="block truncate text-xs text-slate-600" title={p.recordedBy.email}>
-                                  {p.recordedBy.name}
-                                </span>
-                              ) : (
-                                <span className="text-xs text-slate-400" title="Webhook-recorded (online) payment">
-                                  webhook
-                                </span>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <ResultCell statusAfter={p.statusAfter} periodEndAfter={p.periodEndAfter} />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
-
-                {/* Cards (mobile) */}
-                <ul className="space-y-3 p-4 sm:hidden" aria-label="Payments ledger">
-                  {payments.map((p) => (
-                    <li key={p.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-mono text-xs font-semibold text-slate-800">
-                          {p.receiptNo ?? '—'}
-                        </span>
-                        <ResultCell statusAfter={p.statusAfter} periodEndAfter={p.periodEndAfter} />
-                      </div>
-                      <p className="mt-1.5 text-sm font-semibold tabular-nums text-slate-900">
-                        {fmtMoney(p.amount, p.currency)}
-                      </p>
-                      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-slate-600">
-                        <span className="tabular-nums">{fmtDate(p.paymentDate)}</span>
-                        <span>{p.mode.replace(/_/g, ' ').toLowerCase()} · {num.format(p.periodMonths)} mo</span>
-                        {p.reference && (
-                          <span className="col-span-2 truncate font-mono text-[11px] text-slate-500" title={p.reference}>
-                            ref {p.reference}
-                          </span>
-                        )}
-                        <span className="col-span-2 text-[11px] text-slate-500">
-                          {p.recordedBy ? `recorded by ${p.recordedBy.name}` : 'webhook-recorded'}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-          </div>
-
-          <RecordPaymentDialog
-            open={recordOpen}
-            onOpenChange={setRecordOpen}
+        <TabsContent value="plan" className="space-y-4">
+          <PlanBillingCard
             schoolId={schoolId}
             schoolName={data.school.name}
-            periodEnd={sub?.periodEnd ?? null}
+            registryRow={registryRow}
+            legacyPlan={legacyPlan}
             gate={gate}
-            onRecorded={() => void load()}
+            onReload={() => void load()}
           />
-        </>
+        </TabsContent>
+
+        <TabsContent value="codes" className="space-y-4">
+          <CodesCard codes={codes} total={codesTotal} gate={gate} onChanged={() => void load()} />
+        </TabsContent>
+
+        <TabsContent value="students" className="space-y-4">
+                      <StudentsCard
+            students={students}
+            billingModel={billingModel}
+            loading={studentsLoading}
+            onSearch={(q) => void loadStudents(q)}
+            onChanged={() => void load()}
+          />
+        </TabsContent>
+
+        <TabsContent value="ledger" className="space-y-4">
+          <LedgerCard payments={data.payments} />
+        </TabsContent>
+      </Tabs>
+
+      {onNavigateTab && (
+        <p className="text-[11px] text-slate-400">
+          Collecting fees from the school&apos;s own students? That is the{' '}
+          <button
+            type="button"
+            className="font-medium text-teal-700 underline underline-offset-2 hover:text-teal-800"
+            onClick={() => onNavigateTab('gateway')}
+          >
+            Fee gateway
+          </button>{' '}
+          tab — a separate payment rail with separate credentials.
+        </p>
       )}
+
+      {/* Step-up dialog mount (dormant while platform TOTP is stood
+          down; renders the MFA prompt when the 10-minute window is
+          stale). */}
+      {stepUpNode}
     </div>
   )
 }

@@ -32,6 +32,8 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { getSchoolProfile } from '@/lib/school-profile'
 import {
+  examStatusIs,
+  resultStatusIs,
   type ExamDTO, type SchoolContextDTO,
   type StudentResult, type SubjectResult, type ReportCardConfigDTO,
   DEFAULT_GRADE_BOUNDARIES, getGradeForPercentage,
@@ -253,12 +255,12 @@ export function ReportsTab({ exams }: Props) {
         <div className="ml-auto flex items-center gap-2">
           <span className="text-[9px] text-muted-foreground uppercase font-semibold">Status:</span>
           <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold',
-            exam.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' :
-            exam.status === 'Ongoing' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300' :
+            examStatusIs(exam.status, 'Completed') ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' :
+            examStatusIs(exam.status, 'Ongoing') ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300' :
             'bg-sky-500/10 text-sky-700 dark:text-sky-300')}>
             {exam.status}
           </span>
-          {exam.resultStatus !== 'Not Started' && (
+          {!resultStatusIs(exam.resultStatus, 'Not Started') && (
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/10 text-primary">
               {exam.resultStatus}
             </span>
@@ -267,12 +269,12 @@ export function ReportsTab({ exams }: Props) {
       </div>
 
       {/* Status-aware section rendering */}
-      {exam.status === 'Draft' || exam.status === 'Scheduled' ? (
+      {examStatusIs(exam.status, 'Draft') || examStatusIs(exam.status, 'Scheduled') ? (
         /* ─── UPCOMING EXAM: Pre-Examination Monitoring ─── */
         <CollapsibleSection title="Pre-Examination Monitoring" subtitle="readiness & configuration status" accent="sky" defaultOpen={true}>
           <PreExamMonitoring exam={exam} examMarks={examMarks} />
         </CollapsibleSection>
-      ) : exam.status === 'Ongoing' ? (
+      ) : examStatusIs(exam.status, 'Ongoing') ? (
         /* ─── LIVE EXAM: Live Examination Monitoring ─── */
         <CollapsibleSection title="Live Examination Monitoring" subtitle="evaluation progress" accent="amber" defaultOpen={true}>
           <LiveExamMonitoring examMarks={examMarks} />
@@ -280,7 +282,7 @@ export function ReportsTab({ exams }: Props) {
       ) : null}
 
       {/* ─── Section 1: Results & Official Records (only for completed exams) ─── */}
-      {(exam.status === 'Completed' || exam.resultStatus !== 'Not Started') && (
+      {(examStatusIs(exam.status, 'Completed') || !resultStatusIs(exam.resultStatus, 'Not Started')) && (
         <CollapsibleSection title="Results & Official Records" subtitle="report cards, grade sheets, result summary" accent="emerald" defaultOpen={true}>
           <div className="p-3 space-y-3">
             {/* Report action tiles */}
@@ -306,7 +308,7 @@ export function ReportsTab({ exams }: Props) {
       )}
 
       {/* ─── Section 2: Performance Analytics (only for completed exams) ─── */}
-      {(exam.status === 'Completed' || exam.resultStatus !== 'Not Started') && (
+      {(examStatusIs(exam.status, 'Completed') || !resultStatusIs(exam.resultStatus, 'Not Started')) && (
         <CollapsibleSection title="Performance Analytics" subtitle="class, subject & grade analysis" accent="violet" defaultOpen={false}>
           <div className="p-3 space-y-3">
             {/* Class Performance */}

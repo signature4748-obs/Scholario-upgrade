@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { requireTeacher, assertStudentInScope, classLabelOf } from '@/lib/teacher-hub'
-import { getGradeForPercentage } from '@/lib/exams/types'
+import { getGradeForPercentage, isResultDeclared } from '@/lib/exams/types'
 
 export const runtime = 'nodejs'
 
@@ -199,7 +199,7 @@ export async function GET(
       })
 
       // ── per-exam summaries + the subject × exam matrix ───────────────
-      const isDeclared = (status: string) => status === 'Declared' || status === 'Result Declared'
+      const isDeclared = isResultDeclared // canonical helper (legacy 'Declared' ≡ 'Result Declared')
       type ExamDto = {
         examId: string
         examName: string

@@ -9,6 +9,8 @@ import { runWithContext } from '@/lib/observability/context'
 import { sanitizeRequestId, newRequestId } from '@/lib/observability/http'
 import { rupeesFromPaise, dec } from '@/lib/money'
 import { webhookSecretCandidates } from '@/lib/payments/tenant-gateway'
+import { settleSubscriptionOrder } from '@/lib/subscription/orders'
+import { applySchoolSubscriptionPeriodInTx } from '@/lib/platform/billing'
 
 /**
  * Razorpay webhook receiver — real signature verification + DB-persisted
@@ -323,8 +325,75 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
 
   try {
     if (eventType === 'payment.captured') {
-      // Look up the FeeTransaction by gatewayOrderId (the order_id from /api/fees/orders).
       if (!orderId) throw new Error('payment.captured missing order_id')
+
+      // ── SUBSCRIPTION & ENTITLEMENT SYSTEM — subscription orders share ──
+      // this gateway account with fee orders. A subscription order id
+      // settles through the exactly-once ORDER lane (entitlement/tenant
+      // activation + VERIFIED payment row, idempotent on the order flip +
+      // unique providerPaymentId); only non-subscription ids fall through
+      // to the fee lane. Without this branch every subscription capture
+      // would 500 on the FeeTransaction lookup and never settle.
+      const subOrder = await db.subscriptionOrder.findUnique({
+        where: { providerOrderId: orderId },
+        select: { id: true, orderNo: true, scope: true, amount: true, currency: true },
+      })
+      if (subOrder) {
+        // Amount/currency agreement (the BATCH2-B3 discipline, mirrored):
+        // a valid signature proves the event is genuine, not that the
+        // amount matches the order — a mismatch is an exception, never a
+        // settlement.
+        const expectedPaise = Math.round(Number(subOrder.amount) * 100)
+        if (
+          !Number.isSafeInteger(amountPaise) ||
+          (amountPaise as number) <= 0 ||
+          (amountPaise as number) !== expectedPaise ||
+          (currency !== undefined && currency !== 'INR')
+        ) {
+          throw new Error(
+            `amount agreement failed for subscription order ${orderId}: gateway reports ${Number.isSafeInteger(amountPaise) ? amountPaise : 'an invalid'} paise (${currency ?? 'no currency'}) but the order expects ${expectedPaise} paise INR — settlement refused`,
+          )
+        }
+        const settled = await settleSubscriptionOrder({
+          orderNo: subOrder.orderNo,
+          providerPaymentId: gatewayPaymentId ?? eventId,
+          settledVia: 'webhook',
+          applySchool: (tx, o) =>
+            applySchoolSubscriptionPeriodInTx(tx, {
+              schoolId: o.schoolId,
+              planId: o.order.planId,
+              planCode: o.order.planCode,
+              interval: o.order.interval,
+              priceSnapshot: o.order.amount,
+              currency: o.order.currency,
+              amount: o.order.amount,
+              mode: 'ONLINE_PAYMENT',
+              paymentDate: new Date(),
+              validityMonths: o.order.validityMonths,
+              reference: gatewayPaymentId ?? eventId,
+              notes: 'Online subscription payment — Razorpay webhook (order-linked)',
+              orderId: o.orderId,
+            }),
+        })
+        matchedTransactionId = settled.orderId
+        log('info', 'webhook_subscription_settled', {
+          channel: 'webhook',
+          eventId,
+          orderNo: subOrder.orderNo,
+          alreadyPaid: settled.alreadyPaid,
+          scope: subOrder.scope,
+        })
+        // Standard ack — the finally block marks the WebhookEvent processed.
+        return NextResponse.json({
+          received: true,
+          event_id: eventId,
+          type: eventType,
+          layer: 'subscription-order',
+          matched_transaction_id: matchedTransactionId,
+        })
+      }
+
+      // Look up the FeeTransaction by gatewayOrderId (the order_id from /api/fees/orders).
       const txn = await db.feeTransaction.findUnique({ where: { gatewayOrderId: orderId } })
       if (!txn) {
         // Order wasn't created by /api/fees/orders — log + still ack 200 so

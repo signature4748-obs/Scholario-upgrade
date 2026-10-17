@@ -1,4 +1,5 @@
 import { db } from '@/lib/db'
+import { isResultDeclared, examStatusIs } from '@/lib/exams/types'
 import { withUser, schoolScoped } from '@/lib/api'
 import { teacherCanEnterMarks } from '@/lib/teacher-scope'
 
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
         where: { id: body.examId },
         select: { status: true, resultStatus: true },
       })
-      if (examRow?.resultStatus === 'Declared' || examRow?.status === 'COMPLETED') {
+      if (isResultDeclared(examRow?.resultStatus) || examStatusIs(examRow?.status, 'Completed')) {
         throw new Error('This exam is completed — marks are with the exam office')
       }
       const entered = marks.filter((m) => m.marksObtained != null)

@@ -75,6 +75,12 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     ADMISSION_NUMBER_COLLISION: 409,
     EMAIL_TAKEN: 409,
     CREDENTIAL_EXPIRED: 401,
+    // SCHEMA-PENDING GATE — the deployed code may run ahead of the
+    // owner-gated subscription-system migration; hardened GET surfaces
+    // degrade honestly and everything that genuinely needs the missing
+    // objects fails with THIS typed error (see
+    // src/lib/platform/subscription-schema.ts).
+    SUBSCRIPTION_SYSTEM_PENDING: 503,
     // SUPABASE AUTH PHASE 1 — provider-identity exchange codes (stable,
     // machine-readable; the login-door UX drives off these).
     AUTH_PROVIDER_UNREACHABLE: 503,

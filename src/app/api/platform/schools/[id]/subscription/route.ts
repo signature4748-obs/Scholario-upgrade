@@ -6,6 +6,7 @@ import { applySubscriptionOverride, SUBSCRIPTION_STATES } from '@/lib/platform/b
 import { parseJsonBody, strictBody } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { evaluateTenantEntitlement } from '@/lib/entitlement/entitlement'
+import { SUBSCRIPTION_LEGACY_SELECT } from '@/lib/platform/subscription-schema'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -21,14 +22,34 @@ export const runtime = 'nodejs'
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   return withPlatform({ permission: 'billing.manage' }, async () => {
+    // SCHEMA-PENDING RESILIENCE — only legacy columns are consumed here
+    // (the entitlement snapshot + payment ledger); `subscription: true`
+    // would select pending columns and P2022 on a pre-migration database.
     const school = await db.school.findUnique({
       where: { id },
       include: {
-        subscription: true,
+        subscription: { select: { ...SUBSCRIPTION_LEGACY_SELECT } },
         platformPayments: {
           orderBy: { paymentDate: 'desc' },
           take: 100,
-          include: { recordedBy: { select: { name: true, email: true } } },
+          // Explicit field set: orderId is a pending-migration column —
+          // selecting it would P2022 on a pre-migration database.
+          select: {
+            id: true,
+            receiptNo: true,
+            amount: true,
+            currency: true,
+            mode: true,
+            paymentDate: true,
+            periodMonths: true,
+            reference: true,
+            notes: true,
+            verification: true,
+            statusAfter: true,
+            periodEndAfter: true,
+            createdAt: true,
+            recordedBy: { select: { name: true, email: true } },
+          },
         },
       },
     })

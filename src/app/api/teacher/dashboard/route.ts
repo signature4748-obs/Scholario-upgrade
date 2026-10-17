@@ -254,7 +254,7 @@ export async function GET() {
                 if (assignments.length === 0) return 0
                 return await db.examMark.count({
                   where: {
-                    exam: { schoolId, resultStatus: { not: 'Declared' } },
+                    exam: { schoolId, resultStatus: { notIn: ['Declared', 'Result Declared'] } }, // both spellings (legacy + canonical)
                     workflowStatus: 'DRAFT',
                     OR: assignments.map((a) => ({
                       AND: [{ classId: a.classId }, { subjectId: a.subjectId }],

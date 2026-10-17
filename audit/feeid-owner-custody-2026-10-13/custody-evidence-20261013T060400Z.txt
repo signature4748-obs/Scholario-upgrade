@@ -1,0 +1,75 @@
+# Owner-custody preparation evidence — 2026-10-13T06:04–06:15Z
+# All commands run locally as user z. ZERO network operations this session.
+# No credentials, tokens, or database contents appear below.
+
+## 1. Custody bundle staging (sandbox dumps dir, outside the repo)
+$ cd /home/z/prod-recovery-prep/dumps && ls -la   # BEFORE
+-rw------- 1 z z 1156906 Oct 13 05:09 prod-full-20261013T050827Z.dump
+-rw------- 1 z z      0 Oct 13 05:24 toc-reverify-20261013T052405Z.err
+-rw------- 1 z z 133134 Oct 13 05:24 toc-reverify-20261013T052405Z.txt
+
+$ sha256sum prod-full-20261013T050827Z.dump | tee prod-full-20261013T050827Z.dump.sha256
+fbe7f495425f27e9dc8f922edd79d3369383035fb71455f74ace27575d64afa5  prod-full-20261013T050827Z.dump
+sidecar_exit=0
+
+$ /home/z/prod-recovery-prep/pgclient/root/usr/lib/postgresql/17/bin/pg_restore \
+    --list prod-full-20261013T050827Z.dump > prod-full-20261013T050827Z.dump.toc.txt
+toc_exit=0
+
+$ chmod 600 prod-full-20261013T050827Z.dump.sha256 prod-full-20261013T050827Z.dump.toc.txt
+
+$ ls -la   # AFTER
+-rw------- 1 z z 1156906 Oct 13 05:09 prod-full-20261013T050827Z.dump
+-rw------- 1 z z     98 Oct 13 06:04 prod-full-20261013T050827Z.dump.sha256
+-rw------- 1 z z 133134 Oct 13 06:04 prod-full-20261013T050827Z.dump.toc.txt
+-rw------- 1 z z      0 Oct 13 05:24 toc-reverify-20261013T052405Z.err     # preserved
+-rw------- 1 z z 133134 Oct 13 05:24 toc-reverify-20261013T052405Z.txt    # preserved
+# directory: drwx------ (700) z:z — unchanged
+
+## 2. Checksum verification (the exact owner destination check)
+$ sha256sum -c prod-full-20261013T050827Z.dump.sha256
+prod-full-20261013T050827Z.dump: OK
+verify_exit=0
+
+$ head -5 prod-full-20261013T050827Z.dump.toc.txt
+;
+; Archive created at 2026-10-13 05:08:27 UTC
+;     dbname: postgres
+;     TOC Entries: 1827
+;     Compression: gzip
+
+## 3. Corrected runbook SHA — validity proof (local only)
+$ git cat-file -t 27183a991926db07729784b16f4752821a029ae6
+commit
+$ git log -1 --format='%H|%P|%s|%ci' 27183a991926db07729784b16f4752821a029ae6
+27183a991926db07729784b16f4752821a029ae6|cb9a0d485507f9c62d199901feefa1e83b1e3c7d 3ac77bf8953bdc28426fbf72f61391490f814a5b|Merge pull request #28 from signature4748-obs/fix/feeid-verify-gates|2026-10-13 10:14:06 +0530
+$ git rev-parse origin/main
+27183a991926db07729784b16f4752821a029ae6
+# == local origin/main ref (last updated by the READ-ONLY fetch of
+#    2026-10-13T05:52:20Z earlier in this same conversation; no fetch this session)
+$ sed -n '38p' docs/LIVE-MIGRATION-RUNBOOK.md
+   git checkout 27183a991926db07729784b16f4752821a029ae6   # detached is fine
+$ git show baead94:docs/LIVE-MIGRATION-RUNBOOK.md | sed -n '38p'
+   git checkout 27183a991926db07729784b16f4752821a029ae6   # detached is fine
+# malformed 37-char variant: only in the two checkpoint audit files, quoted
+# as the documented defect narrative (FINAL-PRE-APPLY-CHECKPOINT-REPORT §1b,
+# checkpoint-evidence §10) — not executable commands.
+
+## 4. Preservation state at session start
+$ git status --porcelain=v1 | wc -l
+0                      # clean tree before this session's additions
+$ git rev-list --count origin/main..main
+11                     # local-only evidence commits, NEVER pushed
+$ git stash list | wc -l
+3                      # stashes preserved untouched
+$ git log --oneline -1
+baead94 audit(final-checkpoint): …
+$ ls audit/ | wc -l
+15                     # all audit dirs intact
+$ stat -c 'mode=%A owner=%U:%G' .env.prod-migration
+mode=-rw------- owner=z:z    # contents never read/printed this session
+
+## 5. Credential handling of the task message
+# Secrets arrived in the owner's chat message; this session did NOT use,
+# store, echo, or commit any of them; none are reproduced in any file.
+# Rotation recommended (owner action, see report §0 and §5.2).

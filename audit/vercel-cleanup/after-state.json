@@ -1,0 +1,76 @@
+{
+  "recorded_at": "2026-10-12T09:51:44.629765+00:00",
+  "phase": "AFTER cleanup",
+  "projects": {
+    "scholario-platform": {
+      "total_deployments": 3,
+      "serving": {
+        "production": "dpl_9o6pYbm28YgRqjxHrxNh1K69bwFk @ b32f4ca",
+        "preview": "dpl_5n9QAsdgyy94M3cTuj9B8WcFtvYr @ a90379a"
+      },
+      "deployments": [
+        {
+          "id": "dpl_9o6pYbm28YgRqjxHrxNh1K69bwFk",
+          "state": "READY",
+          "target": "production",
+          "sha": "b32f4ca"
+        },
+        {
+          "id": "dpl_5n9QAsdgyy94M3cTuj9B8WcFtvYr",
+          "state": "READY",
+          "target": "preview",
+          "sha": "a90379a"
+        },
+        {
+          "id": "dpl_GgEQfDiQcFUh2YubCFd1NFaJsePq",
+          "state": "READY",
+          "target": "production",
+          "sha": "541cfe8"
+        }
+      ]
+    },
+    "scholario-app": {
+      "total_deployments": 3,
+      "serving": {
+        "production": "dpl_6HNdCjq98x5fWA7bzrdSLudzj5sN @ b32f4ca",
+        "preview": "dpl_2vyz1WD3tRxshDHG4eajzqbcEHYJ @ a90379a"
+      },
+      "deployments": [
+        {
+          "id": "dpl_6HNdCjq98x5fWA7bzrdSLudzj5sN",
+          "state": "READY",
+          "target": "production",
+          "sha": "b32f4ca"
+        },
+        {
+          "id": "dpl_2vyz1WD3tRxshDHG4eajzqbcEHYJ",
+          "state": "READY",
+          "target": "preview",
+          "sha": "a90379a"
+        },
+        {
+          "id": "dpl_Hnybc4ETQYAAzPSx4BrNoPEgmTde",
+          "state": "READY",
+          "target": "production",
+          "sha": "541cfe8"
+        }
+      ]
+    },
+    "scholario-production": {
+      "status": "DELETED 2026-10-12 (project + 137 deployments + env vars + domain)",
+      "deployments": 0
+    }
+  },
+  "verification": {
+    "platform_health": "200 ready db:ok @2026-10-12T09:51:02Z",
+    "school_health": "200 ready db:ok @2026-10-12T09:51:03Z",
+    "platform_login_door": "200",
+    "school_login_green_valley": "200",
+    "school_login_hawkings": "200",
+    "legacy_url": "404 (deleted)",
+    "pr22_merge_builds_created": 2,
+    "both_planes": "READY @ b32f4caf",
+    "env_vars": "platform 14 / app 13 (unchanged, verified)",
+    "supabase_site_url": "https://scholario-app-virid.vercel.app/ (re-pointed from legacy before deletion)"
+  }
+}

@@ -10,6 +10,12 @@ import { parseQuery, parseJsonBody, strictBody, emailSchema, safeText } from '@/
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { hostnameRejectionReason, normalizeHostname } from '@/lib/tenant/hostname'
 import { schoolLoginUrl, schoolPublicUrl } from '@/lib/plane'
+import { evaluateTenantEntitlement } from '@/lib/entitlement/entitlement'
+import {
+  isSubscriptionSchemaPendingError,
+  subscriptionSchemaPending as subscriptionSchemaPendingProbe,
+  SUBSCRIPTION_LEGACY_SELECT,
+} from '@/lib/platform/subscription-schema'
 import {
   inviteStateFromRowStatus,
   principalInviteDeliveryState,
@@ -27,8 +33,31 @@ const SCHOOL_PLANS = ['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'] as const
 
 const listQuerySchema = z.object({
   q: z.string().max(120).optional(),
-  status: z.enum(['ACTIVE', 'SUSPENDED', 'PENDING', 'TRIAL']).optional(),
+  /** ATTENTION is the overview's needs-attention rule: schools whose
+   *  lifecycle is PENDING (setup not completed) or TRIAL — the same
+   *  two statuses the Overview metric counts. */
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'PENDING', 'TRIAL', 'ATTENTION']).optional(),
+  /** Legacy tenant plan marker (school.plan). */
+  plan: z.enum(['FREE', 'STANDARD', 'PRO', 'ENTERPRISE']).optional(),
+  /** Subscription billing model (SchoolSubscription.billingModel). */
+  billingModel: z.enum(['SCHOOL_WIDE', 'PER_STUDENT', 'MIXED']).optional(),
+  /** Computed entitlement state (ACTIVE/GRACE/RESTRICTED/SUSPENDED/NOT_ACTIVATED). */
+  subscriptionState: z
+    .enum(['ACTIVE', 'GRACE', 'RESTRICTED', 'SUSPENDED', 'NOT_ACTIVATED'])
+    .optional(),
+  /** Demo/production classification (School.isDemo). */
+  demo: z.enum(['demo', 'production']).optional(),
+  /** Onboarding readiness (all 5 required setup sections done). */
+  readiness: z.enum(['ready', 'incomplete']).optional(),
+  /** Subscription periodEnd within N days (renewal report). */
+  expiringDays: z.coerce.number().int().min(1).max(365).optional(),
+  /** Sort key (server-side; default newest first). */
+  sort: z
+    .enum(['created_desc', 'created_asc', 'name_asc', 'name_desc', 'updated_desc'])
+    .optional(),
   page: z.coerce.number().int().min(1).max(500).optional(),
+  /** Include the KPI summary (computed for the CURRENT filter set). */
+  summary: z.coerce.boolean().optional(),
 })
 
 /**
@@ -37,6 +66,17 @@ const listQuerySchema = z.object({
  *
  * Permission: schools.read. This is a PLATFORM surface — a school
  * session can never reach it (disjoint token spaces).
+ *
+ * Directory capabilities (§3A): search (name/slug/code/domain), filters
+ * (lifecycle status, legacy plan marker, billing model, COMPUTED
+ * subscription entitlement state, demo/production classification,
+ * onboarding readiness, expiring-within-N-days), server-side sorting
+ * (created/name/updated), pagination, and an optional KPI summary —
+ * every number DB-derived, none fabricated.
+ *
+ * Computed-state filters (subscriptionState/readiness) are evaluated
+ * over the whole filtered set BEFORE pagination — page 1 of a filtered
+ * view is genuinely page 1 of that view, not a page-local slice.
  *
  * Each row also carries the access truth an operator needs without
  * opening the record: the demo/production marker (isDemo) and the
@@ -51,7 +91,7 @@ export async function GET(req: NextRequest) {
     const page = query.page ?? 1
     const pageSize = 25
 
-    const where = {
+    const baseWhere: Record<string, unknown> = {
       ...(query.q
         ? {
             OR: [
@@ -62,30 +102,210 @@ export async function GET(req: NextRequest) {
             ],
           }
         : {}),
-      ...(query.status ? { status: query.status } : {}),
+      ...(query.status
+        ? query.status === 'ATTENTION'
+          ? { status: { in: ['PENDING', 'TRIAL'] } }
+          : { status: query.status }
+        : {}),
+      ...(query.plan ? { plan: query.plan } : {}),
+      ...(query.demo ? { isDemo: query.demo === 'demo' } : {}),
+      ...(query.billingModel ? { subscription: { billingModel: query.billingModel } } : {}),
     }
 
-    const [schools, total] = await Promise.all([
-      db.school.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        include: {
-          _count: { select: { users: true, students: true, teachers: true, classes: true } },
+    const now = new Date()
+
+    // ── Light pass over the filtered set: id + the fields the computed
+    // filters and the per-row subscription chip need (no joins/counts —
+    // one bounded query; every downstream number stays DB-derived).
+    //
+    // SCHEMA-PENDING RESILIENCE — the directory is the control plane's
+    // primary surface: it must list REAL schools even when the deployed
+    // database has not yet applied the subscription-system migration
+    // (owner-gated). First attempt carries the post-migration chip
+    // columns; a pending-shape P2021/P2022 retries with the legacy
+    // select (entitlement computation needs only the legacy fields) and
+    // flags the response `subscriptionSchemaPending: true` so the UI can
+    // state exactly WHY plan/billing-model chips read “—” and the
+    // billingModel filter is not applied. No row, count or state is
+    // fabricated — only the unavailable columns degrade to null. ──
+    let subscriptionSchemaPending = false
+    let lightRows: Array<{
+      id: string
+      name: string
+      createdAt: Date
+      updatedAt: Date
+      status: string
+      isDemo: boolean
+      academicYear: string | null
+      subscription: {
+        status: string
+        plan: string
+        periodEnd: Date | null
+        graceDays: number
+        overrideStatus: string | null
+        planCode?: string | null
+        billingModel?: string | null
+      } | null
+    }>
+    try {
+      lightRows = await db.school.findMany({
+        where: baseWhere,
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          updatedAt: true,
+          status: true,
+          isDemo: true,
+          academicYear: true,
+          subscription: {
+            select: {
+              status: true,
+              plan: true,
+              planCode: true,
+              billingModel: true,
+              periodEnd: true,
+              graceDays: true,
+              overrideStatus: true,
+            },
+          },
         },
-      }),
-      db.school.count({ where }),
-    ])
+      })
+    } catch (e) {
+      if (!isSubscriptionSchemaPendingError(e)) throw e
+      subscriptionSchemaPending = true
+      // Pre-migration retry: legacy columns only; the billingModel filter
+      // (a pending column) cannot be served and is reported via the flag.
+      const { subscription: _drop, ...whereNoSubscription } = baseWhere as Record<string, unknown>
+      lightRows = await db.school.findMany({
+        where: whereNoSubscription,
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          updatedAt: true,
+          status: true,
+          isDemo: true,
+          academicYear: true,
+          subscription: { select: { ...SUBSCRIPTION_LEGACY_SELECT } },
+        },
+      })
+    }
+
+    // ── Onboarding readiness inputs (5 required sections): grouped
+    // counts over the filtered school set — bounded, one round. ──
+    const needsReadiness = Boolean(query.readiness || query.summary)
+    let readinessBySchool: Map<string, { requiredDone: number; ready: boolean }> | null = null
+    if (needsReadiness && lightRows.length) {
+      const ids = lightRows.map((r) => r.id)
+      const [classCounts, teacherCounts, studentCounts, feeStructCounts, feeCounts, principalCounts] =
+        await Promise.all([
+          db.class.groupBy({ by: ['schoolId'], where: { schoolId: { in: ids } }, _count: { _all: true } }),
+          db.teacher.groupBy({ by: ['schoolId'], where: { schoolId: { in: ids } }, _count: { _all: true } }),
+          db.student.groupBy({ by: ['schoolId'], where: { schoolId: { in: ids } }, _count: { _all: true } }),
+          db.feeStructure.groupBy({ by: ['schoolId'], where: { schoolId: { in: ids } }, _count: { _all: true } }),
+          db.fee.groupBy({ by: ['schoolId'], where: { schoolId: { in: ids } }, _count: { _all: true } }),
+          db.user.groupBy({
+            by: ['schoolId'],
+            where: { schoolId: { in: ids }, role: 'PRINCIPAL', status: 'ACTIVE' },
+            _count: { _all: true },
+          }),
+        ])
+      const toMap = (rows: Array<{ schoolId: string | null; _count: { _all: number } }>) =>
+        new Map(rows.filter((r) => r.schoolId).map((r) => [r.schoolId as string, r._count._all]))
+      const classMap = toMap(classCounts)
+      const teacherMap = toMap(teacherCounts)
+      const studentMap = toMap(studentCounts)
+      const feeStructMap = toMap(feeStructCounts)
+      const feeMap = toMap(feeCounts)
+      const principalMap = toMap(principalCounts)
+      readinessBySchool = new Map(
+        lightRows.map((r) => {
+          // Same 5 required sections as computeSetupReadiness (identity is
+          // done by construction post-provision; principal/academic/people/
+          // fees from these live counts; academic = year AND ≥1 class —
+          // the §7 consistency fix; fees = structures OR student fees).
+          let requiredDone = 1 // identity
+          if ((principalMap.get(r.id) ?? 0) > 0) requiredDone += 1
+          if (r.academicYear && (classMap.get(r.id) ?? 0) > 0) requiredDone += 1
+          if ((teacherMap.get(r.id) ?? 0) > 0 && (studentMap.get(r.id) ?? 0) > 0) requiredDone += 1
+          if ((feeStructMap.get(r.id) ?? 0) > 0 || (feeMap.get(r.id) ?? 0) > 0) requiredDone += 1
+          return [r.id, { requiredDone, ready: requiredDone === 5 }]
+        }),
+      )
+    }
+
+    // ── Computed entitlement state per school (the same pure evaluator
+    // the school plane enforces — the directory can never disagree). ──
+    const stateBySchool = new Map(
+      lightRows.map((r) => [
+        r.id,
+        evaluateTenantEntitlement({
+          schoolStatus: r.status,
+          accountSubscriptionStatus: 'ACTIVE',
+          subscription: r.subscription,
+        }),
+      ]),
+    )
+
+    // ── Apply computed filters BEFORE pagination (honest page math). ──
+    let filtered = lightRows
+    if (query.subscriptionState) {
+      filtered = filtered.filter((r) => stateBySchool.get(r.id)?.state === query.subscriptionState)
+    }
+    if (query.expiringDays) {
+      const before = new Date(now.getTime() + query.expiringDays * 24 * 60 * 60 * 1000)
+      filtered = filtered.filter((r) => {
+        const end = r.subscription?.periodEnd
+        return end != null && end >= now && end <= before
+      })
+    }
+    if (query.readiness && readinessBySchool) {
+      filtered = filtered.filter((r) => readinessBySchool.get(r.id)?.ready === (query.readiness === 'ready'))
+    }
+
+    // ── Server-side sort (default: newest first). ──
+    const collator = new Intl.Collator('en', { sensitivity: 'base', numeric: true })
+    const sortKey = query.sort ?? 'created_desc'
+    filtered.sort((a, b) => {
+      switch (sortKey) {
+        case 'created_asc':
+          return a.createdAt.getTime() - b.createdAt.getTime()
+        case 'name_asc':
+          return collator.compare(a.name, b.name)
+        case 'name_desc':
+          return collator.compare(b.name, a.name)
+        case 'updated_desc':
+          return b.updatedAt.getTime() - a.updatedAt.getTime()
+        default:
+          return b.createdAt.getTime() - a.createdAt.getTime()
+      }
+    })
+
+    const total = filtered.length
+    const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize)
+    const pageIds = pageRows.map((r) => r.id)
+
+    // ── Full rows for the page (counts + founding principal + invites). ──
+    const schools = pageIds.length
+      ? await db.school.findMany({
+          where: { id: { in: pageIds } },
+          include: {
+            _count: { select: { users: true, students: true, teachers: true, classes: true } },
+          },
+        })
+      : []
+    // Re-order the fetched rows to match the sorted page slice.
+    const byId = new Map(schools.map((s) => [s.id, s]))
+    const ordered = pageIds.map((id) => byId.get(id)).filter((s): s is (typeof schools)[number] => Boolean(s))
 
     // Founding principal per school (earliest PRINCIPAL row) — one
     // grouped query for the whole page. A school provisioned through
     // the wizard ALWAYS has exactly one founding principal; a missing
     // row (manually crafted data) is reported as null, never guessed.
-    const schoolIds = schools.map((s) => s.id)
-    const principals = schoolIds.length
+    const principals = pageIds.length
       ? await db.user.findMany({
-          where: { schoolId: { in: schoolIds }, role: 'PRINCIPAL' },
+          where: { schoolId: { in: pageIds }, role: 'PRINCIPAL' },
           orderBy: { createdAt: 'asc' },
           select: {
             id: true,
@@ -131,12 +351,49 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ── KPI summary for the CURRENT filter set (every number computed
+    // from the rows above — no fabricated counts). ──
+    let summary: Record<string, unknown> | undefined
+    if (query.summary) {
+      const statusCounts = { ACTIVE: 0, SUSPENDED: 0, PENDING: 0, TRIAL: 0 } as Record<string, number>
+      const stateCounts: Record<string, number> = {}
+      let demoCount = 0
+      let expiringSoon = 0
+      const expiringBefore = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+      for (const r of filtered) {
+        statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1
+        const st = stateBySchool.get(r.id)?.state ?? 'NOT_ACTIVATED'
+        stateCounts[st] = (stateCounts[st] ?? 0) + 1
+        if (r.isDemo) demoCount += 1
+        const end = r.subscription?.periodEnd
+        if (end != null && end >= now && end <= expiringBefore) expiringSoon += 1
+      }
+      const readyCount = readinessBySchool
+        ? filtered.filter((r) => readinessBySchool.get(r.id)?.ready).length
+        : null
+      summary = {
+        total,
+        byStatus: statusCounts,
+        bySubscriptionState: stateCounts,
+        demo: demoCount,
+        production: filtered.length - demoCount,
+        onboardingReady: readyCount,
+        subscriptionsExpiringWithin30Days: expiringSoon,
+      }
+    }
+
     return {
       total,
       page,
       pageSize,
-      schools: schools.map((s) => {
+      ...(summary ? { summary } : {}),
+      // Honest schema-pending signal: subscription chip columns degrade to
+      // null and the billingModel filter is not applied (see above).
+      ...(subscriptionSchemaPending ? { subscriptionSchemaPending: true as const } : {}),
+      schools: ordered.map((s) => {
         const founding = foundingBySchool.get(s.id)
+        const light = pageRows.find((r) => r.id === s.id)
+        const entitlement = light ? stateBySchool.get(s.id) : undefined
         return {
           id: s.id,
           name: s.name,
@@ -152,6 +409,29 @@ export async function GET(req: NextRequest) {
           isDemo: s.isDemo,
           createdAt: s.createdAt.toISOString(),
           counts: s._count,
+          // The subscription chip: the SAME computed entitlement state the
+          // school plane enforces + the authoritative plan/billing fields
+          // (nulls = legacy tenant without a registry plan yet, or the
+          // schema-pending flag explains why the columns are unavailable).
+          subscription: light?.subscription
+            ? {
+                state: entitlement?.state ?? 'NOT_ACTIVATED',
+                businessAllowed: entitlement?.businessAllowed ?? false,
+                renewalRequired: entitlement?.renewalRequired ?? false,
+                planCode: light.subscription.planCode ?? null,
+                billingModel: light.subscription.billingModel ?? null,
+                periodEnd: light.subscription.periodEnd?.toISOString() ?? null,
+                graceDays: light.subscription.graceDays,
+              }
+            : {
+                state: entitlement?.state ?? 'NOT_ACTIVATED',
+                businessAllowed: entitlement?.businessAllowed ?? false,
+                renewalRequired: entitlement?.renewalRequired ?? false,
+                planCode: null,
+                billingModel: null,
+                periodEnd: null,
+                graceDays: null,
+              },
           // The founding principal's access state (same vocabulary as
           // the detail dossier — BOOTSTRAP_PENDING means the one-time
           // credential has not been replaced yet) + the invite-email
@@ -200,6 +480,10 @@ const provisionSchema = strictBody({
   state: safeText(60).optional(),
   phone: safeText(20).optional(),
   plan: z.enum(SCHOOL_PLANS).default('STANDARD'),
+  /// Subscription billing model (mission §4 — the wizard's subscription
+  /// configuration; defaults to SCHOOL_WIDE, the same default the schema
+  /// applies when absent).
+  billingModel: z.enum(['SCHOOL_WIDE', 'PER_STUDENT', 'MIXED']).default('SCHOOL_WIDE'),
   board: z.enum(['CBSE', 'UP_BOARD', 'ICSE', 'STATE', 'CUSTOM']).default('CBSE'),
   principalName: safeText(80),
   principalEmail: emailSchema,
@@ -306,6 +590,9 @@ export async function POST(req: NextRequest) {
     async (ctx) => {
       const body = await parseJsonBody(req, provisionSchema)
       const ip = clientIpFromHeaders(req.headers)
+      // SCHEMA-PENDING RESILIENCE — probe once (TTL-cached); see the
+      // subscription-create note inside the transaction.
+      const subscriptionSchemaPending = await subscriptionSchemaPendingProbe()
       const principalEmail = body.principalEmail.toLowerCase()
 
       // HONEST capability gate — Google SSO is architected but NOT
@@ -502,15 +789,49 @@ export async function POST(req: NextRequest) {
           // SaaS-HARDENING — the tenant's subscription row is part of the
           // SAME transaction: ACTIVE (no expiry until the first recorded
           // payment — honest default: billing starts when billing starts).
-          await tx.schoolSubscription.create({
-            data: {
-              schoolId: createdSchool.id,
-              status: 'ACTIVE',
-              plan: body.plan,
-              periodStart: new Date(),
-              periodEnd: null,
-            },
-          })
+          // SCHEMA-PENDING RESILIENCE — `billingModel` is a pending-migration
+          // column: provisioning is the control plane's PRIMARY workflow and
+          // must keep working on a pre-migration database. Under pending we
+          // omit the column (the migration's default SCHOOL_WIDE applies
+          // retroactively when the owner applies it) and flag the response;
+          // a non-default billing model choice is honestly refused — it
+          // could not be persisted yet and pretending otherwise would
+          // misstate the tenant's commercial model.
+          if (subscriptionSchemaPending && body.billingModel !== 'SCHOOL_WIDE') {
+            throw new AppError('SUBSCRIPTION_SYSTEM_PENDING', {
+              publicMessage:
+                'Per-student and mixed billing models require the pending subscription-system migration. Provision with the school-wide model (the default) — the platform owner can switch the model after the migration is applied.',
+              internalDetail: `provision: billingModel ${body.billingModel} refused (schema pending)`,
+            })
+          }
+          if (subscriptionSchemaPending) {
+            // RAW INSERT with the legacy column set only — the generated
+            // client's INSERT/RETURNING references the pending-migration
+            // columns (billingModel + snapshot fields) even when they are
+            // omitted from `data`, so model.create() cannot run at all on
+            // a pre-migration database. The migration's own default
+            // (billingModel 'SCHOOL_WIDE') applies to this row when the
+            // owner applies the migration.
+            await tx.$executeRawUnsafe(
+              `INSERT INTO "SchoolSubscription" ("id","schoolId","status","plan","periodStart","periodEnd","graceDays","updatedAt","createdAt")
+               VALUES ($1,$2,'ACTIVE',$3,$4,NULL,14,NOW(),NOW())`,
+              `sub-${randomBytes(12).toString('hex')}`,
+              createdSchool.id,
+              body.plan,
+              new Date(),
+            )
+          } else {
+            await tx.schoolSubscription.create({
+              data: {
+                schoolId: createdSchool.id,
+                status: 'ACTIVE',
+                plan: body.plan,
+                billingModel: body.billingModel,
+                periodStart: new Date(),
+                periodEnd: null,
+              },
+            })
+          }
           // Same transaction: a principal-creation failure (concurrent
           // email claim) rolls the School row back — no orphans, ever.
           //
@@ -706,6 +1027,13 @@ export async function POST(req: NextRequest) {
         // re-issue it from the school record).
         invitation,
         nextStep: 'activate',
+        ...(subscriptionSchemaPending
+          ? {
+              subscriptionSchemaPending: true as const,
+              subscriptionPendingNote:
+                'The tenant subscription row was created with the legacy schema fields; the billing model will default to school-wide until the pending subscription-system migration is applied.',
+            }
+          : {}),
       }
     },
     { method: 'POST' },

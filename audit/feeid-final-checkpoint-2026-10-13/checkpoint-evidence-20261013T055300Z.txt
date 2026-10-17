@@ -1,0 +1,127 @@
+# Checkpoint verification evidence — 2026-10-13T05:52–06:05Z
+# All commands run locally as user z in /home/z/my-project (unless noted).
+# No credentials, tokens, connection strings, or database contents appear below.
+# Raw outputs, lightly elided where noted.
+
+## 1. Backup artifact — stat
+$ stat -c 'path=%n size=%s mode=%A owner=%U:%G mtime=%y' \
+    /home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump
+path=/home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump size=1156906 mode=-rw------- owner=z:z mtime=2026-10-13 05:09:34.350176438 +0000
+stat_exit=0
+
+$ stat -c 'path=%n mode=%A owner=%U:%G' /home/z/prod-recovery-prep/dumps /home/z/prod-recovery-prep
+path=/home/z/prod-recovery-prep/dumps mode=drwx------ owner=z:z
+path=/home/z/prod-recovery-prep mode=drwxrwxr-x owner=z:z
+
+## 2. Backup artifact — SHA-256 (recomputed)
+$ sha256sum /home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump
+fbe7f495425f27e9dc8f922edd79d3369383035fb71455f74ace27575d64afa5  /home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump
+sha_exit=0
+# == full digest recorded in POSTMERGE-RECOVERY-REPORT.md and OPTION-A-PREP-REPORT.md
+# == the fbe7f495… prefix cited in the task. Byte-for-byte match.
+
+## 3. Backup artifact — pg_restore --list (integrity; header only, metadata only)
+$ /home/z/prod-recovery-prep/pgclient/root/usr/lib/postgresql/17/bin/pg_restore --version
+pg_restore (PostgreSQL) 17.11 (Debian 17.11-0+deb13u1)
+
+$ pg_restore --list <dump>   # output to a temp file, then summarized; temp removed
+list_exit=0
+toc_lines=1835
+table_data_entries=162
+; Archive created at 2026-10-13 05:08:27 UTC
+;     dbname: postgres
+;     TOC Entries: 1827
+;     Compression: gzip
+;     Dump Version: 1.16-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 17.11
+;     Dumped by pg_dump version: 17.11 (Debian 17.11-0+deb13u1)
+(stderr: empty; temp listing + stderr files deleted after capture)
+
+## 4. Git exclusion proof
+$ git check-ignore -v /home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump
+fatal: … is outside repository at '/home/z/my-project'   # Git cannot track this path
+$ git -C /home/z/prod-recovery-prep rev-parse --show-toplevel
+fatal: not a git repository (or any of the parent directories): .git
+
+## 5. Dump-copy search (durable-custody determination)
+$ find /home/z -name '*.dump' -not -path '*/node_modules/*' -type f
+/home/z/prod-recovery-prep/dumps/prod-full-20261013T050827Z.dump      # the ONLY copy
+$ find /home/z -name '*.sha256' -not -path '*/node_modules/*' -type f
+/home/z/.cache/prisma/… (3 prisma engine sidecars only — unrelated)
+$ ls /home/z/backups
+ls: cannot access '/home/z/backups': No such file or directory
+$ find /tmp -name '*.dump*' -o -name '*prod-full*'            # no results
+$ ls upload/  (repo)   # only old pasted-text files from Oct 1; git-tracked count 0
+# → durable owner-controlled copy NOT verifiable from this environment.
+
+## 6. Release commit & local evidence state
+$ date -u
+2026-10-13T05:52:20Z
+$ git fetch origin            # READ-ONLY network op to GitHub (source repo only)
+fetch_exit=0
+$ git rev-parse origin/main
+27183a991926db07729784b16f4752821a029ae6
+$ git rev-list --count origin/main..main
+10
+$ git status --porcelain=v1 | wc -l        # BEFORE this session's docs fix
+0
+$ git log origin/main..main --oneline
+bc11ccc audit(option-a): browser verification screenshot …
+0fccb20 docs(option-a): owner-held backup preparation …
+acd89b6 audit: post-merge evidence — PR #28 merged (27183a9) …
+d959674 Merge origin/main (PR #28 verify-gates hardening) into local main with audit evidence commits
+d370793 audit: final release-gate evidence …
+f8be545 2c60e94c-a00a-4cc3-9144-ab8a229d860c
+5019ea7 audit: feeId apply-readiness evidence …
+e573d95 Merge origin/main (PR #27 feeid self-heal) into local main with audit evidence commits
+9f19b5d a2a2d2fb-8390-49b1-a1e7-b65eaf7054a1
+55facb0 7b7000f8-5723-43f9-be20-67ca68e2a5b1
+# all 10 local-only; NEVER pushed (fetch did not change the ahead count)
+
+$ git stash list
+stash@{0}: On main: residue: deleted upload routes (snapshot 2026-10-14)
+stash@{1}: WIP on main: 4864af9 Merge pull request #5 …
+stash@{2}: On main: PRESERVED pre-RC residual worktree 2026-10-10 …
+# 3 stashes — preserved untouched.
+
+## 7. Script identity vs release commit
+$ sha256sum prisma/migrations/20261013140000_fee_transaction_dangling_feeid_self_heal/migration.sql
+ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db  prisma/migrations/20261013140000_fee_transaction_dangling_feeid_self_heal/migration.sql
+$ git show 27183a991926db07729784b16f4752821a029ae6:prisma/migrations/20261013140000_fee_transaction_dangling_feeid_self_heal/migration.sql | sha256sum
+ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db  -
+$ git diff 27183a99…29ae6 HEAD --stat -- scripts/ docs/
+ docs/LIVE-MIGRATION-RUNBOOK.md | 242 +++++++++++++++   (new file added after release commit)
+ docs/OWNER-BACKUP-RUNBOOK.md  | 345 +++++++++++++++   (new file added after release commit)
+# scripts/ byte-identical; only the two NEW runbook docs differ (by design)
+
+## 8. Script flag contracts (grep of argv parsing)
+preflight.ts: --out <path> (default prod-migration-snapshot.json), --expect <csv>, exit 1/2 on failure
+apply.ts:     --expect <csv>, --dry-run, exit 1/2 on failure
+verify.ts:    --snapshot <path> REQUIRED, exit 1/2 on failure
+# → all runbook commands match the implemented contracts.
+
+## 9. Credentials hygiene
+$ stat -c 'mode=%A owner=%U:%G size=%s' .env.prod-migration
+mode=-rw------- owner=z:z size=237
+$ git check-ignore -v .env.prod-migration
+.gitignore:84:.env.*    .env.prod-migration
+$ git ls-files .env.prod-migration | wc -l
+0
+# contents never printed.
+
+## 10. Runbook hex-string audit (all recorded hashes validated)
+64-char strings present in the two runbooks (sorted, unique):
+  ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db   == migration.sql sha256 (verified §7) ✓
+  fbe7f495425f27e9dc8f922edd79d3369383035fb71455f74ace27575d64afa5   == dump sha256 (verified §2) ✓
+32-char: a87ebe601cdf03d3929ddefe33353ffb  == last-verified live ledger digest (historical, read-only) ✓
+40-char: 27183a991926db07729784b16f4752821a029ae6  == origin/main (verified §6) ✓
+37-char DEFECT (LIVE-MIGRATION-RUNBOOK.md line 38, git checkout command):
+  27183a991926db07784b16f4752821a029ae6  → FIXED to 27183a991926db07729784b16f4752821a029ae6
+  post-fix: git grep for the malformed string across tracked files = 0 matches.
+
+## 11. Dev server (untouched this session; docs-only change)
+$ tail dev.log → GET / 200 (server up; db-query errors are the documented
+  pre-existing unwired local DATABASE_URL — unrelated, no source changes made).

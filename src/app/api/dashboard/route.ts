@@ -27,7 +27,13 @@ export async function GET() {
       throw new Error('FORBIDDEN')
     }
     if (user.role === 'SUPER_ADMIN') {
-      const setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+      // Legacy-compatible column select: only showDemoSchool is consumed
+      // (a full-row read P2022s on a pre-migration database — the pending
+      // subscriptionConfig column — and 500s the platform dashboard).
+      const setting = await db.platformSetting.findUnique({
+        where: { id: 'global' },
+        select: { showDemoSchool: true },
+      })
       const showDemo = setting ? setting.showDemoSchool : true
 
       const schoolWhere = showDemo ? {} : { isDemo: false }

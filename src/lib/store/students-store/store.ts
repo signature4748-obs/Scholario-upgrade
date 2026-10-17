@@ -134,6 +134,8 @@ export const useStudentsStore = create<StudentsState>()(
   // renders its honest empty states.
   students: [],
   classes: [],
+  // Null until the first canonical roster sync lands (see types.ts).
+  rosterSyncedAt: null,
   // STUDENT-CONTACTS — active teacher directory from the roster sync
   // (USER-id space). Empty until /api/students/roster lands (students
   // get their /api/teachers 403 by design — role-scoped).

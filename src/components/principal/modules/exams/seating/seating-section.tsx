@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import type { ExamDTO, AdmitCardStudent } from '@/lib/exams/types'
 import type { ExamRoom, SeatingPlan, SeatingStudent, SeatingType, InvigilationAssignment, ExamSlot } from '@/lib/exams/seating/types'
 import { computeCapacity } from '@/lib/exams/seating/types'
+import { examStatusIs } from '@/lib/exams/types'
 import { generateSeatingPlan, roomOccupancy, buildExamSlots } from '@/lib/exams/seating/generator'
 import { SeatingMap } from './seating-map'
 import { generateSeatingPlanPDF, generateBatchAdmitCardPDF } from '@/lib/exams/pdf'
@@ -97,7 +98,7 @@ export function SeatingSection({ exam }: Props) {
 
   // Auto-seed: for Completed/Ongoing exams, distribute classes across rooms and generate the plan.
   // This fixes the data-integrity issue where a Completed exam showed "Not Generated".
-  const isCompletedOrOngoing = exam.status === 'Completed' || exam.status === 'Ongoing'
+  const isCompletedOrOngoing = examStatusIs(exam.status, 'Completed') || examStatusIs(exam.status, 'Ongoing')
   const [autoSeeded, setAutoSeeded] = useState(false)
   useEffect(() => {
     if (!isCompletedOrOngoing || autoSeeded || totalEligibleStudents === 0 || rooms.length === 0) return

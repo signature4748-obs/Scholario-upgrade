@@ -1,4 +1,5 @@
 import { db } from '@/lib/db'
+import { isResultDeclared, examStatusIs } from '@/lib/exams/types'
 import { withUser, schoolScoped } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
 import { teacherCanEnterMarks } from '@/lib/teacher-scope'
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
         where: { id: body.examId },
         select: { status: true, resultStatus: true },
       })
-      const examDeclared = examRow?.resultStatus === 'Declared' || examRow?.status === 'COMPLETED'
+      const examDeclared = isResultDeclared(examRow?.resultStatus) || examStatusIs(examRow?.status, 'Completed')
       if (submittedIds.size > 0 || examDeclared) {
         throw new Error('Marks already submitted — corrections flow through the exam office')
       }

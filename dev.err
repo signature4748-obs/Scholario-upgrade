@@ -1,0 +1,2 @@
+$ NODE_OPTIONS=--max-old-space-size=${DEV_OLD_SPACE_MB:-1700} next dev --webpack -p 3000 2>&1 | tee -a dev.log
+error: script "dev" was terminated by signal SIGTERM (Polite quit request)

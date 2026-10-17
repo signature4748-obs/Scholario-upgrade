@@ -179,12 +179,13 @@ export function SettingsModule() {
           {/* ACCOUNT-RECOVERY — the signed-in admin's own credentials */}
           <SettingsAccountCard />
 
-          {/* Platform section */}
+          {/* GENERAL — platform-wide behaviour (demo visibility,
+              support ceiling) */}
           <Card className="rounded-xl border-slate-200 bg-white shadow-sm">
             <CardHeader>
-              <CardTitle className="text-slate-900 text-base font-semibold">Platform</CardTitle>
+              <CardTitle className="text-slate-900 text-base font-semibold">General</CardTitle>
               <CardDescription className="text-slate-500 text-xs">
-                Global platform behaviour.
+                Platform-wide behaviour.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -239,12 +240,13 @@ export function SettingsModule() {
             </CardContent>
           </Card>
 
-          {/* Module master switches */}
+          {/* MODULES — master switches for tenant module availability
+              (school override ?? master ?? enabled). No Notifications or
+              Integrations groups exist because no such configuration is
+              backed by the settings API — nothing is faked. */}
           <Card className="rounded-xl border-slate-200 bg-white shadow-sm">
             <CardHeader>
-              <CardTitle className="text-slate-900 text-base font-semibold">
-                Module master switches
-              </CardTitle>
+              <CardTitle className="text-slate-900 text-base font-semibold">Modules</CardTitle>
               <CardDescription className="text-slate-500 text-xs">
                 Applies to every school without an explicit override
                 (school override ?? this master ?? enabled).

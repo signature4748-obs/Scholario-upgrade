@@ -18,6 +18,7 @@ import {
   RotateCcw,
   KeyRound,
   Copy,
+  Search,
   ShieldAlert,
   ShieldCheck,
   Unlink,
@@ -32,6 +33,13 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -141,6 +149,11 @@ export function AdminsModule() {
   const [forbidden, setForbidden] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** Users & Access toolbar — client-side search + status filter. The
+   *  roster is a bounded list (the whole point of this surface), so
+   *  filtering happens locally; the server still gates every action. */
+  const [searchInput, setSearchInput] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'SUSPENDED'>('ALL')
 
   // Create-admin dialog
   const [createOpen, setCreateOpen] = useState(false)
@@ -163,6 +176,23 @@ export function AdminsModule() {
 
   const canManage = can('admins.manage')
   const isSelf = (a: AdminRow) => Boolean(me && me.admin.id === a.id)
+
+  // Derived — the visible slice of the roster under the toolbar's
+  // search + status filter (client-side, honest: an empty result while
+  // the roster itself is loaded renders the no-match state, not zeros).
+  const searchQ = searchInput.trim().toLowerCase()
+  const visibleAdmins = admins.filter((a) => {
+    if (statusFilter !== 'ALL' && a.status !== statusFilter) return false
+    if (
+      searchQ &&
+      !a.name.toLowerCase().includes(searchQ) &&
+      !a.email.toLowerCase().includes(searchQ)
+    ) {
+      return false
+    }
+    return true
+  })
+  const filtersActive = searchQ !== '' || statusFilter !== 'ALL'
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -488,11 +518,11 @@ export function AdminsModule() {
             <span className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center">
               <Users className="h-4.5 w-4.5 text-teal-600" aria-hidden="true" />
             </span>
-            Platform admins
+            Users &amp; Access
           </h1>
           <p className="text-sm text-slate-500 mt-2 max-w-2xl">
-            Accounts that can sign in to the control plane. Every change here is step-up gated and
-            audited.
+            Platform administrators who can sign in to the control plane. Every change here is
+            step-up gated and audited.
           </p>
         </div>
         <Button
@@ -603,8 +633,69 @@ export function AdminsModule() {
         </div>
       )}
 
-      {/* Roster */}
+      {/* Users & Access toolbar — search + status filter (client-side
+          over the bounded roster; every action remains server-gated). */}
       {!loading && !forbidden && admins.length > 0 && (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative flex-1 min-w-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" aria-hidden="true" />
+            <Input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search name or email"
+              aria-label="Search platform users"
+              className="pl-9 h-10 bg-white border-slate-200 text-slate-900 placeholder:text-slate-400"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Select
+              value={statusFilter}
+              onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}
+            >
+              <SelectTrigger
+                aria-label="Filter users by status"
+                className="w-full sm:w-44 h-10 bg-white border-slate-200 text-slate-700"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-white border-slate-200">
+                <SelectItem value="ALL">All statuses</SelectItem>
+                <SelectItem value="ACTIVE">Active</SelectItem>
+                <SelectItem value="SUSPENDED">Suspended</SelectItem>
+              </SelectContent>
+            </Select>
+            {filtersActive && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearchInput('')
+                  setStatusFilter('ALL')
+                }}
+                className="h-10 px-3 text-slate-500 hover:text-slate-900"
+                aria-label="Clear user filters"
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* No-match state — the roster loaded, but the toolbar filters
+          exclude every row (distinct from an empty roster). */}
+      {!loading && !forbidden && admins.length > 0 && visibleAdmins.length === 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-8 text-center shadow-sm">
+          <Users className="h-5 w-5 text-slate-400 mx-auto" aria-hidden="true" />
+          <p className="mt-2 text-sm font-medium text-slate-900">No users match your filters.</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Try a different search or status — the roster itself loaded successfully.
+          </p>
+        </div>
+      )}
+
+      {/* Roster */}
+      {!loading && !forbidden && visibleAdmins.length > 0 && (
         <>
           {/* Table (≥ sm) */}
           <div className="hidden sm:block rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -620,7 +711,7 @@ export function AdminsModule() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {admins.map((a) => {
+                {visibleAdmins.map((a) => {
                   const open = expanded === a.id
                   return (
                     <React.Fragment key={a.id}>
@@ -773,7 +864,7 @@ export function AdminsModule() {
 
           {/* Cards (mobile) */}
           <div className="sm:hidden space-y-3">
-            {admins.map((a) => {
+            {visibleAdmins.map((a) => {
               const open = expanded === a.id
               return (
                 <div

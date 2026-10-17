@@ -156,8 +156,13 @@ export async function computeSetupReadiness(schoolId: string): Promise<SetupRead
       id: 'academic',
       label: 'Academic setup',
       required: true,
-      done: (school.academicYear ? 1 : 0) + classCount > 0,
-      detail: `${school.academicYear ?? 'no session'} · ${classCount} classes · ${subjectCount} subjects`,
+      // §7 consistency: academic setup is complete only when the session
+      // year is set AND at least one class exists — a year with zero
+      // classes cannot place students (admissions/enrollment require a
+      // class destination), and classes without a session year have no
+      // academic period. Both halves are honest prerequisites.
+      done: Boolean(school.academicYear) && classCount > 0,
+      detail: `${school.academicYear ?? 'no session year'} · ${classCount} classes · ${subjectCount} subjects`,
       counts: { classes: classCount, subjects: subjectCount },
     },
     {

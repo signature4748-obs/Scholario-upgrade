@@ -42,7 +42,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { EXAM_TYPES, type ExamDTO } from '@/lib/exams/types'
+import { EXAM_TYPES, isResultDeclared, type ExamDTO } from '@/lib/exams/types'
 import { InlineLoading } from '../inline-loading'
 import { ModuleEmptyState } from '../../shared/empty-state'
 import { useUpdateExam, useDeleteExam } from '@/lib/exams/use-exams'
@@ -462,7 +462,7 @@ function ExamCard({
           </span>
           <span className="text-muted-foreground/40">·</span>
           {isCompleted ? (
-            <span className={cn('font-medium', exam.resultStatus === 'Result Declared' && 'text-emerald-600 dark:text-emerald-400')}>
+            <span className={cn('font-medium', isResultDeclared(exam.resultStatus) && 'text-emerald-600 dark:text-emerald-400')}>
               {exam.resultStatus}
             </span>
           ) : (

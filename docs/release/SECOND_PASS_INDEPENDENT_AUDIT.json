@@ -1,0 +1,178 @@
+{
+  "report": "SCHOLARIO SECOND-PASS INDEPENDENT AUDIT (AUDIT OF THE AUDIT)",
+  "mode": "READ -> COMPARE -> VERIFY -> REPORT (strictly read-only, zero production mutations)",
+  "executedAt": "2026-10-03T05:00:00Z",
+  "auditedReports": [
+    "docs/release/FINAL_FORENSIC_PRODUCTION_ACCEPTANCE.md (a675a6f)",
+    "docs/release/FINAL_FORENSIC_ACCEPTANCE_STATE.json (a675a6f)",
+    "docs/FINAL_PRODUCTION_RELEASE_REPORT.md (64b93b4, final at 2199417)",
+    "worklog FFA-1/FFA-2/FFA-3 entries (a675a6f/2199417)"
+  ],
+  "credentialBoundary": {
+    "vercelToken": "ABSENT in this sandbox (previously-truncated handoff token invalid)",
+    "githubPat": "ABSENT (anonymous read-only works)",
+    "supabaseDbUrl": "ABSENT",
+    "supabaseMgmtToken": "ABSENT",
+    "resendApiKey": "ABSENT",
+    "rotatedDemoCredentials": "ABSENT (vault /home/z/.sec/* and /home/z/.mission-secrets.env wiped by Oct-3 02:42 sandbox recreation)",
+    "previousAuditArtifacts": "/home/z/prod-verify/* GONE",
+    "note": "All credential-gated verifications are therefore BLOCKED and reported as UNVERIFIED, never as PASS."
+  },
+  "git": {
+    "githubMainHead": "219941756bc09066ecec43b8b2e60fa4e6dbbfa5",
+    "githubDevelopment": "3727ba2bed9afe09cf83366416af0752bea42b13",
+    "remoteBranches": ["main", "development"],
+    "archiveBranchRemoteDeleted": true,
+    "localHead": "2deef0fc00e6d920f77a24a9bc847b3acaba6a3c",
+    "localDivergence": {
+      "status": "DIVERGED from origin/main after common ancestor 3727ba2",
+      "localOnlyCommits": [
+        {"sha": "43920fe", "content": "deletes 7 upload API routes (1101 lines) that ARE in the released tree; adds FINAL_PRODUCTION_RELEASE_REPORT draft"},
+        {"sha": "2deef0f", "content": "sandbox preview infrastructure: mini-services/postgres-db, keepalive, spawn-detached, next.config watch options"}
+      ],
+      "implication": "the local preview stack runs code that is NOT the released code (upload APIs 404 locally); production unaffected",
+      "workingTree": "clean"
+    },
+    "shaChain": [
+      {"sha": "3727ba2bed9afe09cf83366416af0752bea42b13", "date": "2026-10-02T11:01:30Z", "class": "APPLICATION CHANGES (rebrand + corpus rebuild + subscription-lock migration)", "deployed": "claimed"},
+      {"sha": "a744f7b1e13f58b59ac7a5389de7befff402f9a9", "date": "2026-10-02T11:53:43Z", "class": "docs only (UUID auto-snapshot)"},
+      {"sha": "3ec11e9bf950875834e1fcb419e4977633e546c6", "date": "2026-10-02T14:05:11Z", "class": "tests/scripts only"},
+      {"sha": "2aac7cb2d9f53c424af36e6a183e335957f049b6", "date": "2026-10-02T15:18:55Z", "class": "TEMP diagnostic route add"},
+      {"sha": "be98dbe0f17eab2d56c2a83bba3dd603dcd7821c", "date": "2026-10-02T15:37:14Z", "class": "TEMP diagnostic revert (net zero)"},
+      {"sha": "64b93b4b5b6b113a587c64eb78ef4fbe015045b9", "date": "2026-10-02T16:00:32Z", "class": "release evidence only (rotation report)"},
+      {"sha": "a675a6fed497ac93d87f8a547a77f0be89f12eee", "date": "2026-10-02T18:22:38Z", "class": "release evidence only (forensic report)"},
+      {"sha": "219941756bc09066ecec43b8b2e60fa4e6dbbfa5", "date": "2026-10-02T18:27:09Z", "class": "worklog only (final commit)"}
+    ],
+    "runtimeCodeDelta3727ba2to2199417": "ZERO application-code changes (docs/tests/worklog only + reverted TEMP route)"
+  },
+  "vercel": {
+    "productionUrl": "https://scholario-production.vercel.app",
+    "live": true,
+    "healthLive": "ok",
+    "healthReady": "database:ok 224-235ms (probes 03:56-04:41 UTC)",
+    "appVersion": "2.14.0 (non-discriminating: identical at all candidate commits)",
+    "csp": "carries wss://kbyknezedewvgrnqervj.supabase.co (post-rotation realtime URL) VERIFIED",
+    "securityHeaders": "full set VERIFIED (HSTS/nosniff/referrer/permissions-policy)",
+    "gitIntegrationAlias": "scholario-production-git-main-signature4748-2940.vercel.app EXISTS (SSO 302) => auto-deploy connected",
+    "deploymentProtection": "Standard (team-suffixed aliases 302 to Vercel SSO)",
+    "runtimeSha": {
+      "status": "UNVERIFIED (NOT PASS per mission rule)",
+      "evidence": "x-vercel-id carries per-request ids only (verified across 8+ requests); no deployment id in headers; Vercel API blocked; GitHub shows no Vercel-bot statuses to logged-out pages",
+      "lastVerifiedDeploymentByPreviousRun": "dpl_49w9LsSF at a675a6f",
+      "finalCommitDeployment": "2199417 pushed 18:27 after the final sweep; its deployment was NEVER recorded/verified by anyone",
+      "mitigation": "app-code delta a675a6f -> 2199417 is zero, so any deployment >= 3727ba2 is behaviorally identical to the final commit"
+    }
+  },
+  "databases": {
+    "production": {
+      "identity": "Supabase kbyknezedewvgrnqervj ap-south-1 (prior evidence); live app database:ok; REST/realtime endpoints alive (401 no-key)",
+      "directAccess": "BLOCKED",
+      "tenantCount": 2,
+      "publiclyVerifiedCounts": {"hawkingsStudents": 82, "hawkingsTeachers": 16, "hawkingsClasses": 15, "hawkingsSubjects": 14, "hawkingsLibraryBooks": 12, "greenValleyBusinessData": 0}
+    },
+    "local": {
+      "identity": "Embedded PostgreSQL 18.4 (mini-services/postgres-db), database scholario, DATABASE_ENV=development",
+      "migrations": "9/9 applied (names identical to repo)",
+      "tables": 102,
+      "tenants": 2,
+      "censusParityWithPreviousProductionClaims": "EXACT for User 185, Teacher 16, Student 82, Class 15, Subject 14, CSA 87, Exam 4/45/653, Fee 328/Payment 218/FeeTransaction 226, Attendance 3280, Timetable 396, Salary 15/30, Curriculum 518/419",
+      "moneyParity": "billed 1025600 / collected 595820 / PAID 198 (550300) / PARTIAL 20 (95200) / UNPAID 110 (380100) — bit-exact",
+      "attendanceDistribution": {"PRESENT": 2933, "ABSENT": 185, "LATE": 110, "LEAVE": 52},
+      "marks": {"n": 653, "min": 27, "max": 88, "negative": 0, "overMax": 0},
+      "differencesVsProductionClaims": {"Room": "23 local (22 H + 1 GV) vs '22 all Hawkings' (Hawkings-only counting)", "PlatformAdmin": "3 local vs 2 claimed in production", "StudyMaterial": "1 local vs 11 claimed live", "operationalTables": "local fresh-seed zeros vs production accumulated history"}
+    }
+  },
+  "duplicateDetectors": {
+    "production": "BLOCKED",
+    "localRerun": {
+      "studentAdmissionNoPerSchool": 0, "studentRollNoPerClass": 0, "userEmail": 0,
+      "teacherEmployeeIdPerSchool": 0, "schoolSlug": 0, "realReceiptNoDuplicates": 0,
+      "salarySchoolTeacherMonth": 0, "examMarkKey": 0, "timetableSlot": 0,
+      "artifact": "naive GROUP BY receiptNo reports 1 group = 8 NULL receiptNo rows (nullable by design); NULL-excluding count = 0"
+    }
+  },
+  "orphanDetectors": {
+    "production": "BLOCKED; previous 51-row cleanup evidence GONE (sandbox wipe)",
+    "localRerun": "0 across all families",
+    "cleanupClaimClassification": "PLAUSIBLE, unverifiable; live-equivalent numbers (4 decks/32 cards/3 groups) reproduce locally",
+    "openQuestion": "StudyMaterial.schoolId has NO FK (soft ref) — explains orphan persistence; FlashcardDeck/StudyGroup HAVE FKs — whether the 'dead' Sunrise school row was deleted or dead-in-place is undeterminable without DB access"
+  },
+  "tenants": {
+    "hawkings": {
+      "publicIdentity": "VERIFIED live (name/address/phone/board/principal/counts/class list)",
+      "classTeacherCoverage": "100% local (15/15 with real teachers)",
+      "ledger": "local bit-exact parity with claimed KPIs; production ledger BLOCKED"
+    },
+    "greenValley": {
+      "clean": "VERIFIED (public zeros + local zeros + honest CMS placeholder)",
+      "bootstrap": "Room 101, GradeScale 7, ExamTypeConfig 1, 5 role users — exactly seed-clean.ts design"
+    }
+  },
+  "crossTenant": {
+    "anonymousProbes": "ALL PASS (slug h=200/g=200/unknown=404; neutral SPA fallback on unknown slug; demo fallback on bare URL; /api/dashboard 401; /api/platform/schools 401; /api/realtime/config 401; /api/dbdiag 404)",
+    "authenticatedGauntlet": "BLOCKED (credentials absent)",
+    "codeLevel": "session-derived tenancy verified in released tree (withUser/schoolScoped; client schoolId ignored; fail-safe 404)",
+    "localCrossTenantRows": 0
+  },
+  "rbac": {"status": "PARTIALLY VERIFIED (code-level gates + prior live evidence; live re-run BLOCKED)"},
+  "invariants": {
+    "attendance": {"localUniqueIndex": "Attendance_studentId_date_key VERIFIED", "localDuplicates": 0},
+    "fees": {"localLedgerCoherence": "0 overpaid / 0 negative / 0 incoherent partial / 0 paid-but-underpaid", "uniqueIndexes": "receiptNo/referenceNumber/gatewayOrderId/transactionId VERIFIED"},
+    "marks": {"localViolations": 0, "unique4KeyIndex": "VERIFIED"},
+    "salary": {"localDuplicates": 0, "teacherSchoolMismatch": 0, "pattern": "15 teachers x 2 months"}
+  },
+  "mockData": {
+    "sunriseInSrc": 0,
+    "renderedKpis": "public surfaces DB-derived VERIFIED",
+    "discrepancy": "'1842'/'96' remain LIVE VALUES in src/lib/mock/school.ts + students.ts + attendance.ts; 47 live files import @/lib/mock/* (mostly structural constants, documented in DATA_SOURCE_MAP R1-R20); previous claim 'zero live occurrences' is OVERSTATED at code level",
+    "aaravSharma": "placeholder/comments only"
+  },
+  "rls": {
+    "productionAdvisors": "BLOCKED",
+    "localParity": "102 tables RLS-enabled / 0 policies (the 102 INFO) + pg_trgm in public (the 1 WARN) = 103 classification structurally REPRODUCED; 1 SECURITY DEFINER function WITH search_path pinned; 0 anon grants (local roles)"
+  },
+  "migrations": {
+    "repoCount": 9,
+    "localApplied": "9/9",
+    "ninth": "20261003000000_account_subscription_lock added by 3727ba2 (FINAL-ACCEPTANCE 1/3) — the 8/8 vs 9/9 discrepancy RESOLVED as intentional",
+    "production": "BLOCKED (claim 9/9; indirectly corroborated by healthy app on the 9-migration schema)"
+  },
+  "vercelEnv": {"liveCheck": "BLOCKED", "codeLevel": "0 NEXT_PUBLIC_* variables in src (no client-exposed secrets)", "priorNames": 8},
+  "credentialRotation": {"status": "UNVERIFIED (vault wiped; deployed credentials demonstrably work — database:ok, CSP realtime)"},
+  "resend": {"engine": "UNVERIFIED (prior evidence: ACTIVE, send-restricted, owner delivery verified)", "customDomain": "NOT VERIFIED (documented owner DNS action)"},
+  "ci": {"parkedFile": "present in released tree", "workflowsDir": "absent", "githubActionsPage": "empty state — no workflows, no runs", "apiBranchProtection": "BLOCKED (anonymous quota exhausted on shared egress IP)"},
+  "backup": {"docAndScripts": "present in tree", "evidence": "era-coherent (97 tables/9171 rows, money sums match the pre-rebuild corpus)", "artifacts": "GONE", "rerun": "not performed"},
+  "browserQA": {
+    "production": "PASS on anonymous surfaces: 0 console errors, 0 page errors, no horizontal overflow at 320/390/414/768/1024/1440/1920, live DB-derived stats, platform announcement live, no demo chips, platform login page renders",
+    "authenticated": "BLOCKED",
+    "screenshots": ["prod-hawkings-320.png", "prod-gv-320.png", "prod-hawkings-1440.png"]
+  },
+  "mobileSafari": {"classification": "COOKIE CONTRACT VERIFIED (prior evidence only) — REAL iOS SAFARI NOT TESTED (no device in either environment)"},
+  "temporaryArtifacts": {"repo": "clean (no diagnostic routes; only false-positive 'template' route match)", "live": "/api/dbdiag 404 VERIFIED", "productionDbState": "BLOCKED"},
+  "tests": {
+    "unitFreshRun": "88 pass / 0 fail (EXACT match with claim)",
+    "staticCounts": "within ~5% of claimed 639 total (crude regex; not authoritative)",
+    "fullMatrixRerun": "NOT PERFORMED (would reset the live local preview DB in active use; released-code run would require isolated worktree+DB+server)",
+    "previousClaim": "622 pass / 0 fail / 17 designed skips — internal total 622+17=639 consistent; security row 413 vs 395+17=412 OFF-BY-ONE inside their own table"
+  },
+  "secretScan": {
+    "method": "shape-based (ghp_/github_pat_/vcp_/sbp_/sb_secret_/JWT/pg-URLs) across ALL blobs of ALL refs",
+    "tokenShapedHits": 0,
+    "pgUrlHits": "all placeholder/CI-standard forms (.env.example template, ci.yml.parked postgres:postgres, seed-guard fixture, docs) — 0 real credentials",
+    "note": "live rotated values are not present in this sandbox, so value-scanning is impossible by construction (strongest non-leak posture)"
+  },
+  "stopResume": {"conclusion": "NO DUPLICATION in surviving evidence; the claimed anti-duplication outcomes (temp-school REUSE, ledger=2, sessions=0) are unverifiable (BLOCKED)"},
+  "discrepancies": [
+    "RUNTIME SHA UNVERIFIED — no 2199417 deployment was ever recorded or verified; last verified deployment a675a6f (dpl_49w9LsSF)",
+    "Three unreconciled 'current production SHA' statements across the final docs (be98dbe in FINAL report vs 64b93b4 in FFA vs a675a6f in FFA-3 worklog)",
+    "FFA test-table off-by-one: security 413 total vs 395 pass + 17 skips = 412",
+    "User count presented inconsistently: 186 (JSON census) vs 185 (MD report + final sweep)",
+    "Mock-data claim overstated: fabricated KPI constants (1842/96) remain live code values in the shipped mock library (documented R1-R20; not rendered)",
+    "Local sandbox repo diverged from release (2 unpushed snapshot commits; upload routes deleted locally) — local preview runs non-released code",
+    "All credential-gated production claims (census internals, rotation truth, Resend, advisors, env names, sessions=0) remain UNVERIFIABLE from this sandbox"
+  ],
+  "blockers": ["Vercel API token", "Supabase DB connection string", "Supabase management token", "Resend API key", "one tenant login (rotated demo credentials)", "GitHub API anonymous quota (shared IP)"],
+  "finalIndependentStatus": "DISCREPANCIES FOUND",
+  "finalStatusElaboration": "No evidence of fabrication; every publicly reachable claim verifies; the deepest claims are credential-blocked (not disproven); the runtime-SHA item is UNVERIFIED by the mission's own standard; documentation carries five precision-level inconsistencies; the local sandbox is diverged from the release (sandbox-only). No production mutation was performed at any point during this second pass.",
+  "committedOrPushed": false
+}

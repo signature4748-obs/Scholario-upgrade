@@ -6,6 +6,7 @@
 
 import 'server-only'
 import { db, trackedTransaction } from '@/lib/db'
+import { isResultDeclared, resultStatusIs } from './types'
 import { AppError } from '@/lib/security/errors'
 import {
   type ExamDTO,
@@ -542,7 +543,7 @@ export async function deleteExam(examId: string, schoolId: string, _user: AuthUs
   // Phase 3 — declared results are auditable history: the exam (and its
   // cascading marks/results rows) must survive for report cards and
   // compliance. Refuse with 409 CONFLICT — archive instead.
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new AppError('CONFLICT', {
       publicMessage:
         'Results for this examination have been declared — it is part of the auditable academic record and cannot be deleted. Archive it instead.',
@@ -727,7 +728,7 @@ export async function setMark(
 ): Promise<ExamMarkDTO> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot modify marks after results are declared')
   }
 
@@ -865,7 +866,7 @@ export async function setMark(
     await db.exam.update({ where: { id: examId }, data: { status: 'Ongoing' } })
   }
   // Update exam resultStatus to "Marks Entry" if it was "Not Started"
-  if (exam.resultStatus === 'Not Started') {
+  if (resultStatusIs(exam.resultStatus, 'Not Started')) {
     await db.exam.update({ where: { id: examId }, data: { resultStatus: 'Marks Entry' } })
   }
 
@@ -955,7 +956,7 @@ export async function submitMarks(
 ): Promise<{ submitted: number }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot modify marks after results are declared')
   }
   // ── IQ3000 Phase 8 — CSA scope for TEACHER (audit 3-b MEDIUM) ────────
@@ -1009,7 +1010,7 @@ export async function verifyMarks(
 ): Promise<{ verified: number }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot modify marks after results are declared')
   }
   const result = await db.examMark.updateMany({
@@ -1044,7 +1045,7 @@ export async function lockMarks(
 ): Promise<{ locked: number }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     throw new Error('Cannot modify marks after results are declared')
   }
   // Lock everything matching filter (DRAFT/SUBMITTED/VERIFIED → LOCKED)
@@ -1142,12 +1143,53 @@ export async function declareResults(
   examId: string,
   schoolId: string,
   user: AuthUserLike | null
-): Promise<{ declared: boolean }> {
+): Promise<{ declared: boolean; resultsMaterialized: number }> {
   const exam = await db.exam.findFirst({ where: { id: examId, schoolId } })
   if (!exam) throw new Error('Exam not found')
-  if (exam.resultStatus !== 'Result Ready') {
+  if (!resultStatusIs(exam.resultStatus, 'Result Ready')) {
     throw new Error('Results can only be declared from Result Ready state')
   }
+
+  // PHASE 3 contract (Result schema comment + student-results-store doc:
+  // "the staff publish/declare flow writes [the rows]"): declaring an exam
+  // must materialize the student-visible report-card rows from the FINAL
+  // ExamMark set. Without this, the exam flips to "Result Declared" and
+  // the publish notification tells students their results are available,
+  // while /api/results (the student Results module + dashboard academics
+  // card) stays empty — every student sees "No published results yet".
+  // Rows are idempotent by the (studentId, examId, subjectId) business
+  // key (@@unique + skipDuplicates): a re-run never duplicates.
+  // workflowStatus ≠ DRAFT: only SUBMITTED/VERIFIED/LOCKED marks are final —
+  // a DRAFT row with a value must never leak into a student-visible
+  // report card (lockMarks-with-filter can leave drafts behind while the
+  // exam is already Result Ready).
+  const finalMarks = await db.examMark.findMany({
+    where: { examId, marksObtained: { not: null }, workflowStatus: { not: 'DRAFT' } },
+    select: { studentId: true, classId: true, subjectId: true, marksObtained: true },
+  })
+  let resultsMaterialized = 0
+  if (finalMarks.length > 0) {
+    const configs = await db.examSubjectConfig.findMany({
+      where: { examId },
+      select: { classId: true, subjectId: true, maxMarks: true },
+    })
+    const maxBy = new Map(configs.map((c) => [`${c.classId}:${c.subjectId}`, c.maxMarks]))
+    const rows = finalMarks.map((m) => {
+      const totalMarks = maxBy.get(`${m.classId}:${m.subjectId}`) ?? 100
+      const marks = m.marksObtained ?? 0
+      return {
+        studentId: m.studentId,
+        examId,
+        subjectId: m.subjectId,
+        marks,
+        totalMarks,
+        grade: gradeForMaterialization(marks, totalMarks),
+      }
+    })
+    const created = await db.result.createMany({ data: rows, skipDuplicates: true })
+    resultsMaterialized = created.count
+  }
+
   await db.exam.update({
     where: { id: examId },
     data: {
@@ -1158,7 +1200,25 @@ export async function declareResults(
     },
   })
   await audit(examId, user, 'RESULT_DECLARED', 'EXAM', examId, null, null)
-  return { declared: true }
+  return { declared: true, resultsMaterialized }
+}
+
+/**
+ * Grade for a materialized report-card row — the same CBSE-style scale
+ * the canonical seeds write (prisma/seed-student-dashboard.ts gradeFor),
+ * so a declared exam's stored grades read identically to seeded ones.
+ * The Result.grade column is informational; the student store re-derives
+ * display grades from pct + the school's configured scale.
+ */
+function gradeForMaterialization(marks: number, total: number): string {
+  const pct = total > 0 ? (marks / total) * 100 : 0
+  if (pct >= 90) return 'A+'
+  if (pct >= 80) return 'A'
+  if (pct >= 70) return 'B+'
+  if (pct >= 60) return 'B'
+  if (pct >= 50) return 'C'
+  if (pct >= 33) return 'D'
+  return 'F'
 }
 
 export type { StudentResult }

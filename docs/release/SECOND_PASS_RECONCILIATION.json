@@ -1,0 +1,257 @@
+{
+  "report": "SCHOLARIO SECOND-PASS RECONCILIATION & BLOCKER CLOSURE",
+  "mode": "TARGETED CREDENTIALED VERIFICATION — read-only, zero production mutations",
+  "executedAt": "2026-10-03T05:07:00Z/2026-10-03T07:05:00Z",
+  "inputs": {
+    "priorSecondPass": "docs/release/SECOND_PASS_INDEPENDENT_AUDIT.md (unpushed local commit 6ee0472)",
+    "priorReports": "docs/FINAL_PRODUCTION_RELEASE_REPORT.md + docs/release/FINAL_FORENSIC_* (origin/main @ 2199417)"
+  },
+  "credentialRecovery": {
+    "status": "BLOCKED",
+    "checked": [
+      "process environment (no Vercel/Supabase/Resend/GitHub token-shaped vars)",
+      "/home/z/.sec + /home/z/.mission-secrets.env + /home/z/prod-verify (wiped by Oct-3 02:42 sandbox recreation)",
+      "~/.vercel, ~/.git-credentials, ~/.netrc (absent)",
+      "repo .env (LOCAL DEV ONLY: postgresql://...@127.0.0.1 embedded preview PG)",
+      "git remote (plain anonymous HTTPS — no PAT, push impossible)",
+      "filesystem pattern scan (no values found)"
+    ],
+    "recovery": "anonymous GitHub API quota window reset at 05:07 UTC — unblocked commit-status verification (used for deployment attestation)"
+  },
+  "vercelDeployment": {
+    "githubMainHead": "219941756bc09066ecec43b8b2e60fa4e6dbbfa5 (live git ls-remote + GitHub branches API re-confirmation at 06:06 UTC)",
+    "vercelCommitStatus": {
+      "sha": "219941756bc09066ecec43b8b2e60fa4e6dbbfa5",
+      "state": "success",
+      "description": "Deployment has completed",
+      "context": "Vercel (official GitHub App, bot in/8329)",
+      "postedAt": "2026-10-02T18:30:09Z",
+      "targetUrl": "https://vercel.com/signature4748-2940/scholario-production/FoVXJCFtb2V4eBB7bywJfGhiqEaD"
+    },
+    "deploymentId": "FoVXJCFtb2V4eBB7bywJfGhiqEaD (new-format dashboard slug; legacy dpl_* equivalent)",
+    "deploymentState": "success/completed",
+    "productionAlias": "https://scholario-production.vercel.app",
+    "belongsToCurrentMain": true,
+    "statusChainCaptured": {
+      "source": "official Vercel GitHub App commit statuses (context 'Vercel', bot in/8329), captured live at the 05:07 and 06:59 UTC quota windows",
+      "2aac7cb": "success 'Deployment has completed' @ 2026-10-02T15:34:14Z → GHAug6oAMw5iR7kbsHfLLoqa9GF8 (TEMP route live ~9 min)",
+      "be98dbe": "success 'Deployment has completed' @ 2026-10-02T15:43:23Z → Dk8c9MNuCic8riz6LrqWgqL7aYPn",
+      "64b93b4": "success 'Deployment has completed' @ 2026-10-02T16:06:44Z → AqpB12mAENFviAdkm2eaSDKeyCPD (dashboard slug BEGINS with legacy dpl_AqpB12mA — two evidence paths corroborate)",
+      "a675a6f": "success 'Deployment has completed' @ 2026-10-02T18:25:54Z → 49w9LsSF1pvcoSz9UfkdVKvmdU22 (dashboard slug BEGINS with legacy dpl_49w9LsSF — two evidence paths corroborate)",
+      "2199417": "success 'Deployment has completed' @ 2026-10-02T18:30:09Z → FoVXJCFtb2V4eBB7bywJfGhiqEaD (current production)",
+      "3727ba2": "not captured (quota) — immaterial: every later deployment contains its code",
+      "branchMain": "main HEAD = 2199417… (captured 06:06 UTC window)",
+      "quotaPhenomenon": "egress rotates across shared IPs (8.212.10.159, 47.57.232.222, 47.57.242.119); anonymous 60-req/h windows drain within seconds of reset; workflows API query rate-limited — CI verified via repo evidence instead"
+    },
+    "liveCorrespondsTo2199417": "VERIFIED — Vercel GitHub-App attestation + no commits pushed after 2199417 + auto-deploy integration (git-main alias live) + homepage etag 03f58dd9b117cf3247676169c231b136 byte-identical to the second-pass audit's probes (runtime output unchanged)",
+    "caveat": "dashboard-initiated manual rollback not anonymously excludable; zero evidence of one",
+    "liveChecks": {
+      "healthReady": "200 database:ok 242ms",
+      "appVersion": "2.14.0",
+      "cspRealtimeOrigin": "wss://kbyknezedewvgrnqervj.supabase.co (post-rotation)",
+      "dbdiagRoute": "404 (TEMP route gone)",
+      "authBoundaries": "401 on /api/dashboard, /api/platform/schools, /api/realtime/config"
+    }
+  },
+  "shaHistory": [
+    {
+      "short": "be98dbe",
+      "full": "be98dbe0f17eab2d56c2a83bba3dd603dcd7821c",
+      "date": "2026-10-02T15:37:14Z",
+      "role": "revert of TEMP diagnostic route; tree == tested release 3ec11e9",
+      "deployed": "YES — ATTESTED (Vercel GitHub-App status success @ 15:43:23Z → Dk8c9MNuCic8riz6LrqWgqL7aYPn; also FPR §3 READY)",
+      "currentProduction": "NO (superseded)"
+    },
+    {
+      "short": "64b93b4",
+      "full": "64b93b4b5b6b113a587c64eb78ef4fbe015045b9",
+      "date": "2026-10-02T16:00:32Z",
+      "role": "FINAL-ACCEPTANCE 3/3 — FPR release report (GO); docs+worklog only",
+      "deployed": "YES — ATTESTED (status success @ 16:06:44Z → AqpB12mAENFviAdkm2eaSDKeyCPD = legacy dpl_AqpB12mA; also dpl_awgTvMCd per FFA phase-0 Vercel API)",
+      "currentProduction": "NO (superseded)"
+    },
+    {
+      "short": "a675a6f",
+      "full": "a675a6fed497ac93d87f8a547a77f0be89f12eee",
+      "date": "2026-10-02T18:22:38Z",
+      "role": "FINAL FORENSIC ACCEPTANCE report (GO); docs+JSON+worklog only",
+      "deployed": "YES — ATTESTED (status success @ 18:25:54Z → 49w9LsSF1pvcoSz9UfkdVKvmdU22 = legacy dpl_49w9LsSF; FFA-3 also verified via Vercel API)",
+      "currentProduction": "NO (superseded)"
+    },
+    {
+      "short": "2199417",
+      "full": "219941756bc09066ecec43b8b2e60fa4e6dbbfa5",
+      "date": "2026-10-02T18:27:09Z",
+      "role": "final sweep — worklog only (15 lines); zero app-code delta vs 3727ba2",
+      "deployed": "YES — INDEPENDENTLY ATTESTED THIS SESSION (status success @ 18:30:09Z → FoVXJCFtb2V4eBB7bywJfGhiqEaD, current production)",
+      "currentProduction": "YES"
+    }
+  ],
+  "appCodeFact": "from 3727ba2 to 2199417 all commits are docs/evidence-only — runtime application code identical across be98dbe/64b93b4/a675a6f/2199417",
+  "productionDatabase": {
+    "directAccess": "BLOCKED (no credentials in sandbox)",
+    "publicCensus": {
+      "hawkings": {
+        "students": 82,
+        "teachers": 16,
+        "classes": 15,
+        "subjects": 14,
+        "libraryBooks": 12,
+        "status": "VERIFIED UNCHANGED vs all prior reports"
+      },
+      "greenValley": {
+        "businessData": 0,
+        "status": "VERIFIED UNCHANGED (honest CMS placeholder)"
+      },
+      "tenants": 2,
+      "unknownSlug": "404 honest",
+      "bareUrl": "resolves demo tenant (Hawkings)"
+    },
+    "localMirrorRerun": {
+      "migrations": "9/9 applied, names identical to repo",
+      "census": {
+        "users": 185,
+        "teachers": 16,
+        "students": 82,
+        "classes": 15,
+        "subjects": 14,
+        "attendance": 3280,
+        "examMarks": 653,
+        "fees": 328,
+        "payments": 218,
+        "feeTransactions": 226,
+        "timetable": 396,
+        "salaryStructures": 15,
+        "salaryPayments": 30
+      },
+      "duplicates": "0 across all families (admissionNo, rollNo, email, employeeId, slug, receiptNo-NULL-excluded, salary, examMark, attendance, timetable); 8 NULL-receipt rows = UNDER_VERIFICATION by design",
+      "orphans": "0 (students, attendance, marks, fees, sessions, StudyMaterials, decks, cards, groups)",
+      "crossTenant": "0",
+      "attendanceSplit": {
+        "PRESENT": 2933,
+        "ABSENT": 185,
+        "LATE": 110,
+        "LEAVE": 52
+      },
+      "fees": {
+        "billed": "1025600.00",
+        "collected": "595820.00",
+        "paid": "198/550300.00",
+        "partial": "20/95200.00",
+        "unpaid": "110/380100.00",
+        "overpaid": 0
+      },
+      "marks": {
+        "count": 653,
+        "range": "27-88",
+        "violations": 0
+      },
+      "salary": {
+        "recorded": "30 = 15 teachers x 2026-08 + 2026-09",
+        "duplicates": 0
+      },
+      "classTeacherCoverage": "15/15 (0 vacant)",
+      "rlsParity": "102 tables RLS / 0 policies + pg_trgm public — reproduces the 103-advisor classification",
+      "temporaryResidue": "0 third tenants; GV bootstrap-only (5 users, Room 101, 7 grade scales)",
+      "verdict": "BIT-EXACT with the previous claims and the second-pass audit — zero drift"
+    }
+  },
+  "cleanup51Rows": {
+    "arithmetic": "11 StudyMaterials + 4 FlashcardDecks + 32 FlashcardCards + 3 StudyGroups + 1 User = 51 EXACT",
+    "historicalEvidence": "cleanup-evidence.json GONE (sandbox artifact, never committed) — exact deletion evidence NOT reconstructible",
+    "reconstruction": "architecturally coherent (StudyMaterial.schoolId soft-ref no FK; decks/groups have FKs; rows referenced dead pre-rebuild school cmupmxxz7); local fresh-seed post-cleanup design has 0 orphans/0 broken references; production public surfaces healthy",
+    "brokenReferences": "NO EVIDENCE (direct check BLOCKED)",
+    "legitimateDataRemoved": "NO EVIDENCE (live equivalents exist; public counts unchanged)",
+    "classification": "CONSISTENT & PLAUSIBLE — direct evidence UNAVAILABLE"
+  },
+  "credentialRotation": {
+    "currentCredentialsWork": "VERIFIED INDIRECTLY (health/ready database:ok 242ms; realtime CSP active; app healthy)",
+    "oldCredentialsDead": "UNVERIFIED (material unavailable — per instruction, not manufactured)",
+    "appUsesCurrent": "VERIFIED INDIRECTLY",
+    "noRevokedActive": "UNVERIFIED",
+    "clarification": "FPR rotated 4 demo families (incl. default, 172 accounts); FFA INC-1 re-rotated 3 re-exposed families — two rotation events, not a contradiction"
+  },
+  "resend": {
+    "emailApi": "UNVERIFIED (current) — prior evidence: ACTIVE, send-restricted (read endpoints 401)",
+    "applicationEmailPath": "UNVERIFIED (current) — prior evidence: admission-enquiry → EmailDelivery SENT with provider message id",
+    "customSendingDomain": "NOT VERIFIED — unchanged owner-held gap (shared test sender onboarding@resend.dev; SPF/DKIM/DMARC outstanding)",
+    "ownerAddressDelivery": "UNVERIFIED (current) — prior-verified with provider message id",
+    "claimDiscipline": "'production email fully complete' NOT claimed"
+  },
+  "migrations": {
+    "repoDirs": 9,
+    "localApplied": "9/9 identical names",
+    "production": "claimed 9/9 (queried by FFA with credentials); re-verify BLOCKED; indirectly corroborated",
+    "lineageExplanation": "8/8 = earlier baseline; 9/9 = current released lineage; 9th = 20261003000000_account_subscription_lock added by 3727ba2 (FINAL-ACCEPTANCE 1/3)",
+    "minorNote": "PREVIEW-FIX worklog said '8 migrations applied' — imprecise sandbox-log wording; actual local state 9/9 (verified)"
+  },
+  "documentationDiscrepancies": [
+    "SHA ambiguity: three sequential 'current production SHA' statements (be98dbe / 64b93b4 / a675a6f) reconciled — final production = 2199417 (Vercel-attested this session)",
+    "FPR test table: security 413 total vs 395 pass + 17 skip = 412 — off-by-one; pass column sums 621 vs stated 622; FFA carried 622 forward while its rows sum 621; no '626' exists in any artifact",
+    "User 185 vs 186: JSON census pre-cleanup (186) vs MD table post-cleanup (185) — difference = the 1 deleted stale User row; timing undocumented",
+    "'zero live mock occurrences' overstated: 1842/96/93.3 remain in non-rendered mock modules; corrected verified wording adopted",
+    "rotation families 3 vs 4 across reports: two rotation events, explained",
+    "45 = 41 + 4 probes: consistent as stated; artifact gone (evidence-unavailable, not a discrepancy)"
+  ],
+  "mockData": {
+    "valuesPresent": [
+      "src/lib/mock/school.ts:23-24 (totalStudents 1842, totalTeachers 96)",
+      "src/lib/mock/students.ts:62 (total 1842)",
+      "src/lib/mock/attendance.ts:20 (today.total 1842, rate 93.3)"
+    ],
+    "rendered": false,
+    "analysis": "only consumed fields are structural (school.categories dropdown; students array for duplicate-name checks; attendanceOverview is a dead export with zero external importers); 53 importing files use structural constants per DATA_SOURCE_MAP R1-R20",
+    "correctedWording": "Legacy mock constants (1842 / 96 teachers / 93.3%) remain in non-rendered mock modules and are not part of the production data path; every rendered KPI is DB-derived (live-verified).",
+    "action": "NO deletion performed (per instruction)"
+  },
+  "localDivergence": {
+    "localMain": "6ee0472 (3 unpushed commits after common ancestor 3727ba2)",
+    "githubMain": "2199417 (7 docs-only commits after 3727ba2)",
+    "commits": [
+      {
+        "sha": "43920fe",
+        "time": "2026-10-03T01:17:26Z",
+        "content": "deletes 7 upload API routes (-1101 lines) + local FINAL_PRODUCTION_RELEASE_REPORT.md",
+        "class": "SANDBOX-RUNTIME snapshot; route deletion is a local-only regression vs release"
+      },
+      {
+        "sha": "2deef0f",
+        "time": "2026-10-03T03:09:00Z",
+        "content": "preview infrastructure (embedded PG 18.4, keepalive, spawn-detached, next.config watch)",
+        "class": "SANDBOX-RUNTIME — required for preview; not in release"
+      },
+      {
+        "sha": "6ee0472",
+        "time": "2026-10-03T04:45:59Z",
+        "content": "second-pass audit reports + worklog",
+        "class": "AUDIT EVIDENCE (platform auto-snapshot committed them locally; never pushed)"
+      }
+    ],
+    "userBusinessWork": "NONE in any local commit",
+    "localCodeVsProduction": "DIFFERENT (missing 7 upload routes; missing remote docs commits; carries preview infra)",
+    "action": "NOT pushed, NOT merged, NOT reset (report-only; owner reconciliation recommended after review)"
+  },
+  "ci": {
+    "parkedFile": ".github/ci.yml.parked present in released tree (VERIFIED)",
+    "workflowsDir": "absent (VERIFIED); GitHub Actions API check captured at quota window",
+    "active": false
+  },
+  "blockers": [
+    "Supabase production DB connection string",
+    "Vercel API token",
+    "Supabase management token",
+    "Resend API key",
+    "one authorized production tenant login",
+    "real iOS Safari device"
+  ],
+  "resolvedThisSession": [
+    "GitHub API quota windows captured (2 windows) — full deployment attestation chain for 5 of 6 release commits",
+    "final-commit deployment verified (2199417 → FoVXJCFtb2V4eBB7bywJfGhiqEaD success 18:30:09Z)",
+    "legacy dpl_ id ↔ dashboard-slug mapping proven by prefix match (dpl_AqpB12mA → AqpB12mA…, dpl_49w9LsSF → 49w9LsSF…)",
+    "TEMP-route deployment window bounded (15:34:14Z → 15:43:23Z, ~9 min, properly reverted)",
+    "SHA chain + deployment chain documentation reconciled",
+    "mock-data wording reclassified with verified precision",
+    "local divergence analyzed"
+  ],
+  "finalStatus": "PARTIALLY VERIFIED — SPECIFIC ITEMS BLOCKED"
+}

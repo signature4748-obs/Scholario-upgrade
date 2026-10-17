@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { useUpdateExam } from '@/lib/exams/use-exams'
 import { useRoleGate } from '@/lib/exams/use-role-gate'
 import type { ExamDTO } from '@/lib/exams/types'
+import { isResultDeclared, resultStatusIs, examStatusIs } from '@/lib/exams/types'
 import { Kpi, DetailField, type Tab } from './workspace-shared'
 
 // ─── Action Items Widget — smart next-steps based on exam state ──────
@@ -96,7 +97,7 @@ export function ActionItemsWidget({ exam, onNavigate }: { exam: ExamDTO; onNavig
 
   // All locked but results not declared
   const allLocked = total > 0 && locked === total
-  if (allLocked && exam.resultStatus !== 'Result Declared' && exam.resultStatus !== 'Result Ready') {
+  if (allLocked && !isResultDeclared(exam.resultStatus) && !resultStatusIs(exam.resultStatus, 'Result Ready')) {
     items.push({
       label: 'Declare results',
       description: 'All papers are locked. Ready to declare results for individual classes.',
@@ -108,7 +109,7 @@ export function ActionItemsWidget({ exam, onNavigate }: { exam: ExamDTO; onNavig
   }
 
   // Results declared but not published (check per-class)
-  if (exam.resultStatus === 'Result Declared') {
+  if (isResultDeclared(exam.resultStatus)) {
     items.push({
       label: 'Publish results to students',
       description: 'Results are declared. Publish to notify students and parents.',
@@ -120,10 +121,14 @@ export function ActionItemsWidget({ exam, onNavigate }: { exam: ExamDTO; onNavig
   }
 
   // Completed exam — suggest analytics
-  if (exam.status === 'Completed' && exam.resultStatus === 'Result Declared') {
+  if (examStatusIs(exam.status, 'Completed') && isResultDeclared(exam.resultStatus)) {
     items.push({
       label: 'Review grade analytics',
-      description: 'Results are published. Review grade distribution and student performance.',
+      // Honest copy: this item appears as soon as results are DECLARED —
+      // publish status is not tracked on the exam row (publishResults
+      // only fans out notifications + audit), so claiming "published"
+      // here would overstate the state pre-publish.
+      description: 'Results are declared. Review grade distribution and student performance.',
       action: 'View Grades',
       tab: 'grade',
       priority: 'low',
@@ -238,7 +243,7 @@ export function OverviewSection({ exam, onReload, onNavigate }: { exam: ExamDTO;
     { label: 'Marks entry started', done: exam.markSummary.entered > 0, navigate: 'marks' as Tab },
     { label: 'Marks verified', done: exam.markSummary.verified > 0, navigate: 'marks' as Tab },
     { label: 'Marks locked', done: exam.markSummary.locked > 0, navigate: 'marks' as Tab },
-    { label: 'Results declared', done: exam.resultStatus === 'Result Declared', navigate: 'marks' as Tab },
+    { label: 'Results declared', done: isResultDeclared(exam.resultStatus), navigate: 'marks' as Tab },
   ]
 
   const entered = exam.markSummary.entered

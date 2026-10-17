@@ -45,8 +45,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const body = await parseJsonBody(req, accessSchema)
       const ip = clientIpFromHeaders(req.headers)
 
-      // Honor the platform-configured maximum duration.
-      const setting = await db.platformSetting.findUnique({ where: { id: 'global' } })
+      // Honor the platform-configured maximum duration. Legacy-compatible
+      // column select: only supportMaxDuration is consumed (a full-row
+      // read P2022s on a pre-migration database — pending
+      // subscriptionConfig column — and 503s the support-session
+      // launcher, a core support workflow).
+      const setting = await db.platformSetting.findUnique({
+        where: { id: 'global' },
+        select: { supportMaxDuration: true },
+      })
       const maxMinutes = setting?.supportMaxDuration ?? 60
       const durationMinutes = Math.min(body.durationMinutes, maxMinutes)
 

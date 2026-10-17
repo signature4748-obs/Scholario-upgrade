@@ -1,0 +1,36 @@
+══════════════════════════════════════════════════════════════════════
+feeId migration evidence run — migration 20261013140000 (disposable PG)
+══════════════════════════════════════════════════════════════════════
+local PG version : PostgreSQL 18.4 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit
+prod  PG version : PostgreSQL 17.11 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit  (captured step 0 via read-only Management API)
+migration file   : 20261013140000_fee_transaction_dangling_feeid_self_heal
+migration sha256 : ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db (matches expected ec171c91…b16e9db)
+
+─── PHASE A: setup database feeid_evidence (23 migrations + fixtures) ───
+EVIDENCE RUN CRASHED: 689 |         result = new this._Promise((resolve, reject) => {
+690 |           query.callback = (err, res) => (err ? reject(err) : resolve(res))
+691 |         }).catch((err) => {
+692 |           // replace the stack trace that leads to `TCP.onStreamRead` with one that leads back to the
+693 |           // application that created the query
+694 |           Error.captureStackTrace(err)
+                      ^
+error: database "feeid_evidence" is being accessed by other users
+     length: 160,
+   severity: "ERROR",
+     detail: "There is 1 other session using the database.",
+       hint: undefined,
+   position: undefined,
+ internalPosition: undefined,
+ internalQuery: undefined,
+      where: undefined,
+     schema: undefined,
+      table: undefined,
+   dataType: undefined,
+ constraint: undefined,
+       file: "dbcommands.c",
+    routine: "dropdb",
+       code: "55006"
+
+      at /home/z/probe/node_modules/pg/lib/client.js:694:17
+      at processTicksAndRejections (native:7:39)
+

@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
+import { isResultDeclared } from '@/lib/exams/types'
 import { withUser } from '@/lib/api'
 import { audienceAllows, audienceLabel } from '@/lib/notices'
 import {
@@ -171,7 +172,7 @@ export async function GET(_req: NextRequest) {
           where: { schoolId: ctx.schoolId, examClasses: { some: { classId: student.classId } } },
           orderBy: [{ declaredAt: 'desc' }, { endDate: 'desc' }],
         })
-        const declared = exams.find((e) => e.resultStatus === 'Declared' && e.declaredAt)
+        const declared = exams.find((e) => isResultDeclared(e.resultStatus) && e.declaredAt)
         if (!declared) return null
         const [myResults, classResults] = await Promise.all([
           db.result.findMany({
@@ -215,7 +216,7 @@ export async function GET(_req: NextRequest) {
 
         // Nearest upcoming exam for the class (an Up Next source).
         const upcoming = exams
-          .filter((e) => e.resultStatus !== 'Declared' && e.startDate && new Date(e.startDate) > new Date())
+          .filter((e) => !isResultDeclared(e.resultStatus) && e.startDate && new Date(e.startDate) > new Date())
           .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0]
 
         return {

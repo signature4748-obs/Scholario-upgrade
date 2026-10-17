@@ -619,7 +619,7 @@ export function FeesOverviewSection({ onNavigate, academicYear }: Props) {
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.04 }}
                       onClick={() => onNavigate('transactions')}
-                      aria-label={`View transaction for ${t.studentName}, ${formatINR(t.amount, true)} via ${mode}`}
+                      aria-label={`View transaction for ${t.studentName ?? 'Student'}, ${formatINR(t.amount, true)} via ${mode}`}
                       className={listPanelBtnClass}
                     >
                       <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-md ring-1', modeAccent(mode))}>

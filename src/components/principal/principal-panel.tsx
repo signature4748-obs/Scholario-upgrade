@@ -5,7 +5,7 @@ import {
   LayoutDashboard, UserPlus, GraduationCap, School, CalendarCheck, IndianRupee,
   Wallet, FileText, Megaphone, CalendarDays, ClipboardList,
   BookMarked, Bus, Package, Award, Settings, MessageSquare,
-  PieChart, Download, Clock, Globe
+  PieChart, Download, Clock, Globe, CreditCard
 } from 'lucide-react'
 import { AppShell, type NavGroup } from '@/components/shell/app-shell'
 import { lazyModule } from '@/components/shared/lazy-module'
@@ -47,6 +47,7 @@ const StudentsClassesModule = lazy(() => import('./modules/students-classes'), '
 const TeachersModule = lazy(() => import('./modules/teachers'), 'TeachersModule')
 const FeesModule = lazy(() => import('./modules/fees'), 'FeesModule')
 const FinanceDashboardModule = lazy(() => import('./modules/finance-dashboard'), 'FinanceDashboardModule')
+const PrincipalSubscriptionModule = lazy(() => import('./modules/subscription'), 'PrincipalSubscriptionModule')
 
 const moduleRegistry: Record<string, React.ComponentType<any>> = {
   dashboard: PrincipalDashboard,
@@ -74,6 +75,7 @@ const moduleRegistry: Record<string, React.ComponentType<any>> = {
   certificates: lazy(() => import('./modules/certificates'), 'CertificatesModule'),
   downloads: lazy(() => import('./modules/downloads'), 'DownloadsModule'),
   settings: lazy(() => import('./modules/school-settings'), 'SchoolSettingsModule'),
+  subscription: PrincipalSubscriptionModule,
   website: lazy(() => import('./modules/website'), 'WebsiteManagementModule'),
 }
 
@@ -134,6 +136,7 @@ const navGroups: NavGroup[] = [
     label: 'System',
     items: [
       { key: 'settings', label: 'Settings', icon: <Settings className="h-4.5 w-4.5" />, permission: 'school.masterdata.read' },
+      { key: 'subscription', label: 'Subscription', icon: <CreditCard className="h-4.5 w-4.5" /> },
     ],
   },
 ]

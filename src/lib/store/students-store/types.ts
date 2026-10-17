@@ -221,6 +221,15 @@ export interface StudentsState {
    * PRINCIPAL/MANAGEMENT-only). Empty until the roster sync lands.
    */
   rosterTeachers: { id: string; name: string }[]
+  /**
+   * ISO timestamp of the last SUCCESSFUL canonical roster sync
+   * (syncStudentsFromServer). Null until the first sync lands — lets
+   * dashboard consumers distinguish "not loaded yet" (render an honest
+   * "—" placeholder) from "synced and genuinely empty" (render 0).
+   * Persisted, so returning sessions keep their stale-while-revalidate
+   * figures visible instantly.
+   */
+  rosterSyncedAt: string | null
   houses: House[]
   promotions: PromotionRecord[]
   transfers: TransferRecord[]
