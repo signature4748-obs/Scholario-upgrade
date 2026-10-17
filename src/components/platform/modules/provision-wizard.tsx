@@ -176,7 +176,9 @@ interface WizardForm {
   roomsText: string
 }
 
-const EMPTY_FORM: WizardForm = {
+// Exported for the wizard-empty-form regression test: the inert-row
+// invariant (a name-less row must carry no sections) must never regress.
+export const EMPTY_FORM: WizardForm = {
   name: '',
   shortName: '',
   code: '',
@@ -201,7 +203,11 @@ const EMPTY_FORM: WizardForm = {
   country: '',
   timezone: 'Asia/Kolkata',
   academicYear: '',
-  classRows: [{ name: '', sections: 'A' }],
+  // No pre-filled sections: a default row with sections but no class name
+  // tripped the step-3 validation ("Every class row needs a class name")
+  // and blocked Continue for admins who skip the optional bootstrap —
+  // the submit path drops name-less rows, so an untouched row must be inert.
+  classRows: [{ name: '', sections: '' }],
   subjectsText: '',
   roomsText: '',
 }
