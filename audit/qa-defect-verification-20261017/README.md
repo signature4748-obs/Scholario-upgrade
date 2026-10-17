@@ -141,3 +141,88 @@ Dev-environment artifacts observed (documented, NOT app defects):
   the audit window (server correctly fail-closed on the deleted class ids).
 - localStorage demo-store keys (`::t:t-dsg-gur-01`) retain the sanctioned
   demo-tenant corpus; live sessions fetch server truth independently.
+
+---
+
+# Student Panel Functional Audit — addendum (same session, @ d2ef886 + fix batch)
+
+Student session: `aman.sah@hawkingshigh.edu` (featured student, 7-A roll 01,
+Hawkings). DOM `.click()` dispatch used where dev-mode re-render churn
+interfered with coordinate clicks (the same sanctioned workaround as the
+teacher addendum).
+
+## Browser-verified
+
+| Module | Result |
+| --- | --- |
+| Dashboard | Fee reminder banner (₹5.2K due, overdue 46 days), Up Next feed (real NEXT Sanskrit 8:00 AM Room 70A; TASK Finish Maths Worksheet 7; FEES overdue; NOTICE results-published), Today's Classes, Attendance card, Academic Snapshot, Needs-attention (2 unread msgs, dues), School Notices (3 live rows incl. the 17-Oct results-published notification) |
+| Results | **TWO assessment tabs after the fix** (Half-Yearly 85.8% A / 515 of 600, LATEST; PA1 72.0% B / 216 of 300 — previously invisible), subject performance rows, published dates |
+| Timetable | 7-A real periods (Sanskrit/Mathematics/English with named teachers + Room 70A) |
+| Attendance | 90% rate, October calendar grid with per-day states (Present / No attendance recorded / Weekend) |
+| Learning | Overview (subject filters with live counts), Planner tab (real task CRUD surface, Up Next parity), Flashcards/Groups tabs |
+| Messages | 2 real unread conversations (Neha Gupta, Ajay Kumar Mishra) matching the seeded threads |
+| Notices | 5 live notifications (My Feed / Announcements / Calendar tabs, audience + sender + read state) |
+| Fees | Balance ₹5,200 of ₹13,000 (₹7,800 paid), late-fee policy ₹50/month capped ₹500, honest offline-payment copy |
+| My Subscription | Honest tenant-plan copy ("Covered by your school's plan") |
+| Certificates | Honest empty state |
+| Applications | Demo-labeled + honest empty states (no open forms / no submissions) |
+| My Profile | Real identity (Admission No HHSP-2021-049, Active), Academic Snapshot, Personal/Parents/Records tabs, School ID card |
+| Settings | 8 sections; Study Preferences flashcard-reminder toggle → **server-persisted** (UserPreference.learning JSON, verified in DB) → restored |
+| Mobile 390×844 | scrollWidth == clientWidth == 390, 0 overflowing elements in main, nav drawer (Open/Close navigation menu), footer `mt-auto` last child of the flex-col scroller — sticks on short pages, pushed naturally on long pages (measured both) |
+| Conditional nav | My Class (Class Leadership) correctly ABSENT (no active position — data-honest); Transport correctly ABSENT (routeId null) |
+
+## API-verified (audit/qa-student-mutations.ts — 26/26)
+
+- study-task CRUD: create (school+self scoped, subject resolved, dueDate
+  persisted) → empty-title 400 → subject-not-of-this-school 400 →
+  PATCH edit+complete persisted → DELETE gone
+- direct messaging (the student send surface — POST /api/messages is
+  staff-only by design): student→teacher 200 with DB row (subject
+  'Direct message'); cross-tenant counterpart 404 fail-safe (no
+  existence oracle, no row); student→student 403 role policy (no row)
+- settings prefs PUT persisted byte-level and restored to the pre-run value
+- results GET role scope: 12 rows, all own, count parity with DB
+- 7 module reads 200 with real payloads (dashboard, timetable, attendance,
+  notices, payments, messaging/threads, notifications-feed)
+- authz negatives: POST /api/students 403, POST /api/teachers 403,
+  declare-results 403, platform plane 401, school-settings PATCH 403
+- foreign-tenant id unreachable (role gate 403 — honest denial; the
+  student-accessible tenant boundary is the messaging 404 above)
+- self-cleaning (0 leftover rows, UserPreference restored)
+
+## Defects
+
+1. **FIXED (this batch)** — `declareResults` never materialized the
+   student-visible `Result` rows (the PHASE 3 contract documented in the
+   Result schema comment + student-results-store doc): the exam flipped to
+   "Result Declared", publish notified students their results "are now
+   available", and /api/results stayed empty. Now materializes from the
+   FINAL ExamMark set (non-null, non-DRAFT), idempotent by the
+   (studentId, examId, subjectId) business key, totalMarks from
+   ExamSubjectConfig, canonical grade scale. Regression suite: 6 cases
+   (tests/regression/exam-declare-materializes-results.test.ts).
+2. **FIXED (corpus, same batch)** — the seeds declared PA1 + Half-Yearly
+   directly without ever writing Result rows (285 + 308 marks invisible to
+   every student). seed-student-dashboard now gap-fills every declared exam
+   (skipDuplicates preserves the curated legacy rows; re-runs idempotent).
+   Live-verified: the student Results module shows both assessments after
+   re-seeding.
+
+## Non-defects (documented, not changed)
+
+- Class Leadership positions are a documented store-local tier
+  (students-store server-sync doc: "houses/positions — store-local
+  config") — awarding lives in the awarding browser's persisted store by
+  design; no server rows exist for positions.
+- POST /api/messages is staff-only (role gate); the student send surface is
+  POST /api/messaging/threads/[userId] with the STUDENT →
+  TEACHER/PRINCIPAL/MANAGEMENT policy — correct, not a defect.
+- `/api/schools/public` 404 on the bare platform domain is the documented
+  PRODUCT-DIRECTION RESET (no single-school inference, no demo fallback on
+  the bare domain; explicit slug/tenant resolves fine).
+- One transient `[school-settings-store] config sync failed … HTTP 401`
+  console warning during the login handoff race — the store keeps existing
+  data and self-heals (subsequent syncs 200, verified in dev.log); the
+  fail-safe is the documented design.
+- Online payment disabled with honest offline copy — the documented
+  PAYMENTS_SANDBOX-env environmental lane (CI parity runs it enabled).
