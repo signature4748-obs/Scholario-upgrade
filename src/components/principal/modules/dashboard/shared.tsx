@@ -23,6 +23,34 @@ export interface WelcomeBannerProps {
   onNavigate?: (module: string) => void
 }
 
+/** Honorific tokens (Indian school context) that must never become the
+ *  greeting name — "Dr. (Smt.) Sunita Verma" must greet as "Sunita",
+ *  "Smt. Kavita Singh" as "Kavita", never "Dr. (Smt.)" or "Smt.". */
+const HONORIFICS = new Set([
+  'dr', 'mr', 'mrs', 'ms', 'miss', 'shri', 'sri', 'smt', 'shrimati',
+  'kum', 'prof', 'md', 'fr', 'sr', 'jr', 'ma', 'maa',
+])
+
+/** The first non-honorific word of a full name (parens/dots stripped). */
+function givenName(fullName?: string | null): string | null {
+  if (!fullName) return null
+  const words = fullName.trim().replace(/\s+/g, ' ').split(' ')
+  for (const w of words) {
+    const bare = w.replace(/[().]/g, '')
+    if (bare && !HONORIFICS.has(bare.toLowerCase())) return bare
+  }
+  // Every token was an honorific — fall back to the last raw word.
+  return words[words.length - 1] ?? null
+}
+
+/** Time-of-day greeting from the device clock (parity with the teacher
+ *  and student dashboards, which are already clock-derived). */
+function timeGreeting(hour: number): string {
+  if (hour < 12) return 'Good morning'
+  if (hour < 17) return 'Good afternoon'
+  return 'Good evening'
+}
+
 export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
   const { user } = useAuth()
   // PHASE 7 — REAL school identity: the name comes from the
@@ -41,13 +69,17 @@ export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
   // teachers stat (hook `refresh`), and a remount after the 60s TTL
   // refetches in the background while the figure stays visible.
   const { stats: schoolStats, error: statsError, refresh: refreshStats } = useSchoolStats()
-  const firstName = user?.name?.split(' ').slice(0, 2).join(' ') ?? 'Principal'
+  const firstName = givenName(user?.name) ?? 'Principal'
+  const greeting = timeGreeting(new Date().getHours())
   // REAL student figures — derived from the canonical roster in the students
   // store (DB-hydrated): total = ACTIVE students; birthdays = ACTIVE students
-  // whose dob ('YYYY-MM-DD') falls on today's month/day.
+  // whose dob ('YYYY-MM-DD') falls on today's month/day. rosterSyncedAt gates
+  // the "not yet loaded" flash: a null marker renders an honest "—" /
+  // "syncing" placeholder instead of a fabricated 0 / 0-birthdays line.
   const activeStudents = useStudentsStore((s) => s.students).filter(
     (s) => s.status === 'Active',
   )
+  const rosterSynced = useStudentsStore((s) => s.rosterSyncedAt) != null
   const now = new Date()
   const birthdaysToday = activeStudents.filter((s) => {
     const parts = s.dob.split('-').map(Number)
@@ -65,10 +97,10 @@ export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
             ("Dashboard"); this greeting is page content, so it starts the
             content heading order at h2 → panels use h3 (clean hierarchy). */}
         <h2 className="text-base sm:text-lg font-semibold tracking-tight text-foreground mt-0.5">
-          Good morning, {firstName}
+          {greeting}, {firstName}
         </h2>
         <p className="text-xs text-muted-foreground mt-1">
-          {schoolShort} · Attendance {attendance ? attendance.today.rate : '—'}% · {birthdaysToday} birthdays today
+          {schoolShort} · Attendance {attendance ? attendance.today.rate : '—'}% · {rosterSynced ? `${birthdaysToday} birthdays today` : 'roster syncing…'}
         </p>
       </div>
       <div className="flex items-center gap-3 shrink-0 text-sm">
@@ -81,7 +113,7 @@ export function WelcomeBanner({ onNavigate }: WelcomeBannerProps) {
             <Users className="h-3.5 w-3.5" />
           </span>
           <span className="leading-tight">
-            <span className="block font-semibold text-foreground tabular-nums">{activeStudents.length.toLocaleString('en-IN')}</span>
+            <span className="block font-semibold text-foreground tabular-nums">{rosterSynced ? activeStudents.length.toLocaleString('en-IN') : '—'}</span>
             <span className="block text-[10px] text-muted-foreground uppercase tracking-wider">Students</span>
           </span>
         </button>

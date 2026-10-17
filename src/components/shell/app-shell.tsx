@@ -665,7 +665,7 @@ export function AppShell({ groups, activeKey, onNavigate, role, roleLabel, child
           )}
           {children}
           {/* Sticky footer — quiet identity line (no invented status claims) */}
-          <footer className="mt-auto pt-4 border-t border-slate-200 text-center text-[11px] text-slate-400">
+          <footer className="mt-auto pt-4 border-t border-slate-200 text-center text-[11px] text-slate-500 dark:text-slate-400">
             <p>
               &copy; {new Date().getFullYear()} SCHOLARIO &middot; v{APP_VERSION} &middot; {shellSchoolName}
             </p>

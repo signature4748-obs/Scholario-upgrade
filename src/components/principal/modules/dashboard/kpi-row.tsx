@@ -81,6 +81,7 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
   // monthly series ending on the current month (replaces the mock
   // studentStats.newThisMonth and the mock analytics trend).
   const students = useStudentsStore((s) => s.students)
+  const rosterSynced = useStudentsStore((s) => s.rosterSyncedAt) != null
   const admissionsSeries = useMemo(() => {
     const now = new Date()
     const months = Array.from({ length: 8 }, (_, i) => {
@@ -138,7 +139,7 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
         icon={<CalendarCheck className="h-4 w-4" />}
         delay={0}
         sparkline={attendance ? attendance.weekTrend.map((d) => d.rate) : undefined}
-        trend="up"
+        trend={attendance ? 'up' : undefined}
         onClick={onNavigate
           ? attendanceError
             ? () => void refreshAttendance()
@@ -165,13 +166,13 @@ export function KpiRow({ onNavigate }: KpiRowProps) {
       />
       <SummaryCard
         label="New Admissions"
-        value={newThisMonth}
-        sub={admissionsSub}
+        value={rosterSynced ? newThisMonth : <Skeleton className="h-7 w-16" />}
+        sub={rosterSynced ? admissionsSub : 'Loading roster…'}
         tone="sky"
         icon={<UserPlus className="h-4 w-4" />}
         delay={0.08}
-        sparkline={admissionsSeries}
-        trend={momDelta > 0 ? 'up' : momDelta < 0 ? 'down' : 'neutral'}
+        sparkline={rosterSynced ? admissionsSeries : undefined}
+        trend={rosterSynced ? (momDelta > 0 ? 'up' : momDelta < 0 ? 'down' : 'neutral') : undefined}
         onClick={onNavigate ? () => onNavigate('admission') : undefined}
       />
       <SummaryCard

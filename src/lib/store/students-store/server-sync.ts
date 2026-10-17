@@ -352,7 +352,7 @@ export function syncStudentsFromServer(): Promise<boolean> {
         // ride along with the roster sync: student sessions cannot call
         // /api/teachers (role-scoped), so this is the only sanctioned
         // teacher-directory source for student-side contact resolution.
-        return { students, classes, academicSubjects: subjects, studentPositions, rosterTeachers: teachers }
+        return { students, classes, academicSubjects: subjects, studentPositions, rosterTeachers: teachers, rosterSyncedAt: new Date().toISOString() }
       })
       // Prune fee-store seed transactions referencing retired mock
       // students (STU-xxx) so the principal fee ledger only shows

@@ -430,7 +430,7 @@ function OverviewSection({
                 </div>
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
                   <span>Plan: {r.planDef ? r.planDef.name : r.plan}</span>
-                  <span>Valid until: {dateStr(r.periodEnd)}</span>
+                  <span>Valid until: {r.periodEnd ? dateStr(r.periodEnd) : 'No expiry'}</span>
                   <span>Payments: {r.paymentCount == null ? '—' : r.paymentCount}</span>
                 </div>
                 <Button
@@ -473,7 +473,7 @@ function OverviewSection({
                       {r.interval && <div className="text-xs text-slate-500">{r.interval.toLowerCase()}</div>}
                     </td>
                     <td className="px-3 py-2.5"><StateBadge state={r.entitlement.state} /></td>
-                    <td className="px-3 py-2.5 text-slate-700">{dateStr(r.periodEnd)}</td>
+                    <td className="px-3 py-2.5 text-slate-700">{r.periodEnd ? dateStr(r.periodEnd) : 'No expiry'}</td>
                     <td className="px-3 py-2.5 tabular-nums text-slate-700">{r.paymentCount == null ? '—' : r.paymentCount}</td>
                     <td className="px-3 py-2.5 text-right">
                       <Button
@@ -612,7 +612,7 @@ function SchoolDetailSections({
           </DetailField>
           <DetailField label="Grace period">{row.graceDays} days after expiry</DetailField>
           <DetailField label="Started">{dateStr(row.periodStart)}</DetailField>
-          <DetailField label="Valid until">{dateStr(row.periodEnd)}</DetailField>
+          <DetailField label="Valid until">{row.periodEnd ? dateStr(row.periodEnd) : 'No expiry'}</DetailField>
           <DetailField label="Manual override">
             {row.overrideStatus ? row.overrideStatus.toLowerCase() : 'None — computed state applies'}
           </DetailField>

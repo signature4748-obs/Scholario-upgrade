@@ -547,7 +547,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
           {children}
         </main>
 
-        <footer className="mt-auto border-t border-slate-200 bg-white py-4 text-center text-[11px] text-slate-400">
+        <footer className="mt-auto border-t border-slate-200 bg-white py-4 text-center text-[11px] text-slate-500">
           <p>SCHOLARIO Platform · Restricted access · Every action is audited</p>
         </footer>
       </div>
