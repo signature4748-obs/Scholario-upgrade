@@ -25,7 +25,14 @@ import { spawn, exec } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 
-const ROOT = '/home/z/my-project'
+// Checkout-relative ROOT (2026-10-17 fix): a hardcoded /home/z/my-project
+// made the watchdog respawn the MAIN checkout's dev server even when it was
+// itself running from a feature worktree — after an OOM kill of a
+// worktree-served dev server, the resurrected :3000 silently served the
+// wrong branch. Resolving ROOT from this file's own location makes the
+// watchdog supervise the checkout it lives in (the documented recovery
+// setup serves / from /home/z/feature-worktree).
+const ROOT = import.meta.dir
 const PROBE_MS = 20_000
 const HTTP_TIMEOUT_MS = 10_000
 
