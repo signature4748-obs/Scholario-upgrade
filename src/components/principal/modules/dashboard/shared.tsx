@@ -26,26 +26,29 @@ export interface WelcomeBannerProps {
 /** Honorific tokens (Indian school context) that must never become the
  *  greeting name — "Dr. (Smt.) Sunita Verma" must greet as "Sunita",
  *  "Smt. Kavita Singh" as "Kavita", never "Dr. (Smt.)" or "Smt.". */
-const HONORIFICS = new Set([
+export const GREETING_HONORIFICS = new Set([
   'dr', 'mr', 'mrs', 'ms', 'miss', 'shri', 'sri', 'smt', 'shrimati',
   'kum', 'prof', 'md', 'fr', 'sr', 'jr', 'ma', 'maa',
 ])
 
 /** The first non-honorific word of a full name (parens/dots stripped). */
-function givenName(fullName?: string | null): string | null {
+export function givenName(fullName?: string | null): string | null {
   if (!fullName) return null
   const words = fullName.trim().replace(/\s+/g, ' ').split(' ')
   for (const w of words) {
     const bare = w.replace(/[().]/g, '')
-    if (bare && !HONORIFICS.has(bare.toLowerCase())) return bare
+    if (bare && !GREETING_HONORIFICS.has(bare.toLowerCase())) return bare
   }
-  // Every token was an honorific — fall back to the last raw word.
-  return words[words.length - 1] ?? null
+  // Every token was an honorific — fall back to the last raw word,
+  // cleaned the same way (dots/parens stripped; '' must stay null, not
+  // '' ?? null → '').
+  const fallback = words[words.length - 1]?.replace(/[().]/g, '') ?? null
+  return fallback === '' ? null : fallback
 }
 
 /** Time-of-day greeting from the device clock (parity with the teacher
  *  and student dashboards, which are already clock-derived). */
-function timeGreeting(hour: number): string {
+export function timeGreeting(hour: number): string {
   if (hour < 12) return 'Good morning'
   if (hour < 17) return 'Good afternoon'
   return 'Good evening'
