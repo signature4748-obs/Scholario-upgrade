@@ -305,10 +305,22 @@ describe('platform entry — live surfaces on the unified dev server', () => {
     'role-based authorization: a SCHOOL session can never satisfy the platform boundary',
     async () => {
       // Mint a REAL school session directly (auth fixture, not a bypass —
-      // same convention as plane-architecture/tenant-isolation) for any
-      // school-scoped user present in the database.
-      const user = await db.user.findFirst({ where: { schoolId: { not: null } } })
-      if (!user) throw new Error('no school-scoped user fixture in the database — seed required')
+      // same convention as plane-architecture/tenant-isolation). The
+      // selection mirrors /api/auth/me's own admission gate (Task 4-d
+      // fix #9 + the PHASE-1 canonical-role invariant): only an ACTIVE
+      // user holding a CANONICAL school role (PRINCIPAL/TEACHER/STUDENT)
+      // hydrates a session identity — a suspended account or a
+      // PARENT/ACCOUNTANT session 401s /api/auth/me BY DESIGN, which
+      // would defeat the control assertion below. Deterministic order.
+      const user = await db.user.findFirst({
+        where: {
+          schoolId: { not: null },
+          status: 'ACTIVE',
+          role: { in: ['PRINCIPAL', 'TEACHER', 'STUDENT'] },
+        },
+        orderBy: { createdAt: 'asc' },
+      })
+      if (!user) throw new Error('no active canonical-role school user fixture in the database — seed required')
       const raw = randomBytes(32).toString('hex')
       const session = await db.session.create({
         data: {
