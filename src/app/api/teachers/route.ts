@@ -4,7 +4,7 @@ import { hashPassword } from '@/lib/auth'
 import { withUser, schoolScoped } from '@/lib/api'
 import { resolveProvisionedPassword } from '@/lib/account-provisioning'
 import { auditEvent } from '@/lib/security/audit'
-import { newRequestId } from '@/lib/security/errors'
+import { AppError, newRequestId } from '@/lib/security/errors'
 
 export const runtime = 'nodejs'
 
@@ -34,7 +34,14 @@ export async function POST(req: NextRequest) {
       const email = String(body.email || '').trim().toLowerCase()
       if (!name || !email) throw new Error('Name and email are required')
       const exists = await db.user.findUnique({ where: { email } })
-      if (exists) throw new Error('Email already in use')
+      // REGRESSION FIX (duplicate-email 500): same canonical 409 contract
+      // as students POST / admissions enrol — a taken login email is a
+      // CONFLICT, never an unclassifiable 500.
+      if (exists) {
+        throw new AppError('EMAIL_TAKEN', {
+          internalDetail: `teachers POST: email taken (user ${exists.id.slice(0, 8)}…)`,
+        })
+      }
       // Task 4-d (audit 3-a fix #3): NO shared hardcoded default — see
       // students POST and src/lib/account-provisioning.ts.
       const { password, generated } = resolveProvisionedPassword(body.password)

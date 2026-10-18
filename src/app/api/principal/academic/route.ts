@@ -309,14 +309,33 @@ export async function POST(req: NextRequest) {
           if (!classId) throw new Error('MISSING_FIELDS')
           const cls = await ensureClass(classId)
           let teacherUserId: string | null = null
-          if (body.teacherName != null && `${body.teacherName}`.trim() !== '') {
-            const wanted = `${body.teacherName}`.trim()
+          // REGRESSION FIX (ambiguous class-teacher appointment): this action
+          // used to resolve the teacher by DISPLAY NAME ONLY. User.name is
+          // not unique — two teachers named "Anita Mehta" are realistic —
+          // so findFirst silently appointed an arbitrary twin and the
+          // intended teacher stayed capability-locked out of My Class /
+          // attendance baseline. The sibling subjectTeacher.set already
+          // accepts the canonical teacherUserId; classTeacher.set now does
+          // too (school-validated, id takes precedence over name, the
+          // legacy teacherName path is unchanged for the existing UI).
+          if (body.teacherUserId != null && `${body.teacherUserId}`.trim() !== '') {
             const match = await db.teacher.findFirst({
-              where: { schoolId, user: { name: { equals: wanted } } },
+              where: { schoolId, userId: body.teacherUserId },
               include: { user: { select: { name: true } } },
             })
             if (!match) throw new Error('TEACHER_NOT_FOUND')
             teacherUserId = match.userId
+          } else if (body.teacherName != null && `${body.teacherName}`.trim() !== '') {
+            const wanted = `${body.teacherName}`.trim()
+            const matches = await db.teacher.findMany({
+              where: { schoolId, user: { name: { equals: wanted } } },
+              include: { user: { select: { name: true } } },
+            })
+            if (matches.length === 0) throw new Error('TEACHER_NOT_FOUND')
+            // Ambiguous display name: fail closed rather than silently
+            // appoint an arbitrary twin — the client can disambiguate by id.
+            if (matches.length > 1) throw new Error('AMBIGUOUS_TEACHER_NAME')
+            teacherUserId = matches[0].userId
           }
           // Class.classTeacherId = the teacher's USER id — the canonical
           // reference the teacher-side capability gates read.

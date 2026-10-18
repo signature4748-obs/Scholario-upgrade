@@ -71,12 +71,27 @@ const TONE_CLASS: Record<'zinc' | 'red' | 'amber' | 'emerald', string> = {
 }
 
 function ActionBadge({ action }: { action: string }) {
+  // Soft-wrap at dot boundaries ("platform." / "login." / "success") so a
+  // narrow column never breaks mid-word — `break-all` rendered one letter
+  // per line for long dotted actions. Visual output is unchanged; only the
+  // wrap opportunities differ, and <wbr> adds nothing to the copied text.
+  const parts = action.split('.')
   return (
     <Badge
       variant="outline"
-      className={`font-mono text-[11px] tracking-tight whitespace-normal break-all max-w-full text-left ${TONE_CLASS[actionTone(action)]}`}
+      className={`font-mono text-[11px] tracking-tight whitespace-normal max-w-full text-left ${TONE_CLASS[actionTone(action)]}`}
     >
-      {action}
+      {parts.map((part, i) => (
+        <React.Fragment key={i}>
+          {part}
+          {i < parts.length - 1 && (
+            <>
+              {'.'}
+              <wbr />
+            </>
+          )}
+        </React.Fragment>
+      ))}
     </Badge>
   )
 }
