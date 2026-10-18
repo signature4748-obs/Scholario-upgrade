@@ -30,6 +30,12 @@ import {
   *   · platform plane → the school doors (/s/*, /login) and every
   *     school-plane API DO NOT EXIST → 404. Only /api/platform/*,
   *     /api/webhooks/*, /api/app-version and the /api heartbeat remain.
+  *     The ROOT '/' redirects (307) to /platform/login — the control
+  *     plane's only entry: the platform deployment has no public
+  *     marketing surface (the school-root experience cannot function
+  *     here — every school-plane API is gated off — and the public
+  *     marketing/website belongs to the school plane, where it stays
+  *     fully intact: scholario-app + school custom domains).
   *
   * Authorization inside each plane is UNCHANGED — withUser / withPlatform
   * still enforce session, role, tenant, permission on every handler.
@@ -196,6 +202,21 @@ export async function middleware(req: NextRequest) {
       return isApi ? json404(requestId) : page404(requestId)
     }
   } else if (PLANE === 'platform') {
+    // PLATFORM ENTRY — the control plane's root is the operator's
+    // sign-in, not a public marketing surface. The school ERP and its
+    // public website live on the school plane; on THIS deployment the
+    // school-root experience cannot function (every school-plane API
+    // is gated off below), so / redirects to the canonical platform
+    // login. 307 — never cached, method preserved. The /platform/login
+    // page itself is unchanged and remains the ONLY entry point.
+    if (pathname === '/') {
+      const url = req.nextUrl.clone()
+      url.pathname = '/platform/login'
+      url.search = ''
+      const res = NextResponse.redirect(url, 307)
+      res.headers.set('x-request-id', requestId)
+      return res
+    }
     // School doors do not exist on the platform deployment.
     if (isSchoolDoorPage) return page404(requestId)
     // School-plane APIs do not exist either: only shared infra +
@@ -299,5 +320,8 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/api/:path*', '/health/:path*', '/platform/:path*', '/s/:path*', '/login'],
+  // '/' — included ONLY for the platform-plane root redirect (the
+  // school/unified planes run their normal checks and fall through;
+  // the school-root experience is untouched there).
+  matcher: ['/api/:path*', '/health/:path*', '/platform/:path*', '/s/:path*', '/login', '/'],
 }

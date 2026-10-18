@@ -17,7 +17,10 @@
  *   <plane>       plane value, or the literal 'UNSET' to remove the variable
  *   [nodeEnv]     NODE_ENV for the child (default 'test')
  *   [allowUnified] any non-empty value sets SCHOLARIO_ALLOW_UNIFIED_PRODUCTION=1
- * Output: {"status":<number>,"blocked":<bool>,"contentType":<string>,"error"?:<string>}
+ * Output: {"status":<number>,"blocked":<bool>,"contentType":<string>,"location":<string>,"error"?:<string>}
+ *   "location" is the Location response header ('' when absent) — lets
+ *   suites assert REDIRECT TARGETS (e.g. the platform-plane root 307
+ *   to /platform/login) with the same real-middleware verdict.
  */
 import { NextRequest } from 'next/server'
 
@@ -44,6 +47,7 @@ async function main() {
       status: res.status,
       blocked: res.status === 404,
       contentType: res.headers.get('content-type') ?? '',
+      location: res.headers.get('location') ?? '',
     }
     console.log(JSON.stringify(out))
   } catch (err) {
@@ -54,6 +58,7 @@ async function main() {
       status: 500,
       blocked: true,
       contentType: '',
+      location: '',
       error: message.slice(0, 300),
     }
     console.log(JSON.stringify(out))
