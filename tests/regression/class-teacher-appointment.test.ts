@@ -199,7 +199,7 @@ describe('class-teacher appointment resolution', () => {
     expect(role.status).toBe(200)
     expect(body.data?.isClassTeacher).toBe(true)
     const of = body.data?.classTeacherOf ?? []
-    expect(of.some((c: any) => c.classId === classId)).toBe(true)
+    expect(of.some((c: any) => c.id === classId)).toBe(true)
   }, T)
 
   test('E: foreign-school teacherUserId rejected (no existence oracle)', async () => {
