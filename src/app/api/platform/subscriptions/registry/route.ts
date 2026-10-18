@@ -8,6 +8,54 @@ import { isSubscriptionSchemaPendingError, SUBSCRIPTION_LEGACY_SELECT } from '@/
 export const runtime = 'nodejs'
 
 /**
+ * Registry-wide tenant entitlement tallies + expired count, computed from
+ * ALL SchoolSubscription rows using ONLY legacy columns (status, periodEnd,
+ * graceDays, overrideStatus + school.status) — identical on pre- and
+ * post-migration databases, so the renewal KPIs stay honest under
+ * schema-pending. The row inputs are exactly the entitlement evaluator's
+ * contract; every state is computed LIVE (never a stored snapshot).
+ */
+async function computeTenantStateTallies(): Promise<{
+  tenantStates: Record<string, number>
+  subscriptionsExpired: number
+}> {
+  const rows = await db.schoolSubscription.findMany({
+    select: {
+      status: true,
+      periodEnd: true,
+      graceDays: true,
+      overrideStatus: true,
+      school: { select: { status: true } },
+    },
+  })
+  const tenantStates: Record<string, number> = {
+    ACTIVE: 0,
+    GRACE: 0,
+    RESTRICTED: 0,
+    SUSPENDED: 0,
+    NOT_ACTIVATED: 0,
+  }
+  const now = Date.now()
+  let subscriptionsExpired = 0
+  for (const row of rows) {
+    const state = evaluateTenantEntitlement({
+      schoolStatus: row.school.status,
+      accountSubscriptionStatus: 'ACTIVE',
+      subscription: {
+        status: row.status,
+        plan: null,
+        periodEnd: row.periodEnd,
+        graceDays: row.graceDays,
+        overrideStatus: row.overrideStatus,
+      },
+    }).state
+    tenantStates[state] = (tenantStates[state] ?? 0) + 1
+    if (row.periodEnd != null && new Date(row.periodEnd).getTime() < now) subscriptionsExpired += 1
+  }
+  return { tenantStates, subscriptionsExpired }
+}
+
+/**
  * GET /api/platform/subscriptions/registry — the searchable subscription
  * registry (billing.manage): per-school subscriptions with computed
  * states, per-student entitlements, orders and code diagnostics.
@@ -74,6 +122,10 @@ export async function GET(req: NextRequest) {
     let claimDiagnostics: Array<{ type: string; _count: { _all: number } }>
     let expiringSoon: number
     let entitlementRows: Array<Record<string, unknown>>
+    // Registry-wide renewal KPIs — queried SEPARATELY from the pending-
+    // sensitive block: the tally consumes only legacy columns, so it must
+    // survive a schema-pending failure of the other aggregates untouched.
+    const { tenantStates, subscriptionsExpired } = await computeTenantStateTallies()
     try {
       ;[subscriptions, totalCount, studentCounts, orderStats, claimDiagnostics, expiringSoon, entitlementRows] =
         await Promise.all([
@@ -88,7 +140,16 @@ export async function GET(req: NextRequest) {
               _count: { select: { payments: true } },
             },
           }),
-          db.schoolSubscription.count({ where: schoolWhere }),
+          db.schoolSubscription.count({
+            where: {
+              // RENEWAL LANE — when expiringDays is set, the list total is
+              // the WINDOW cohort (the UI's "showing X of Y" must describe
+              // the report, not the whole registry); the unfiltered lane
+              // keeps the plain registry count.
+              ...(expiringBefore ? { periodEnd: { gte: now, lte: expiringBefore } } : {}),
+              ...schoolWhere,
+            },
+          }),
           // Per-student entitlement aggregates (computed live from windows).
           db.studentEntitlement.groupBy({
             by: ['status'],
@@ -137,7 +198,13 @@ export async function GET(req: NextRequest) {
             school: { select: { id: true, name: true, slug: true, code: true, status: true, isDemo: true } },
           },
         }) as unknown as Array<Record<string, unknown>>,
-        db.schoolSubscription.count({ where: whereLegacy }),
+        db.schoolSubscription.count({
+          where: {
+            // Same renewal-lane window semantics as the primary lane.
+            ...(expiringBefore ? { periodEnd: { gte: now, lte: expiringBefore } } : {}),
+            ...whereLegacy,
+          },
+        }),
         db.schoolSubscription.count({
           where: {
             periodEnd: { gte: now, lte: expiringBefore ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000) },
@@ -261,21 +328,27 @@ export async function GET(req: NextRequest) {
       students: {
         rows: studentRegistry.filter((r) => (statusFilter ? r.computedState === statusFilter : true)),
       },
-      summary: schemaPending
-        ? {
-            // null = "system not provisioned on this database yet" — the
-            // UI renders these as unavailable, never as zero activity.
-            studentEntitlements: null,
-            orders: null,
-            rejectedClaims: null,
-            subscriptionsExpiringWithin30Days: expiringSoon,
-          }
-        : {
-            studentEntitlements: Object.fromEntries(studentCounts.map((c) => [c.status, c._count._all])),
-            orders: Object.fromEntries(orderStats.map((o) => [o.status, o._count._all])),
-            rejectedClaims: claimDiagnostics.reduce((sum, c) => sum + c._count._all, 0),
-            subscriptionsExpiringWithin30Days: expiringSoon,
-          },
+      summary: {
+        // Registry-wide tenant entitlement tallies + expired count are
+        // computed on BOTH database states (legacy columns only) — the
+        // renewal KPIs never depend on the pending migration.
+        tenantStates,
+        subscriptionsExpired,
+        ...(schemaPending
+          ? {
+              // null = "system not provisioned on this database yet" — the
+              // UI renders these as unavailable, never as zero activity.
+              studentEntitlements: null,
+              orders: null,
+              rejectedClaims: null,
+            }
+          : {
+              studentEntitlements: Object.fromEntries(studentCounts.map((c) => [c.status, c._count._all])),
+              orders: Object.fromEntries(orderStats.map((o) => [o.status, o._count._all])),
+              rejectedClaims: claimDiagnostics.reduce((sum, c) => sum + c._count._all, 0),
+            }),
+        subscriptionsExpiringWithin30Days: expiringSoon,
+      },
     }
   })
 }

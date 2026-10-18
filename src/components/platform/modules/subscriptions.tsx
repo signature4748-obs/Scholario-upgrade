@@ -29,6 +29,7 @@
 // ============================================================
 
 import React, { useCallback, useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   AlertTriangle, ArrowLeft, Building2, CalendarClock, CalendarX, Check,
   CreditCard, Eye, KeyRound, Loader2, Package, RefreshCw, Search,
@@ -93,11 +94,16 @@ interface SubscriptionRow {
 }
 
 /** GET /api/platform/subscriptions/registry — summary nulls mean the
- *  subsystem is not provisioned on this database (never "zero"). */
+ *  subsystem is not provisioned on this database (never "zero").
+ *  tenantStates + subscriptionsExpired are REGISTRY-WIDE computed-live
+ *  tallies (legacy columns only — available under schema-pending too);
+ *  the KPI cards must never present page-scoped rows as global counts. */
 interface RegistryData {
   subscriptionSchemaPending?: boolean
   schools: { rows: SubscriptionRow[]; total: number }
   summary: {
+    tenantStates?: Record<string, number>
+    subscriptionsExpired?: number
     studentEntitlements: Record<string, number> | null
     orders: Record<string, number> | null
     rejectedClaims: number | null
@@ -164,7 +170,8 @@ function useMediaQuery(query: string): boolean {
 // ── module ─────────────────────────────────────────────────────────────
 
 export function SubscriptionsModule() {
-  const [view, setView] = useState<'overview' | 'students' | 'plans'>('overview')
+  const router = useRouter()
+  const [view, setView] = useState<'overview' | 'renewals' | 'students' | 'plans'>('overview')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [registry, setRegistry] = useState<RegistryData | null>(null)
@@ -214,6 +221,13 @@ export function SubscriptionsModule() {
           {view === 'overview' ? (
             <>
               <Button
+                variant="outline" size="sm" onClick={() => setView('renewals')}
+                className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                aria-label="Open the renewal report: subscriptions expiring within 30 days"
+              >
+                <CalendarClock className="h-4 w-4" aria-hidden="true" />Renewal report
+              </Button>
+              <Button
                 variant="outline" size="sm" onClick={() => setView('students')}
                 className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
               >
@@ -241,7 +255,9 @@ export function SubscriptionsModule() {
       {/* The ONE shared honest banner — rendered once near the top. */}
       {schemaPending && <SubscriptionPendingBanner />}
 
-      {view === 'students' ? (
+      {view === 'renewals' ? (
+        <RenewalReportSection onOpenSchool={(id) => router.push(`/platform/schools/${id}`)} />
+      ) : view === 'students' ? (
         <StudentEntitlementsSection
           onSchemaPending={signalPending}
           onAssigned={() => void load(query, statusFilter)}
@@ -283,14 +299,17 @@ function OverviewSection({
 
   const rows = registry?.schools.rows ?? []
   const now = Date.now()
-  const active = rows.filter((r) => r.entitlement.state === 'ACTIVE').length
-  const expiringSoon = rows.filter((r) => {
-    if (!r.periodEnd) return false
-    const end = new Date(r.periodEnd).getTime()
-    return end >= now && end <= now + 30 * DAY_MS
-  }).length
-  const expired = rows.filter((r) => r.periodEnd != null && new Date(r.periodEnd).getTime() < now).length
-  const needsReview = rows.filter((r) => NEEDS_REVIEW_STATES.includes(r.entitlement.state)).length
+  // REGISTRY-WIDE KPIs — served by the API's summary (computed live over
+  // ALL SchoolSubscription rows, legacy columns only). The page-scoped row
+  // list is bounded by pageSize; presenting its counts as global KPIs
+  // under-reported on paginated registries — never do that again.
+  const tenantStates = registry?.summary.tenantStates
+  const active = tenantStates ? (tenantStates.ACTIVE ?? 0) : rows.filter((r) => r.entitlement.state === 'ACTIVE').length
+  const expiringSoon = registry?.summary.subscriptionsExpiringWithin30Days ?? 0
+  const expired = tenantStates ? (registry?.summary.subscriptionsExpired ?? 0) : rows.filter((r) => r.periodEnd != null && new Date(r.periodEnd).getTime() < now).length
+  const needsReview = tenantStates
+    ? NEEDS_REVIEW_STATES.reduce((sum, s) => sum + (tenantStates[s] ?? 0), 0)
+    : rows.filter((r) => NEEDS_REVIEW_STATES.includes(r.entitlement.state)).length
 
   const applyStatus = (value: string) => {
     const next = statusFilter === value ? '' : value
@@ -502,6 +521,186 @@ function OverviewSection({
 
       {/* Per-school detail overlay — Drawer on mobile, Dialog on desktop */}
       {detailRow && <SchoolDetailOverlay row={detailRow} onClose={() => setDetailRow(null)} />}
+    </div>
+  )
+}
+
+// ── renewal report (the expiring-within-30-days drill-down) ─────────────
+
+/** Subscriptions expiring within the next 30 days — the operator's
+ *  renewal worklist. Server-filtered (?expiringDays=30 — the same lane
+ *  the schools directory exposes), sorted soonest-first, every row links
+ *  into its school workspace where the audited renewal actions live
+ *  (record payment / override). The cohort size comes from the
+ *  registry-wide summary — the list is the drill-down, not the count. */
+function RenewalReportSection({
+  onOpenSchool, onSchemaPending,
+}: {
+  onOpenSchool: (id: string) => void
+  onSchemaPending?: () => void
+}) {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [data, setData] = useState<RegistryData | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const reg = await platformApi<RegistryData>(
+        '/api/platform/subscriptions/registry?expiringDays=30&pageSize=100',
+      )
+      if (isSubscriptionSchemaPending(reg)) onSchemaPending?.()
+      setData(reg)
+    } catch (e) {
+      // ERROR ≠ EMPTY — a failed report must never look like "nothing expires".
+      setError(errMessage(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [onSchemaPending])
+
+  useEffect(() => { void load() }, [load])
+
+  const rows = [...(data?.schools.rows ?? [])].sort((a, b) => {
+    const ea = a.periodEnd ? new Date(a.periodEnd).getTime() : Number.POSITIVE_INFINITY
+    const eb = b.periodEnd ? new Date(b.periodEnd).getTime() : Number.POSITIVE_INFINITY
+    return ea - eb
+  })
+  const total = data?.summary.subscriptionsExpiringWithin30Days ?? 0
+  const nowMs = Date.now()
+
+  const daysLeft = (iso: string): number =>
+    Math.max(0, Math.ceil((new Date(iso).getTime() - nowMs) / DAY_MS))
+
+  const UrgencyBadge = ({ iso }: { iso: string }) => {
+    const d = daysLeft(iso)
+    const cls =
+      d <= 7
+        ? 'border-red-200 bg-red-50 text-red-700'
+        : d <= 14
+          ? 'border-amber-200 bg-amber-50 text-amber-700'
+          : 'border-slate-200 bg-slate-50 text-slate-600'
+    return (
+      <Badge variant="outline" className={`text-[10px] ${cls}`}>
+        {d === 0 ? 'expires today' : `${d}d left`}
+      </Badge>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {loading ? (
+        <div className="space-y-2">
+          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full bg-slate-200" />)}
+        </div>
+      ) : error ? (
+        <div
+          role="alert"
+          className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p className="flex items-start gap-2.5 text-sm text-red-600">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Could not load the renewal report: {error}</span>
+          </p>
+          <Button variant="outline" size="sm" onClick={() => void load()} className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100">
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Retry
+          </Button>
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500" aria-live="polite">
+            {total} school subscription{total === 1 ? '' : 's'} expire{total === 1 ? 's' : ''} within the next 30 days
+            {rows.length < total ? ` · showing the ${rows.length} soonest` : ''}
+          </p>
+
+          {/* Mobile card list */}
+          <div className="space-y-2 md:hidden">
+            {rows.map((r) => (
+              <div key={r.subscriptionId} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p className="truncate text-sm font-semibold text-slate-900">{r.school.name}</p>
+                      {r.school.isDemo && <Badge variant="outline" className="text-[10px]">demo</Badge>}
+                    </div>
+                    <p className="truncate text-xs text-slate-500">{r.school.slug}</p>
+                  </div>
+                  <StateBadge state={r.entitlement.state} />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                  <span>Plan: {r.planDef ? r.planDef.name : r.plan}</span>
+                  <span>Valid until: {r.periodEnd ? dateStr(r.periodEnd) : 'No expiry'}</span>
+                  {r.periodEnd && <UrgencyBadge iso={r.periodEnd} />}
+                </div>
+                <Button
+                  variant="outline" size="sm"
+                  onClick={() => onOpenSchool(r.school.id)}
+                  className="mt-2 w-full border-slate-300 text-slate-700"
+                  aria-label={`Open ${r.school.name} workspace to renew`}
+                >
+                  <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />Open school
+                </Button>
+              </div>
+            ))}
+            {rows.length === 0 && (
+              <EmptyState title="Nothing expires in the next 30 days." hint="The registry-wide KPI on the overview reflects this report." />
+            )}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
+            <table className="w-full min-w-[680px] text-sm">
+              <caption className="sr-only">School subscriptions expiring within 30 days, soonest first, with renewal access into each workspace</caption>
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th scope="col" className="px-3 py-2.5">School</th>
+                  <th scope="col" className="px-3 py-2.5">Current plan</th>
+                  <th scope="col" className="px-3 py-2.5">Status</th>
+                  <th scope="col" className="px-3 py-2.5">Valid until</th>
+                  <th scope="col" className="px-3 py-2.5">Urgency</th>
+                  <th scope="col" className="px-3 py-2.5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.subscriptionId} className="border-t border-slate-100 hover:bg-slate-50/60">
+                    <td className="px-3 py-2.5 font-medium text-slate-900">
+                      {r.school.name}
+                      {r.school.isDemo && <Badge variant="outline" className="ml-2 text-[10px]">demo</Badge>}
+                      <div className="text-xs font-normal text-slate-500">{r.school.slug}</div>
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-700">
+                      {r.planDef ? r.planDef.name : r.plan}
+                      {r.interval && <div className="text-xs text-slate-500">{r.interval.toLowerCase()}</div>}
+                    </td>
+                    <td className="px-3 py-2.5"><StateBadge state={r.entitlement.state} /></td>
+                    <td className="px-3 py-2.5 text-slate-700">{r.periodEnd ? dateStr(r.periodEnd) : 'No expiry'}</td>
+                    <td className="px-3 py-2.5">{r.periodEnd ? <UrgencyBadge iso={r.periodEnd} /> : '—'}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <Button
+                        variant="outline" size="sm"
+                        onClick={() => onOpenSchool(r.school.id)}
+                        className="border-slate-300 text-slate-700"
+                        aria-label={`Open ${r.school.name} workspace to renew`}
+                      >
+                        <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />Open school
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-10 text-center text-slate-500">
+                      <EmptyState title="Nothing expires in the next 30 days." hint="The registry-wide KPI on the overview reflects this report." />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   )
 }
