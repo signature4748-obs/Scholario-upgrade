@@ -104,3 +104,6 @@ worklog.md
 /tqa/
 w12.jar
 mini-services/*/service.log
+
+# Local QA scratch (E2E drivers, screenshots) — never commit
+.qa-scratch/
