@@ -8,6 +8,24 @@ import { auditEvent } from '@/lib/security/audit'
 
 export const runtime = 'nodejs'
 
+/**
+ * REGRESSION FIX (numeric-rollNo 500): the Student model stores rollNo /
+ * guardianPhone / guardianName / dob / gender / bloodGroup / address as
+ * String? columns, but the JSON body naturally carries numbers (e.g.
+ * `rollNo: 1`). A raw pass-through crashed Prisma's argument validation
+ * (PrismaClientValidationError has no P-code → unclassifiable → 500
+ * INTERNAL_ERROR) AFTER the User row was created inside the transaction —
+ * the rollback was atomic (no orphan) but the admit flow was unusable for
+ * any API consumer sending numeric input. The UI is unaffected (it sends
+ * trimmed strings); this coercion restores the documented API contract:
+ * accept scalar input, store as string-or-null, keep falsy → null.
+ */
+function strOrNull(value: unknown): string | null {
+  if (value === undefined || value === null) return null
+  const s = String(value).trim()
+  return s === '' ? null : s
+}
+
 export async function GET(req: NextRequest) {
   return withUser(
     async (user) => {
@@ -44,7 +62,15 @@ export async function POST(req: NextRequest) {
       const email = String(body.email || '').trim().toLowerCase()
       if (!name || !email) throw new Error('Name and email are required')
       const exists = await db.user.findUnique({ where: { email } })
-      if (exists) throw new Error('Email already in use')
+      // REGRESSION FIX (duplicate-email 500): a taken login email used to
+      // throw a generic Error that no classifier recognized → 500.
+      // Canonical status is 409 CONFLICT / EMAIL_TAKEN (same contract as
+      // the admissions enrol route, which already does this).
+      if (exists) {
+        throw new AppError('EMAIL_TAKEN', {
+          internalDetail: `students POST: email taken (user ${exists.id.slice(0, 8)}…)`,
+        })
+      }
       // Task 4-d (audit 3-a fix #3): NO shared hardcoded default password. A
       // supplied password must pass the Phase-1 policy; an absent one gets
       // a random 12-char temp password (surfaced once below) — or the
@@ -95,14 +121,14 @@ export async function POST(req: NextRequest) {
             schoolId,
             userId: u.id,
             classId,
-            rollNo: body.rollNo || null,
+            rollNo: strOrNull(body.rollNo),
             admissionNo: admNo,
-            guardianName: body.guardianName || null,
-            guardianPhone: body.guardianPhone || null,
-            dob: body.dob || null,
-            gender: body.gender || null,
-            bloodGroup: body.bloodGroup || null,
-            address: body.address || null,
+            guardianName: strOrNull(body.guardianName),
+            guardianPhone: strOrNull(body.guardianPhone),
+            dob: strOrNull(body.dob),
+            gender: strOrNull(body.gender),
+            bloodGroup: strOrNull(body.bloodGroup),
+            address: strOrNull(body.address),
             routeId,
           },
           include: { class: true, user: { select: { name: true, email: true } } },

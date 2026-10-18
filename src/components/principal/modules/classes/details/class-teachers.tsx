@@ -163,13 +163,19 @@ export function ClassTeachers({ cls }: { cls: ClassRecord }) {
     if ((initial['class_teacher'] ?? null) !== (classTeacherNext ?? null)) {
       updateClassTeacher(liveClass.id, classTeacherNext)
       if (dbClass) {
-        const teacherName = classTeacherNext
-          ? teachers.find((t) => t.id === classTeacherNext)?.name ?? null
+        // Send the canonical teacherUserId (User.id — what
+        // Class.classTeacherId stores and the capability gates read) along
+        // with the display name: appointment by name alone is ambiguous
+        // when two teachers share a name, and the server now prefers the
+        // explicit id.
+        const teacherRow = classTeacherNext
+          ? teachers.find((t) => t.id === classTeacherNext) ?? null
           : null
         void academicAct({
           action: 'classTeacher.set',
           classId: dbClass.id,
-          teacherName,
+          teacherName: teacherRow?.name ?? null,
+          teacherUserId: teacherRow?.userId ?? null,
         }).then(() => {
           toast.success('Class teacher updated on the server', {
             description: `${dbClass.label} — the Teacher's My Class access follows this assignment.`,
