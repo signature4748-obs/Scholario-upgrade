@@ -1747,8 +1747,14 @@ export function SchoolDetailModule() {
               explicit, audited, step-up-gated, read-only entry into the
               school's application context. */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* PLATFORM-ENTRY — the canonical cross-plane public URL from
+              the detail payload (schoolPublicUrl via the API; absolute
+              on the two-project topology, relative /?tenant= on the
+              unified fallback). The raw /?tenant= same-origin link
+              would 307 into /platform/login on the platform plane —
+              the public website lives on the school plane. */}
           <a
-            href={`/?tenant=${encodeURIComponent(school.slug)}`}
+            href={data?.access?.publicUrl ?? `/?tenant=${encodeURIComponent(school.slug)}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
