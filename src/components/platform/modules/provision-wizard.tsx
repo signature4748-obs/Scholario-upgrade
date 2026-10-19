@@ -2523,7 +2523,7 @@ export function ProvisionWizard({
                       </Button>
                     </div>
                     <div className="grid gap-1.5 px-4 py-3 text-sm">
-                      {section.rows.map(([label, value]) => (
+                      {section.rows.map(([label, value]: readonly [string, string]) => (
                         <div key={label} className="flex justify-between gap-4">
                           <span className="shrink-0 text-slate-500">{label}</span>
                           <span className="min-w-0 break-words text-right text-slate-900">{value}</span>
