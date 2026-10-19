@@ -1,0 +1,20 @@
+[prod-migration:apply] ═══ APPLY (transactional, fail-loud) ═══
+  project ref : kbyknezedewvgrnqervj
+  checkout    : 88d2bd2dbc88a5195f1fc7328e382399f63fa03a
+  mode        : LIVE
+
+  [apply] 20261013140000_fee_transaction_dangling_feeid_self_heal
+    sha256 : ec171c91ee4e2be1912a3a81bc1b9b26264011e1b020ec34ce8c9416bb16e9db
+    batch  : 63 statements (1 transaction incl. history row)
+    done ✓ 4.1s — history row verified (true checksum), objects verified.
+
+  [apply] 20261013183000_subscription_entitlement_system
+    sha256 : 00cf881e5a994bbd489635fb7d2cf6df3d06e5ca6e996bec25f74e0c36170fe9
+    batch  : 370 statements (1 transaction incl. history row)
+    done ✓ 4.1s — history row verified (true checksum), objects verified.
+
+  final history : 25 applied / 25 in repo / 0 pending
+  applied now   : 20261013140000_fee_transaction_dangling_feeid_self_heal, 20261013183000_subscription_entitlement_system
+  seeds executed: NEVER (migrations only — production data untouched except the migration’s own data step)
+
+[prod-migration:apply] ✓ APPLY COMPLETE — migration status is clean

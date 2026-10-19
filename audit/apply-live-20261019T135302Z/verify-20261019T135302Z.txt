@@ -1,0 +1,17 @@
+[prod-migration:verify] ═══ POST-MIGRATION VERIFICATION (read-only) ═══
+  project ref : kbyknezedewvgrnqervj
+  checkout    : 88d2bd2dbc88a5195f1fc7328e382399f63fa03a
+  snapshot    : audit/apply-live-20261019T135302Z/preflight-snapshot-20261019T135302Z.json (captured 2026-10-19T13:53:08.854Z @ 88d2bd2dbc)
+
+  A. migration status : 25/25 applied, 0 pending, checksums true ✓
+  B. schema           : mustChangePassword boolean NOT NULL ✓ · passwordChangedAt timestamp without time zone ✓ · studentId FK present (SET NULL/CASCADE) ✓ · feeId FK present (SET NULL/CASCADE) ✓ · dangling feeId 0 · tenant guards ins+upd enabled ✓
+  C. indexes          : pg_trgm search 24/24 ✓ · schoolId tenant 11/11 ✓
+  D. credentials      : principals never-set-own-password flagged 2/2 ✓ · school-plane never-set-own-password flagged 180/180 ✓ · invariant violations 0 · honest-signal violations 0 (password values never read)
+  E. row counts       : 123 tables · decreases 0 ✓ · increases: ActivationCode: new (0), ActivationCodeEvent: new (0), StudentEntitlement: new (0), StudentSubscriptionPayment: new (0), SubscriptionOrder: new (0), SubscriptionPlan: new (0), _prisma_migrations: +2 · users 187 (stable ✓)
+  E2. financial ledger : rows 226 → 226 · amount sum 602480.00 → 602480.00 · digest a87ebe601cdf… → a87ebe601cdf… ✓ unchanged · feeId pointers 226 → 223 (informational; the heal detaches dead pointers) (values never read)
+  F. production health: BOTH active planes required —
+     platform plane https://scholario-platform.vercel.app/health/ready — ready, database ok ✓
+     school plane https://scholario-app-virid.vercel.app/health/ready — ready, database ok ✓
+  G. account recovery : PlatformAdmin.google{Sub,Email,LinkedAt} ✓ · PlatformPasswordReset (8 cols, UNIQUE tokenHash, FK) ✓ · PlatformRecoveryTicket (11 cols) ✓ · 6 indexes + 2 PKs ✓ · admin state: total 2, with-password 2 (never decreased; values never read)
+
+[prod-migration:verify] ✓ ALL VERIFICATIONS GREEN
