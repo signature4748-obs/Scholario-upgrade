@@ -98,6 +98,12 @@ export interface RegistryRow {
   graceDays: number
   overrideStatus: string | null
   paymentCount: number | null
+  /**
+   * Task 7 — the licensed student count agreed for PER_STUDENT billing
+   * rows (null for SCHOOL_WIDE / MIXED models, or while not recorded /
+   * schema-pending). Consumers MUST treat it as nullable.
+   */
+  licensedStudents?: number | null
   entitlement: { state: string; businessAllowed: boolean; renewalRequired: boolean }
 }
 

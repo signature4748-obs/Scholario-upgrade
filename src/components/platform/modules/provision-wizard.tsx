@@ -1,42 +1,54 @@
 'use client'
 
 // ============================================================
-// ProvisionWizard — the school onboarding workflow
-// (PRODUCT-DIRECTION RESET, Part 4 · §6.5 four-step consolidation)
+// ProvisionWizard — the 7-step school onboarding workflow
+// (ADD-SCHOOL WIZARD, 2026-10-20)
 // ------------------------------------------------------------
-// Platform → Schools → Add school. FOUR steps that collect everything
+// Platform → Schools → Add school. SEVEN steps that collect everything
 // a new tenant needs, then ONE atomic POST /api/platform/schools call
 // that transactionally creates the tenant ecosystem:
 //
-//   School tenant → identity → branding → website configuration →
-//   TenantDomain record → founding Principal (+role) → academic
-//   session → initial classes/sections/subjects/rooms → config
+//   School tenant (identity + internal record prefix) → founding
+//   Principal (+role, phone) → SchoolSubscription (agreed commercial
+//   terms — never a fabricated payment) → TenantDomain record →
+//   academic session → initial classes/sections/subjects/rooms →
+//   branding → address & contact configuration.
 //
-//   · STEP 1  School identity  (name, slug, code, board, plan,
-//                                 short name, contact basics)
-//   · STEP 2  Administrator    (founding Principal account +
+//   · STEP 1  School identity    (name, board: UP Board/CBSE only,
+//                                 optional external code, auto short
+//                                 name, auto slug with server-side
+//                                 availability + collision suggestions,
+//                                 server-allocated record prefix)
+//   · STEP 2  Principal          (founding Principal account, phone,
 //                                 credential option)
-//   · STEP 3  Configuration    (billing model + working days; the
-//                                 optional bootstrap/branding/website/
-//                                 location fields behind collapsed
-//                                 progressive-disclosure sections —
-//                                 every POST field is preserved)
-//   · STEP 4  Review & create  (summary + missing-required
-//                                 indicators → CREATE SCHOOL)
+//   · STEP 3  Subscription      (school-based monthly/yearly OR
+//                                 student-based yearly-only, agreed
+//                                 amount, currency, licensed students,
+//                                 start date, price breakdown)
+//   · STEP 4  Academic setup     (session default from date+timezone,
+//                                 working days, class selection grid,
+//                                 optional subjects/rooms)
+//   · STEP 5  Branding & website (colors + live preview, tagline,
+//                                 website toggle, optional custom
+//                                 domain — PENDING until DNS proof)
+//   · STEP 6  Address & contact  (line 1/2, city, district, state,
+//                                 PIN, country, timezone, email/phone,
+//                                 optional website)
+//   · STEP 7  Review & create   (Ready / Optional / Needs-attention
+//                                 per section, jump-back editing,
+//                                 idempotent CREATE)
 //
-// The SUCCESS panel is the school-access truth surface (PHASE 10):
-// the new tenant's canonical LOGIN URL (from SCHOOL_APP_BASE_URL —
-// never guessed, copy resolves relative URLs against the current
-// origin), the founding principal, and the one-time bootstrap
-// credential with the forced-change warning.
+// Auto-generated fields (short name, slug, academic session) follow
+// the operator's typing until edited — and every derived value shown
+// here is RE-derived and re-validated server-side at creation; the
+// internal record prefix number is allocated under an advisory lock
+// inside the provision transaction (never client-side).
 //
-// SCHEMA-PENDING HONESTY (Task 4 wire contract): a POST on a
-// pending database either succeeds with subscriptionSchemaPending +
-// subscriptionPendingNote (rendered in the success panel), or fails
-// with code SUBSCRIPTION_SYSTEM_PENDING (503) when a non-SCHOOL_WIDE
-// billing model was chosen — the publicMessage renders INLINE and a
-// one-click fix switches the model to school-wide and retries; the
-// operator stays on the review step.
+// The SUCCESS panel is the school-access truth surface: the canonical
+// LOGIN URL, the founding principal, the one-time bootstrap credential
+// with the forced-change warning, the allocated prefix, the agreed
+// subscription terms (with the honest "no payment recorded yet" state)
+// and the remaining setup tasks.
 //
 // One application · one database · many tenants: everything here is
 // DATA — no new deployment, repo, or code change per school. The
@@ -60,6 +72,9 @@ import {
   ExternalLink,
   Info,
   LogIn,
+  Palette,
+  MapPin,
+  CreditCard,
 } from 'lucide-react'
 import { platformApi, type PlatformApiError } from '../platform-client'
 import { Button } from '@/components/ui/button'
@@ -79,9 +94,22 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
+import {
+  BILLING_MODEL_OPTIONS,
+  defaultAcademicSession,
+  deriveShortName,
+  frequencyOptionsFor,
+  slugifyName,
+  suggestSlugAlternatives,
+} from '@/lib/school/identity-derive'
 
-const SCHOOL_PLANS = ['FREE', 'STANDARD', 'PRO', 'ENTERPRISE'] as const
-const SCHOOL_BOARDS = ['CBSE', 'UP_BOARD', 'ICSE', 'STATE', 'CUSTOM'] as const
+/// The two boards the product onboards (mission §2 STEP 1). The API
+/// enforces the same two on provision; existing tenants keep the full
+/// legacy vocabulary.
+const BOARD_OPTIONS = [
+  { value: 'CBSE', label: 'CBSE — Central Board of Secondary Education' },
+  { value: 'UP_BOARD', label: 'UP Board — Uttar Pradesh Madhyamik Shiksha Parishad' },
+] as const
 
 const TIMEZONES = [
   'Asia/Kolkata',
@@ -98,6 +126,8 @@ const TIMEZONES = [
   'Australia/Sydney',
   'UTC',
 ] as const
+
+const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'] as const
 
 const WEEKDAYS = [
   { key: 'MON', label: 'Mon' },
@@ -128,10 +158,25 @@ const ACCENT_PRESETS = [
 ] as const
 
 const BILLING_MODEL_LABELS: Record<string, string> = {
-  SCHOOL_WIDE: 'school-wide',
-  PER_STUDENT: 'per-student',
+  SCHOOL_WIDE: 'school-based',
+  PER_STUDENT: 'student-based',
   MIXED: 'mixed',
 }
+
+const FREQUENCY_LABELS: Record<string, string> = {
+  MONTHLY: 'monthly',
+  ANNUAL: 'yearly',
+}
+
+/// Class-selection presets (mission §2 STEP 4): operators pick the
+/// classes the school actually offers — never forced to offer all.
+const CLASS_PRESETS = [
+  { label: 'Class 1–5', range: [1, 5] },
+  { label: 'Class 6–8', range: [6, 8] },
+  { label: 'Class 9–10', range: [9, 10] },
+  { label: 'Class 11–12', range: [11, 12] },
+  { label: 'Class 1–12', range: [1, 12] },
+] as const
 
 interface ClassRow {
   name: string
@@ -145,82 +190,99 @@ interface WizardForm {
   code: string
   slug: string
   board: string
-  plan: string
-  contactEmail: string
-  contactPhone: string
-  // STEP 2 — Administrator (founding principal + credential option)
+  // STEP 2 — Principal & administrator
   principalName: string
   principalEmail: string
+  principalPhone: string
   principalPassword: string
-  // STEP 3 — Configuration (required) + optional collapsed sections
-  /// §4 — subscription billing model (SCHOOL_WIDE | PER_STUDENT | MIXED).
+  // STEP 3 — Subscription & pricing (agreed commercial terms)
   billingModel: string
-  workingDays: string[]
-  // Optional: branding
-  themeColor: string
-  accentColor: string
-  tagline: string
-  // Optional: website & domain
-  websiteEnabled: boolean
-  customDomain: string
-  // Optional: location & academic session
-  address: string
-  city: string
-  state: string
-  country: string
-  timezone: string
+  billingFrequency: string
+  agreedAmount: string
+  currency: string
+  licensedStudents: string
+  subscriptionStartsOn: string
+  // STEP 4 — Academic setup
   academicYear: string
-  // Optional: academic bootstrap
+  workingDays: string[]
   classRows: ClassRow[]
   subjectsText: string
   roomsText: string
+  // STEP 5 — Branding & website
+  themeColor: string
+  accentColor: string
+  tagline: string
+  websiteEnabled: boolean
+  customDomain: string
+  // STEP 6 — Address & contact
+  address: string
+  addressLine2: string
+  city: string
+  district: string
+  state: string
+  pincode: string
+  country: string
+  timezone: string
+  contactEmail: string
+  contactPhone: string
+  website: string
 }
 
-// Exported for the wizard-empty-form regression test: the inert-row
-// invariant (a name-less row must carry no sections) must never regress.
+/// Exported for the wizard-empty-form regression test: the inert-row
+/// invariant (the default form carries NO class rows; every row the UI
+/// can add is a named, real class — a name-less row can never carry
+/// sections) must never regress.
 export const EMPTY_FORM: WizardForm = {
   name: '',
   shortName: '',
   code: '',
   slug: '',
   board: 'CBSE',
-  plan: 'STANDARD',
-  contactEmail: '',
-  contactPhone: '',
   principalName: '',
   principalEmail: '',
+  principalPhone: '',
   principalPassword: '',
   billingModel: 'SCHOOL_WIDE',
+  billingFrequency: 'ANNUAL',
+  agreedAmount: '',
+  currency: 'INR',
+  licensedStudents: '',
+  subscriptionStartsOn: '',
+  academicYear: '',
   workingDays: ['MON', 'TUE', 'WED', 'THU', 'FRI'],
+  classRows: [],
+  subjectsText: '',
+  roomsText: '',
   themeColor: '#0f766e',
   accentColor: '#f59e0b',
   tagline: '',
   websiteEnabled: true,
   customDomain: '',
   address: '',
+  addressLine2: '',
   city: '',
+  district: '',
   state: '',
+  pincode: '',
   country: '',
   timezone: 'Asia/Kolkata',
-  academicYear: '',
-  // No pre-filled sections: a default row with sections but no class name
-  // tripped the step-3 validation ("Every class row needs a class name")
-  // and blocked Continue for admins who skip the optional bootstrap —
-  // the submit path drops name-less rows, so an untouched row must be inert.
-  classRows: [{ name: '', sections: '' }],
-  subjectsText: '',
-  roomsText: '',
+  contactEmail: '',
+  contactPhone: '',
+  website: '',
 }
 
 const STEPS = [
   { id: 1, label: 'School identity', icon: Building2 },
-  { id: 2, label: 'Administrator', icon: UserCog },
-  { id: 3, label: 'Configuration', icon: GraduationCap },
-  { id: 4, label: 'Review & create', icon: ClipboardCheck },
+  { id: 2, label: 'Principal', icon: UserCog },
+  { id: 3, label: 'Subscription', icon: CreditCard },
+  { id: 4, label: 'Academic setup', icon: GraduationCap },
+  { id: 5, label: 'Branding', icon: Palette },
+  { id: 6, label: 'Address', icon: MapPin },
+  { id: 7, label: 'Review & create', icon: ClipboardCheck },
 ] as const
 
-/** The optional step-3 sections (progressive disclosure). */
-type ConfigSectionKey = 'bootstrap' | 'branding' | 'website' | 'location'
+/** The optional step-4 section (progressive disclosure). */
+type ConfigSectionKey = 'bootstrap'
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const CODE_RE = /^[A-Z0-9-]+$/
@@ -228,6 +290,24 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const YEAR_RE = /^\d{4}[-/]\d{4}$/
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
 const DOMAINISH_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
+const PHONE_RE = /^[+0-9()\-\s]{7,20}$/
+/// Indian PIN codes (6 digits, first 1–8) — permissive for other
+/// countries: 3–12 alphanumerics/punctuation.
+const PIN_IN_RE = /^[1-8][0-9]{5}$/
+const PIN_GENERIC_RE = /^[A-Za-z0-9][A-Za-z0-9 -]{2,11}$/
+const AMOUNT_RE = /^\d{1,9}(\.\d{1,2})?$/
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+interface PrecheckResult {
+  slug: { value: string; patternValid: boolean; available: boolean | null; suggestions: string[] } | null
+  code: { value: string; patternValid: boolean; available: boolean | null } | null
+  generated: {
+    shortName: string | null
+    slug: string | null
+    prefixAbbreviation: string | null
+    prefixNextNumber: number | null
+  }
+}
 
 interface ProvisionResult {
   replayed?: boolean
@@ -237,6 +317,7 @@ interface ProvisionResult {
     name: string
     slug: string
     code: string
+    recordPrefix: string | null
     status: string
     plan: string
   }
@@ -254,6 +335,19 @@ interface ProvisionResult {
     previewUrl: string
   }
   bootstrap?: { classes: number; sections: number; subjects: number; rooms: number }
+  // The AGREED commercial terms as persisted (mission §2 STEP 3) —
+  // paymentsRecorded is the honest count: provisioning records terms,
+  // never a payment.
+  subscription?: {
+    billingModel: string
+    interval: string
+    unitPrice: number
+    currency: string
+    licensedStudents: number | null
+    periodStart: string
+    periodEnd: string | null
+    paymentsRecorded: number
+  }
   // Phase 3 — invite-email delivery state (honest, never fabricated:
   // SENT | QUEUED | FAILED | NONE + optional transport/errorClass).
   invitation?: { state: string; transport?: string; errorClass?: string; at?: string }
@@ -271,7 +365,7 @@ function StepDots({ step }: { step: number }) {
         const active = s.id === step
         return (
           <li key={s.id} className="flex items-center gap-1">
-            {i > 0 ? <span className="h-px w-3 bg-slate-200" aria-hidden="true" /> : null}
+            {i > 0 ? <span className="h-px w-2 bg-slate-200 sm:w-3" aria-hidden="true" /> : null}
             <span
               className={`flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-semibold ${
                 done
@@ -285,7 +379,7 @@ function StepDots({ step }: { step: number }) {
               {done ? <Check className="h-3 w-3" aria-hidden="true" /> : s.id}
             </span>
             <span
-              className={`hidden text-[11px] font-medium sm:inline ${
+              className={`hidden text-[11px] font-medium md:inline ${
                 active ? 'text-slate-900' : 'text-slate-400'
               }`}
             >
@@ -366,13 +460,13 @@ function CopyInlineButton({
   )
 }
 
-// ── Optional-configuration section (§6.5 progressive disclosure) ──────────
+// ── Optional-configuration section (progressive disclosure) ──────────
 
 /**
- * A collapsed optional section of step 3. Every field the POST sends
- * is preserved — the optional ones simply start collapsed so the
- * required configuration stays visible. When a step-3 validation
- * error points into a section, the wizard expands it.
+ * A collapsed optional section (subjects & rooms inside step 4). Every
+ * field the POST sends is preserved — the optional ones simply start
+ * collapsed so the required configuration stays visible. When a step
+ * validation error points into a section, the wizard expands it.
  */
 function OptionalSection({
   title,
@@ -411,6 +505,21 @@ function OptionalSection({
   )
 }
 
+/** Review-section status chip (mission §2 STEP 7: Ready / Optional / Requires attention). */
+function SectionStatus({ state }: { state: 'ready' | 'attention' | 'optional' }) {
+  if (state === 'attention') {
+    return (
+      <Badge className="border-amber-200 bg-amber-50 text-amber-700 normal-case">Needs attention</Badge>
+    )
+  }
+  if (state === 'optional') {
+    return (
+      <Badge className="border-slate-200 bg-slate-50 text-slate-500 normal-case">Optional — not configured</Badge>
+    )
+  }
+  return <Badge className="border-teal-200 bg-teal-50 text-teal-700 normal-case">Ready</Badge>
+}
+
 export function ProvisionWizard({
   open,
   onOpenChange,
@@ -429,21 +538,72 @@ export function ProvisionWizard({
   const [result, setResult] = useState<ProvisionResult | null>(null)
   const [openSections, setOpenSections] = useState<Record<ConfigSectionKey, boolean>>({
     bootstrap: false,
-    branding: false,
-    website: false,
-    location: false,
   })
+  // Auto-generation flags: derived fields follow the operator's typing
+  // until they edit them by hand (then the hand value wins forever).
+  const [autoShortName, setAutoShortName] = useState(true)
+  const [autoSlug, setAutoSlug] = useState(true)
+  const [autoYear, setAutoYear] = useState(true)
+  // Server-side availability answers for the CURRENT slug/code values.
+  const [precheck, setPrecheck] = useState<PrecheckResult | null>(null)
 
   useEffect(() => {
     if (open) {
+      const today = new Date().toISOString().slice(0, 10)
       setStep(1)
-      setForm(EMPTY_FORM)
+      setForm({
+        ...EMPTY_FORM,
+        // Sensible defaults derived from the current date (mission §2
+        // STEPS 3–4): subscription starts today, the academic session
+        // follows the school-year rule in the operator's timezone.
+        subscriptionStartsOn: today,
+        academicYear: defaultAcademicSession(new Date(), EMPTY_FORM.timezone),
+      })
       setError(null)
       setErrorCode(null)
       setResult(null)
-      setOpenSections({ bootstrap: false, branding: false, website: false, location: false })
+      setOpenSections({ bootstrap: false })
+      setAutoShortName(true)
+      setAutoSlug(true)
+      setAutoYear(true)
+      setPrecheck(null)
     }
   }, [open])
+
+  // ── Debounced server precheck (slug/code availability + generated
+  // previews) as the operator edits identity fields. Read-only, never
+  // a reservation — POST-time DB constraints are the authority. ──────
+  useEffect(() => {
+    if (!open) return
+    const name = form.name.trim()
+    const slug = form.slug.trim()
+    const code = form.code.trim()
+    if (!name && !slug && !code) {
+      setPrecheck(null)
+      return
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams()
+        if (name) params.set('name', name)
+        if (slug) params.set('slug', slug)
+        if (code) params.set('code', code)
+        const res = await platformApi<PrecheckResult>(
+          `/api/platform/schools/precheck?${params.toString()}`,
+          { method: 'GET', signal: controller.signal },
+        )
+        setPrecheck(res)
+      } catch {
+        // Availability unknown (aborted/failed) — never block on it:
+        // the server re-validates at POST time.
+      }
+    }, 400)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [form.name, form.slug, form.code, open])
 
   const set = <K extends keyof WizardForm>(key: K, value: WizardForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -471,55 +631,168 @@ export function ProvisionWizard({
     [form.roomsText],
   )
 
+  /// The valid class rows the payload will send (named rows only — the
+  /// inert-row invariant).
+  const parsedClasses = useMemo(
+    () =>
+      form.classRows
+        .filter((r) => r.name.trim())
+        .slice(0, 40)
+        .map((r) => ({
+          name: r.name.trim().slice(0, 40),
+          sections: r.sections
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .slice(0, 8),
+        })),
+    [form.classRows],
+  )
+
   // The temporary platform domain is DERIVED from the slug (data, not a
   // choice): <slug>.scholario.cloud in production, with the ?tenant=
   // link as the development fallback until custom domains are live.
   const tempDomain = form.slug && SLUG_RE.test(form.slug) ? `${form.slug}.scholario.cloud` : ''
 
-  // ── Per-step validation (same rules as the six-step wizard — the
-  //    POST contract is unchanged, only the screens are fewer). ──────
+  /// The prefix preview from the latest precheck (e.g. GVPS-0002) —
+  /// "next available", allocated at creation, never a reservation.
+  const prefixPreview =
+    precheck?.generated.prefixAbbreviation && precheck?.generated.prefixNextNumber != null
+      ? `${precheck.generated.prefixAbbreviation}-${String(precheck.generated.prefixNextNumber).padStart(4, '0')}`
+      : ''
+
+  /// The slug's latest server-side availability for the CURRENT value.
+  const slugCheck =
+    precheck?.slug && precheck.slug.value === form.slug.trim().toLowerCase() ? precheck.slug : null
+  const codeCheck =
+    precheck?.code && precheck.code.value === form.code.trim().toUpperCase() ? precheck.code : null
+
+  // ── Commercial-terms parsing + price breakdown (mission §2 STEP 3)
+  const amountNum = AMOUNT_RE.test(form.agreedAmount.trim()) ? Number(form.agreedAmount) : null
+  const licensedNum = /^\d{1,6}$/.test(form.licensedStudents.trim()) ? Number(form.licensedStudents) : null
+  const isStudentBased = form.billingModel === 'PER_STUDENT'
+  const unitLabel = isStudentBased
+    ? form.billingFrequency === 'MONTHLY'
+      ? 'per student / month'
+      : 'per student / year'
+    : form.billingFrequency === 'MONTHLY'
+      ? 'per month'
+      : 'per year'
+  const money = (v: number) =>
+    new Intl.NumberFormat('en-IN', { style: 'currency', currency: form.currency }).format(v)
+
+  // ── Per-step validation (client UX only; the POST re-validates
+  //    everything server-side — the API is the authority). ──────────
 
   const validateIdentity = (): string | null => {
     if (form.name.trim().length < 2) return 'School name is required (2+ characters)'
-    if (!CODE_RE.test(form.code) || form.code.length < 2)
-      return 'Code must be 2+ chars — uppercase letters, numbers and hyphens only'
+    if (!BOARD_OPTIONS.some((b) => b.value === form.board)) return 'Choose a board — UP Board or CBSE'
     if (!SLUG_RE.test(form.slug) || form.slug.length < 3)
       return 'School slug must be 3+ chars — lowercase letters, numbers and hyphens only'
+    if (form.code && (!CODE_RE.test(form.code) || form.code.length < 2))
+      return 'School code must be 2–16 chars — uppercase letters, numbers and hyphens only (or leave it blank to auto-assign)'
+    if (slugCheck && slugCheck.available === false)
+      return `The slug "${slugCheck.value}" is already in use${
+        slugCheck.suggestions.length > 0 ? ` — try ${slugCheck.suggestions.slice(0, 2).join(' or ')}` : ''
+      }`
+    if (codeCheck && codeCheck.available === false) return `The school code "${codeCheck.value}" is already in use`
     if (form.contactEmail && !EMAIL_RE.test(form.contactEmail.trim()))
       return 'Contact email must be a valid email address'
     return null
   }
 
-  const validateAdmin = (): string | null => {
+  const validatePrincipal = (): string | null => {
     if (!form.principalName.trim()) return 'Principal name is required'
     if (!EMAIL_RE.test(form.principalEmail.trim())) return 'A valid principal email is required'
+    if (form.principalPhone.trim() && !PHONE_RE.test(form.principalPhone.trim()))
+      return 'Principal phone must be 7–20 digits/phone punctuation (or leave it blank)'
     if (form.principalPassword && form.principalPassword.length < 8)
       return 'Password must be at least 8 characters (or leave it blank to auto-generate)'
     return null
   }
 
-  const validateConfiguration = (): { message: string | null; section?: ConfigSectionKey } => {
+  const validateSubscription = (): string | null => {
+    // Student-based is YEARLY ONLY — the selector cannot offer monthly,
+    // and this guard makes the rule impossible to slip past.
+    if (isStudentBased && form.billingFrequency === 'MONTHLY')
+      return 'Student-based subscriptions are billed yearly only'
+    if (amountNum == null)
+      return form.agreedAmount.trim()
+        ? 'Amount must be a positive number with at most 2 decimals (max 1,000,000,000 style amounts rejected above 100,000,000)'
+        : 'The agreed commercial amount is required'
+    if (amountNum > 100_000_000) return 'Amount must be at most 100,000,000'
+    if (isStudentBased) {
+      if (licensedNum == null || licensedNum < 1)
+        return 'Licensed student count is required for student-based billing (1–100,000)'
+      if (licensedNum > 100_000) return 'Licensed student count must be at most 100,000'
+    }
+    if (!DATE_RE.test(form.subscriptionStartsOn)) return 'Subscription start date is required (YYYY-MM-DD)'
+    const d = new Date(`${form.subscriptionStartsOn}T00:00:00Z`)
+    if (Number.isNaN(d.getTime())) return 'Subscription start date is not a valid date'
+    const days = (Date.now() - d.getTime()) / 86_400_000
+    if (days > 366 || days < -366) return 'Subscription start date must be within one year of today'
+    return null
+  }
+
+  const validateAcademic = (): { message: string | null; section?: ConfigSectionKey } => {
+    if (form.academicYear && !YEAR_RE.test(form.academicYear.trim()))
+      return { message: 'Academic session must look like 2026-2027' }
+    if (form.workingDays.length === 0) return { message: 'Select at least one working day' }
+    const namedRows = form.classRows.filter((r) => r.name.trim())
+    const rowKeys = new Set<string>()
+    for (const row of namedRows) {
+      const key = `${row.name.trim().toLowerCase()}|${row.sections.trim().toLowerCase()}`
+      if (rowKeys.has(key))
+        return { message: `Duplicate class configuration: ${row.name.trim()} (${row.sections.trim() || 'no sections'})` }
+      rowKeys.add(key)
+    }
+    if (form.classRows.length > 40) return { message: 'At most 40 classes can be bootstrapped' }
+    return { message: null }
+  }
+
+  const validateBranding = (): string | null => {
     if (!HEX_RE.test(form.themeColor))
-      return { message: 'Primary color must be a 6-digit hex value (e.g. #0f766e)', section: 'branding' }
+      return 'Primary color must be a 6-digit hex value (e.g. #0f766e)'
     if (!HEX_RE.test(form.accentColor))
-      return { message: 'Accent color must be a 6-digit hex value (e.g. #f59e0b)', section: 'branding' }
+      return 'Accent color must be a 6-digit hex value (e.g. #f59e0b)'
     const cd = form.customDomain.trim().toLowerCase().replace(/^(https?:\/\/|www\.)+/, '').replace(/\/.*$/, '')
     if (form.customDomain && !DOMAINISH_RE.test(cd))
-      return { message: 'Custom domain must look like school.com (no protocol, no path)', section: 'website' }
-    if (form.academicYear && !YEAR_RE.test(form.academicYear.trim()))
-      return { message: 'Academic session must look like 2026-2027', section: 'location' }
-    for (const row of form.classRows) {
-      if (!row.name.trim() && row.sections.trim())
-        return { message: 'Every class row needs a class name', section: 'bootstrap' }
+      return 'Custom domain must look like school.com (no protocol, no path)'
+    if (form.website.trim()) {
+      const w = form.website.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+      if (!DOMAINISH_RE.test(w)) return 'School website must look like school.edu or school.edu/path (no protocol needed)'
     }
-    if (form.workingDays.length === 0) return { message: 'Select at least one working day' }
-    return { message: null }
+    return null
+  }
+
+  const validateAddress = (): string | null => {
+    if (!form.address.trim()) return 'Address line 1 is required'
+    if (!form.city.trim()) return 'City is required'
+    if (!form.state.trim()) return 'State is required'
+    if (!form.country.trim()) return 'Country is required'
+    const india = form.country.trim().toLowerCase() === 'india'
+    const pin = form.pincode.trim()
+    if (india && !pin) return 'PIN code is required for Indian schools (6 digits)'
+    if (pin) {
+      if (india && !PIN_IN_RE.test(pin))
+        return 'Indian PIN code must be 6 digits (first digit 1–8)'
+      if (!india && !PIN_GENERIC_RE.test(pin))
+        return 'Postal code must be 3–12 characters'
+    }
+    if (form.contactPhone.trim() && !PHONE_RE.test(form.contactPhone.trim()))
+      return 'Contact phone must be 7–20 digits/phone punctuation'
+    if (form.contactEmail.trim() && !EMAIL_RE.test(form.contactEmail.trim()))
+      return 'Contact email must be a valid email address'
+    return null
   }
 
   const stepIssue = (s: number): { message: string | null; section?: ConfigSectionKey } => {
     if (s === 1) return { message: validateIdentity() }
-    if (s === 2) return { message: validateAdmin() }
-    if (s === 3) return validateConfiguration()
+    if (s === 2) return { message: validatePrincipal() }
+    if (s === 3) return { message: validateSubscription() }
+    if (s === 4) return validateAcademic()
+    if (s === 5) return { message: validateBranding() }
+    if (s === 6) return { message: validateAddress() }
     return { message: null }
   }
 
@@ -546,79 +819,99 @@ export function ProvisionWizard({
     setStep((s) => Math.max(s - 1, 1))
   }
 
-  const buildPayload = () => {
-    const classes = form.classRows
-      .filter((r) => r.name.trim())
-      .slice(0, 40)
-      .map((r) => ({
-        name: r.name.trim().slice(0, 40),
-        sections: r.sections
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .slice(0, 8),
-      }))
-    return {
-      name: form.name.trim(),
-      shortName: form.shortName.trim() || undefined,
-      slug: form.slug,
-      code: form.code,
-      address: form.address.trim() || undefined,
-      city: form.city.trim() || undefined,
-      state: form.state.trim() || undefined,
-      country: form.country.trim() || undefined,
-      timezone: form.timezone || undefined,
-      academicYear: form.academicYear.trim() || undefined,
-      officialEmail: form.contactEmail.trim() || undefined,
-      phone: form.contactPhone.trim() || undefined,
-      plan: form.plan,
-      billingModel: form.billingModel,
-      board: form.board,
-      // Branding (optional section)
-      themeColor: form.themeColor,
-      accentColor: form.accentColor,
-      tagline: form.tagline.trim() || undefined,
-      // Website & domain (optional section)
-      websiteEnabled: form.websiteEnabled,
-      customDomain: form.customDomain.trim().toLowerCase() || undefined,
-      // Founding principal
-      principalName: form.principalName.trim(),
-      principalEmail: form.principalEmail.trim(),
-      principalPassword: form.principalPassword || undefined,
-      // Academic bootstrap (optional section)
-      classes: classes.length > 0 ? classes : undefined,
-      subjects: parsedSubjects.length > 0 ? parsedSubjects : undefined,
-      rooms: parsedRooms.length > 0 ? parsedRooms : undefined,
-      workingDays: form.workingDays,
-    }
+  /// Jump to any step from the review screen (data is preserved — the
+  /// whole wizard shares ONE form state; mission §2 STEP 7).
+  const jumpTo = (s: number) => {
+    setError(null)
+    setErrorCode(null)
+    setStep(Math.min(Math.max(s, 1), 6))
   }
 
+  const buildPayload = () => ({
+    name: form.name.trim(),
+    shortName: form.shortName.trim() || undefined,
+    slug: form.slug,
+    code: form.code.trim() || undefined,
+    board: form.board,
+    // STEP 6 — address & contact
+    address: form.address.trim() || undefined,
+    addressLine2: form.addressLine2.trim() || undefined,
+    city: form.city.trim() || undefined,
+    district: form.district.trim() || undefined,
+    state: form.state.trim() || undefined,
+    pincode: form.pincode.trim() || undefined,
+    country: form.country.trim() || undefined,
+    timezone: form.timezone || undefined,
+    officialEmail: form.contactEmail.trim() || undefined,
+    phone: form.contactPhone.trim() || undefined,
+    website: form.website.trim() || undefined,
+    // STEP 3 — the agreed commercial terms (never a fabricated payment)
+    billingModel: form.billingModel,
+    billingFrequency: form.billingFrequency,
+    agreedAmount: amountNum ?? undefined,
+    currency: form.currency,
+    licensedStudents: isStudentBased && licensedNum != null ? licensedNum : undefined,
+    subscriptionStartsOn: form.subscriptionStartsOn,
+    // STEP 2 — founding principal
+    principalName: form.principalName.trim(),
+    principalEmail: form.principalEmail.trim(),
+    principalPhone: form.principalPhone.trim() || undefined,
+    principalPassword: form.principalPassword || undefined,
+    // STEP 4 — academic setup
+    academicYear: form.academicYear.trim() || undefined,
+    workingDays: form.workingDays,
+    classes: parsedClasses.length > 0 ? parsedClasses : undefined,
+    subjects: parsedSubjects.length > 0 ? parsedSubjects : undefined,
+    rooms: parsedRooms.length > 0 ? parsedRooms : undefined,
+    // STEP 5 — branding & website
+    themeColor: form.themeColor,
+    accentColor: form.accentColor,
+    tagline: form.tagline.trim() || undefined,
+    websiteEnabled: form.websiteEnabled,
+    customDomain: form.customDomain.trim().toLowerCase() || undefined,
+  })
+
   // Review-step missing-required indicators (defensive: per-step Next
-  // validation normally prevents reaching step 4 with issues).
+  // validation normally prevents reaching step 7 with issues).
   const reviewIssues: string[] = STEPS.map((s) => {
     const issue = stepIssue(s.id)
     return issue.message ? `${s.label}: ${issue.message}` : null
   }).filter((v): v is string => v !== null)
 
   /**
-   * POST /api/platform/schools (unchanged contract). `billingOverride`
-   * powers the SUBSCRIPTION_SYSTEM_PENDING recovery: the same payload
-   * with the billing model switched to school-wide (the pending
-   * database's only servable model).
+   * POST /api/platform/schools. `pendingRecovery` powers the
+   * SUBSCRIPTION_SYSTEM_PENDING path: the same payload with the billing
+   * model switched to school-wide AND the terms dropped (a pending
+   * database cannot persist them — the operator can record the terms
+   * after the migration is applied).
    */
-  const submit = async (billingOverride?: string) => {
+  const submit = async (pendingRecovery?: { billingModel?: string; dropTerms?: boolean }) => {
     setBusy(true)
     setError(null)
     setErrorCode(null)
     try {
       const payload = buildPayload()
+      const finalPayload =
+        pendingRecovery?.billingModel || pendingRecovery?.dropTerms
+          ? {
+              ...payload,
+              ...(pendingRecovery.billingModel ? { billingModel: pendingRecovery.billingModel } : {}),
+              ...(pendingRecovery.dropTerms
+                ? {
+                    billingFrequency: undefined,
+                    agreedAmount: undefined,
+                    currency: undefined,
+                    licensedStudents: undefined,
+                    subscriptionStartsOn: undefined,
+                  }
+                : {}),
+            }
+          : payload
       // 90s timeout: provisioning is a heavy multi-table transaction plus
       // the invite email — well beyond platformApi's 30s default.
       const res = await platformApi('/api/platform/schools', {
         method: 'POST',
-        body: JSON.stringify(
-          billingOverride ? { ...payload, billingModel: billingOverride } : payload,
-        ),
+        body: JSON.stringify(finalPayload),
       }, 90_000)
       setResult(res as unknown as ProvisionResult)
       if ((res as unknown as ProvisionResult).replayed) {
@@ -630,13 +923,53 @@ export function ProvisionWizard({
     } catch (e) {
       const err = e as PlatformApiError
       // SUBSCRIPTION_SYSTEM_PENDING (503) is kept IN the wizard (review
-      // step) with its publicMessage + a one-click model fix — the
-      // operator can retry without losing any entered data.
+      // step) with its publicMessage + a one-click fix — the operator
+      // can retry without losing any entered data.
       setErrorCode(err.code || null)
       setError(err.error || 'Provisioning failed — please try again')
     } finally {
       setBusy(false)
     }
+  }
+
+  // ── Class-selection helpers (step 4) ────────────────────────────────
+  const togglePresetClasses = (range: readonly [number, number] | readonly number[]) => {
+    const [from, to] = [range[0], range[range.length - 1]]
+    setForm((f) => {
+      const wanted: string[] = []
+      for (let n = from; n <= to; n += 1) wanted.push(`Class ${n}`)
+      const has = wanted.every((name) => f.classRows.some((r) => r.name === name))
+      if (has) {
+        // Toggle OFF the classes that belong to this preset and nothing else.
+        return { ...f, classRows: f.classRows.filter((r) => !wanted.includes(r.name)) }
+      }
+      const rows = [...f.classRows]
+      for (const name of wanted) {
+        if (!rows.some((r) => r.name === name)) rows.push({ name, sections: 'A' })
+      }
+      return { ...f, classRows: rows }
+    })
+  }
+
+  const customClasses = form.classRows.filter((r) => !/^Class \d+$/.test(r.name))
+
+  // ── Success-panel helpers ────────────────────────────────────────────
+  const remainingTasks: string[] = []
+  if (result) {
+    remainingTasks.push('Activate the school from its record to enable sign-in')
+    if (result.domain.customDomain)
+      remainingTasks.push(
+        `Verify the custom domain ${result.domain.customDomain.hostname} (DNS TXT record from the school record's Domains tab) — it stays PENDING until ownership is proven`,
+      )
+    if (result.subscription)
+      remainingTasks.push(
+        'Record the first verified payment from the school record\u2019s Subscription tab to start the paid period (the agreed terms alone do not bill anything)',
+      )
+    if (result.invitation && (result.invitation.state === 'FAILED' || result.invitation.state === 'NONE'))
+      remainingTasks.push(
+        'The invite email did not go through — hand over the one-time credential yourself or re-issue it from the Access card',
+      )
+    remainingTasks.push('The school uploads its own logo/crest and refines branding from its settings after activation')
   }
 
   return (
@@ -711,6 +1044,15 @@ export function ProvisionWizard({
                 <span className="font-mono text-slate-900">{result.school.code}</span>
               </div>
               <div className="flex justify-between gap-4">
+                <span className="text-slate-500">Internal record prefix</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="font-mono text-slate-900">{result.school.recordPrefix ?? '—'}</span>
+                  {result.school.recordPrefix ? (
+                    <CopyInlineButton value={result.school.recordPrefix} label="Copy record prefix" />
+                  ) : null}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4">
                 <span className="shrink-0 text-slate-500">Founding principal</span>
                 <span className="min-w-0 text-right">
                   <span className="block truncate font-semibold text-slate-900">
@@ -723,10 +1065,10 @@ export function ProvisionWizard({
               </div>
               {result.bootstrap ? (
                 <div className="flex justify-between gap-4">
-                  <span className="text-slate-500">Bootstrap</span>
+                  <span className="text-slate-500">Academic setup</span>
                   <span className="text-slate-900">
-                    {result.bootstrap.classes} classes · {result.bootstrap.subjects} subjects ·{' '}
-                    {result.bootstrap.rooms} rooms
+                    {result.bootstrap.classes} classes · {result.bootstrap.sections} sections ·{' '}
+                    {result.bootstrap.subjects} subjects · {result.bootstrap.rooms} rooms
                   </span>
                 </div>
               ) : null}
@@ -746,6 +1088,50 @@ export function ProvisionWizard({
                 <span className="font-mono text-slate-900">{result.domain.tempDomain}</span>
               </div>
             </div>
+
+            {/* The AGREED subscription terms (mission §2 STEP 3) with the
+                honest billing posture: terms are recorded, nothing is
+                billed and no payment exists yet. */}
+            {result.subscription ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                  <CreditCard className="h-3.5 w-3.5" aria-hidden="true" />
+                  Subscription terms
+                </p>
+                <div className="mt-2 grid gap-1.5 text-sm">
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-500">Billing</span>
+                    <span className="text-slate-900">
+                      {BILLING_MODEL_LABELS[result.subscription.billingModel] ?? result.subscription.billingModel} ·{' '}
+                      {FREQUENCY_LABELS[result.subscription.interval] ?? result.subscription.interval}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-500">Agreed price</span>
+                    <span className="text-slate-900">
+                      {new Intl.NumberFormat('en-IN', {
+                        style: 'currency',
+                        currency: result.subscription.currency,
+                      }).format(result.subscription.unitPrice)}
+                      {result.subscription.licensedStudents != null
+                        ? ` × ${result.subscription.licensedStudents} licensed students`
+                        : ''}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-500">Starts</span>
+                    <span className="text-slate-900">{result.subscription.periodStart}</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-500">Payments recorded</span>
+                    <span className="font-medium text-amber-700">
+                      {result.subscription.paymentsRecorded} — no payment yet; the paid period starts
+                      when a verified payment is recorded from the school record
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {/* School login URL — the canonical door (PHASE 10). Copied
                 links resolve relative URLs against the current origin so
@@ -793,7 +1179,7 @@ export function ProvisionWizard({
                 Website preview URL
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                The school's public website (tenant site). A custom domain only
+                The school&rsquo;s public website (tenant site). A custom domain only
                 becomes the door after DNS verification — until then this is the
                 canonical preview address.
               </p>
@@ -885,6 +1271,19 @@ export function ProvisionWizard({
               </div>
             ) : null}
 
+            {/* Remaining setup tasks — the honest checklist (mission §2
+                STEP 7 completion page). */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                Remaining setup tasks
+              </p>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-700">
+                {remainingTasks.map((task) => (
+                  <li key={task}>{task}</li>
+                ))}
+              </ul>
+            </div>
+
             {/* Data-driven next-step hint from the provision response. */}
             {result.nextStep === 'activate' && (
               <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
@@ -938,8 +1337,8 @@ export function ProvisionWizard({
                 Add school
               </DialogTitle>
               <DialogDescription className="text-slate-500">
-                Four steps create the tenant ecosystem — identity, administrator, configuration and
-                review. One platform, one database: the school is data, not a deployment.
+                Seven steps create the tenant ecosystem — identity, principal, subscription, academics,
+                branding, address and review. One platform, one database: the school is data, not a deployment.
               </DialogDescription>
             </DialogHeader>
 
@@ -955,15 +1354,16 @@ export function ProvisionWizard({
                   {error}
                 </p>
                 {/* SCHEMA-PENDING recovery (Task 4): the pending database
-                    only accepts the school-wide billing model — switch it
-                    and retry without leaving the review step. */}
+                    only accepts the school-wide billing model without
+                    terms — switch and retry without leaving the wizard. */}
                 {errorCode === 'SUBSCRIPTION_SYSTEM_PENDING' && form.billingModel !== 'SCHOOL_WIDE' ? (
                   <div className="mt-2.5 pl-6">
                     <Button
                       size="sm"
                       onClick={() => {
                         set('billingModel', 'SCHOOL_WIDE')
-                        void submit('SCHOOL_WIDE')
+                        set('billingFrequency', 'ANNUAL')
+                        void submit({ billingModel: 'SCHOOL_WIDE', dropTerms: true })
                       }}
                       disabled={busy}
                       className="h-9 bg-teal-600 font-semibold text-white hover:bg-teal-700 focus-ring"
@@ -978,65 +1378,49 @@ export function ProvisionWizard({
             {/* STEP 1 — SCHOOL IDENTITY */}
             {step === 1 ? (
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 sm:col-span-2">
                   <Label htmlFor="pw-name" className="text-xs font-semibold text-slate-700">
-                    School name *
+                    Full official school name *
                   </Label>
                   <Input
                     id="pw-name"
                     value={form.name}
-                    onChange={(e) => set('name', e.target.value)}
-                    placeholder="Demo International School"
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setForm((f) => ({
+                        ...f,
+                        name: v,
+                        // Auto-generated fields follow the name until the
+                        // operator edits them by hand.
+                        ...(autoShortName ? { shortName: deriveShortName(v) } : {}),
+                        ...(autoSlug ? { slug: slugifyName(v) } : {}),
+                      }))
+                    }}
+                    placeholder="Green Valley Public School"
                     className={field}
                   />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-shortname" className="text-xs font-semibold text-slate-700">
-                    Short name <span className="font-normal text-slate-400">(optional)</span>
+                    Short name <span className="font-normal text-slate-400">(auto-generated — editable)</span>
                   </Label>
                   <Input
                     id="pw-shortname"
                     value={form.shortName}
-                    onChange={(e) => set('shortName', e.target.value)}
-                    placeholder="Demo International"
+                    onChange={(e) => {
+                      setAutoShortName(false)
+                      set('shortName', e.target.value)
+                    }}
+                    placeholder="Green Valley"
                     className={field}
                   />
                   <p className="text-[10px] text-slate-400">
-                    Used for the crest label, footers and the login wordmark.
+                    Generated from the official name — used for the crest label, footers and the login wordmark.
                   </p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-slug" className="text-xs font-semibold text-slate-700">
-                    School slug *
-                  </Label>
-                  <Input
-                    id="pw-slug"
-                    value={form.slug}
-                    onChange={(e) => set('slug', e.target.value.toLowerCase())}
-                    placeholder="demo-international-school"
-                    className={`${field} font-mono`}
-                    aria-describedby="pw-slug-hint"
-                  />
-                  <p id="pw-slug-hint" className="text-[10px] text-slate-400">
-                    Lowercase letters, numbers and hyphens — the school&rsquo;s link identity across
-                    the platform (login and website URLs).
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="pw-code" className="text-xs font-semibold text-slate-700">
-                    School code *
-                  </Label>
-                  <Input
-                    id="pw-code"
-                    value={form.code}
-                    onChange={(e) => set('code', e.target.value.toUpperCase())}
-                    placeholder="DIS-001"
-                    className={`${field} font-mono`}
-                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-board" className="text-xs font-semibold text-slate-700">
-                    Board *
+                    School board *
                   </Label>
                   <select
                     id="pw-board"
@@ -1044,29 +1428,108 @@ export function ProvisionWizard({
                     onChange={(e) => set('board', e.target.value)}
                     className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
                   >
-                    {SCHOOL_BOARDS.map((b) => (
-                      <option key={b} value={b}>
-                        {b}
+                    {BOARD_OPTIONS.map((b) => (
+                      <option key={b.value} value={b.value}>
+                        {b.label}
                       </option>
                     ))}
                   </select>
+                  <p className="text-[10px] text-slate-400">UP Board or CBSE — the two boards the platform onboards.</p>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="pw-plan" className="text-xs font-semibold text-slate-700">
-                    Platform plan *
+                  <Label htmlFor="pw-slug" className="text-xs font-semibold text-slate-700">
+                    School URL slug *
                   </Label>
-                  <select
-                    id="pw-plan"
-                    value={form.plan}
-                    onChange={(e) => set('plan', e.target.value)}
-                    className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
-                  >
-                    {SCHOOL_PLANS.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
-                      </option>
-                    ))}
-                  </select>
+                  <Input
+                    id="pw-slug"
+                    value={form.slug}
+                    onChange={(e) => {
+                      setAutoSlug(false)
+                      set('slug', e.target.value.toLowerCase())
+                    }}
+                    placeholder="green-valley-public-school"
+                    className={`${field} font-mono`}
+                    aria-describedby="pw-slug-hint"
+                  />
+                  <div id="pw-slug-hint" className="space-y-1">
+                    <p className="text-[10px] text-slate-400">
+                      Auto-generated from the name — the school&rsquo;s link identity (login and website URLs).
+                    </p>
+                    {slugCheck && slugCheck.patternValid ? (
+                      slugCheck.available ? (
+                        <p className="flex items-center gap-1 text-[11px] font-medium text-teal-700">
+                          <Check className="h-3 w-3" aria-hidden="true" /> {slugCheck.value} is available
+                        </p>
+                      ) : (
+                        <div className="text-[11px] font-medium text-red-600">
+                          <p>{slugCheck.value} is already in use — pick an alternative:</p>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {slugCheck.suggestions.map((s) => (
+                              <button
+                                key={s}
+                                type="button"
+                                onClick={() => {
+                                  setAutoSlug(false)
+                                  set('slug', s)
+                                }}
+                                className="rounded-md border border-red-200 bg-white px-2 py-1 font-mono text-[11px] text-slate-700 transition-colors hover:bg-red-50 focus-ring"
+                              >
+                                {s}
+                              </button>
+                            ))}
+                            {suggestSlugAlternatives(form.slug).length === 0 ? null : null}
+                          </div>
+                        </div>
+                      )
+                    ) : null}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-code" className="text-xs font-semibold text-slate-700">
+                    School code <span className="font-normal text-slate-400">(optional)</span>
+                  </Label>
+                  <Input
+                    id="pw-code"
+                    value={form.code}
+                    onChange={(e) => set('code', e.target.value.toUpperCase())}
+                    placeholder="Leave blank to auto-assign"
+                    className={`${field} font-mono`}
+                    aria-describedby="pw-code-hint"
+                  />
+                  <div id="pw-code-hint" className="space-y-1">
+                    <p className="text-[10px] text-slate-400">
+                      Some schools have an official or internal code — enter it if so. When left blank, the
+                      internal record prefix is assigned as the code.
+                    </p>
+                    {codeCheck && codeCheck.patternValid ? (
+                      codeCheck.available ? (
+                        <p className="flex items-center gap-1 text-[11px] font-medium text-teal-700">
+                          <Check className="h-3 w-3" aria-hidden="true" /> {codeCheck.value} is available
+                        </p>
+                      ) : (
+                        <p className="text-[11px] font-medium text-red-600">
+                          {codeCheck.value} is already in use by another school
+                        </p>
+                      )
+                    ) : null}
+                  </div>
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <p className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+                    <Info className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                    <span>
+                      <span className="font-semibold text-slate-700">Internal record prefix:</span>{' '}
+                      allocated server-side at creation (concurrency-safe, stable forever).{' '}
+                      {prefixPreview ? (
+                        <>
+                          Next available for this name:{' '}
+                          <span className="font-mono font-semibold text-slate-900">{prefixPreview}</span>.
+                        </>
+                      ) : (
+                        'Type the school name to preview it.'
+                      )}
+                    </span>
+                  </p>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-email" className="text-xs font-semibold text-slate-700">
@@ -1077,9 +1540,10 @@ export function ProvisionWizard({
                     type="email"
                     value={form.contactEmail}
                     onChange={(e) => set('contactEmail', e.target.value)}
-                    placeholder="office@demoschool.edu"
+                    placeholder="office@greenvalley.edu"
                     className={field}
                   />
+                  <p className="text-[10px] text-slate-400">The school&rsquo;s general email (office/front desk).</p>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="pw-phone" className="text-xs font-semibold text-slate-700">
@@ -1092,11 +1556,12 @@ export function ProvisionWizard({
                     placeholder="+91 98765 43210"
                     className={field}
                   />
+                  <p className="text-[10px] text-slate-400">Full details are collected on the Address step.</p>
                 </div>
               </div>
             ) : null}
 
-            {/* STEP 2 — ADMINISTRATOR (founding principal) */}
+            {/* STEP 2 — PRINCIPAL & ADMINISTRATOR */}
             {step === 2 ? (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
@@ -1120,11 +1585,27 @@ export function ProvisionWizard({
                     type="email"
                     value={form.principalEmail}
                     onChange={(e) => set('principalEmail', e.target.value)}
-                    placeholder="principal@demoschool.edu"
+                    placeholder="principal@greenvalley.edu"
                     className={field}
                   />
+                  <p className="text-[10px] text-slate-400">
+                    The account is created for THIS school tenant only — tenant isolation is enforced server-side.
+                  </p>
                 </div>
-                <div className="space-y-1.5 sm:col-span-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-pphone" className="text-xs font-semibold text-slate-700">
+                    Principal phone <span className="font-normal text-slate-400">(optional)</span>
+                  </Label>
+                  <Input
+                    id="pw-pphone"
+                    value={form.principalPhone}
+                    onChange={(e) => set('principalPhone', e.target.value)}
+                    placeholder="+91 91234 56789"
+                    className={field}
+                  />
+                  <p className="text-[10px] text-slate-400">Stored on the principal&rsquo;s profile — no new verification flow.</p>
+                </div>
+                <div className="space-y-1.5">
                   <Label htmlFor="pw-ppass" className="text-xs font-semibold text-slate-700">
                     Temporary password{' '}
                     <span className="font-normal text-slate-400">(optional — auto-generated when blank)</span>
@@ -1139,36 +1620,246 @@ export function ProvisionWizard({
                     className={field}
                   />
                   <p className="text-[10px] text-slate-400">
-                    Optional — if blank, a one-time password is generated and shown once after
-                    creation. The principal changes it at first sign-in. This account belongs to
-                    THIS school tenant only.
+                    No shared defaults. One-time bootstrap — the principal must replace it at first sign-in
+                    (server-enforced). Additional administrators are added from the school record later.
                   </p>
                 </div>
               </div>
             ) : null}
 
-            {/* STEP 3 — CONFIGURATION (required visible, optional collapsed) */}
+            {/* STEP 3 — SUBSCRIPTION & PRICING */}
             {step === 3 ? (
               <div className="space-y-4">
+                {/* Billing model — exactly two (mission §2 STEP 3). */}
                 <div className="space-y-1.5">
-                  <Label htmlFor="pw-billing-model" className="text-xs font-semibold text-slate-700">
-                    Billing model *
+                  <Label className="text-xs font-semibold text-slate-700">Billing model *</Label>
+                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Billing model">
+                    {BILLING_MODEL_OPTIONS.map((opt) => {
+                      const active = form.billingModel === opt.value
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          onClick={() => {
+                            setForm((f) => ({
+                              ...f,
+                              billingModel: opt.value,
+                              // Student-based is YEARLY ONLY — switching the
+                              // model can never leave MONTHLY selected.
+                              ...(opt.value === 'PER_STUDENT' && f.billingFrequency === 'MONTHLY'
+                                ? { billingFrequency: 'ANNUAL' as const }
+                                : {}),
+                            }))
+                          }}
+                          className={`rounded-xl border p-3 text-left transition-colors focus-ring ${
+                            active
+                              ? 'border-teal-400 bg-teal-50/60 ring-1 ring-teal-500/30'
+                              : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <span className="block text-sm font-semibold text-slate-900">{opt.label}</span>
+                          <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
+                            {opt.description}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Billing frequency — dynamic per model (mission §2 STEP 3):
+                    student-based NEVER offers monthly. */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-freq" className="text-xs font-semibold text-slate-700">
+                    Billing frequency *
                   </Label>
                   <select
-                    id="pw-billing-model"
-                    value={form.billingModel}
-                    onChange={(e) => set('billingModel', e.target.value)}
-                    className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
-                    aria-describedby="pw-billing-model-hint"
+                    id="pw-freq"
+                    value={form.billingFrequency}
+                    onChange={(e) => set('billingFrequency', e.target.value)}
+                    disabled={isStudentBased}
+                    className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm disabled:bg-slate-50 disabled:text-slate-500`}
+                    aria-describedby="pw-freq-hint"
                   >
-                    <option value="SCHOOL_WIDE">School-wide (recommended)</option>
-                    <option value="PER_STUDENT">Per-student</option>
-                    <option value="MIXED">Mixed</option>
+                    {frequencyOptionsFor(form.billingModel).map((f) => (
+                      <option key={f.value} value={f.value}>
+                        {f.label}
+                      </option>
+                    ))}
                   </select>
-                  <p id="pw-billing-model-hint" className="text-[11px] leading-snug text-slate-400">
-                    How this school pays for Scholario — one subscription for the whole school,
-                    per-student entitlements, or both. Changeable later with the first plan payment.
+                  <p id="pw-freq-hint" className="text-[11px] leading-snug text-slate-400">
+                    {isStudentBased
+                      ? 'Student-based subscriptions are billed yearly only — monthly is never offered for them.'
+                      : 'School-based billing: monthly or yearly.'}
                   </p>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-amount" className="text-xs font-semibold text-slate-700">
+                      Agreed amount ({unitLabel}) *
+                    </Label>
+                    <Input
+                      id="pw-amount"
+                      inputMode="decimal"
+                      value={form.agreedAmount}
+                      onChange={(e) => set('agreedAmount', e.target.value)}
+                      placeholder={isStudentBased ? '1200' : '24000'}
+                      className={field}
+                      aria-describedby="pw-amount-hint"
+                    />
+                    <p id="pw-amount-hint" className="text-[10px] text-slate-400">
+                      The commercial amount actually agreed with the school{isStudentBased ? ' — per student, per year.' : '.'}
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-currency" className="text-xs font-semibold text-slate-700">
+                      Currency *
+                    </Label>
+                    <select
+                      id="pw-currency"
+                      value={form.currency}
+                      onChange={(e) => set('currency', e.target.value)}
+                      className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
+                    >
+                      {CURRENCIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-slate-400">The platform&rsquo;s supported currency set.</p>
+                  </div>
+                  {isStudentBased ? (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pw-licensed" className="text-xs font-semibold text-slate-700">
+                        Licensed student count *
+                      </Label>
+                      <Input
+                        id="pw-licensed"
+                        inputMode="numeric"
+                        value={form.licensedStudents}
+                        onChange={(e) => set('licensedStudents', e.target.value.replace(/[^0-9]/g, ''))}
+                        placeholder="500"
+                        className={field}
+                      />
+                      <p className="text-[10px] text-slate-400">
+                        The billable student quantity for the first year (1–100,000).
+                      </p>
+                    </div>
+                  ) : null}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-startson" className="text-xs font-semibold text-slate-700">
+                      Subscription start date *
+                    </Label>
+                    <Input
+                      id="pw-startson"
+                      type="date"
+                      value={form.subscriptionStartsOn}
+                      onChange={(e) => set('subscriptionStartsOn', e.target.value)}
+                      className={field}
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Defaults to today. The paid period only begins once a verified payment is recorded.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Price breakdown (mission §2 STEP 3): the operator
+                    sees exactly what will be charged, computed from the
+                    entered values — never a hardcoded price. */}
+                <div className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold text-slate-700">Price breakdown</p>
+                  {amountNum != null ? (
+                    <div className="space-y-1 text-sm">
+                      {isStudentBased ? (
+                        <>
+                          <div className="flex justify-between gap-4">
+                            <span className="text-slate-500">
+                              {money(amountNum)} per student / year × {licensedNum ?? '—'} licensed students
+                            </span>
+                          </div>
+                          <div className="flex justify-between gap-4 border-t border-slate-200 pt-1.5">
+                            <span className="font-semibold text-slate-700">First-year total</span>
+                            <span className="font-semibold text-slate-900">
+                              {licensedNum != null ? money(amountNum * licensedNum) : '— enter the student count'}
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex justify-between gap-4">
+                          <span className="text-slate-500">
+                            {form.billingFrequency === 'MONTHLY'
+                              ? 'Monthly price (billed once a payment is recorded)'
+                              : 'Yearly price (billed once a payment is recorded)'}
+                          </span>
+                          <span className="font-semibold text-slate-900">{money(amountNum)}</span>
+                        </div>
+                      )}
+                      <p className="pt-1 text-[11px] leading-snug text-slate-500">
+                        Creating the school records these agreed terms only — no payment is fabricated and the
+                        subscription is not marked paid. The first verified payment (recorded from the school
+                        record&rsquo;s Subscription tab) starts the paid period.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-400">Enter the agreed amount to see the breakdown.</p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            {/* STEP 4 — ACADEMIC SETUP */}
+            {step === 4 ? (
+              <div className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-year" className="text-xs font-semibold text-slate-700">
+                      Academic session *
+                    </Label>
+                    <Input
+                      id="pw-year"
+                      value={form.academicYear}
+                      onChange={(e) => {
+                        setAutoYear(false)
+                        set('academicYear', e.target.value)
+                      }}
+                      placeholder="2026-2027"
+                      className={field}
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Auto-defaulted from today&rsquo;s date and the school&rsquo;s timezone (Indian April–March
+                      year) — edit if the school&rsquo;s session differs.
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pw-tz" className="text-xs font-semibold text-slate-700">
+                      Timezone *
+                    </Label>
+                    <select
+                      id="pw-tz"
+                      value={form.timezone}
+                      onChange={(e) => {
+                        const tz = e.target.value
+                        setForm((f) => ({
+                          ...f,
+                          timezone: tz,
+                          // The academic-session default follows the
+                          // timezone until the operator edits it.
+                          ...(autoYear ? { academicYear: defaultAcademicSession(new Date(), tz) } : {}),
+                        }))
+                      }}
+                      className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
+                    >
+                      {TIMEZONES.map((tz) => (
+                        <option key={tz} value={tz}>
+                          {tz}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div className="space-y-1.5">
@@ -1201,98 +1892,115 @@ export function ProvisionWizard({
                     })}
                   </div>
                   <p className="text-[10px] text-slate-400">
-                    Basic timetable context. The school configures the full timetable later in its
-                    ERP — every detail is not required here.
+                    Basic timetable context. The school configures the full timetable later in its ERP.
                   </p>
                 </div>
 
-                {/* Optional academic bootstrap */}
+                {/* Classes offered — practical selection (mission §2
+                    STEP 4): pick what the school actually offers; never
+                    forced to offer every class. */}
+                <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Classes offered <span className="font-normal text-slate-400">(select what applies)</span>
+                    </Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {CLASS_PRESETS.map((preset) => {
+                        const [from, to] = preset.range
+                        const allSelected = (() => {
+                          for (let n = from; n <= to; n += 1) {
+                            if (!form.classRows.some((r) => r.name === `Class ${n}`)) return false
+                          }
+                          return true
+                        })()
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => togglePresetClasses(preset.range)}
+                            aria-pressed={allSelected}
+                            className={`h-8 rounded-lg border px-2.5 text-[11px] font-medium transition-colors focus-ring ${
+                              allSelected
+                                ? 'border-teal-300 bg-teal-50 text-teal-700'
+                                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  {form.classRows.length === 0 ? (
+                    <p className="text-[11px] text-slate-400">
+                      No classes selected yet — pick a preset above, or add the school&rsquo;s own classes.
+                      Classes can also be configured later by the principal.
+                    </p>
+                  ) : null}
+                  {form.classRows.map((row, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Input
+                        value={row.name}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            classRows: f.classRows.map((r, j) =>
+                              j === i ? { ...r, name: e.target.value } : r,
+                            ),
+                          }))
+                        }
+                        placeholder="Class 1"
+                        className={`${field} h-9 flex-1`}
+                        aria-label={`Class row ${i + 1} name`}
+                      />
+                      <Input
+                        value={row.sections}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            classRows: f.classRows.map((r, j) =>
+                              j === i ? { ...r, sections: e.target.value } : r,
+                            ),
+                          }))
+                        }
+                        placeholder="A, B"
+                        className={`${field} h-9 w-28`}
+                        aria-label={`Class row ${i + 1} sections (comma-separated)`}
+                      />
+                      <Button
+                        variant="ghost"
+                        onClick={() =>
+                          setForm((f) => ({ ...f, classRows: f.classRows.filter((_, j) => j !== i) }))
+                        }
+                        className="h-9 px-2 text-slate-400 hover:text-red-600 focus-ring"
+                        aria-label={`Remove class row ${i + 1}`}
+                      >
+                        ×
+                      </Button>
+                    </div>
+                  ))}
+                  {customClasses.length === 0 && form.classRows.length > 0 ? (
+                    <p className="text-[10px] text-slate-400">
+                      {form.classRows.length} classes · default section A (edit each row to change).
+                    </p>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    onClick={() => setForm((f) => ({ ...f, classRows: [...f.classRows, { name: '', sections: 'A' }] }))}
+                    disabled={form.classRows.length >= 40}
+                    className="h-8 w-fit border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:bg-slate-100 focus-ring"
+                  >
+                    + Add the school&rsquo;s own class
+                  </Button>
+                </div>
+
+                {/* Optional: subjects & rooms */}
                 <OptionalSection
-                  title="Optional settings — classes, subjects, rooms"
-                  description="Bootstrap the academic setup now, or leave it to the principal in the school's ERP."
+                  title="Optional — subjects & rooms"
+                  description="Bootstrap school-level subjects and rooms now, or leave them to the principal in the school's ERP."
                   open={openSections.bootstrap}
                   onOpenChange={(v) => setOpenSections((prev) => ({ ...prev, bootstrap: v }))}
                 >
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs font-semibold text-slate-700">
-                        Classes &amp; sections
-                      </Label>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          onClick={() =>
-                            set('classRows', Array.from({ length: 12 }, (_, i) => ({
-                              name: `Class ${i + 1}`,
-                              sections: 'A',
-                            })))
-                          }
-                          className="h-7 border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:bg-slate-100 focus-ring"
-                        >
-                          Preset: Class 1–12
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() =>
-                            setForm((f) => ({
-                              ...f,
-                              classRows: [...f.classRows, { name: '', sections: 'A' }],
-                            }))
-                          }
-                          className="h-7 border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:bg-slate-100 focus-ring"
-                        >
-                          + Add class
-                        </Button>
-                      </div>
-                    </div>
-                    {form.classRows.map((row, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <Input
-                          value={row.name}
-                          onChange={(e) =>
-                            setForm((f) => ({
-                              ...f,
-                              classRows: f.classRows.map((r, j) =>
-                                j === i ? { ...r, name: e.target.value } : r,
-                              ),
-                            }))
-                          }
-                          placeholder="Class 1"
-                          className={`${field} h-9 flex-1`}
-                          aria-label={`Class ${i + 1} name`}
-                        />
-                        <Input
-                          value={row.sections}
-                          onChange={(e) =>
-                            setForm((f) => ({
-                              ...f,
-                              classRows: f.classRows.map((r, j) =>
-                                j === i ? { ...r, sections: e.target.value } : r,
-                              ),
-                            }))
-                          }
-                          placeholder="A, B"
-                          className={`${field} h-9 w-28`}
-                          aria-label={`Class ${i + 1} sections (comma-separated)`}
-                        />
-                        {form.classRows.length > 1 ? (
-                          <Button
-                            variant="ghost"
-                            onClick={() =>
-                              setForm((f) => ({
-                                ...f,
-                                classRows: f.classRows.filter((_, j) => j !== i),
-                              }))
-                            }
-                            className="h-9 px-2 text-slate-400 hover:text-red-600 focus-ring"
-                            aria-label={`Remove class row ${i + 1}`}
-                          >
-                            ×
-                          </Button>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="pw-subjects" className="text-xs font-semibold text-slate-700">
                       Subjects
@@ -1306,8 +2014,7 @@ export function ProvisionWizard({
                       className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500/40"
                     />
                     <p className="text-[10px] text-slate-400">
-                      Comma-separated · {parsedSubjects.length}/60 · optional — the principal can add
-                      these later in the school&rsquo;s ERP.
+                      Comma-separated · {parsedSubjects.length}/60 · optional.
                     </p>
                   </div>
                   <div className="space-y-1.5">
@@ -1326,17 +2033,16 @@ export function ProvisionWizard({
                     </p>
                   </div>
                 </OptionalSection>
+              </div>
+            ) : null}
 
-                {/* Branding (optional) */}
-                <OptionalSection
-                  title="Branding"
-                  description="Primary/accent colors and the school-provided tagline — refined later in school settings."
-                  open={openSections.branding}
-                  onOpenChange={(v) => setOpenSections((prev) => ({ ...prev, branding: v }))}
-                >
+            {/* STEP 5 — BRANDING & WEBSITE */}
+            {step === 5 ? (
+              <div className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="pw-color" className="text-xs font-semibold text-slate-700">
-                      Primary color *
+                      Primary colour *
                     </Label>
                     <div className="flex items-center gap-2">
                       <Input
@@ -1377,7 +2083,7 @@ export function ProvisionWizard({
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="pw-accent" className="text-xs font-semibold text-slate-700">
-                      Secondary / accent color *
+                      Secondary / accent colour *
                     </Label>
                     <div className="flex items-center gap-2">
                       <Input
@@ -1416,7 +2122,7 @@ export function ProvisionWizard({
                       ))}
                     </div>
                   </div>
-                  <div className="space-y-1.5">
+                  <div className="space-y-1.5 sm:col-span-2">
                     <Label htmlFor="pw-tagline" className="text-xs font-semibold text-slate-700">
                       Tagline (if the school provides one)
                     </Label>
@@ -1428,166 +2134,255 @@ export function ProvisionWizard({
                       className={field}
                     />
                     <p className="text-[10px] text-slate-400">
-                      Only what the school actually provides. Empty is honest — the website shows a
-                      clean placeholder until the school writes its own content.
+                      Only what the school actually provides. Empty is honest — the website shows a clean
+                      placeholder until the school writes its own content.
                     </p>
                   </div>
-                  <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
-                    School name display uses the name and short name from step 1. Logo and favicon
-                    are uploaded by the school itself from its settings after activation — the
-                    platform never invents branding.
-                  </p>
-                </OptionalSection>
+                </div>
 
-                {/* Website & domain (optional) */}
-                <OptionalSection
-                  title="Website & domain"
-                  description="Public website toggle, custom domain (PENDING until DNS verification) and the temporary platform domain."
-                  open={openSections.website}
-                  onOpenChange={(v) => setOpenSections((prev) => ({ ...prev, website: v }))}
-                >
-                  <label className="flex items-start gap-3 rounded-xl border border-teal-300 bg-teal-50/60 p-4 focus-ring">
-                    <input
-                      type="checkbox"
-                      checked={form.websiteEnabled}
-                      onChange={(e) => set('websiteEnabled', e.target.checked)}
-                      className="mt-0.5 h-4 w-4 shrink-0 accent-teal-600"
-                      aria-label="Website enabled"
-                    />
-                    <span className="min-w-0">
-                      <span className="block text-sm font-semibold text-slate-900">
-                        Website enabled
-                      </span>
-                      <span className="mt-0.5 block text-xs text-slate-600">
-                        The school gets its public website — home, about, academics, admissions,
-                        contact and its own login — as soon as it is activated.
-                      </span>
-                    </span>
-                  </label>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="pw-customdomain" className="text-xs font-semibold text-slate-700">
-                      Custom domain
-                    </Label>
-                    <Input
-                      id="pw-customdomain"
-                      value={form.customDomain}
-                      onChange={(e) => set('customDomain', e.target.value.toLowerCase())}
-                      placeholder="www.demoschool.edu"
-                      className={`${field} font-mono`}
-                    />
-                    <p className="text-[10px] text-slate-400">
-                      Optional. Recorded as PENDING with a verification token — the school proves
-                      ownership with a DNS TXT record before it routes traffic. Nothing is faked.
-                    </p>
-                  </div>
-                  <div className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs font-semibold text-slate-700">Temporary platform domain</p>
-                    <p className="font-mono text-sm text-slate-900">
-                      {tempDomain || 'derived from the slug (fill it in step 1)'}
-                    </p>
-                    <p className="text-[10px] leading-relaxed text-slate-400">
-                      The school&rsquo;s platform subdomain. Until DNS is configured, the website is
-                      reachable through the tenant link{' '}
-                      <span className="font-mono text-slate-600">
-                        /?tenant={form.slug || 'school-slug'}
-                      </span>{' '}
-                      — a development fallback, never the final customer URL.
-                    </p>
-                  </div>
-                </OptionalSection>
-
-                {/* Location & academic session (optional) */}
-                <OptionalSection
-                  title="Location & academic session"
-                  description="Address, city, state, country, timezone and the academic year (e.g. 2026-2027)."
-                  open={openSections.location}
-                  onOpenChange={(v) => setOpenSections((prev) => ({ ...prev, location: v }))}
-                >
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-1.5 sm:col-span-2">
-                      <Label htmlFor="pw-address" className="text-xs font-semibold text-slate-700">
-                        Address
-                      </Label>
-                      <Input
-                        id="pw-address"
-                        value={form.address}
-                        onChange={(e) => set('address', e.target.value)}
-                        placeholder="12 Education Avenue"
-                        className={field}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="pw-city" className="text-xs font-semibold text-slate-700">
-                        City
-                      </Label>
-                      <Input
-                        id="pw-city"
-                        value={form.city}
-                        onChange={(e) => set('city', e.target.value)}
-                        placeholder="Pune"
-                        className={field}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="pw-state" className="text-xs font-semibold text-slate-700">
-                        State
-                      </Label>
-                      <Input
-                        id="pw-state"
-                        value={form.state}
-                        onChange={(e) => set('state', e.target.value)}
-                        placeholder="Maharashtra"
-                        className={field}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="pw-country" className="text-xs font-semibold text-slate-700">
-                        Country
-                      </Label>
-                      <Input
-                        id="pw-country"
-                        value={form.country}
-                        onChange={(e) => set('country', e.target.value)}
-                        placeholder="India"
-                        className={field}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="pw-tz" className="text-xs font-semibold text-slate-700">
-                        Timezone
-                      </Label>
-                      <select
-                        id="pw-tz"
-                        value={form.timezone}
-                        onChange={(e) => set('timezone', e.target.value)}
-                        className={`${field} w-full rounded-md border border-slate-200 bg-white px-3 text-sm`}
+                {/* Live branding preview — a small, useful mock of the
+                    school's public identity rendered with the chosen
+                    colours + names (data only; the real website uses the
+                    same School fields). */}
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold text-slate-700">Live preview</p>
+                  <div
+                    className="relative overflow-hidden rounded-xl border border-slate-200"
+                    style={{ backgroundColor: form.themeColor }}
+                  >
+                    <div className="flex flex-col items-center gap-2 px-6 py-6 text-center">
+                      <span
+                        className="flex h-12 w-12 items-center justify-center rounded-full border-2 text-sm font-bold text-white"
+                        style={{ borderColor: form.accentColor, backgroundColor: 'rgba(255,255,255,0.15)' }}
+                        aria-hidden="true"
                       >
-                        {TIMEZONES.map((tz) => (
-                          <option key={tz} value={tz}>
-                            {tz}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1.5 sm:col-span-2">
-                      <Label htmlFor="pw-year" className="text-xs font-semibold text-slate-700">
-                        Academic session
-                      </Label>
-                      <Input
-                        id="pw-year"
-                        value={form.academicYear}
-                        onChange={(e) => set('academicYear', e.target.value)}
-                        placeholder="2026-2027"
-                        className={field}
+                        {(form.shortName.trim() || form.name.trim() || 'S')
+                          .split(/\s+/)
+                          .map((w) => w[0])
+                          .join('')
+                          .slice(0, 3)
+                          .toUpperCase()}
+                      </span>
+                      <span className="text-base font-semibold text-white">
+                        {form.shortName.trim() || form.name.trim() || 'School name'}
+                      </span>
+                      <span className="max-w-md truncate text-xs" style={{ color: 'rgba(255,255,255,0.75)' }}>
+                        {form.tagline.trim() || 'Tagline appears here once the school provides one'}
+                      </span>
+                      <span
+                        className="mt-1 h-1 w-16 rounded-full"
+                        style={{ backgroundColor: form.accentColor }}
+                        aria-hidden="true"
                       />
+                      <span
+                        className="mt-2 rounded-md px-3 py-1.5 text-[11px] font-semibold"
+                        style={{ backgroundColor: form.accentColor, color: '#1f2937' }}
+                        aria-hidden="true"
+                      >
+                        Sign in
+                      </span>
                     </div>
                   </div>
-                </OptionalSection>
+                  <p className="text-[10px] text-slate-400">
+                    The crest, wordmark and accents use the school&rsquo;s colours. Logo and favicon are
+                    uploaded by the school itself from its settings after activation — the platform never
+                    invents branding.
+                  </p>
+                </div>
+
+                <label className="flex items-start gap-3 rounded-xl border border-teal-300 bg-teal-50/60 p-4 focus-ring">
+                  <input
+                    type="checkbox"
+                    checked={form.websiteEnabled}
+                    onChange={(e) => set('websiteEnabled', e.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-teal-600"
+                    aria-label="Website enabled"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-slate-900">
+                      Public school website enabled
+                    </span>
+                    <span className="mt-0.5 block text-xs text-slate-600">
+                      The school gets its public website — home, about, academics, admissions, contact and
+                      its own login — as soon as it is activated, on the standard Scholario template
+                      configured through the branding above.
+                    </span>
+                  </span>
+                </label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-customdomain" className="text-xs font-semibold text-slate-700">
+                    Custom domain <span className="font-normal text-slate-400">(optional)</span>
+                  </Label>
+                  <Input
+                    id="pw-customdomain"
+                    value={form.customDomain}
+                    onChange={(e) => set('customDomain', e.target.value.toLowerCase())}
+                    placeholder="www.greenvalley.edu"
+                    className={`${field} font-mono`}
+                  />
+                  <p className="text-[10px] text-slate-400">
+                    Recorded as PENDING with a verification token — the school proves ownership with a DNS
+                    TXT record before it routes traffic. A missing custom domain never blocks creation.
+                  </p>
+                </div>
+                <div className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold text-slate-700">Temporary platform domain</p>
+                  <p className="font-mono text-sm text-slate-900">
+                    {tempDomain || 'derived from the slug (fill it in step 1)'}
+                  </p>
+                  <p className="text-[10px] leading-relaxed text-slate-400">
+                    The school&rsquo;s platform subdomain, separate from any custom domain. Until DNS is
+                    configured, the website is reachable through the tenant link{' '}
+                    <span className="font-mono text-slate-600">
+                      /?tenant={form.slug || 'school-slug'}
+                    </span>{' '}
+                    — a development fallback, never the final customer URL.
+                  </p>
+                </div>
               </div>
             ) : null}
 
-            {/* STEP 4 — REVIEW & CREATE */}
-            {step === 4 ? (
+            {/* STEP 6 — ADDRESS & CONTACT */}
+            {step === 6 ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label htmlFor="pw-address" className="text-xs font-semibold text-slate-700">
+                    Address line 1 *
+                  </Label>
+                  <Input
+                    id="pw-address"
+                    value={form.address}
+                    onChange={(e) => set('address', e.target.value)}
+                    placeholder="12 Education Avenue"
+                    className={field}
+                  />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label htmlFor="pw-address2" className="text-xs font-semibold text-slate-700">
+                    Address line 2 <span className="font-normal text-slate-400">(optional)</span>
+                  </Label>
+                  <Input
+                    id="pw-address2"
+                    value={form.addressLine2}
+                    onChange={(e) => set('addressLine2', e.target.value)}
+                    placeholder="Near Civil Lines"
+                    className={field}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-city" className="text-xs font-semibold text-slate-700">
+                    City *
+                  </Label>
+                  <Input
+                    id="pw-city"
+                    value={form.city}
+                    onChange={(e) => set('city', e.target.value)}
+                    placeholder="Jhansi"
+                    className={field}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-district" className="text-xs font-semibold text-slate-700">
+                    District <span className="font-normal text-slate-400">(optional)</span>
+                  </Label>
+                  <Input
+                    id="pw-district"
+                    value={form.district}
+                    onChange={(e) => set('district', e.target.value)}
+                    placeholder="Jhansi"
+                    className={field}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-state" className="text-xs font-semibold text-slate-700">
+                    State *
+                  </Label>
+                  <Input
+                    id="pw-state"
+                    value={form.state}
+                    onChange={(e) => set('state', e.target.value)}
+                    placeholder="Uttar Pradesh"
+                    className={field}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-pin" className="text-xs font-semibold text-slate-700">
+                    PIN / postal code{' '}
+                    <span className="font-normal text-slate-400">
+                      {form.country.trim().toLowerCase() === 'india' ? '' : '(optional)'}
+                    </span>
+                  </Label>
+                  <Input
+                    id="pw-pin"
+                    inputMode="numeric"
+                    value={form.pincode}
+                    onChange={(e) => set('pincode', e.target.value)}
+                    placeholder="284001"
+                    className={field}
+                  />
+                  <p className="text-[10px] text-slate-400">
+                    {form.country.trim().toLowerCase() === 'india'
+                      ? 'Indian PIN — 6 digits, first digit 1–8.'
+                      : 'Validated per the chosen country.'}
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-country" className="text-xs font-semibold text-slate-700">
+                    Country *
+                  </Label>
+                  <Input
+                    id="pw-country"
+                    value={form.country}
+                    onChange={(e) => set('country', e.target.value)}
+                    placeholder="India"
+                    className={field}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-gemail" className="text-xs font-semibold text-slate-700">
+                    General school email <span className="font-normal text-slate-400">(optional)</span>
+                  </Label>
+                  <Input
+                    id="pw-gemail"
+                    type="email"
+                    value={form.contactEmail}
+                    onChange={(e) => set('contactEmail', e.target.value)}
+                    placeholder="office@greenvalley.edu"
+                    className={field}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-gphone" className="text-xs font-semibold text-slate-700">
+                    Contact phone <span className="font-normal text-slate-400">(optional)</span>
+                  </Label>
+                  <Input
+                    id="pw-gphone"
+                    value={form.contactPhone}
+                    onChange={(e) => set('contactPhone', e.target.value)}
+                    placeholder="+91 98765 43210"
+                    className={field}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pw-website" className="text-xs font-semibold text-slate-700">
+                    School website <span className="font-normal text-slate-400">(optional)</span>
+                  </Label>
+                  <Input
+                    id="pw-website"
+                    value={form.website}
+                    onChange={(e) => set('website', e.target.value)}
+                    placeholder="greenvalley.edu"
+                    className={`${field} font-mono`}
+                  />
+                  <p className="text-[10px] text-slate-400">
+                    The school&rsquo;s existing external website, shown on its public page.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {/* STEP 7 — REVIEW & CREATE */}
+            {step === 7 ? (
               <div className="space-y-3">
                 {/* Missing-required indicators — defensive (per-step Next
                     validation normally prevents reaching review with
@@ -1608,55 +2403,141 @@ export function ProvisionWizard({
                     </ul>
                   </div>
                 ) : null}
-                <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
-                  {[
-                    ['School', `${form.name}${form.shortName ? ` (${form.shortName})` : ''}`],
-                    ['Slug · code', `${form.slug} · ${form.code}`],
-                    [
-                      'Board · plan · billing',
-                      `${form.board} · ${form.plan} · ${BILLING_MODEL_LABELS[form.billingModel] ?? form.billingModel}`,
-                    ],
-                    [
-                      'Location',
-                      [form.city, form.state, form.country].filter(Boolean).join(', ') || '—',
-                    ],
-                    ['Address', form.address || '—'],
-                    ['Contact', [form.contactEmail, form.contactPhone].filter(Boolean).join(' · ') || '—'],
-                    ['Timezone', form.timezone],
-                    ['Academic session', form.academicYear || '—'],
-                    ['Branding', `${form.themeColor} / ${form.accentColor}${form.tagline ? ' · tagline' : ''}`],
-                    [
-                      'Website',
-                      form.websiteEnabled
-                        ? `enabled · slug ${form.slug}${form.customDomain ? ` · ${form.customDomain} (pending DNS verification)` : ''}`
-                        : 'disabled',
-                    ],
-                    ['Temporary domain', tempDomain || '—'],
-                    ['Principal', `${form.principalName} · ${form.principalEmail}`],
-                    [
-                      'Classes',
-                      form.classRows.filter((r) => r.name.trim()).length > 0
-                        ? form.classRows
-                            .filter((r) => r.name.trim())
-                            .map((r) => (r.sections.trim() ? `${r.name} (${r.sections})` : r.name))
-                            .join(', ')
-                        : '—',
-                    ],
-                    ['Subjects', parsedSubjects.length > 0 ? parsedSubjects.join(', ') : '—'],
-                    ['Rooms', parsedRooms.length > 0 ? parsedRooms.join(', ') : '—'],
-                    ['Working days', form.workingDays.join(', ')],
-                  ].map(([label, value]) => (
-                    <div key={label} className="flex justify-between gap-4">
-                      <span className="shrink-0 text-slate-500">{label}</span>
-                      <span className="truncate text-right text-slate-900">{value}</span>
+
+                {(
+                  [
+                    {
+                      stepId: 1,
+                      label: 'School identity',
+                      state: stepIssue(1).message ? 'attention' : 'ready',
+                      rows: [
+                        ['School', `${form.name}${form.shortName ? ` (${form.shortName})` : ''}`],
+                        ['Board', BOARD_OPTIONS.find((b) => b.value === form.board)?.label ?? form.board],
+                        ['Slug · status', `${form.slug} · ${slugCheck?.available === false ? 'already in use' : slugCheck?.available === true ? 'available' : 'checked at creation'}`],
+                        ['School code', form.code.trim() || `auto-assigned from the record prefix (${prefixPreview || 'derived at creation'})`],
+                        ['Record prefix', prefixPreview ? `${prefixPreview} (next available — allocated at creation)` : 'allocated server-side at creation'],
+                      ],
+                    },
+                    {
+                      stepId: 2,
+                      label: 'Principal',
+                      state: stepIssue(2).message ? 'attention' : 'ready',
+                      rows: [
+                        ['Principal', `${form.principalName} · ${form.principalEmail}`],
+                        ['Phone', form.principalPhone.trim() || '—'],
+                        ['Credential', form.principalPassword ? 'operator-supplied (forced change at first sign-in)' : 'auto-generated one-time (shown once)'],
+                      ],
+                    },
+                    {
+                      stepId: 3,
+                      label: 'Subscription & pricing',
+                      state: stepIssue(3).message ? 'attention' : 'ready',
+                      rows: [
+                        [
+                          'Billing',
+                          `${BILLING_MODEL_LABELS[form.billingModel] ?? form.billingModel} · ${FREQUENCY_LABELS[form.billingFrequency] ?? form.billingFrequency}`,
+                        ],
+                        [
+                          'Agreed price',
+                          amountNum != null
+                            ? `${money(amountNum)} ${unitLabel}${isStudentBased ? ` × ${licensedNum ?? '—'} students` : ''}${isStudentBased && licensedNum != null ? ` = ${money(amountNum * licensedNum)}` : ''}`
+                            : '—',
+                        ],
+                        ['Starts', form.subscriptionStartsOn],
+                        ['Payments', 'none recorded yet — terms only, nothing billed at creation'],
+                      ],
+                    },
+                    {
+                      stepId: 4,
+                      label: 'Academic setup',
+                      state: stepIssue(4).message ? 'attention' : parsedClasses.length === 0 ? 'optional' : 'ready',
+                      rows: [
+                        ['Session · timezone', `${form.academicYear || '—'} · ${form.timezone}`],
+                        ['Working days', form.workingDays.join(', ')],
+                        [
+                          'Classes',
+                          parsedClasses.length > 0
+                            ? parsedClasses
+                                .map((c) => (c.sections.length > 0 ? `${c.name} (${c.sections.join(', ')})` : c.name))
+                                .join(', ')
+                            : 'not configured — the principal sets them up later',
+                        ],
+                        ['Subjects', parsedSubjects.length > 0 ? parsedSubjects.join(', ') : '—'],
+                        ['Rooms', parsedRooms.length > 0 ? parsedRooms.join(', ') : '—'],
+                      ],
+                    },
+                    {
+                      stepId: 5,
+                      label: 'Branding & website',
+                      state: stepIssue(5).message ? 'attention' : form.websiteEnabled || form.customDomain ? 'ready' : 'ready',
+                      rows: [
+                        ['Colours', `${form.themeColor} / ${form.accentColor}${form.tagline ? ' · tagline' : ''}`],
+                        ['Website', form.websiteEnabled ? 'enabled' : 'disabled'],
+                        [
+                          'Custom domain',
+                          form.customDomain
+                            ? `${form.customDomain} (PENDING until DNS verification)`
+                            : 'none — the temporary platform domain serves the site',
+                        ],
+                        ['Temporary domain', tempDomain || '—'],
+                      ],
+                    },
+                    {
+                      stepId: 6,
+                      label: 'Address & contact',
+                      state: stepIssue(6).message ? 'attention' : 'ready',
+                      rows: [
+                        [
+                          'Address',
+                          [form.address, form.addressLine2].filter(Boolean).join(', ') || '—',
+                        ],
+                        [
+                          'City · district · state',
+                          [form.city, form.district, form.state].filter(Boolean).join(' · ') || '—',
+                        ],
+                        [
+                          'PIN · country',
+                          [form.pincode, form.country].filter(Boolean).join(' · ') || '—',
+                        ],
+                        [
+                          'Contact',
+                          [form.contactEmail, form.contactPhone, form.website].filter(Boolean).join(' · ') || '—',
+                        ],
+                      ],
+                    },
+                  ] as const
+                ).map((section) => (
+                  <div key={section.stepId} className="rounded-xl border border-slate-200 bg-white">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <p className="truncate text-xs font-semibold text-slate-700">{section.label}</p>
+                        <SectionStatus state={section.state} />
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => jumpTo(section.stepId)}
+                        className="h-7 shrink-0 border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:bg-slate-100 focus-ring"
+                        aria-label={`Edit ${section.label}`}
+                      >
+                        Edit
+                      </Button>
                     </div>
-                  ))}
-                </div>
+                    <div className="grid gap-1.5 px-4 py-3 text-sm">
+                      {section.rows.map(([label, value]) => (
+                        <div key={label} className="flex justify-between gap-4">
+                          <span className="shrink-0 text-slate-500">{label}</span>
+                          <span className="min-w-0 break-words text-right text-slate-900">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
                 <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  CREATE SCHOOL provisions the whole tenant ecosystem in one transaction: school
-                  identity, branding, website configuration, domain record, the principal
-                  account, and the initial academic setup. The school is created in PENDING
-                  state — sign-in is blocked until you activate it from the school record.
+                  CREATE SCHOOL provisions the whole tenant ecosystem in one transaction: school identity,
+                  record prefix, subscription terms, branding, website configuration, domain record, the
+                  principal account, and the initial academic setup. The school is created in PENDING
+                  state — sign-in is blocked until you activate it from the school record. Retries are
+                  idempotent: a duplicate submission can never create a second school.
                 </p>
               </div>
             ) : null}
@@ -1671,6 +2552,9 @@ export function ProvisionWizard({
                 <ChevronLeft className="h-4 w-4" aria-hidden="true" />
                 Back
               </Button>
+              <p className="text-[11px] text-slate-400">
+                Step {step} of {STEPS.length}
+              </p>
               {step < STEPS.length ? (
                 <Button
                   onClick={next}

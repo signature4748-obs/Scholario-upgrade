@@ -42,6 +42,7 @@ import {
   BookOpen,
   LayoutGrid,
   ClipboardList,
+  Hash,
   IndianRupee,
   MonitorSmartphone,
   Globe,
@@ -112,6 +113,14 @@ interface SchoolRecord {
   name: string
   slug: string
   code: string
+  // Task 7 — the internal record prefix (e.g. GVPS-0001) plus the
+  // extended profile fields the hardened detail GET now returns.
+  recordPrefix: string | null
+  shortName?: string | null
+  tagline?: string | null
+  website?: string | null
+  pincode?: string | null
+  district?: string | null
   domain: string | null
   address: string | null
   city: string | null
@@ -134,6 +143,11 @@ interface SchoolDetailData {
   counts: { users: number; students: number; teachers: number; classes: number; exams: number; fees: number }
   activeSchoolSessions: number
   activeSupportSessions: number
+  // Task 7 — the live student-access-pause state (null when student
+  // access is NOT paused). The enforcement itself is the LOCKED student
+  // User rows; this record is the operator-facing truth (reason,
+  // affected count, timestamp) behind the Access group's control.
+  studentAccessPause: { pausedAt: string; reason: string; affectedCount: number } | null
   // TWO-PROJECT TOPOLOGY (PHASE 10) — the access truth: canonical
   // doors (may be RELATIVE when SCHOOL_APP_BASE_URL is unset — the
   // unified deployment serves both planes), the founding principal's
@@ -821,6 +835,207 @@ function SuspendDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ── Student access — pause/resume control (Task 7) ───────────────────────
+
+const STUDENT_ACCESS_PAUSE_IMPACT =
+  "Locks ONLY this school's student accounts out of business APIs (server-enforced). Staff and the principal keep working. Student records, marks, fees and attendance are preserved. Students admitted later are not automatically paused."
+
+const STUDENT_ACCESS_RESUME_IMPACT =
+  'Restores ONLY the accounts locked by this pause that are still locked. Accounts locked individually for other reasons stay locked.'
+
+/**
+ * Access group → "Student access" card (Task 7): the server-enforced
+ * pause of ONLY this school's student accounts (business APIs). Staff
+ * and the principal keep working; student records are preserved. The
+ * control is rendered for schools.manage holders only — the server
+ * re-authorizes the permission AND the step-up window anyway, and
+ * writes the audit event with the operator's reason. The live pause
+ * truth (reason · affected count · timestamp) comes from the dossier
+ * payload's top-level `studentAccessPause`.
+ */
+function StudentAccessCard({
+  schoolId,
+  schoolName,
+  pause,
+  gate,
+  onChanged,
+}: {
+  schoolId: string
+  schoolName: string
+  pause: SchoolDetailData['studentAccessPause']
+  gate: GateFn
+  onChanged: () => void
+}) {
+  // 'pause' | 'resume' while the reason dialog is open, null when closed.
+  const [mode, setMode] = useState<'pause' | 'resume' | null>(null)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (mode !== null) {
+      setReason('')
+      setError(null)
+    }
+  }, [mode])
+
+  const submit = async () => {
+    if (mode === null) return
+    if (reason.trim().length < 10) {
+      setError('A reason of at least 10 characters is required — it goes into the platform audit trail')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await gate(() =>
+        platformApi<{ paused: boolean; affectedCount?: number; resumedCount?: number; note: string }>(
+          `/api/platform/schools/${schoolId}/student-access`,
+          { method: 'POST', body: JSON.stringify({ action: mode, reason: reason.trim() }) },
+        ),
+      )
+      if (!res) return // cancelled at the step-up prompt
+      toast.success(res.note)
+      setMode(null)
+      onChanged()
+    } catch (e) {
+      const err = e as PlatformApiError
+      toast.error(err.error ?? 'Failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pausedAt = pause ? new Date(pause.pausedAt) : null
+  const pausedAtLabel =
+    pausedAt && !Number.isNaN(pausedAt.getTime()) ? pausedAt.toLocaleString() : pause ? pause.pausedAt : ''
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
+        <h2 className="font-display text-sm font-bold text-slate-900">Student access</h2>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Pausing locks ONLY this school&rsquo;s student accounts out of business APIs (server-enforced) —
+          staff and the principal keep working. Requires step-up verification and is audited with your
+          reason.
+        </p>
+      </div>
+      <div className="space-y-3 p-4 sm:px-5">
+        {pause ? (
+          <>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-amber-800">
+                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                Student access paused
+              </p>
+              <p className="mt-1.5 text-xs leading-snug text-amber-800">
+                <span className="font-semibold">Reason:</span> {pause.reason || '—'}
+              </p>
+              <p className="mt-1 text-xs text-amber-700">
+                {num.format(pause.affectedCount)} student account{pause.affectedCount === 1 ? '' : 's'}{' '}
+                locked at pause time · since {pausedAtLabel}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => setMode('resume')}
+              disabled={busy}
+              className="h-11 border-amber-300 bg-white text-amber-800 hover:bg-amber-50 font-semibold focus-ring"
+            >
+              <Power className="h-4 w-4" aria-hidden="true" />
+              Resume student access
+            </Button>
+          </>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-xs text-slate-500">
+              Student accounts currently sign in normally — no pause is in effect.
+            </p>
+            <Button
+              variant="outline"
+              onClick={() => setMode('pause')}
+              disabled={busy}
+              className="h-11 border-amber-300 bg-white text-amber-700 hover:bg-amber-50 font-semibold focus-ring"
+            >
+              <Ban className="h-4 w-4" aria-hidden="true" />
+              Pause student access
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Reason dialog — same pattern as SuspendDialog (min 10 chars,
+          step-up-gated POST, audit reason). */}
+      <Dialog open={mode !== null} onOpenChange={(v) => { if (!v) setMode(null) }}>
+        <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
+              {mode === 'resume' ? (
+                <Power className="h-4 w-4 text-teal-600" aria-hidden="true" />
+              ) : (
+                <Ban className="h-4 w-4 text-amber-600" aria-hidden="true" />
+              )}
+              {mode === 'resume' ? 'Resume student access' : 'Pause student access'} — {schoolName}
+            </DialogTitle>
+            <DialogDescription className="text-slate-500">
+              {mode === 'resume' ? STUDENT_ACCESS_RESUME_IMPACT : STUDENT_ACCESS_PAUSE_IMPACT} This action
+              requires step-up verification and is audited with your reason.
+            </DialogDescription>
+          </DialogHeader>
+
+          {error && (
+            <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              {error}
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="student-access-reason" className="text-xs font-semibold text-slate-700">
+              Reason (required) *
+            </Label>
+            <Textarea
+              id="student-access-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={
+                mode === 'resume'
+                  ? 'e.g. Fee reconciliation review complete — restoring the accounts locked on 12 March…'
+                  : 'e.g. Fee reconciliation dispute — parents requested a sign-in freeze pending the March ledger review…'
+              }
+              rows={3}
+              maxLength={400}
+              className="bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus-visible:ring-amber-500/40 min-h-[88px]"
+            />
+            <p className="text-[10px] text-slate-400 tabular-nums">{reason.trim().length}/400 · minimum 10</p>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setMode(null)}
+              className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void submit()}
+              disabled={busy}
+              className={
+                mode === 'resume'
+                  ? 'h-11 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring'
+                  : 'h-11 bg-amber-500 hover:bg-amber-600 text-slate-900 font-semibold focus-ring'
+              }
+            >
+              {busy ? (mode === 'resume' ? 'Resuming…' : 'Pausing…') : mode === 'resume' ? 'Resume student access' : 'Pause student access'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }
 
@@ -1659,8 +1874,16 @@ export function SchoolDetailModule() {
   // retry — no error boundary is needed on top of it.)
   const subscriptionPending = isSubscriptionSchemaPending(data)
 
-  const profile: Array<{ icon: React.ReactNode; label: string; value: string }> = [
+  const profile: Array<{ icon: React.ReactNode; label: string; value: string; mono?: boolean }> = [
     { icon: <Globe className="h-3.5 w-3.5" />, label: 'Domain', value: school.domain ?? '—' },
+    // Task 7 — internal record prefix + short name (honest '—' when unset).
+    {
+      icon: <Hash className="h-3.5 w-3.5" />,
+      label: 'Record prefix',
+      value: school.recordPrefix ?? '—',
+      mono: true,
+    },
+    { icon: <Info className="h-3.5 w-3.5" />, label: 'Short name', value: school.shortName ?? '—' },
     { icon: <MapPin className="h-3.5 w-3.5" />, label: 'City', value: school.city ?? '—' },
     { icon: <Info className="h-3.5 w-3.5" />, label: 'Board', value: school.board },
     { icon: <ClipboardList className="h-3.5 w-3.5" />, label: 'Plan', value: school.plan },
@@ -1738,6 +1961,7 @@ export function SchoolDetailModule() {
           </div>
           <p className="mt-1 font-mono text-xs text-slate-500">
             {school.slug} · {school.code}
+            {school.recordPrefix ? ` · ${school.recordPrefix}` : null}
           </p>
         </div>
         {/* ARCHITECTURE RESET — explicit, boundary-respecting actions:
@@ -1867,7 +2091,10 @@ export function SchoolDetailModule() {
                     </span>
                     {p.label}
                   </dt>
-                  <dd className="mt-1 truncate text-sm text-slate-700" title={p.value}>
+                  <dd
+                    className={`mt-1 truncate text-sm text-slate-700 ${p.mono ? 'font-mono' : ''}`}
+                    title={p.value}
+                  >
                     {p.value}
                   </dd>
                 </div>
@@ -2367,6 +2594,18 @@ export function SchoolDetailModule() {
               activeSchoolSessions={data.activeSchoolSessions}
               activeSupportSessions={data.activeSupportSessions}
             />
+            {/* Task 7 — student-access pause/resume (schools.manage +
+                step-up): rendered only for managers; the server
+                re-authorizes anyway. */}
+            {canManage && (
+              <StudentAccessCard
+                schoolId={id}
+                schoolName={school.name}
+                pause={data.studentAccessPause}
+                gate={gate}
+                onChanged={() => void reload()}
+              />
+            )}
           </GroupSection>
 
           {/* Users & access (mission §9 — read-only roster) */}
