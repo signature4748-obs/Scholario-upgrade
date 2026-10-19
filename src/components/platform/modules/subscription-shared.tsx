@@ -77,18 +77,27 @@ export interface PlanRow {
 export interface RegistryRow {
   subscriptionId: string
   school: { id: string; name: string; slug: string; code: string; status: string; isDemo: boolean }
-  billingModel: string
+  /**
+   * Registry-snapshot fields are NULL while the owner-gated subscription
+   * migration (20261013183000) is unapplied: the registry route's honest
+   * degradation serves the row from LEGACY columns only and flags the
+   * response with `subscriptionSchemaPending: true` (the same wire
+   * contract the Subscriptions page already renders). Consumers MUST
+   * treat these as nullable and render the pending state honestly —
+   * never assume them present (2026-10-19 school-detail crash).
+   */
+  billingModel: string | null
   plan: string
   planDef: { code: string; name: string } | null
   planCode: string | null
   interval: string | null
   priceSnapshot: number | null
-  currencySnapshot: string
+  currencySnapshot: string | null
   periodStart: string | null
   periodEnd: string | null
   graceDays: number
   overrideStatus: string | null
-  paymentCount: number
+  paymentCount: number | null
   entitlement: { state: string; businessAllowed: boolean; renewalRequired: boolean }
 }
 
