@@ -63,6 +63,7 @@ import {
   type RegistryRow,
   type StudentRow,
 } from './subscription-shared'
+import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -190,7 +191,7 @@ function BoundaryBanner() {
 
 // ── Snapshot card (the enforced state + override) ─────────────────────────
 
-function SnapshotCard({
+export function SnapshotCard({
   data,
   registryRow,
   gate,
@@ -277,7 +278,7 @@ function SnapshotCard({
               {registryRow.planCode}
             </Badge>
           )}
-          {registryRow && (
+          {registryRow?.billingModel && (
             <Badge variant="outline" className="normal-case border-slate-200 bg-slate-100 text-slate-700">
               {registryRow.billingModel.replace(/_/g, ' ')}
             </Badge>
@@ -735,7 +736,7 @@ function RecordPaymentDialog({
 
 // ── Plan & billing card ──────────────────────────────────────────────────
 
-function PlanBillingCard({
+export function PlanBillingCard({
   schoolId,
   schoolName,
   registryRow,
@@ -815,11 +816,13 @@ function PlanBillingCard({
           </div>
           <div>
             <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Billing model</dt>
-            <dd className="mt-0.5 text-slate-900">{(registryRow?.billingModel ?? 'SCHOOL_WIDE').replace(/_/g, ' ')}</dd>
+            <dd className="mt-0.5 text-slate-900">{registryRow?.billingModel ? registryRow.billingModel.replace(/_/g, ' ') : '—'}</dd>
           </div>
           <div>
             <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Price snapshot</dt>
-            <dd className="mt-0.5 text-slate-900">{registryRow ? money(registryRow.priceSnapshot, registryRow.currencySnapshot) : '—'}</dd>
+            <dd className="mt-0.5 text-slate-900">
+              {registryRow ? money(registryRow.priceSnapshot, registryRow.currencySnapshot ?? 'INR') : '—'}
+            </dd>
           </div>
           <div>
             <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Interval</dt>
@@ -831,7 +834,7 @@ function PlanBillingCard({
           </div>
           <div>
             <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Renewal payments</dt>
-            <dd className="mt-0.5 text-slate-900 tabular-nums">{registryRow?.paymentCount ?? 0}</dd>
+            <dd className="mt-0.5 text-slate-900 tabular-nums">{registryRow?.paymentCount ?? '—'}</dd>
           </div>
         </dl>
 
@@ -1354,6 +1357,7 @@ export function SchoolSubscriptionTab({
   const [data, setData] = useState<SubscriptionResponse | null>(null)
   const hasDataRef = useRef(false)
   const [registryRow, setRegistryRow] = useState<RegistryRow | null>(null)
+  const [schemaPending, setSchemaPending] = useState(false)
   const [codes, setCodes] = useState<ActivationCodeRow[]>([])
   const [codesTotal, setCodesTotal] = useState(0)
   const [students, setStudents] = useState<StudentRow[]>([])
@@ -1373,7 +1377,9 @@ export function SchoolSubscriptionTab({
     try {
       const [sub, reg, cod] = await Promise.all([
         platformApi<SubscriptionResponse>(`/api/platform/schools/${schoolId}/subscription`),
-        platformApi<{ schools: { rows: RegistryRow[] } }>(`/api/platform/subscriptions/registry?schoolId=${schoolId}`),
+        platformApi<{ subscriptionSchemaPending?: boolean; schools: { rows: RegistryRow[] } }>(
+          `/api/platform/subscriptions/registry?schoolId=${schoolId}`,
+        ),
         platformApi<{ codes: ActivationCodeRow[]; total: number }>(
           `/api/platform/subscriptions/codes?schoolId=${schoolId}&pageSize=100`,
         ),
@@ -1381,6 +1387,7 @@ export function SchoolSubscriptionTab({
       hasDataRef.current = true
       setData(sub)
       setRegistryRow(reg.schools.rows[0] ?? null)
+      setSchemaPending(isSubscriptionSchemaPending(reg))
       setCodes(cod.codes)
       setCodesTotal(cod.total)
       setLegacyPlan(sub.subscription?.plan ?? 'STANDARD')
@@ -1452,6 +1459,12 @@ export function SchoolSubscriptionTab({
   return (
     <div className="space-y-4">
       <BoundaryBanner />
+
+      {/* Schema-pending honesty — the same wire flag the Subscriptions
+          page consumes: the registry row exists, but its plan/billing
+          fields are unavailable on this database until the owner-gated
+          migration is applied (compact banner inside the tab). */}
+      {schemaPending && <SubscriptionPendingBanner compact />}
 
       <Tabs value={subTab} onValueChange={setSubTab}>
         <TabsList className="w-full bg-slate-100 border border-slate-200 h-auto flex-wrap p-1 gap-1">
