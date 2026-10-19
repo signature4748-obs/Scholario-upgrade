@@ -19,6 +19,11 @@
 // SubscriptionPendingBanner is rendered exactly once near the top
 // while the metrics/list keep rendering. No fabricated KPIs, no
 // decorative charts — every number comes from an API.
+//
+// System health (docs/PLATFORM_CONTROL_PLANE.md §3/§11 — the
+// documented "DB latency, counts, memory, recent auth failures"
+// panel) renders from the existing read-only /api/platform/health
+// route via the SystemHealthCard module.
 // ============================================================
 
 import React, { useCallback, useEffect, useState } from 'react'
@@ -43,6 +48,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
+import { SystemHealthCard } from './overview-health'
 
 // ── Types (API contracts — only the fields this page consumes) ────────────
 
@@ -421,6 +427,11 @@ export function OverviewModule() {
           )}
         </div>
       )}
+
+      {/* System health — the documented control-plane health panel
+          (DB latency, live sessions, recent auth failures, process
+          health) fed by the read-only /api/platform/health route. */}
+      <SystemHealthCard />
 
       {/* Needs attention — real actionable rows only (nothing when empty) */}
       {!loading && attention.length > 0 && (

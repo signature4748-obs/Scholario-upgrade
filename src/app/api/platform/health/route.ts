@@ -9,7 +9,9 @@ export const runtime = 'nodejs'
  *   · entity counts (schools by status, users, platform admins);
  *   · live session counts (platform + school + support);
  *   · process health (uptime, memory);
- *   · recent platform audit failures (security signal).
+ *   · recent platform audit failures (security signal) — windowed to
+ *     the last 7 days (createdAt-indexed) so "recent" stays truthful as
+ *     the audit log grows; the window is returned alongside the count.
  *
  * Readable by ANY platform admin (operational visibility).
  */
@@ -24,6 +26,9 @@ export async function GET() {
     } catch {
       dbOk = false
     }
+
+    const AUTH_FAILURE_WINDOW_DAYS = 7
+    const authFailuresSince = new Date(Date.now() - AUTH_FAILURE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
 
     const [
       schoolsActive,
@@ -45,7 +50,10 @@ export async function GET() {
       db.session.count({ where: { expiresAt: { gt: new Date() } } }),
       db.supportSession.count({ where: { revokedAt: null, expiresAt: { gt: new Date() } } }),
       db.platformAuditLog.count({
-        where: { action: { in: ['platform.login.failed', 'platform.step_up.failed', 'platform.login.locked'] } },
+        where: {
+          action: { in: ['platform.login.failed', 'platform.step_up.failed', 'platform.login.locked'] },
+          createdAt: { gte: authFailuresSince },
+        },
       }),
     ])
 
@@ -62,7 +70,10 @@ export async function GET() {
         school: liveSchoolSessions,
         support: liveSupportSessions,
       },
-      security: { recentAuthFailures: recentFailures },
+      security: {
+        recentAuthFailures: recentFailures,
+        recentAuthFailuresWindowDays: AUTH_FAILURE_WINDOW_DAYS,
+      },
       process: {
         uptimeSec: Math.round(process.uptime()),
         rssMb: Math.round(mem.rss / 1024 / 1024),
