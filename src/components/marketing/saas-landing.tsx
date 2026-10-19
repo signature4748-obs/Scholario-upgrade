@@ -17,6 +17,21 @@ import {
 } from 'lucide-react'
 
 /**
+ * The control plane's door (two-project architecture — see
+ * docs/VERCEL_PROJECTS.md). This landing renders on the SCHOOL plane,
+ * where the relative /platform/login does not exist (the plane gate
+ * answers 404 — no console door to phish on), so the operator CTA must
+ * target the platform deployment itself. The canonical URL is the same
+ * one the release tooling uses (scripts/prod-release/verify-deployment.ts
+ * DEFAULT_PLATFORM_URL); NEXT_PUBLIC_PLATFORM_URL is the override for
+ * alternative topologies (e.g. a local unified dev server:
+ * NEXT_PUBLIC_PLATFORM_URL=http://localhost:3000).
+ */
+const PLATFORM_LOGIN_HREF = `${(
+  process.env.NEXT_PUBLIC_PLATFORM_URL ?? 'https://scholario-platform.vercel.app'
+).replace(/\/+$/, '')}/platform/login`
+
+/**
  * PRODUCT-DIRECTION RESET (Parts 2 & 11) — the SCHOLARIO SaaS website.
  *
  * Rendered at the root when NO tenant resolves (bare platform domain /
@@ -66,7 +81,7 @@ export function SaasLanding({ notFoundForSlug }: { notFoundForSlug?: string | nu
             <a href="#contact" className="transition-colors hover:text-slate-900">Contact</a>
           </nav>
           <a
-            href="/platform/login"
+            href={PLATFORM_LOGIN_HREF}
             className="rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600"
           >
             Platform login
@@ -319,7 +334,7 @@ export function SaasLanding({ notFoundForSlug }: { notFoundForSlug?: string | nu
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
                 <a
-                  href="/platform/login"
+                  href={PLATFORM_LOGIN_HREF}
                   className="inline-flex h-11 items-center gap-2 rounded-xl bg-white px-5 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                 >
                   Platform login
@@ -340,7 +355,7 @@ export function SaasLanding({ notFoundForSlug }: { notFoundForSlug?: string | nu
             One platform · Many schools
           </span>
           <a
-            href="/platform/login"
+            href={PLATFORM_LOGIN_HREF}
             className="font-semibold text-slate-600 transition-colors hover:text-teal-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600"
           >
             Platform sign-in
