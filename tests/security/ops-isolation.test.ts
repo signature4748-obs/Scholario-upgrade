@@ -252,14 +252,30 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
   }, 90_000)
 
   test('the cron endpoint is not an unauthenticated backdoor', async () => {
-    const res = await fetch(`${BASE}/api/cron/ops-sync`, { method: 'POST' })
-    const body = (await res.json().catch(() => null)) as { ok?: boolean; skipped?: boolean } | null
+    // A dev server lazily compiles a route module on its FIRST request —
+    // that first request can stall until compilation finishes (observed
+    // 60–90s on cold dev servers; production builds have no lazy
+    // compilation). Warm the route with a bounded attempt, then assert
+    // on the warm response — the security verdict is the warm 401.
+    const post = () =>
+      fetch(`${BASE}/api/cron/ops-sync`, { method: 'POST', signal: AbortSignal.timeout(25_000) })
+    let res: Response | null = null
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        res = await post()
+        break
+      } catch {
+        /* cold lazy-compile stall — the next attempt hits the warm route */
+      }
+    }
+    expect(res).not.toBeNull()
+    const body = (await res!.json().catch(() => null)) as { ok?: boolean; skipped?: boolean } | null
     // Unified/school plane answers the honest skip (200 {skipped});
     // the platform plane without a session/secret answers 401. BOTH safe.
-    if (res.status === 200) {
+    if (res!.status === 200) {
       expect(body?.skipped).toBe(true)
     } else {
-      expect([401, 403]).toContain(res.status)
+      expect([401, 403]).toContain(res!.status)
     }
-  }, 90_000)
+  }, 150_000)
 })

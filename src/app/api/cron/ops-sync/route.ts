@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
-import { syncAllProviders } from '@/lib/ops/sync'
+
+// NOTE: syncAllProviders is imported LAZILY inside the handlers — the
+// route's module graph stays tiny so an unauthenticated request is
+// rejected fast even on a cold dev-server lazy compile (the sync chain
+// pulls the provider adapters; production builds compile everything
+// up front either way).
 
 export const runtime = 'nodejs'
 
@@ -36,11 +41,19 @@ async function handle(req: Request): Promise<Response> {
     return json({ skipped: true, reason: 'not applicable on the school plane' })
   }
 
+  // AUTH BEFORE WORK: the sync chain is imported ONLY after a valid
+  // credential exists. Importing it eagerly would compile/evaluate the
+  // whole provider-adapter graph for every unauthenticated ping — and
+  // on a cold dev server a dynamic import of uncompiled modules stalls
+  // the in-flight request until the lazy-compilation cycle completes
+  // (observed 60–75s). Production builds precompile everything; the
+  // ordering here is a correctness + cold-start property either way.
   // Cron-secret transport (Vercel Cron sends Authorization: Bearer …).
   const secret = (process.env.OPS_CRON_SECRET ?? '').trim()
   if (secret) {
     const auth = req.headers.get('authorization') ?? ''
     if (auth === `Bearer ${secret}`) {
+      const { syncAllProviders } = await import('@/lib/ops/sync')
       const statuses = await syncAllProviders('cron')
       return json({ ranAt: new Date().toISOString(), statuses })
     }
@@ -58,6 +71,7 @@ async function handle(req: Request): Promise<Response> {
       targetType: 'SETTING',
       reason: 'cron endpoint (session-authenticated invocation)',
     })
+    const { syncAllProviders } = await import('@/lib/ops/sync')
     const statuses = await syncAllProviders('cron')
     return { ranAt: new Date().toISOString(), statuses }
   }, { method: req.method === 'GET' ? 'GET' : 'POST' })
