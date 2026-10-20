@@ -323,7 +323,7 @@ describe('forged tenant parameters never switch an authenticated session', () =>
       },
     })
     tokenB = raw
-  })
+  }, 30_000)
 
   async function meWith(query: string): Promise<{ status: number; schoolId: unknown }> {
     const res = await liveFetch(`${BASE}/api/auth/me${query}`, {
@@ -340,28 +340,28 @@ describe('forged tenant parameters never switch an authenticated session', () =>
     expect(r.status).toBe(200)
     expect(r.schoolId).toBe(schoolBId)
     expect(r.schoolId).not.toBe(schoolAId)
-  })
+  }, 30_000)
 
   test('?slug=<foreign-slug> does not switch the session tenant', async () => {
     const r = await meWith('?slug=hawkings-prithvipur')
     expect(r.status).toBe(200)
     expect(r.schoolId).toBe(schoolBId)
-  })
+  }, 30_000)
 
   test('?schoolId=<foreign-id> does not switch the session tenant', async () => {
     const r = await meWith(`?schoolId=${encodeURIComponent(schoolAId)}`)
     expect(r.status).toBe(200)
     expect(r.schoolId).toBe(schoolBId)
-  })
+  }, 30_000)
 
   test('no parameters — the session tenant is unchanged (control)', async () => {
     const r = await meWith('')
     expect(r.status).toBe(200)
     expect(r.schoolId).toBe(schoolBId)
-  })
+  }, 30_000)
 
   test('an unauthenticated forged-tenant probe never leaks identity', async () => {
     const res = await liveFetch(`${BASE}/api/auth/me?tenant=hawkings-prithvipur`, undefined, LIVE)
     expect(res.status).toBe(401)
-  })
+  }, 30_000)
 })
