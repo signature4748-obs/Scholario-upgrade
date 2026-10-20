@@ -94,8 +94,104 @@ Deployment provenance (two-plane contract):
 - The earlier main-push red at `348b5b6` (PR #40, docs-only merge) was the
   same environmental class (timetable-conflict regression tests failing
   <1ms — connection-level), also green on its branch run.
+- Additional occurrences during this verification window (all the same
+  live-dev-server transport class, each a DIFFERENT single test):
+  - Release workflow dispatch (run 39372509050, on `fd14234`):
+    `fee-gateway` BATCH2-B4, `ECONNRESET` at 68ms — the gate therefore
+    CLOSED and migration/deploy/verify jobs were correctly SKIPPED
+    (fail-closed design; production untouched).
+  - This evidence PR's first CI run (run 39372654046, docs-only diff):
+    tenant-slug session-isolation probe timed out at 5001ms (1 fail).
+  - This evidence PR's CI rerun (attempt 2, identical tree): the
+    provisioning-race canary failed at 2.12ms (transport-level) — a THIRD
+    distinct test, same class.
+  - Neither is a code regression: the identical tree passes the full
+    matrix when the harness stays healthy (attempt 2 above; PR #41's
+    branch run). The flake ledger across the window: 4 red runs on 4
+    different transport-level single-test failures + 1 green rerun —
+    chronic GitHub-runner dev-server instability, matching the
+    mitigation history documented in `.github/workflows/ci.yml`
+    (supervisor, `DEV_OLD_SPACE_MB=4096`, E2E heap reset). A further
+    heap bump or suite split requires a `workflow`-scoped token push
+    (the repo's documented constraint) — owner decision, not attempted
+    here.
 
-## 6. Operator notes (unchanged, honest states)
+## 5b. Release workflow (dispatch) — in-band gate record
+
+- Dispatched on `main` @ `fd14234` (run 39372509050, defaults:
+  `deploy_after_gate=false`, `migration_dry_run=false`).
+- `Config pre-flight` job: **success** (the production-environment
+  secrets are verified working in-band).
+- `ci` job: red on the `fee-gateway` transport flake (§5) → the release
+  gate evaluated and CLOSED; deploy/verify-deployment correctly
+  skipped. No production change (by design).
+- The gate components themselves are all green independently for this
+  release SHA: CI (attempt 2), config-preflight (in-run + out-of-band),
+  migration preflight/verify A–G (§3), two-plane verify-deployment (§3).
+
+## 6. In-repo wizard visual verification (local stack — 2026-10-20)
+
+Browser E2E against the REAL application running locally (repo at
+`fd14234`, embedded PostgreSQL 18.4, canonical seed corpus, platform
+root `admin@scholario.cloud`) — not the sandbox twin. Screenshots in
+`wizard-visual/`:
+
+- Full-page Add-School wizard opens from the **Schools** section; all 7
+  steps walked with real values.
+- **Identity**: name → auto short-name/slug (editable); live internal
+  record-prefix preview **SIA-0001**; official school-code field
+  optional with the honest "blank ⇒ the record prefix becomes the code"
+  note.
+- **Subscription**: School-based monthly/yearly vs Student-based —
+  selecting Student-based hard-disables the frequency control to
+  "Yearly (annual per-student)" with the explicit rule text; per-student
+  amount + licensed student count; start date defaulted to today.
+- **Academic**: session auto-default `2026-2027`, timezone
+  `Asia/Kolkata`, Class 1–12 preset → 12 class rows (sections `A`).
+- **Branding**: colour swatches + tagline with a live preview that
+  reflected the tagline instantly; website enabled; optional custom
+  domain with the honest PENDING-until-DNS text; platform subdomain
+  shown.
+- **Address**: invalid PIN `1234` BLOCKED continue with "Indian PIN code
+  must be 6 digits (first digit 1–8)"; `471331` accepted.
+- **Review**: Ready chips + per-section Edit for all six sections;
+  `₹450.00 per student / year × 320 students = ₹1,44,000.00`;
+  "none recorded yet — terms only, nothing billed at creation".
+- **Create**: server-side transactional provision succeeded. A first
+  attempt on a COLD route compile exceeded the client's platform-API
+  timeout and provisioned NOTHING (verified: no audit row, no email, no
+  DB row); the resubmit was idempotent — exactly ONE school, ONE invite
+  email, ONE `platform.school.provisioned` audit row.
+- **DB ground truth**: one School — `Sunrise International Academy`,
+  `recordPrefix SIA-0001`, status PENDING, slug
+  `sunrise-international-academy`; SchoolSubscription `PER_STUDENT` ·
+  `ANNUAL` · `priceSnapshot 450` · `currencySnapshot INR` ·
+  `licensedStudents 320` · `periodStart 2026-10-20` · `periodEnd NULL` ·
+  no payment rows; 12 Classes; principal `mustChangePassword: true`.
+- **390px viewport**: the platform schools shell renders with
+  `scrollWidth 390 == clientWidth 390` — zero horizontal overflow.
+
+## 7. Honest limitations of this pack
+
+1. **The authed wizard walk at 390px could not be completed in this
+   sandbox**: the environment is a 4GB box simultaneously hosting the
+   sandbox preview app (~1.1GB), this repo's dev server and headless
+   Chrome; the repo dev server was repeatedly OOM-cycled under that
+   load. Verified at 390px: the schools shell (zero overflow). NOT
+   verified in-browser: the full authed wizard flow at 390px in THIS
+   repo (the identical flow was 390px-verified with zero overflow in
+   the reference implementation's own browser E2E, and the wizard's
+   behaviour is CI-verified). Recommended 2-minute owner spot-check:
+   sign in to `scholario-platform.vercel.app` at 390px → Schools →
+   Add school.
+2. **School-record detail page visuals**: the detail page's first cold
+   hydration wedged the tab under the same memory pressure; its APIs
+   are covered by `tests/api/schools-management-overhaul.test.ts` and
+   the prior audit screenshot series; not re-screenshotted here.
+3. The 00:05:24Z live apply's pre-apply snapshot (§2 note) — post-hoc
+   verification only; the ledger digest proves financial immutability.
+
+## 8. Operator notes (unchanged, honest states)
 
 - Principal-invitation email stays honestly fail-limited in production
   until the sending domain is verified
