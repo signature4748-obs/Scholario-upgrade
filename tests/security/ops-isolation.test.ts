@@ -112,11 +112,35 @@ async function directSchoolSession(email: string): Promise<string> {
   return token
 }
 
+
+/**
+ * Respawn-tolerant fetch: the CI dev server runs under a supervisor that
+ * respawns it when Next dev's memory guard fires (documented contract in
+ * the CI workflow: "respawn on ANY exit"). A connection reset/refusal
+ * during that window is RECOVERABLE — wait for the respawn and retry.
+ * Non-connection failures (timeouts) surface to the caller unchanged.
+ */
+async function resilientFetch(url: string, init?: RequestInit, opts?: { attempts?: number }): Promise<Response> {
+  const attempts = opts?.attempts ?? 3
+  for (let i = 1; ; i++) {
+    try {
+      return await fetch(url, init)
+    } catch (e) {
+      const code = (e as { code?: string })?.code ?? ''
+      if ((code === 'ECONNRESET' || code === 'ECONNREFUSED') && i < attempts) {
+        await new Promise((r) => setTimeout(r, 20_000))
+        continue
+      }
+      throw e
+    }
+  }
+}
+
 const asPlatform = (token: string, path: string) =>
-  fetch(`${BASE}${path}`, { headers: { 'x-platform-token': token, 'content-type': 'application/json' } })
+  resilientFetch(`${BASE}${path}`, { headers: { 'x-platform-token': token, 'content-type': 'application/json' } })
 
 const asSchool = (token: string, path: string) =>
-  fetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' } })
+  resilientFetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' } })
 
 describe('Operations center — cross-tenant monitoring authorization', () => {
   let rootToken: string
@@ -194,7 +218,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
       ['/api/platform/operations/alerts/settings', 'PUT'],
       ['/api/platform/operations/errors/abc/resolve', 'POST'],
     ] as const) {
-      const res = await fetch(`${BASE}${path}`, {
+      const res = await resilientFetch(`${BASE}${path}`, {
         method,
         headers: { 'x-platform-token': limitedAdminToken, 'content-type': 'application/json' },
         body: '{}',
@@ -213,7 +237,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
   }, 90_000)
 
   test('unauthenticated requests are refused (401)', async () => {
-    const res = await fetch(`${BASE}/api/platform/operations/overview`)
+    const res = await resilientFetch(`${BASE}/api/platform/operations/overview`)
     expect(res.status).toBe(401)
   }, 90_000)
 
@@ -232,7 +256,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
     // fire-and-forget — poll briefly for the atomic counter to land.
     expect(hawkingsSchoolId).toBeTruthy()
     let attributed = false
-    for (let attempt = 0; attempt < 12 && !attributed; attempt++) {
+    for (let attempt = 0; attempt < 10 && !attributed; attempt++) {
       const res = await asPlatform(rootToken, `/api/platform/operations/school-usage?days=1`)
       expect(res.status).toBe(200)
       const body = (await res.json()) as {
@@ -241,7 +265,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
       }
       const row = body.data.rows.find((r) => r.schoolId === hawkingsSchoolId)
       if (row && row.apiOperations > 0) attributed = true
-      else await new Promise((r) => setTimeout(r, 400))
+      else await new Promise((r) => setTimeout(r, 700))
     }
     expect(attributed).toBe(true)
   }, 120_000)
@@ -257,16 +281,12 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
     // 60–90s on cold dev servers; production builds have no lazy
     // compilation). Warm the route with a bounded attempt, then assert
     // on the warm response — the security verdict is the warm 401.
-    const post = () =>
-      fetch(`${BASE}/api/cron/ops-sync`, { method: 'POST', signal: AbortSignal.timeout(25_000) })
     let res: Response | null = null
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      try {
-        res = await post()
-        break
-      } catch {
-        /* cold lazy-compile stall — the next attempt hits the warm route */
-      }
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      if (attempt > 1) await new Promise((r) => setTimeout(r, 15_000))
+      const r = await (fetch(`${BASE}/api/cron/ops-sync`, { method: 'POST', signal: AbortSignal.timeout(30_000) }).catch(() => null) as Promise<Response | null>)
+      if (r) { res = r; break }
+      /* cold lazy-compile stall or supervised respawn — retry on the warm route */
     }
     expect(res).not.toBeNull()
     const body = (await res!.json().catch(() => null)) as { ok?: boolean; skipped?: boolean } | null
