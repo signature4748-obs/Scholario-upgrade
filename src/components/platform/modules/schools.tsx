@@ -110,6 +110,9 @@ interface SchoolRow {
   name: string
   slug: string
   code: string
+  /** Stable internal record prefix (e.g. GVPS-0001) — null only for
+   *  rows created before the 2026-10-20 backfill or a pending DB. */
+  recordPrefix: string | null
   domain: string | null
   city: string | null
   plan: string
@@ -154,6 +157,8 @@ interface SchoolsData {
 type StatusFilter = 'ALL' | 'ACTIVE' | 'SUSPENDED' | 'PENDING' | 'TRIAL' | 'ATTENTION'
 type SubStateFilter = 'ALL' | 'ACTIVE' | 'GRACE' | 'RESTRICTED' | 'SUSPENDED' | 'NOT_ACTIVATED'
 type BillingModelFilter = 'ALL' | 'SCHOOL_WIDE' | 'PER_STUDENT' | 'MIXED'
+type BillingFrequencyFilter = 'ALL' | 'MONTHLY' | 'ANNUAL'
+type BoardFilter = 'ALL' | 'CBSE' | 'UP_BOARD' | 'ICSE' | 'STATE' | 'CUSTOM'
 type PlanFilter = 'ALL' | 'FREE' | 'STANDARD' | 'PRO' | 'ENTERPRISE'
 type DemoFilter = 'ALL' | 'demo' | 'production'
 type ReadinessFilter = 'ALL' | 'ready' | 'incomplete'
@@ -482,6 +487,21 @@ const BILLING_MODEL_OPTIONS: readonly FilterOption[] = [
   { value: 'MIXED', label: 'Mixed' },
 ]
 
+const BILLING_FREQUENCY_OPTIONS: readonly FilterOption[] = [
+  { value: 'ALL', label: 'Any frequency' },
+  { value: 'MONTHLY', label: 'Monthly' },
+  { value: 'ANNUAL', label: 'Yearly' },
+]
+
+const BOARD_OPTIONS: readonly FilterOption[] = [
+  { value: 'ALL', label: 'All boards' },
+  { value: 'CBSE', label: 'CBSE' },
+  { value: 'UP_BOARD', label: 'UP Board' },
+  { value: 'ICSE', label: 'ICSE (legacy)' },
+  { value: 'STATE', label: 'State (legacy)' },
+  { value: 'CUSTOM', label: 'Custom (legacy)' },
+]
+
 const DEMO_OPTIONS: readonly FilterOption[] = [
   { value: 'ALL', label: 'Demo + production' },
   { value: 'demo', label: 'Demo only' },
@@ -558,6 +578,8 @@ export function SchoolsModule() {
   const [demo, setDemo] = useState<DemoFilter>('ALL')
   const [readiness, setReadiness] = useState<ReadinessFilter>('ALL')
   const [expiringDays, setExpiringDays] = useState<ExpiringFilter>('ALL')
+  const [boardFilter, setBoardFilter] = useState<BoardFilter>('ALL')
+  const [billingFrequency, setBillingFrequency] = useState<BillingFrequencyFilter>('ALL')
   const [sort, setSort] = useState<SortKey>('created_desc')
   const [page, setPage] = useState(1)
   const [data, setData] = useState<SchoolsData | null>(null)
@@ -580,6 +602,8 @@ export function SchoolsModule() {
     (plan !== 'ALL' ? 1 : 0) +
     (subscriptionState !== 'ALL' ? 1 : 0) +
     (billingModel !== 'ALL' ? 1 : 0) +
+    (billingFrequency !== 'ALL' ? 1 : 0) +
+    (boardFilter !== 'ALL' ? 1 : 0) +
     (demo !== 'ALL' ? 1 : 0) +
     (readiness !== 'ALL' ? 1 : 0) +
     (expiringDays !== 'ALL' ? 1 : 0)
@@ -626,16 +650,17 @@ export function SchoolsModule() {
     setUrlParsed(true)
   }, [can])
 
-  // SCHEMA-PENDING honesty: the server cannot serve the billingModel
-  // filter (and the popover disables both subscription filters with
-  // the reason) — clear any in-flight values so the toolbar never
-  // claims a filter that is not being applied. Self-healing: a
+  // SCHEMA-PENDING honesty: the server cannot serve the billingModel /
+  // billingFrequency filters (and the popover disables the subscription
+  // filters with the reason) — clear any in-flight values so the toolbar
+  // never claims a filter that is not being applied. Self-healing: a
   // response from a migrated database re-enables the controls.
   useEffect(() => {
     if (!schemaPending) return
     if (billingModel !== 'ALL') setBillingModel('ALL')
+    if (billingFrequency !== 'ALL') setBillingFrequency('ALL')
     if (subscriptionState !== 'ALL') setSubscriptionState('ALL')
-  }, [schemaPending, billingModel, subscriptionState])
+  }, [schemaPending, billingModel, billingFrequency, subscriptionState])
 
   const clearAllFilters = () => {
     setSearchInput('')
@@ -644,6 +669,8 @@ export function SchoolsModule() {
     setPlan('ALL')
     setSubscriptionState('ALL')
     setBillingModel('ALL')
+    setBillingFrequency('ALL')
+    setBoardFilter('ALL')
     setDemo('ALL')
     setReadiness('ALL')
     setExpiringDays('ALL')
@@ -661,6 +688,8 @@ export function SchoolsModule() {
       if (plan !== 'ALL') params.set('plan', plan)
       if (subscriptionState !== 'ALL') params.set('subscriptionState', subscriptionState)
       if (billingModel !== 'ALL') params.set('billingModel', billingModel)
+      if (billingFrequency !== 'ALL') params.set('billingFrequency', billingFrequency)
+      if (boardFilter !== 'ALL') params.set('board', boardFilter)
       if (demo !== 'ALL') params.set('demo', demo)
       if (readiness !== 'ALL') params.set('readiness', readiness)
       if (expiringDays !== 'ALL') params.set('expiringDays', expiringDays)
@@ -677,7 +706,7 @@ export function SchoolsModule() {
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [q, status, plan, subscriptionState, billingModel, demo, readiness, expiringDays, sort, page])
+  }, [q, status, plan, subscriptionState, billingModel, billingFrequency, boardFilter, demo, readiness, expiringDays, sort, page])
 
   useEffect(() => {
     if (!urlParsed) return
@@ -758,7 +787,7 @@ export function SchoolsModule() {
                 setPage(1)
               }
             }}
-            placeholder="Search name, slug, code, domain…"
+            placeholder="Search name, slug, code, prefix, contact…"
             aria-label="Search schools"
             className="h-10 bg-white border-slate-200 pl-9 text-slate-900 placeholder:text-slate-400 focus-visible:ring-teal-500/40"
           />
@@ -846,13 +875,34 @@ export function SchoolsModule() {
                   options={BILLING_MODEL_OPTIONS}
                   disabled={schemaPending}
                 />
+                <FilterSelect
+                  id="flt-freq"
+                  label="Billing frequency"
+                  value={billingFrequency}
+                  onChange={(v) => {
+                    setBillingFrequency(v as BillingFrequencyFilter)
+                    setPage(1)
+                  }}
+                  options={BILLING_FREQUENCY_OPTIONS}
+                  disabled={schemaPending}
+                />
+                <FilterSelect
+                  id="flt-board"
+                  label="Board"
+                  value={boardFilter}
+                  onChange={(v) => {
+                    setBoardFilter(v as BoardFilter)
+                    setPage(1)
+                  }}
+                  options={BOARD_OPTIONS}
+                />
                 {schemaPending ? (
                   <p
                     className="col-span-2 flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-700"
                     role="note"
                   >
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-                    Billing model &amp; subscription state — unavailable until the pending migration.
+                    Billing model, frequency &amp; subscription state — unavailable until the pending migration.
                   </p>
                 ) : null}
                 <FilterSelect
@@ -1021,8 +1071,9 @@ export function SchoolsModule() {
                         >
                           <TableCell className="max-w-[16rem] py-3">
                             <p className="truncate font-semibold text-slate-900">{s.name}</p>
-                            <p className="truncate font-mono text-[11px] text-slate-500">
+                            <p className="truncate font-mono text-[11px] text-slate-500" title={`slug: ${s.slug} · code: ${s.code}${s.recordPrefix ? ` · record prefix: ${s.recordPrefix}` : ''}`}>
                               {s.slug} · {s.code}
+                              {s.recordPrefix ? ` · ${s.recordPrefix}` : ''}
                             </p>
                             <PrincipalLine principal={s.principal} />
                           </TableCell>
@@ -1125,8 +1176,12 @@ export function SchoolsModule() {
                         <p className="min-w-0 truncate text-sm font-semibold text-slate-900">{s.name}</p>
                         <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
                       </div>
-                      <p className="mt-0.5 truncate font-mono text-[11px] text-slate-500">
+                      <p
+                        className="mt-0.5 truncate font-mono text-[11px] text-slate-500"
+                        title={`slug: ${s.slug} · code: ${s.code}${s.recordPrefix ? ` · record prefix: ${s.recordPrefix}` : ''}`}
+                      >
                         {s.slug} · {s.code}
+                        {s.recordPrefix ? ` · ${s.recordPrefix}` : ''}
                       </p>
                       <div className="mt-1">
                         <PrincipalLine principal={s.principal} />

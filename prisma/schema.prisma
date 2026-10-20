@@ -38,6 +38,17 @@ model School {
   academicYear String?
   board        String   @default("CBSE") // CBSE | UP_BOARD | ICSE | STATE | CUSTOM
   isDemo       Boolean  @default(false)
+  // ADD-SCHOOL WIZARD (2026-10-20) — stable internal school record prefix
+  // (e.g. GVPS-0001), allocated server-side at provisioning inside the
+  // provision transaction under a Postgres advisory lock (per-abbrev
+  // sequence + unique index backstop). IMMUTABLE after creation: it is
+  // never re-derived from the school name, never reused and never
+  // overwritten — the School row is the only source of truth. When a
+  // school has no external code of its own, this prefix doubles as the
+  // assigned School.code. Displayed on platform surfaces and available
+  // for future school-scoped record numbering.
+  recordPrefix String? @unique
+
   // PHASE 6 — per-school module overrides (JSON map, e.g.
   // {"fees":false}). Effective availability = this map ?? PlatformSetting
   // modules map ?? true. Managed exclusively via the control plane.
@@ -3158,6 +3169,14 @@ model SchoolSubscription {
   /// Price actually charged (Decimal-safe; the plan's price at purchase).
   priceSnapshot    Decimal? @db.Decimal(12, 2)
   currencySnapshot String   @default("INR")
+  /// ADD-SCHOOL WIZARD (2026-10-20) — licensed student quantity agreed
+  /// for PER_STUDENT billing at onboarding (the count the per-student
+  /// annual price multiplies to reach the commercial total). Null for
+  /// SCHOOL_WIDE/MIXED tenants. Set only via the platform control plane;
+  /// the agreed per-student unit price lives in priceSnapshot and the
+  /// commercial total is priceSnapshot × licensedStudents (computed,
+  /// never stored twice).
+  licensedStudents Int?
   updatedAt    DateTime @updatedAt
   createdAt    DateTime @default(now())
 

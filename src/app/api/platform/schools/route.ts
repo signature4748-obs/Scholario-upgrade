@@ -6,7 +6,14 @@ import { resolveProvisionedPassword } from '@/lib/account-provisioning'
 import { AppError } from '@/lib/security/errors'
 import { withPlatform } from '@/lib/platform/authz'
 import { platformAuditEvent } from '@/lib/platform/audit'
-import { parseQuery, parseJsonBody, strictBody, emailSchema, safeText } from '@/lib/security/validation'
+import {
+  parseQuery,
+  parseJsonBody,
+  strictBody,
+  emailSchema,
+  phoneSchema,
+  safeText,
+} from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { hostnameRejectionReason, normalizeHostname } from '@/lib/tenant/hostname'
 import { schoolLoginUrl, schoolPublicUrl } from '@/lib/plane'
@@ -22,6 +29,7 @@ import {
   provisionInviteKey,
   sendPrincipalInvite,
 } from '@/lib/platform/principal-invite'
+import { allocateRecordPrefix } from '@/lib/platform/school-prefix'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -49,6 +57,10 @@ const listQuerySchema = z.object({
   demo: z.enum(['demo', 'production']).optional(),
   /** Onboarding readiness (all 5 required setup sections done). */
   readiness: z.enum(['ready', 'incomplete']).optional(),
+  /** Board filter (mission §4 — the full legacy vocabulary is listable). */
+  board: z.enum(['CBSE', 'UP_BOARD', 'ICSE', 'STATE', 'CUSTOM']).optional(),
+  /** Billing frequency filter (SchoolSubscription.interval). */
+  billingFrequency: z.enum(['MONTHLY', 'ANNUAL']).optional(),
   /** Subscription periodEnd within N days (renewal report). */
   expiringDays: z.coerce.number().int().min(1).max(365).optional(),
   /** Sort key (server-side; default newest first). */
@@ -98,7 +110,10 @@ export async function GET(req: NextRequest) {
               { name: { contains: query.q, mode: 'insensitive' as const } },
               { slug: { contains: query.q, mode: 'insensitive' as const } },
               { code: { contains: query.q, mode: 'insensitive' as const } },
+              { recordPrefix: { contains: query.q, mode: 'insensitive' as const } },
               { domain: { contains: query.q, mode: 'insensitive' as const } },
+              { email: { contains: query.q, mode: 'insensitive' as const } },
+              { phone: { contains: query.q, mode: 'insensitive' as const } },
             ],
           }
         : {}),
@@ -108,8 +123,16 @@ export async function GET(req: NextRequest) {
           : { status: query.status }
         : {}),
       ...(query.plan ? { plan: query.plan } : {}),
+      ...(query.board ? { board: query.board } : {}),
       ...(query.demo ? { isDemo: query.demo === 'demo' } : {}),
-      ...(query.billingModel ? { subscription: { billingModel: query.billingModel } } : {}),
+      ...(query.billingModel || query.billingFrequency
+        ? {
+            subscription: {
+              ...(query.billingModel ? { billingModel: query.billingModel } : {}),
+              ...(query.billingFrequency ? { interval: query.billingFrequency } : {}),
+            },
+          }
+        : {}),
     }
 
     const now = new Date()
@@ -137,6 +160,7 @@ export async function GET(req: NextRequest) {
       status: string
       isDemo: boolean
       academicYear: string | null
+      recordPrefix: string | null
       subscription: {
         status: string
         plan: string
@@ -158,6 +182,7 @@ export async function GET(req: NextRequest) {
           status: true,
           isDemo: true,
           academicYear: true,
+          recordPrefix: true,
           subscription: {
             select: {
               status: true,
@@ -174,8 +199,9 @@ export async function GET(req: NextRequest) {
     } catch (e) {
       if (!isSubscriptionSchemaPendingError(e)) throw e
       subscriptionSchemaPending = true
-      // Pre-migration retry: legacy columns only; the billingModel filter
-      // (a pending column) cannot be served and is reported via the flag.
+      // Pre-migration retry: legacy columns only; the billingModel and
+      // billingFrequency filters (pending columns) cannot be served
+      // and are reported via the flag.
       const { subscription: _drop, ...whereNoSubscription } = baseWhere as Record<string, unknown>
       lightRows = await db.school.findMany({
         where: whereNoSubscription,
@@ -187,6 +213,7 @@ export async function GET(req: NextRequest) {
           status: true,
           isDemo: true,
           academicYear: true,
+          recordPrefix: true,
           subscription: { select: { ...SUBSCRIPTION_LEGACY_SELECT } },
         },
       })
@@ -399,6 +426,7 @@ export async function GET(req: NextRequest) {
           name: s.name,
           slug: s.slug,
           code: s.code,
+          recordPrefix: s.recordPrefix,
           domain: s.domain,
           city: s.city,
           plan: s.plan,
@@ -472,21 +500,78 @@ const provisionSchema = strictBody({
     .min(3)
     .max(60)
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'lowercase letters, numbers and hyphens only'),
-  code: z.string().min(2).max(16).regex(/^[A-Z0-9-]+$/, 'uppercase letters, numbers and hyphens only'),
+  /// STEP 1 — the school's OWN external/official code, OPTIONAL since
+  /// 2026-10-20 (mission §2): some schools have one, others do not.
+  /// When absent the server assigns the allocated internal record
+  /// prefix as the code (guaranteed unique by construction).
+  code: z
+    .string()
+    .min(2)
+    .max(16)
+    .regex(/^[A-Z0-9-]+$/, 'uppercase letters, numbers and hyphens only')
+    .optional(),
   domain: z.string().max(120).optional(),
   /// STEP 1 — school basics.
-  address: safeText(120).optional(),
+  address: safeText(200).optional(),
+  addressLine2: safeText(120).optional(),
   city: safeText(60).optional(),
+  district: safeText(60).optional(),
+  pincode: z
+    .string()
+    .trim()
+    .max(12)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9 -]*$/, 'invalid postal code characters')
+    .optional(),
   state: safeText(60).optional(),
   phone: safeText(20).optional(),
+  /// STEP 6 — the school's existing external website (School.website,
+  /// shown on its public page). Hostname or https URL, 200 chars max.
+  website: z
+    .string()
+    .trim()
+    .max(200)
+    .refine(
+      (v) => {
+        const bare = v.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*/, '')
+        return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(bare)
+      },
+      'must look like a website host (e.g. school.edu)',
+    )
+    .optional(),
   plan: z.enum(SCHOOL_PLANS).default('STANDARD'),
   /// Subscription billing model (mission §4 — the wizard's subscription
   /// configuration; defaults to SCHOOL_WIDE, the same default the schema
   /// applies when absent).
   billingModel: z.enum(['SCHOOL_WIDE', 'PER_STUDENT', 'MIXED']).default('SCHOOL_WIDE'),
-  board: z.enum(['CBSE', 'UP_BOARD', 'ICSE', 'STATE', 'CUSTOM']).default('CBSE'),
+  /// ADD-SCHOOL WIZARD (mission §2 STEP 3) — the agreed commercial terms.
+  /// billingFrequency: MONTHLY (school-based monthly) | ANNUAL (school-
+  /// based yearly AND the only frequency a student-based subscription
+  /// may ever have — enforced cross-field below + by the wizard UI).
+  billingFrequency: z.enum(['MONTHLY', 'ANNUAL']).optional(),
+  /// The agreed commercial UNIT price: monthly/yearly price for
+  /// school-based, per-student annual price for student-based. NEVER a
+  /// hardcoded plan price and never fabricated — recording a PAYMENT is
+  /// a separate operation.
+  agreedAmount: z.number().positive().max(100_000_000).optional(),
+  /// Existing supported currency set (src/lib/platform/billing.ts).
+  currency: z.enum(['INR', 'USD', 'EUR', 'GBP', 'AED']).optional(),
+  /// Licensed student quantity for PER_STUDENT billing (the count the
+  /// per-student price multiplies). Required when billingModel is
+  /// PER_STUDENT and terms are provided.
+  licensedStudents: z.coerce.number().int().min(1).max(100_000).optional(),
+  /// Subscription start date (YYYY-MM-DD). Defaults to today when terms
+  /// are provided; the paid period only begins when a payment is
+  /// actually recorded (periodEnd stays null — honest).
+  subscriptionStartsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'format: YYYY-MM-DD').optional(),
+  /// NEW PROVISIONS accept the two boards the product onboards (mission
+  /// §2 STEP 1): UP Board or CBSE only. Existing rows keep the full
+  /// legacy vocabulary (CBSE | UP_BOARD | ICSE | STATE | CUSTOM).
+  board: z.enum(['CBSE', 'UP_BOARD']).default('CBSE'),
   principalName: safeText(80),
   principalEmail: emailSchema,
+  /// Principal contact phone — optional, stored on the User row using
+  /// the shared phone validator (no new verification system invented).
+  principalPhone: phoneSchema.optional(),
   // ARCHITECTURE RESET — self-service onboarding (Phase 4):
   principalPassword: z.string().max(128).optional(),
   country: safeText(60).optional(),
@@ -527,6 +612,76 @@ const provisionSchema = strictBody({
     .array(z.enum(['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']))
     .max(7)
     .optional(),
+}).superRefine((v, ctx) => {
+  // ── Cross-field commercial rules (mission §2 STEP 3) ──────────────────
+  // Student-based is YEARLY ONLY — reject before any write (the UI
+  // never offers the combination; the API is the authority).
+  if (v.billingModel === 'PER_STUDENT' && v.billingFrequency === 'MONTHLY') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['billingFrequency'],
+      message: 'Student-based subscriptions are billed yearly only — choose yearly, or switch to school-based billing for monthly.',
+    })
+  }
+  // The licensed student quantity is required whenever student-based
+  // commercial terms are being configured.
+  if (v.billingModel === 'PER_STUDENT' && v.billingFrequency != null && v.licensedStudents == null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['licensedStudents'],
+      message: 'Licensed student count is required for student-based billing',
+    })
+  }
+  // Frequency and amount are one unit: an agreed price is always for an
+  // interval, and an interval is always priced.
+  if (v.agreedAmount != null && v.billingFrequency == null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['billingFrequency'],
+      message: 'Billing frequency is required when an agreed amount is provided',
+    })
+  }
+  if (v.billingFrequency != null && v.agreedAmount == null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['agreedAmount'],
+      message: 'The agreed commercial amount is required when billing frequency is provided',
+    })
+  }
+  if (v.licensedStudents != null && v.billingModel !== 'PER_STUDENT') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['licensedStudents'],
+      message: 'Licensed student count applies to student-based billing only',
+    })
+  }
+  // ── Address cross-field validation (mission §2 STEP 6) ────────────────
+  // Indian PIN codes are validated as Indian (6 digits, first 1–8) —
+  // never rejected by an international-only rule; other countries use a
+  // permissive generic postal code.
+  if ((v.country ?? '').trim().toLowerCase() === 'india' && v.pincode != null && !/^[1-8][0-9]{5}$/.test(v.pincode.trim())) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['pincode'],
+      message: 'Indian PIN code must be 6 digits (first digit 1–8)',
+    })
+  }
+  // Start-date sanity: not more than a year in the past or future.
+  if (v.subscriptionStartsOn != null) {
+    const d = new Date(`${v.subscriptionStartsOn}T00:00:00Z`)
+    if (Number.isNaN(d.getTime())) {
+      ctx.addIssue({ code: 'custom', path: ['subscriptionStartsOn'], message: 'Invalid subscription start date' })
+    } else {
+      const days = (Date.now() - d.getTime()) / 86_400_000
+      if (days > 366 || days < -366) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['subscriptionStartsOn'],
+          message: 'Subscription start date must be within one year of today',
+        })
+      }
+    }
+  }
 })
 
 /**
@@ -615,14 +770,20 @@ export async function POST(req: NextRequest) {
       // it was provisioned by THIS admin (audit-proven) AND it is still
       // PENDING, the retry is a REPLAY: the original school is returned
       // with `replayed: true` and NO second school/principal is created.
-      // The database uniques remain the authority; anything that does
-      // not match ALL replay conditions falls through to the standard
-      // CONFLICT path below. The one-time tempPassword is deliberately
-      // NOT re-surfaced (only its scrypt hash exists) — the recovery
-      // path for a lost credential is the reissue-credential route.
+      //
+      // OPTIONAL-CODE EXTENSION (2026-10-20): when the retry carries NO
+      // external code, the fingerprint matches a school whose code was
+      // auto-assigned from its internal record prefix (code ===
+      // recordPrefix) — the deterministic outcome of the original
+      // no-code provision. The database uniques remain the authority;
+      // anything that does not match ALL replay conditions falls
+      // through to the standard CONFLICT path below. The one-time
+      // tempPassword is deliberately NOT re-surfaced (only its scrypt
+      // hash exists) — the recovery path for a lost credential is the
+      // reissue-credential route.
       const existingBySlug = await db.school.findUnique({ where: { slug: body.slug } })
       if (existingBySlug) {
-        const [existingPrincipal, origProvisionAudit] = await Promise.all([
+        const [existingPrincipal, origProvisionAudit, existingPrefixRow] = await Promise.all([
           db.user.findFirst({
             where: { schoolId: existingBySlug.id, role: 'PRINCIPAL' },
             orderBy: { createdAt: 'asc' },
@@ -636,9 +797,18 @@ export async function POST(req: NextRequest) {
             },
             select: { id: true },
           }),
+          db.school.findUnique({
+            where: { id: existingBySlug.id },
+            select: { recordPrefix: true },
+          }),
         ])
+        const codeMatches =
+          body.code != null
+            ? existingBySlug.code === body.code
+            : // Auto-assigned code: the school's code IS its record prefix.
+              existingPrefixRow?.recordPrefix != null && existingBySlug.code === existingPrefixRow.recordPrefix
         const isReplay =
-          existingBySlug.code === body.code &&
+          codeMatches &&
           existingBySlug.status === 'PENDING' &&
           !!existingPrincipal &&
           existingPrincipal.email === principalEmail &&
@@ -669,6 +839,7 @@ export async function POST(req: NextRequest) {
               name: existingBySlug.name,
               slug: existingBySlug.slug,
               code: existingBySlug.code,
+              recordPrefix: existingPrefixRow?.recordPrefix ?? null,
               status: existingBySlug.status,
               plan: existingBySlug.plan,
             },
@@ -694,10 +865,13 @@ export async function POST(req: NextRequest) {
       }
 
       // UX fast-path pre-checks (the transaction's DB uniques are the
-      // authority under concurrency — see the P2002 mapping below).
+      // authority under concurrency — see the P2002 mapping below). The
+      // external code is checked only when the operator supplied one;
+      // an absent code is resolved to the allocated record prefix inside
+      // the transaction, unique by construction.
       const [slugTaken, codeTaken, emailTaken] = await Promise.all([
         db.school.findUnique({ where: { slug: body.slug } }),
-        db.school.findUnique({ where: { code: body.code } }),
+        body.code ? db.school.findUnique({ where: { code: body.code } }) : null,
         db.user.findUnique({ where: { email: body.principalEmail.toLowerCase() } }),
       ])
       if (slugTaken) throw new AppError('CONFLICT', { publicMessage: 'School slug is already in use' })
@@ -737,6 +911,7 @@ export async function POST(req: NextRequest) {
         name: string
         slug: string
         code: string
+        recordPrefix: string | null
         status: string
         plan: string
       }
@@ -748,18 +923,49 @@ export async function POST(req: NextRequest) {
         subjects: 0,
         rooms: 0,
       }
+      // The agreed commercial terms that were PERSISTED (reported back
+      // honestly; never fabricated beyond what the operator entered).
+      const subscriptionTerms =
+        body.billingFrequency != null && body.agreedAmount != null
+          ? {
+              billingModel: body.billingModel,
+              interval: body.billingFrequency,
+              unitPrice: body.agreedAmount,
+              currency: body.currency ?? 'INR',
+              licensedStudents:
+                body.billingModel === 'PER_STUDENT' ? (body.licensedStudents ?? null) : null,
+              periodStart: (body.subscriptionStartsOn ?? new Date().toISOString().slice(0, 10)) as string,
+              // HONEST BILLING: provisioning records the AGREED terms only.
+              // No payment is fabricated — periodEnd stays null until a
+              // VERIFIED payment is recorded through the subscription flow.
+              periodEnd: null as string | null,
+              paymentsRecorded: 0,
+            }
+          : null
 
       try {
         ;({ school, principal, domainRecord } = await db.$transaction(async (tx) => {
+          // ── INTERNAL RECORD PREFIX (mission §2 STEP 1-B) ────────────
+          // Allocated FIRST, inside this transaction, under a Postgres
+          // advisory lock (serialized across concurrent provisions) with
+          // the UNIQUE index as the DB-enforced backstop. Immutable after
+          // this write; when the operator supplied no external code,
+          // this prefix doubles as the assigned School.code.
+          const recordPrefix = await allocateRecordPrefix(tx, body.name)
+          const resolvedCode = body.code ?? recordPrefix
+
           // Onboarding settings (data-driven, no schema change): country,
           // state, timezone, the website toggle, working days, the derived
-          // temporary platform domain, and the chosen auth method live in
-          // School.settings.
+          // temporary platform domain, the chosen auth method and the
+          // extended address fields live in School.settings.
           const settings: Record<string, unknown> = {}
           if (body.country) settings.country = body.country
           if (body.state) settings.state = body.state
           if (body.timezone) settings.timezone = body.timezone
           if (body.workingDays?.length) settings.workingDays = body.workingDays
+          if (body.addressLine2) settings.addressLine2 = body.addressLine2
+          if (body.district) settings.district = body.district
+          if (body.pincode) settings.pincode = body.pincode
           settings.websiteEnabled = body.websiteEnabled
           settings.tempDomain = tempDomain
           settings.authMethod = 'PASSWORD'
@@ -768,7 +974,8 @@ export async function POST(req: NextRequest) {
             data: {
               name: body.name,
               slug: body.slug,
-              code: body.code,
+              code: resolvedCode,
+              recordPrefix,
               domain: body.domain || null,
               address: body.address || null,
               city: body.city || null,
@@ -776,6 +983,7 @@ export async function POST(req: NextRequest) {
               email: body.officialEmail || null,
               shortName: body.shortName || null,
               tagline: body.tagline || null,
+              website: body.website || null,
               academicYear: body.academicYear || null,
               themeColor: body.themeColor || '#0f766e',
               accentColor: body.accentColor || '#f59e0b',
@@ -804,6 +1012,25 @@ export async function POST(req: NextRequest) {
               internalDetail: `provision: billingModel ${body.billingModel} refused (schema pending)`,
             })
           }
+          // Onboarding commercial terms (interval/priceSnapshot/currency/
+          // licensedStudents) are ALSO pending-migration columns — a
+          // pending database cannot persist them, so the request is
+          // honestly refused instead of silently dropping the operator's
+          // agreed terms.
+          if (
+            subscriptionSchemaPending &&
+            (body.billingFrequency != null ||
+              body.agreedAmount != null ||
+              body.currency != null ||
+              body.licensedStudents != null ||
+              body.subscriptionStartsOn != null)
+          ) {
+            throw new AppError('SUBSCRIPTION_SYSTEM_PENDING', {
+              publicMessage:
+                'Agreed subscription terms cannot be recorded until the pending subscription-system migration is applied. Provision without them and record the commercial terms afterwards.',
+              internalDetail: 'provision: subscription terms refused (schema pending)',
+            })
+          }
           if (subscriptionSchemaPending) {
             // RAW INSERT with the legacy column set only — the generated
             // client's INSERT/RETURNING references the pending-migration
@@ -827,7 +1054,21 @@ export async function POST(req: NextRequest) {
                 status: 'ACTIVE',
                 plan: body.plan,
                 billingModel: body.billingModel,
-                periodStart: new Date(),
+                // AGREED TERMS (mission §2 STEP 3) — persisted exactly as
+                // the operator entered them: interval (MONTHLY/ANNUAL),
+                // the unit price snapshot, the currency and the licensed
+                // student count. periodEnd stays null: billing starts when
+                // a VERIFIED payment is recorded — never fabricated here.
+                ...(body.billingFrequency ? { interval: body.billingFrequency } : {}),
+                ...(body.agreedAmount != null ? { priceSnapshot: body.agreedAmount } : {}),
+                ...(body.currency ? { currencySnapshot: body.currency } : {}),
+                ...(body.billingModel === 'PER_STUDENT' && body.licensedStudents != null
+                  ? { licensedStudents: body.licensedStudents }
+                  : {}),
+                periodStart:
+                  body.subscriptionStartsOn != null
+                    ? new Date(`${body.subscriptionStartsOn}T00:00:00Z`)
+                    : new Date(),
                 periodEnd: null,
               },
             })
@@ -851,6 +1092,7 @@ export async function POST(req: NextRequest) {
               role: 'PRINCIPAL',
               status: 'ACTIVE',
               mustChangePassword: true,
+              ...(body.principalPhone ? { phone: body.principalPhone } : {}),
             },
           })
 
@@ -887,10 +1129,17 @@ export async function POST(req: NextRequest) {
             bootstrapCounts.subjects = body.subjects.length
           }
           if (body.classes?.length) {
+            // SERVER-SIDE DEDUPE (mission §2 STEP 4): one Class row per
+            // (name, section) pair — a repeated row in the payload must
+            // never become duplicate classes/sections in the tenant.
+            const seenClass = new Set<string>()
             for (const cls of body.classes) {
               const sections =
                 cls.sections.length > 0 ? cls.sections : [null]
               for (const section of sections) {
+                const key = `${cls.name.toLowerCase()}|${(section ?? '').toLowerCase()}`
+                if (seenClass.has(key)) continue
+                seenClass.add(key)
                 await tx.class.create({
                   data: {
                     schoolId: createdSchool.id,
@@ -936,6 +1185,13 @@ export async function POST(req: NextRequest) {
           if (target.includes('slug')) {
             throw new AppError('CONFLICT', { publicMessage: 'School slug is already in use' })
           }
+          if (target.includes('recordPrefix')) {
+            // The advisory lock makes this near-impossible; the unique
+            // index still guarantees no duplicate is ever persisted.
+            throw new AppError('CONFLICT', {
+              publicMessage: 'Internal record prefix allocation conflict — please retry',
+            })
+          }
           if (target.includes('code')) {
             throw new AppError('CONFLICT', { publicMessage: 'School code is already in use' })
           }
@@ -963,12 +1219,25 @@ export async function POST(req: NextRequest) {
           plan: body.plan,
           principalEmail,
           principalId: principal.id,
+          principalPhone: body.principalPhone ?? null,
           country: body.country ?? null,
           timezone: body.timezone ?? null,
           academicYear: body.academicYear ?? null,
           authMethod: 'PASSWORD',
           customDomain: customDomainHostname,
           websiteEnabled: body.websiteEnabled,
+          recordPrefix: school.recordPrefix,
+          codeAssignedFromPrefix: body.code == null,
+          billingModel: body.billingModel,
+          // The AGREED commercial terms exactly as entered (a payment is
+          // a separate, audited operation — see subscription/payments).
+          billingFrequency: body.billingFrequency ?? null,
+          agreedAmount: body.agreedAmount ?? null,
+          currency: body.currency ?? null,
+          licensedStudents: body.licensedStudents ?? null,
+          subscriptionStartsOn: body.subscriptionStartsOn ?? null,
+          pincode: body.pincode ?? null,
+          district: body.district ?? null,
           bootstrap: bootstrapCounts,
         },
       })
@@ -995,6 +1264,8 @@ export async function POST(req: NextRequest) {
           name: school.name,
           slug: school.slug,
           code: school.code,
+          // The stable internal record prefix (immutable from here on).
+          recordPrefix: school.recordPrefix,
           status: school.status,
           plan: school.plan,
         },
@@ -1022,6 +1293,10 @@ export async function POST(req: NextRequest) {
         // bootstrap credential is single-purpose.
         mustChangePassword: true,
         bootstrap: bootstrapCounts,
+        // The AGREED commercial terms as persisted (mission §2 STEP 3).
+        // paymentsRecorded is the honest count (0) — provisioning records
+        // terms, never a payment; the subscription flow does that.
+        ...(subscriptionTerms ? { subscription: subscriptionTerms } : {}),
         // Invite-delivery state (honest: SENT/QUEUED/FAILED — never
         // fabricated; FAILED ⇒ deliver the credential manually or
         // re-issue it from the school record).

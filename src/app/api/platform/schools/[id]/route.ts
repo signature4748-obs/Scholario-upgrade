@@ -92,13 +92,48 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       }),
     ])
 
+    // STUDENT-ACCESS PAUSE state (mission §3): the platform-owned
+    // settings key records the live pause (affected count + reason +
+    // time) so the Access surface can show the truth. The ENFORCEMENT
+    // is the User.subscriptionStatus LOCKED rows themselves.
+    let studentAccessPause: { pausedAt: string; reason: string; affectedCount: number } | null = null
+    let settingsExtras: { pincode: string | null; district: string | null } = {
+      pincode: null,
+      district: null,
+    }
+    try {
+      const parsedSettings = school.settings
+        ? (JSON.parse(school.settings) as Record<string, unknown>)
+        : {}
+      const record = parsedSettings.studentAccessPause as
+        | { pausedAt: string; reason: string; affectedCount: number }
+        | undefined
+      if (record && typeof record.pausedAt === 'string') {
+        studentAccessPause = {
+          pausedAt: record.pausedAt,
+          reason: String(record.reason ?? ''),
+          affectedCount: Number(record.affectedCount ?? 0),
+        }
+      }
+      if (typeof parsedSettings.pincode === 'string') settingsExtras.pincode = parsedSettings.pincode
+      if (typeof parsedSettings.district === 'string') settingsExtras.district = parsedSettings.district
+    } catch {
+      /* unparseable settings — extras stay null, pause state stays null */
+    }
+
     return {
       school: {
         id: school.id,
         name: school.name,
         slug: school.slug,
         code: school.code,
+        recordPrefix: school.recordPrefix,
         domain: school.domain,
+        shortName: school.shortName,
+        tagline: school.tagline,
+        website: school.website,
+        pincode: settingsExtras.pincode,
+        district: settingsExtras.district,
         address: school.address,
         city: school.city,
         phone: school.phone,
@@ -163,6 +198,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
             }
           : null,
       },
+      // Mission §3 — the live student-access-pause state (null when not
+      // paused). The enforcement itself is the LOCKED User rows.
+      studentAccessPause,
       domains: tenantDomains.map((d) => ({
         hostname: d.hostname,
         status: d.status,

@@ -824,6 +824,27 @@ export function PlanBillingCard({
               {registryRow ? money(registryRow.priceSnapshot, registryRow.currencySnapshot ?? 'INR') : '—'}
             </dd>
           </div>
+          {/* Task 7 — licensed students (PER_STUDENT rows only): the
+              licensed count the per-student price rides on. Not rendered
+              for SCHOOL_WIDE / MIXED models; '—' (title: not recorded)
+              when the registry has no value. */}
+          {registryRow?.billingModel === 'PER_STUDENT' && (
+            <div>
+              <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Licensed students
+              </dt>
+              <dd
+                className="mt-0.5 text-slate-900"
+                title={registryRow.licensedStudents == null ? 'not recorded' : undefined}
+              >
+                {registryRow.licensedStudents != null
+                  ? `${registryRow.licensedStudents.toLocaleString('en-IN')} licensed student${
+                      registryRow.licensedStudents === 1 ? '' : 's'
+                    }`
+                  : '—'}
+              </dd>
+            </div>
+          )}
           <div>
             <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Interval</dt>
             <dd className="mt-0.5 text-slate-900">{registryRow?.interval ? registryRow.interval.toLowerCase() : '—'}</dd>

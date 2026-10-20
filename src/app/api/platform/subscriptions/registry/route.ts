@@ -228,6 +228,7 @@ export async function GET(req: NextRequest) {
           status: string
           school: { id: string; name: string; slug: string; code: string; status: string; isDemo: boolean }
           billingModel?: string
+          licensedStudents?: number | null
           plan: string
           planDef?: { code: string; name: string } | null
           planCode?: string | null
@@ -256,6 +257,9 @@ export async function GET(req: NextRequest) {
           subscriptionId: sub.id,
           school: sub.school,
           billingModel: sub.billingModel ?? null,
+          // ADD-SCHOOL WIZARD — the licensed student count agreed for
+          // PER_STUDENT tenants (null for school-wide/mixed).
+          licensedStudents: sub.licensedStudents ?? null,
           plan: sub.plan,
           planDef: sub.planDef ? { code: sub.planDef.code, name: sub.planDef.name } : null,
           planCode: sub.planCode ?? null,
