@@ -3742,3 +3742,259 @@ model ActivationCodeEvent {
   @@index([codeId, createdAt])
   @@index([type, createdAt])
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM OPERATIONS CENTER — observability, usage & limits, error
+// diagnosis, service health (2026-10).
+//
+// DESIGN CONTRACT (matches the PlatformAuditLog convention):
+//   · NO foreign keys on operations rows — operational history must
+//     SURVIVE the deletion of the school/admin/error it describes.
+//     Every schoolId here is an informational pointer, not a relation.
+//   · NO credential/PII columns. Messages are sanitized + length-capped
+//     at WRITE time (src/lib/ops/errors.ts sanitizeErrorMessage);
+//     metadata JSON never carries payloads (same rule as audit rows).
+//   · Additive only; production-safe migration; retention jobs prune
+//     event-level rows (occurrence events, check history, usage
+//     snapshots) while group/rollup rows stay.
+//   · Unknown limits are NULL — never 0. A NULL limitValue renders as
+//     "not reported by the provider API/plan", never as "0 used of 0".
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Provider usage snapshot — one row per (provider, scope, metric,
+/// collection). History is kept (retention-pruned) so the dashboard can
+/// chart real trends; the newest row per (provider, scope, metric) is
+/// the live value. Written ONLY by the sync service
+/// (src/lib/ops/sync.ts) — never inline in a request path.
+model ProviderUsageSnapshot {
+  id        String   @id @default(cuid())
+  /// 'vercel' | 'supabase' | 'resend'
+  provider  String
+  /// 'project:<idOrName>' | 'account:<owner>' — separates project-level
+  /// from account/organization-level metrics.
+  scope     String
+  /// Stable metric key, e.g. 'db_size_bytes', 'emails_sent_30d'.
+  metric    String
+  value     Float
+  /// 'bytes' | 'count' | 'requests' | 'ms' | 'percent' | 'services' …
+  unit      String
+  /// NULL = provider does not expose a limit for this metric/plan.
+  limitValue Float?
+  /// True when the value is a MEASURED provider/infra number; false
+  /// when it is a clearly-labeled operator estimate (never mixed).
+  measured  Boolean  @default(true)
+  periodStart DateTime?
+  /// Quota reset / period end when the provider reports one.
+  periodEnd   DateTime?
+  /// 'ok' | 'unavailable' — 'unavailable' rows record WHY a metric is
+  /// missing (e.g. plan-restricted) so the UI can show the honest
+  /// reason instead of an absence.
+  availability String @default("ok")
+  /// Sanitized JSON detail (error class, plan message, headers used).
+  meta      String?
+  collectedAt DateTime @default(now())
+  /// Latest sync run that produced this row (ProviderSyncRun.id).
+  syncRunId String?
+
+  @@index([provider, scope, metric, collectedAt])
+  @@index([collectedAt])
+}
+
+/// One row per provider synchronization run (manual, staleness-triggered
+/// or cron). The newest SUCCESS row per provider drives "last successful
+/// synchronization" on the Overview and the sync-freshness health check.
+model ProviderSyncRun {
+  id            String    @id @default(cuid())
+  provider      String
+  /// 'manual' | 'staleness' | 'cron' | 'request'
+  trigger       String    @default("manual")
+  /// 'running' | 'success' | 'partial' | 'failed' | 'skipped'
+  status        String    @default("running")
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  durationMs    Int?
+  metricsWritten Int      @default(0)
+  metricsUnavailable Int  @default(0)
+  /// Sanitized failure detail (error class + provider message; no keys).
+  error         String?
+
+  @@index([provider, startedAt])
+  @@index([status, startedAt])
+}
+
+/// Operational error GROUP — one row per stable fingerprint. Individual
+/// occurrences land in OperationalErrorEvent (retention-pruned). Group
+/// transitions (acknowledge / resolve) are audited via the platform
+/// audit funnel with action prefix platform.ops.*.
+model OperationalError {
+  id           String   @id @default(cuid())
+  /// sha1(category|statusCode|route|normalizedMessage) — stable across
+  /// occurrences of the same defect (see src/lib/ops/errors.ts).
+  fingerprint  String   @unique
+  /// 'http' | 'email' | 'provider_sync' | 'health' | 'webhook' | 'auth'
+  category     String
+  /// 'warning' | 'error' | 'critical'
+  severity     String   @default("error")
+  /// 'open' | 'acknowledged' | 'resolved'
+  status       String   @default("open")
+  /// 'production' | 'preview' | 'development' (server-declared, never client).
+  env          String   @default("production")
+  /// Sanitized + capped (no stack paths, no credentials, no PII).
+  message      String
+  /// Context of the LATEST occurrence (group-level summary fields).
+  lastRoute    String?
+  lastMethod   String?
+  lastStatusCode Int?
+  /// Provider involved, when the error is provider-scoped.
+  provider     String?
+  /// Informational school pointer (NO FK — rows outlive tenants).
+  schoolId     String?
+  /// Vercel deployment uid / build id when known (deployment drill-down).
+  deploymentId String?
+  requestId    String?
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  occurrences  Int      @default(1)
+  acknowledgedBy String?
+  acknowledgedAt DateTime?
+  resolvedBy   String?
+  resolvedAt   DateTime?
+  /// Operator note recorded at resolution (sanitized).
+  resolutionNote String?
+
+  @@index([status, severity, lastSeenAt])
+  @@index([category, status, lastSeenAt])
+  @@index([schoolId, lastSeenAt])
+  @@index([lastSeenAt])
+}
+
+/// One occurrence record for an OperationalError group (retention-pruned
+/// to OPS_EVENT_RETENTION_DAYS; occurrence counts stay on the group).
+model OperationalErrorEvent {
+  id          String   @id @default(cuid())
+  fingerprint String
+  occurredAt  DateTime @default(now())
+  requestId   String?
+  route       String?
+  statusCode  Int?
+  deploymentId String?
+  schoolId    String?
+  /// Capped sanitized context line (never a stack, never a payload).
+  brief      String?
+
+  @@index([fingerprint, occurredAt])
+  @@index([occurredAt])
+}
+
+/// Platform alert — deduplicated by (type, metricKey): one OPEN alert per
+/// breached metric until resolved (manually or automatically when the
+/// value returns within threshold). Threshold changes, acks and
+/// resolutions are audited (platform.ops.* actions).
+model PlatformAlert {
+  id            String   @id @default(cuid())
+  /// 'type:metricKey' — the dedup identity (NOT time-bucketed: a still-
+  /// breached metric bumps occurrences + lastSeenAt instead of opening
+  /// a duplicate alert; cooldown prevents flapping auto-resolves).
+  fingerprint    String   @unique
+  /// 'usage_threshold' | 'sync_stale' | 'email_failure_rate' |
+  /// 'error_burst' | 'health_check'
+  type          String
+  /// 'info' | 'warning' | 'high' | 'critical'
+  severity      String   @default("warning")
+  /// 'open' | 'acknowledged' | 'resolved'
+  status        String   @default("open")
+  metricKey     String
+  metricLabel   String
+  observedValue Float
+  /// The threshold that was configured when the alert fired.
+  threshold     Float?
+  unit          String
+  /// Sanitized human explanation shown in the alert card.
+  message       String
+  /// Sanitized JSON evidence (source snapshot, window, counts).
+  detail        String?
+  firstSeenAt   DateTime @default(now())
+  lastSeenAt    DateTime @default(now())
+  occurrences   Int      @default(1)
+  acknowledgedBy String?
+  resolvedBy    String?
+  resolvedAt    DateTime?
+  resolutionNote String?
+
+  @@index([status, severity, lastSeenAt])
+  @@index([type, status, lastSeenAt])
+}
+
+/// Operator-configurable alert thresholds (PlatformAlertSettings).
+/// key → numeric value (stored as string, parsed at read; invalid values
+/// fall back to documented defaults). Every change is audited.
+model PlatformAlertSetting {
+  key       String   @id
+  value     String
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+
+  @@index([updatedAt])
+}
+
+/// Per-school daily usage rollup. The ONLY counter here is apiOperations
+/// (authenticated business-API calls), incremented with an ATOMIC upsert
+/// increment — never read-modify-write — from server-derived tenant
+/// identity only (withUser). Every other school metric already has a
+/// single source of truth and is aggregated at READ time instead of
+/// being double-written:
+///   logins / failed logins → ActivityLog (LOGIN_SUCCESS / LOGIN_FAILED /
+///                            LOGIN_LOCKED, indexed on schoolId+createdAt)
+///   emails attempted/accepted/failed/delivered → EmailDelivery
+///   uploads + bytes                         → UploadedFile
+///   active users (DAU/MAU)                  → SchoolActiveUserDay
+model SchoolUsageDaily {
+  id            String   @id @default(cuid())
+  /// Informational pointer (NO FK — usage history outlives tenants).
+  schoolId      String
+  /// UTC day (date bucket).
+  date          DateTime  @db.Date
+  apiOperations Int      @default(0)
+
+  @@unique([schoolId, date])
+  @@index([date])
+}
+
+/// Distinct (school, user, day) activity rows — written by an idempotent
+/// upsert on every authenticated school API request (withUser). Powers
+/// DAU/MAU and school active-user metrics without storing PII.
+model SchoolActiveUserDay {
+  id       String   @id @default(cuid())
+  schoolId String
+  userId   String
+  date     DateTime @db.Date
+  /// Role at observation time (PRINCIPAL|TEACHER|STUDENT) — aggregate
+  /// identity class only, never personal data.
+  role     String?
+
+  @@unique([schoolId, userId, date])
+  @@index([schoolId, date])
+  @@index([date])
+}
+
+/// Service-health check results — one row per check per run (history
+/// kept, retention-pruned). The newest row per checkKey is the live
+/// status; the last N rows drive the Service Health history panel.
+model MonitoringCheck {
+  id        String   @id @default(cuid())
+  /// 'db_connectivity' | 'db_size' | 'config_presence' |
+  /// 'resend_api' | 'supabase_mgmt_api' | 'vercel_api' |
+  /// 'email_outbox_failure_rate' | 'ops_sync_freshness'
+  checkKey  String
+  /// 'healthy' | 'degraded' | 'down' | 'unknown' | 'not_configured'
+  status    String
+  /// 'info' | 'warning' | 'error' | 'critical' (severity when NOT healthy)
+  severity  String   @default("info")
+  latencyMs Int?
+  /// Sanitized summary / failure reason / next-step guidance.
+  detail    String?
+  checkedAt DateTime @default(now())
+
+  @@index([checkKey, checkedAt])
+  @@index([checkedAt])
+}

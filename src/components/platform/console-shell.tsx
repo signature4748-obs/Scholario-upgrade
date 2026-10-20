@@ -5,11 +5,12 @@
 // ------------------------------------------------------------
 // Scholario production design system — LIGHT (slate canvas, white
 // chrome, teal accents — same light identity as /platform/login).
-// SUPER-ADMIN CONTROL PANEL IA (2026-10 simplification):
-//   · ONE flat primary navigation, exactly nine destinations in a
+// SUPER-ADMIN CONTROL PANEL IA (2026-10 simplification + the 2026-10
+// Platform Operations center):
+//   · ONE flat primary navigation, ten destinations in a
 //     fixed order (Overview · Schools · Subscriptions · Users &
 //     Access · Support · Announcements · Audit Log · Settings ·
-//     My Sessions) — no group headers, no submenus.
+//     My Sessions · Operations) — no group headers, no submenus.
 //   · Compact desktop sidebar with an OPTIONAL collapsed icon-only
 //     state (persisted in localStorage; icon links keep accessible
 //     names; mobile drawer always shows full labels).
@@ -47,6 +48,7 @@ import {
   RefreshCw,
   PanelLeftClose,
   PanelLeftOpen,
+  Activity,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from './platform-client'
 import { Button } from '@/components/ui/button'
@@ -68,7 +70,7 @@ interface NavItem {
   permission?: string
 }
 
-/** FLAT IA — the nine primary destinations, fixed order, no groups. */
+/** FLAT IA — the ten primary destinations, fixed order, no groups. */
 const NAV: NavItem[] = [
   { href: '/platform', label: 'Overview', icon: LayoutDashboard },
   { href: '/platform/schools', label: 'Schools', icon: Building2, permission: 'schools.read' },
@@ -79,6 +81,7 @@ const NAV: NavItem[] = [
   { href: '/platform/audit', label: 'Audit Log', icon: ScrollText, permission: 'audit.read' },
   { href: '/platform/settings', label: 'Settings', icon: Settings2, permission: 'settings.manage' },
   { href: '/platform/sessions', label: 'My Sessions', icon: MonitorSmartphone },
+  { href: '/platform/operations', label: 'Operations', icon: Activity, permission: 'ops.read' },
 ]
 
 /** localStorage key for the desktop collapsed-sidebar preference. */
