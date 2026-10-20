@@ -26,6 +26,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
   Card,
   CardContent,
   CardDescription,
@@ -47,6 +55,9 @@ export function SettingsAccountCard() {
   const searchParams = useSearchParams()
   const [googleConfigured, setGoogleConfigured] = useState<boolean | null>(null)
   const [unlinking, setUnlinking] = useState(false)
+  // Themed unlink confirmation (replaces the old window.confirm): the
+  // destructive sign-in consequence is stated before the same call.
+  const [unlinkOpen, setUnlinkOpen] = useState(false)
 
   // ── In-session password change (P0-A repair) ─────────────────────────
   const [pwOpen, setPwOpen] = useState(false)
@@ -116,13 +127,8 @@ export function SettingsAccountCard() {
 
   const unlink = useCallback(async () => {
     if (unlinking) return
-    if (
-      !window.confirm(
-        'Unlink Google sign-in from this account? You will keep signing in with your password, and every active session will be signed out.',
-      )
-    ) {
-      return
-    }
+    // Confirmation lives in the themed AlertDialog below — this runs only
+    // after the explicit Unlink click (same server call as before).
     setUnlinking(true)
     try {
       await platformApi('/api/platform/auth/google/unlink', { method: 'POST' })
@@ -133,6 +139,7 @@ export function SettingsAccountCard() {
       toast.error(err.error || 'Failed to unlink Google identity')
     } finally {
       setUnlinking(false)
+      setUnlinkOpen(false)
     }
   }, [unlinking, refresh])
 
@@ -310,7 +317,7 @@ export function SettingsAccountCard() {
             {linked ? (
               <Button
                 variant="outline"
-                onClick={() => void unlink()}
+                onClick={() => setUnlinkOpen(true)}
                 disabled={unlinking}
                 className="h-11 px-4 border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 focus-ring"
               >
@@ -343,6 +350,48 @@ export function SettingsAccountCard() {
           recent multi-factor step-up while platform MFA is enabled, and every change is
           written to the platform audit trail.
         </p>
+
+        {/* ── Themed unlink confirmation (replaces window.confirm) — states
+            the sign-in consequence before the same server call. */}
+        <AlertDialog
+          open={unlinkOpen}
+          onOpenChange={(v) => {
+            // Never dismiss mid-request — the busy state stays honest.
+            if (!v && !unlinking) setUnlinkOpen(false)
+          }}
+        >
+          <AlertDialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="font-display flex items-center gap-2 text-red-700">
+                <Unlink className="h-4 w-4" aria-hidden="true" />
+                Unlink Google sign-in?
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-slate-500">
+                You will no longer be able to sign in with Google. Password sign-in remains and
+                opens this same account. Every active session — including this one — is signed
+                out, so you will sign in again with your password.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setUnlinkOpen(false)}
+                disabled={unlinking}
+                className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void unlink()}
+                disabled={unlinking}
+                className="h-11 bg-red-600 hover:bg-red-500 text-white font-semibold focus-ring"
+              >
+                {unlinking && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                {unlinking ? 'Unlinking…' : 'Unlink'}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
   )

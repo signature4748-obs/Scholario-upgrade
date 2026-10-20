@@ -56,15 +56,21 @@ interface AuditData {
   events: AuditEvent[]
 }
 
-/** Common action-prefix families for the quick filter. */
+/** Common action families for the quick filter. Values are matched
+ * server-side as `contains` (case-insensitive) — they MUST be real
+ * action strings as written by the routes:
+ *   platform.school.domain_added | domain_removed | domain_verified |
+ *   domain_check_failed        (school-domains routes)
+ *   platform.school.identity_request_rejected | identity_changed
+ *                              (profile-change-requests route) */
 const ACTION_FAMILIES = [
   { value: 'ALL', label: 'All actions' },
   { value: 'platform.school.', label: 'School lifecycle' },
   { value: 'platform.billing.', label: 'Billing & codes' },
   { value: 'platform.support_session.', label: 'Support sessions' },
   { value: 'platform.school_session.', label: 'User session revokes' },
-  { value: 'platform.domain.', label: 'Domains' },
-  { value: 'platform.profile_change.', label: 'Identity changes' },
+  { value: 'platform.school.domain_', label: 'Domain changes' },
+  { value: 'platform.school.identity_', label: 'Identity requests' },
 ] as const
 
 function fmtDateTime(iso: string): string {

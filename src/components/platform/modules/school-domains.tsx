@@ -7,16 +7,28 @@
  * hostnames (normalized + validated server-side; duplicates 409), runs
  * DNS verification (ownership TXT + routing records), and removes
  * mappings. Step-up-gated mutations use the console's gate() convention.
+ * READ-ONLY ADMINS: the add/verify/remove endpoints all require
+ * `schools.manage` server-side, so every mutation control is gated on
+ * the session's resolved permission here (self-contained — never a
+ * button that would 403), with an honest explanation instead.
  * A "DNS instructions" expander shows the exact records a school must
  * create (the verification token IS the school's proof-of-ownership
  * secret — the platform console may show it).
  */
 import React, { useCallback, useEffect, useState } from 'react'
-import { Globe, Plus, RefreshCw, ShieldCheck, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Globe, Plus, RefreshCw, ShieldCheck, Trash2, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { platformApi, type PlatformApiError } from '../platform-client'
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { platformApi, usePlatformSession, type PlatformApiError } from '../platform-client'
 import { useStepUpGate } from '../step-up-gate'
 
 interface DomainRow {
@@ -50,6 +62,16 @@ function errText(e: unknown): string {
 
 export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; canManage: boolean }) {
   const { gate, node: stepUpNode } = useStepUpGate()
+  // SELF-CONTAINED PERMISSION GATE — the verify, add and remove endpoints
+  // all authorize `schools.manage` server-side. The parent threads its own
+  // canManage flag, but this tab must never render a mutation control that
+  // would 403: the session's resolved permission list (the same source the
+  // endpoint checks against) is consulted here directly, so a read-only
+  // admin gets an honest disabled/explained view instead of a raw error.
+  // For an admin holding schools.manage both checks agree and every
+  // control behaves exactly as before.
+  const { can } = usePlatformSession()
+  const canManageDomains = canManage && can('schools.manage')
   const [domains, setDomains] = useState<DomainRow[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [newHostname, setNewHostname] = useState('')
@@ -59,6 +81,9 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
   const [verifyMsg, setVerifyMsg] = useState<Record<string, string>>({})
   const [deleteBusy, setDeleteBusy] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
+  // Themed removal confirmation (replaces the old window.confirm):
+  // holds the row pending explicit Cancel/Remove.
+  const [confirmRemove, setConfirmRemove] = useState<DomainRow | null>(null)
 
   const load = useCallback(async () => {
     setLoadError(null)
@@ -115,14 +140,17 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
   }
 
   const remove = async (domain: DomainRow) => {
-    if (!window.confirm(`Remove the domain mapping ${domain.hostname}? Traffic on it stops resolving this school.`)) return
+    // Confirmation lives in the themed AlertDialog below — this runs only
+    // after the explicit Remove click (same server call as before).
     setDeleteBusy(domain.id)
     try {
       await gate(() =>
         platformApi(`/api/platform/schools/${schoolId}/domains/${domain.id}`, { method: 'DELETE' }),
       )
+      setConfirmRemove(null)
       await load()
     } catch (e) {
+      setConfirmRemove(null)
       setVerifyMsg((m) => ({ ...m, [domain.id]: errText(e) }))
     } finally {
       setDeleteBusy(null)
@@ -146,7 +174,14 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
         </div>
 
         <div className="p-4 sm:px-5 space-y-4">
-          {canManage && (
+          {!canManageDomains && (
+            <p className="text-xs text-slate-500" role="note">
+              You do not hold <span className="font-mono text-slate-600">schools.manage</span> — this
+              list is read-only for you. Verifying DNS, adding or removing a domain requires school
+              management permission.
+            </p>
+          )}
+          {canManageDomains && (
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 value={newHostname}
@@ -222,17 +257,21 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
                       variant="outline"
                       size="sm"
                       onClick={() => void verify(d)}
-                      disabled={verifyBusy === d.id || d.status === 'VERIFIED'}
+                      disabled={!canManageDomains || verifyBusy === d.id || d.status === 'VERIFIED'}
+                      title={!canManageDomains ? 'Requires school management permission' : undefined}
                       className="h-8 border-slate-300 text-slate-700 hover:text-slate-900 hover:bg-slate-50"
                     >
                       <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                       {verifyBusy === d.id ? 'Checking…' : d.status === 'VERIFIED' ? 'Verified' : 'Verify DNS'}
+                      {!canManageDomains && (
+                        <span className="sr-only"> — requires school management permission</span>
+                      )}
                     </Button>
-                    {canManage && (
+                    {canManageDomains && (
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => void remove(d)}
+                        onClick={() => setConfirmRemove(d)}
                         disabled={deleteBusy === d.id}
                         className="h-8 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50"
                         aria-label={`Remove ${d.hostname}`}
@@ -273,6 +312,67 @@ export function SchoolDomainsTab({ schoolId, canManage }: { schoolId: string; ca
           </ul>
         </div>
       </div>
+
+      {/* ── Themed removal confirmation (replaces window.confirm) — states
+          the hostname and every consequence before the same DELETE call. */}
+      <AlertDialog
+        open={confirmRemove !== null}
+        onOpenChange={(v) => {
+          // Never dismiss mid-request — the busy state stays honest.
+          if (!v && deleteBusy === null) setConfirmRemove(null)
+        }}
+      >
+        <AlertDialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-md">
+          {confirmRemove && (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle className="font-display flex items-center gap-2 text-red-700">
+                  <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                  Remove domain mapping?
+                </AlertDialogTitle>
+                <AlertDialogDescription asChild>
+                  <div className="space-y-3 text-slate-500">
+                    <p>
+                      <span className="break-all font-mono text-xs font-semibold text-slate-700">
+                        {confirmRemove.hostname}
+                      </span>{' '}
+                      stops resolving this school. The domain mapping record is deleted; the school
+                      keeps its temporary{' '}
+                      <span className="font-mono text-xs">&lt;slug&gt;.scholario.cloud</span> address
+                      and stays reachable there.
+                    </p>
+                    <p>
+                      The DNS verification state is lost — mapping this hostname again starts
+                      ownership verification from scratch (a fresh TXT token must be published and
+                      verified).
+                    </p>
+                  </div>
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setConfirmRemove(null)}
+                  disabled={deleteBusy === confirmRemove.id}
+                  className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => void remove(confirmRemove)}
+                  disabled={deleteBusy === confirmRemove.id}
+                  className="h-11 bg-red-600 hover:bg-red-500 text-white font-semibold focus-ring"
+                >
+                  {deleteBusy === confirmRemove.id && (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  )}
+                  {deleteBusy === confirmRemove.id ? 'Removing…' : 'Remove domain'}
+                </Button>
+              </AlertDialogFooter>
+            </>
+          )}
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

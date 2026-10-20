@@ -4,7 +4,8 @@
 // AuditModule — /platform/audit (PHASE 6 console)
 // ------------------------------------------------------------
 // The platform audit-trail viewer: free-text search (action/reason),
-// action-prefix filter, pagination (50/page, newest first) and an
+// action-substring filter (the server matches `contains`, not a
+// strict prefix), pagination (50/page, newest first) and an
 // expandable metadata row per event. Audit rows have NO foreign keys
 // server-side — they deliberately survive school/admin deletion, which
 // is why an admin name can render as "unknown admin".
@@ -204,8 +205,8 @@ export function AuditModule() {
           <Input
             value={action}
             onChange={(e) => setAction(e.target.value)}
-            placeholder="Action prefix e.g. platform.school"
-            aria-label="Filter by action prefix"
+            placeholder="Action contains… e.g. platform.school"
+            aria-label="Filter by action (contains)"
             className="sm:w-72 font-mono text-[13px] bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 h-11 focus-visible:ring-teal-500/40"
           />
         </div>

@@ -54,7 +54,6 @@ import {
   SlidersHorizontal,
 } from 'lucide-react'
 import { usePlatformSession, platformApi, type PlatformApiError } from '../platform-client'
-import { ProvisionWizard } from './provision-wizard'
 import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -585,7 +584,6 @@ export function SchoolsModule() {
   const [data, setData] = useState<SchoolsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [provisionOpen, setProvisionOpen] = useState(false)
   const [filtersOpen, setFiltersOpen] = useState(false)
   /** URL-param ingestion gate — the first fetch waits until the
    *  mount-time URL has been parsed (deep links like
@@ -642,13 +640,19 @@ export function SchoolsModule() {
         setStatus(st)
       }
       if (sp.get('new') === '1' && can('schools.provision')) {
-        setProvisionOpen(true)
+        // The wizard is a full-page workspace now — redirect there and
+        // leave the legacy parameter behind (also fixes the edge where
+        // a client-side query change after mount would never re-open
+        // the old modal).
+        router.replace('/platform/schools/new')
       }
     } catch {
       /* no usable location — defaults apply */
     }
     setUrlParsed(true)
-  }, [can])
+    // `router` is stable in the App Router; the ref guard above keeps
+    // this parse one-shot regardless of session-driven `can` refreshes.
+  }, [can, router])
 
   // SCHEMA-PENDING honesty: the server cannot serve the billingModel /
   // billingFrequency filters (and the popover disables the subscription
@@ -734,7 +738,7 @@ export function SchoolsModule() {
         </div>
         {canProvision && (
           <Button
-            onClick={() => setProvisionOpen(true)}
+            onClick={() => router.push('/platform/schools/new')}
             className="h-10 bg-teal-600 font-semibold text-white hover:bg-teal-700 focus-ring"
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
@@ -1071,9 +1075,12 @@ export function SchoolsModule() {
                         >
                           <TableCell className="max-w-[16rem] py-3">
                             <p className="truncate font-semibold text-slate-900">{s.name}</p>
-                            <p className="truncate font-mono text-[11px] text-slate-500" title={`slug: ${s.slug} · code: ${s.code}${s.recordPrefix ? ` · record prefix: ${s.recordPrefix}` : ''}`}>
-                              {s.slug} · {s.code}
-                              {s.recordPrefix ? ` · ${s.recordPrefix}` : ''}
+                            <p
+                              className="truncate font-mono text-[11px] text-slate-500"
+                              title={`slug: ${s.slug} · school code: ${s.code}${s.recordPrefix ? ` · record prefix: ${s.recordPrefix}` : ''}`}
+                            >
+                              {s.slug} · code {s.code}
+                              {s.recordPrefix ? ` · prefix ${s.recordPrefix}` : ''}
                             </p>
                             <PrincipalLine principal={s.principal} />
                           </TableCell>
@@ -1178,10 +1185,10 @@ export function SchoolsModule() {
                       </div>
                       <p
                         className="mt-0.5 truncate font-mono text-[11px] text-slate-500"
-                        title={`slug: ${s.slug} · code: ${s.code}${s.recordPrefix ? ` · record prefix: ${s.recordPrefix}` : ''}`}
+                        title={`slug: ${s.slug} · school code: ${s.code}${s.recordPrefix ? ` · record prefix: ${s.recordPrefix}` : ''}`}
                       >
-                        {s.slug} · {s.code}
-                        {s.recordPrefix ? ` · ${s.recordPrefix}` : ''}
+                        {s.slug} · code {s.code}
+                        {s.recordPrefix ? ` · prefix ${s.recordPrefix}` : ''}
                       </p>
                       <div className="mt-1">
                         <PrincipalLine principal={s.principal} />
@@ -1287,17 +1294,6 @@ export function SchoolsModule() {
             </>
           )}
         </div>
-      )}
-
-      {canProvision && (
-        <ProvisionWizard
-          open={provisionOpen}
-          onOpenChange={setProvisionOpen}
-          onProvisioned={() => {
-            setPage(1)
-            void load()
-          }}
-        />
       )}
     </section>
   )

@@ -19,10 +19,34 @@ export const runtime = 'nodejs'
  */
 export async function GET() {
   return withPlatform({ permission: 'admins.manage' }, async () => {
-    const admins = await db.platformAdmin.findMany({
-      orderBy: { createdAt: 'asc' },
-      include: { permissions: true, _count: { select: { sessions: true } } },
-    })
+    // Session-derived roster facts, computed in bulk (no N+1):
+    //   lastLoginAt  — most recent PlatformAdminSession.createdAt per
+    //                  admin (a session row is issued at each sign-in).
+    //   liveSessions — sessions neither revoked nor expired right now.
+    const now = new Date()
+    const [admins, lastLoginGroups, liveGroups] = await Promise.all([
+      db.platformAdmin.findMany({
+        orderBy: { createdAt: 'asc' },
+        include: { permissions: true },
+      }),
+      db.platformAdminSession.groupBy({
+        by: ['adminId'],
+        _max: { createdAt: true },
+      }),
+      db.platformAdminSession.groupBy({
+        by: ['adminId'],
+        where: { revokedAt: null, expiresAt: { gt: now } },
+        _count: { _all: true },
+      }),
+    ])
+    const lastLoginByAdmin = new Map<string, Date>()
+    for (const g of lastLoginGroups) {
+      if (g._max.createdAt) lastLoginByAdmin.set(g.adminId, g._max.createdAt)
+    }
+    const liveSessionsByAdmin = new Map<string, number>()
+    for (const g of liveGroups) {
+      liveSessionsByAdmin.set(g.adminId, g._count._all)
+    }
     return {
       admins: admins.map((a) => ({
         id: a.id,
@@ -35,12 +59,12 @@ export async function GET() {
         googleLinked: a.googleSub !== null,
         googleEmail: a.googleEmail ?? null,
         createdAt: a.createdAt.toISOString(),
-        lastLoginAt: null,
+        lastLoginAt: lastLoginByAdmin.get(a.id)?.toISOString() ?? null,
         grants: a.isRoot
           ? [...PLATFORM_PERMISSION_KEYS]
           : a.permissions.filter((p) => p.granted).map((p) => p.key),
         permissionCatalog: [...PLATFORM_PERMISSION_KEYS],
-        liveSessions: 0, // filled below
+        liveSessions: liveSessionsByAdmin.get(a.id) ?? 0,
       })),
     }
   })

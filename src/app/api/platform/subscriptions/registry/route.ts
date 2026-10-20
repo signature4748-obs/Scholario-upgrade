@@ -2,7 +2,6 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withPlatform } from '@/lib/platform/authz'
 import { evaluateTenantEntitlement } from '@/lib/entitlement/entitlement'
-import { evaluateStudentEntitlement } from '@/lib/entitlement/student'
 import { isSubscriptionSchemaPendingError, SUBSCRIPTION_LEGACY_SELECT } from '@/lib/platform/subscription-schema'
 
 export const runtime = 'nodejs'
@@ -58,18 +57,33 @@ async function computeTenantStateTallies(): Promise<{
 /**
  * GET /api/platform/subscriptions/registry — the searchable subscription
  * registry (billing.manage): per-school subscriptions with computed
- * states, per-student entitlements, orders and code diagnostics.
+ * states, plus the registry-wide summary aggregates.
  *
  * Query filters:
  *   ?q=<text>            school name/slug/code search
  *   ?billingModel=       SCHOOL_WIDE | PER_STUDENT | MIXED
  *   ?status=             computed state filter (ACTIVE/GRACE/RESTRICTED/…)
- *   ?expiringDays=30     periodEnd/validityEnd within N days (renewal report)
+ *   ?expiringDays=30     periodEnd within N days (renewal report window)
  *   ?page=&pageSize=     pagination (default 25, max 100)
  *
- * Summary aggregates (registry + student entitlement counts by computed
- * state + expiring buckets + failed-claim diagnostics) come with every
- * page — the operations dashboard reads one endpoint.
+ * ROW PIPELINE (filter-BEFORE-paginate): the DB applies schoolId/q/
+ * billingModel + the renewal window; the COMPUTED-state filter runs in JS
+ * over the FULL filtered row set (the state is derived, it cannot be a
+ * SQL predicate); ONLY THEN is the page sliced. `schools.total` is the
+ * filtered cohort's size — the UI's "Showing X of Y" must describe the
+ * filtered report, never the unfiltered registry, and matching rows on
+ * page 2+ must be reachable.
+ *
+ * SUMMARY SEMANTICS — registry-wide, NEVER filter-scoped: the KPI cards
+ * on the subscriptions overview are labeled as global counts, so
+ * tenantStates / subscriptionsExpired / subscriptionsExpiringWithin30Days
+ * are computed over ALL SchoolSubscription rows (the 30-day KPI keeps a
+ * FIXED 30-day window even when ?expiringDays narrows the row lane).
+ * Student-entitlement ORDER COUNTS by status + order stats + failed-claim
+ * diagnostics come with every page — the operations dashboard reads one
+ * endpoint. (The per-student ROWS slice this route once served was dead
+ * wire payload — no consumer; the school-scoped student registry lives
+ * at /api/platform/schools/[id]/students.)
  */
 export async function GET(req: NextRequest) {
   return withPlatform({ permission: 'billing.manage' }, async () => {
@@ -83,6 +97,14 @@ export async function GET(req: NextRequest) {
 
     const now = new Date()
     const expiringBefore = expiringDays > 0 ? new Date(now.getTime() + expiringDays * 24 * 60 * 60 * 1000) : null
+    /** Renewal-lane window — bounds the ROW set (and therefore the
+     *  cohort total) when ?expiringDays is set. */
+    const renewalWindow = expiringBefore ? { periodEnd: { gte: now, lte: expiringBefore } } : {}
+    /** FIXED 30-day window for the "Expiring soon (30d)" KPI — the UI
+     *  label says 30 days regardless of the renewal-report filter, so
+     *  the math must too (a registry-wide KPI is never silently
+     *  re-scoped to the active filter). */
+    const expiring30Before = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
 
     // ── School (tenant) subscriptions ─────────────────────────────────────
     const schoolId = url.searchParams.get('schoolId')?.trim() ?? ''
@@ -104,6 +126,10 @@ export async function GET(req: NextRequest) {
     if (billingModel && ['SCHOOL_WIDE', 'PER_STUDENT', 'MIXED'].includes(billingModel)) {
       schoolWhere.billingModel = billingModel
     }
+    /** DB-level tenant-row filter: schoolId / q / billingModel + the
+     *  renewal window (the window is a plain SQL predicate, so it bounds
+     *  the candidate set up front — coherent with the cohort total). */
+    const registryWhere: Record<string, unknown> = { ...renewalWindow, ...schoolWhere }
 
     // SCHEMA-PENDING RESILIENCE — the registry is the subscription read
     // surface. On a pre-migration database the SchoolSubscription rows
@@ -116,41 +142,34 @@ export async function GET(req: NextRequest) {
     // filter (a pending column) is dropped in the retry path.
     let schemaPending = false
     let subscriptions: Array<Record<string, unknown>>
-    let totalCount: number
     let studentCounts: Array<{ status: string; _count: { _all: number } }>
     let orderStats: Array<{ status: string; _count: { _all: number } }>
     let claimDiagnostics: Array<{ type: string; _count: { _all: number } }>
     let expiringSoon: number
-    let entitlementRows: Array<Record<string, unknown>>
     // Registry-wide renewal KPIs — queried SEPARATELY from the pending-
     // sensitive block: the tally consumes only legacy columns, so it must
     // survive a schema-pending failure of the other aggregates untouched.
     const { tenantStates, subscriptionsExpired } = await computeTenantStateTallies()
     try {
-      ;[subscriptions, totalCount, studentCounts, orderStats, claimDiagnostics, expiringSoon, entitlementRows] =
+      ;[subscriptions, studentCounts, orderStats, claimDiagnostics, expiringSoon] =
         await Promise.all([
+          // FULL filtered row set — NO take/skip here. The computed-state
+          // filter (a JS derivation) must run over EVERY matching row
+          // BEFORE the pagination slice; slicing first made the filtered
+          // total incoherent and matching rows beyond page 1 unreachable.
+          // The renewal window IS a SQL predicate — apply it up front so
+          // the candidates are bounded and coherent with the cohort total.
           db.schoolSubscription.findMany({
-            where: schoolWhere,
+            where: registryWhere,
             orderBy: { updatedAt: 'desc' },
-            take: pageSize,
-            skip: (page - 1) * pageSize,
             include: {
               school: { select: { id: true, name: true, slug: true, code: true, status: true, isDemo: true } },
               planDef: { select: { code: true, name: true } },
               _count: { select: { payments: true } },
             },
           }),
-          db.schoolSubscription.count({
-            where: {
-              // RENEWAL LANE — when expiringDays is set, the list total is
-              // the WINDOW cohort (the UI's "showing X of Y" must describe
-              // the report, not the whole registry); the unfiltered lane
-              // keeps the plain registry count.
-              ...(expiringBefore ? { periodEnd: { gte: now, lte: expiringBefore } } : {}),
-              ...schoolWhere,
-            },
-          }),
-          // Per-student entitlement aggregates (computed live from windows).
+          // Per-student entitlement ORDER-COUNT aggregates (computed live
+          // from windows) — summary only.
           db.studentEntitlement.groupBy({
             by: ['status'],
             _count: { _all: true },
@@ -164,33 +183,24 @@ export async function GET(req: NextRequest) {
             _count: { _all: true },
             where: { type: 'CLAIM_REJECTED' },
           }),
+          // Registry-wide 30-day KPI — FIXED window (never the
+          // ?expiringDays filter's window), never schoolWhere-scoped.
           db.schoolSubscription.count({
-            where: {
-              periodEnd: { gte: now, lte: expiringBefore ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000) },
-            },
-          }),
-          db.studentEntitlement.findMany({
-            orderBy: { validityEnd: 'desc' },
-            take: pageSize,
-            include: {
-              school: { select: { id: true, name: true, slug: true } },
-              student: { select: { id: true, admissionNo: true, rollNo: true, user: { select: { name: true, email: true } } } },
-            },
+            where: { periodEnd: { gte: now, lte: expiring30Before } },
           }),
         ])
     } catch (e) {
       if (!isSubscriptionSchemaPendingError(e)) throw e
       schemaPending = true
       // Pre-migration retry: the tenant rows themselves (legacy columns +
-      // computed states). The billingModel filter cannot be served.
-      const whereLegacy = { ...schoolWhere }
+      // computed states). The billingModel filter cannot be served. Same
+      // filter-BEFORE-paginate lane as the primary path.
+      const whereLegacy: Record<string, unknown> = { ...renewalWindow, ...schoolWhere }
       delete whereLegacy.billingModel
-      ;[subscriptions, totalCount, expiringSoon] = await Promise.all([
+      ;[subscriptions, expiringSoon] = await Promise.all([
         db.schoolSubscription.findMany({
           where: whereLegacy,
           orderBy: { updatedAt: 'desc' },
-          take: pageSize,
-          skip: (page - 1) * pageSize,
           select: {
             id: true,
             schoolId: true,
@@ -199,16 +209,7 @@ export async function GET(req: NextRequest) {
           },
         }) as unknown as Array<Record<string, unknown>>,
         db.schoolSubscription.count({
-          where: {
-            // Same renewal-lane window semantics as the primary lane.
-            ...(expiringBefore ? { periodEnd: { gte: now, lte: expiringBefore } } : {}),
-            ...whereLegacy,
-          },
-        }),
-        db.schoolSubscription.count({
-          where: {
-            periodEnd: { gte: now, lte: expiringBefore ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000) },
-          },
+          where: { periodEnd: { gte: now, lte: expiring30Before } },
         }),
       ])
       // Honest emptiness: these subsystems do not exist on this database
@@ -216,11 +217,15 @@ export async function GET(req: NextRequest) {
       studentCounts = []
       orderStats = []
       claimDiagnostics = []
-      entitlementRows = []
     }
 
-    // Compose the tenant entitlement states + row-level filters.
-    const rows = subscriptions
+    // Compose the tenant entitlement states + row-level filters over the
+    // FULL filtered set. The status filter matches a COMPUTED state (JS
+    // derivation) — running it here, before the slice, is what keeps
+    // `total` and the paged rows coherent; the window re-check mirrors
+    // the SQL predicate exactly (defense against boundary drift between
+    // the query's `now` and composition time).
+    const filteredRows = subscriptions
       .map((raw) => {
         const sub = raw as {
           id: string
@@ -286,51 +291,23 @@ export async function GET(req: NextRequest) {
           : true,
       )
 
-    // ── Student entitlements slice (per-student registry) — loaded in
-    // the main Promise.all above (empty + schemaPending when the system
-    // is not provisioned on this database yet). ──────────────────────────
-    const studentRegistry = (entitlementRows as Array<{
-      id: string
-      planCode: string | null
-      status: string
-      validityStart: Date
-      validityEnd: Date
-      source: string
-      revokeReason: string | null
-      school: { id: string; name: string; slug: string }
-      student: { id: string; admissionNo: string | null; rollNo: string | null; user: { name: string | null; email: string } }
-    }>).map((e) => {
-      const decision = evaluateStudentEntitlement({
-        accountSubscriptionStatus: 'ACTIVE',
-        tenant: { state: 'ACTIVE', businessAllowed: true, loginAllowed: true, plan: 'STANDARD', periodEnd: null, graceUntil: null, renewalRequired: false, message: null },
-        billingModel: 'PER_STUDENT',
-        entitlement: { status: e.status, validityStart: e.validityStart, validityEnd: e.validityEnd, source: e.source },
-        now,
-      })
-      return {
-        entitlementId: e.id,
-        school: e.school,
-        student: e.student,
-        planCode: e.planCode,
-        status: e.status,
-        computedState: decision.state,
-        validityStart: e.validityStart.toISOString(),
-        validityEnd: e.validityEnd.toISOString(),
-        source: e.source,
-        revokeReason: e.revokeReason,
-      }
-    })
+    // Pagination — the slice happens ONLY after the computed-state filter
+    // so every matching row is reachable and the counter's denominator is
+    // the filtered cohort.
+    const total = filteredRows.length
+    const pageStart = (page - 1) * pageSize
+    const pagedRows = filteredRows.slice(pageStart, pageStart + pageSize)
 
     return {
       ...(schemaPending ? { subscriptionSchemaPending: true as const } : {}),
       schools: {
-        rows,
-        total: totalCount,
+        rows: pagedRows,
+        // The FILTERED cohort's size (search + billingModel + renewal
+        // window + computed status) — the honest denominator for the
+        // UI's "Showing X of Y" under any filter combination.
+        total,
         page,
         pageSize,
-      },
-      students: {
-        rows: studentRegistry.filter((r) => (statusFilter ? r.computedState === statusFilter : true)),
       },
       summary: {
         // Registry-wide tenant entitlement tallies + expired count are

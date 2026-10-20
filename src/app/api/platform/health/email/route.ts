@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import { withPlatform } from '@/lib/platform/authz'
 import { getEmailDiagnostics } from '@/lib/email/diagnostics'
 
@@ -20,11 +20,15 @@ export const runtime = 'nodejs'
  * visibility, same posture as /api/platform/health). No step-up: this
  * route READS provider state; it can never send email, rotate keys or
  * mutate the outbox.
+ *
+ * (2026-10-20: returns the plain diagnostics object through the
+ * standard api() envelope — the raw NextResponse.json passthrough
+ * predated any UI consumer; the console SystemHealthCard now reads
+ * this endpoint via platformApi.)
  */
 export async function GET(req: NextRequest) {
   return withPlatform({}, async () => {
     const live = req.nextUrl.searchParams.get('live') === '1'
-    const diagnostics = await getEmailDiagnostics(live)
-    return NextResponse.json(diagnostics)
+    return getEmailDiagnostics(live)
   })
 }

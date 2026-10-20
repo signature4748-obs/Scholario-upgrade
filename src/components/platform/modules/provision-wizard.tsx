@@ -2,8 +2,16 @@
 
 // ============================================================
 // ProvisionWizard — the 7-step school onboarding workflow
-// (ADD-SCHOOL WIZARD, 2026-10-20)
+// (ADD-SCHOOL WIZARD, 2026-10-20 · FULL-PAGE WORKSPACE,
+//  2026-10-20 control-plane mandate)
 // ------------------------------------------------------------
+// Served at /platform/schools/new — a DEDICATED FULL-PAGE workspace
+// in the Schools hierarchy (never a cramped modal). The stepper's
+// COMPLETED steps are clickable (jump-back without data loss), the
+// form AUTO-SAVES to sessionStorage (the principal password is
+// structurally never persisted) and a stored draft is only ever
+// loaded through an explicit RESUME/DISCARD decision.
+//
 // Platform → Schools → Add school. SEVEN steps that collect everything
 // a new tenant needs, then ONE atomic POST /api/platform/schools call
 // that transactionally creates the tenant ecosystem:
@@ -56,6 +64,7 @@
 // ============================================================
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
   Building2,
@@ -86,13 +95,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { toast } from 'sonner'
 import {
   BILLING_MODEL_OPTIONS,
@@ -357,34 +359,101 @@ interface ProvisionResult {
   subscriptionPendingNote?: string
 }
 
-function StepDots({ step }: { step: number }) {
+/// Draft contract (sessionStorage). SECURITY: `principalPassword` is
+/// structurally excluded — restores always bring it back empty; any
+/// password value found in storage is discarded unread.
+interface WizardDraft {
+  form: WizardForm
+  step: number
+  autoShortName: boolean
+  autoSlug: boolean
+  autoYear: boolean
+  savedAt: string
+}
+
+const DRAFT_KEY = 'scholario.platform.add-school-draft.v1'
+
+/// True when the operator has entered anything worth resuming — the
+/// auto-save never writes a pristine, untouched form.
+function isFormMeaningful(f: WizardForm): boolean {
+  return Boolean(
+    f.name.trim() ||
+      f.slug.trim() ||
+      f.code.trim() ||
+      f.principalName.trim() ||
+      f.principalEmail.trim() ||
+      f.agreedAmount.trim() ||
+      f.address.trim() ||
+      f.city.trim() ||
+      f.customDomain.trim() ||
+      f.classRows.length > 0,
+  )
+}
+
+/** The workspace stepper. COMPLETED steps are clickable — the operator
+ *  can jump back to any finished step without losing data (the whole
+ *  wizard shares ONE form state). Future steps stay non-interactive:
+ *  forward motion is validation-gated by Continue. */
+function StepDots({ step, onJump }: { step: number; onJump: (s: number) => void }) {
   return (
-    <ol className="flex items-center gap-1" aria-label="Onboarding steps">
+    <ol
+      className="flex min-w-0 items-center gap-0.5 overflow-x-auto custom-scrollbar"
+      aria-label="Onboarding steps"
+    >
       {STEPS.map((s, i) => {
         const done = s.id < step
         const active = s.id === step
+        const connectorDone = i > 0 && STEPS[i - 1].id < step
+        const chip = (
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ${
+              done
+                ? 'border-teal-600 bg-teal-600 text-white'
+                : active
+                  ? 'border-teal-600 bg-white text-teal-700'
+                  : 'border-slate-200 bg-white text-slate-400'
+            }`}
+          >
+            {done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : s.id}
+          </span>
+        )
+        const label = (
+          <span
+            className={`whitespace-nowrap text-xs font-medium ${
+              active ? 'text-slate-900' : done ? 'text-slate-600' : 'text-slate-400'
+            }`}
+          >
+            {s.label}
+          </span>
+        )
         return (
-          <li key={s.id} className="flex items-center gap-1">
-            {i > 0 ? <span className="h-px w-2 bg-slate-200 sm:w-3" aria-hidden="true" /> : null}
-            <span
-              className={`flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-semibold ${
-                done
-                  ? 'border-teal-600 bg-teal-600 text-white'
-                  : active
-                    ? 'border-teal-600 bg-white text-teal-700'
-                    : 'border-slate-200 bg-white text-slate-400'
-              }`}
-              aria-current={active ? 'step' : undefined}
-            >
-              {done ? <Check className="h-3 w-3" aria-hidden="true" /> : s.id}
-            </span>
-            <span
-              className={`hidden text-[11px] font-medium md:inline ${
-                active ? 'text-slate-900' : 'text-slate-400'
-              }`}
-            >
-              {s.label}
-            </span>
+          <li key={s.id} className="flex shrink-0 items-center">
+            {i > 0 ? (
+              <span
+                className={`mx-1 h-px w-3 sm:w-5 ${connectorDone ? 'bg-teal-300' : 'bg-slate-200'}`}
+                aria-hidden="true"
+              />
+            ) : null}
+            {done ? (
+              <button
+                type="button"
+                onClick={() => onJump(s.id)}
+                aria-label={`Back to step ${s.id}: ${s.label}`}
+                title={`Back to ${s.label}`}
+                className="flex items-center gap-1.5 rounded-lg py-1 pl-1 pr-1.5 transition-colors hover:bg-teal-50 focus-ring"
+              >
+                {chip}
+                <span className="hidden sm:inline">{label}</span>
+              </button>
+            ) : (
+              <span
+                className={`flex items-center gap-1.5 py-1 pl-1 ${active ? 'pr-1.5' : ''}`}
+                aria-current={active ? 'step' : undefined}
+              >
+                {chip}
+                <span className="hidden sm:inline">{label}</span>
+              </span>
+            )}
           </li>
         )
       })}
@@ -520,18 +589,18 @@ function SectionStatus({ state }: { state: 'ready' | 'attention' | 'optional' })
   return <Badge className="border-teal-200 bg-teal-50 text-teal-700 normal-case">Ready</Badge>
 }
 
-export function ProvisionWizard({
-  open,
-  onOpenChange,
-  onProvisioned,
-}: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
-  onProvisioned: () => void
-}) {
+export function ProvisionWizard() {
   const router = useRouter()
   const [step, setStep] = useState(1)
-  const [form, setForm] = useState<WizardForm>(EMPTY_FORM)
+  const [form, setForm] = useState<WizardForm>(() => ({
+    ...EMPTY_FORM,
+    // Date-derived defaults (mission §2 STEPS 3–4): the subscription
+    // starts today; the academic session follows the school-year rule
+    // in the operator's timezone. Both are RE-derived and re-validated
+    // server-side at creation.
+    subscriptionStartsOn: new Date().toISOString().slice(0, 10),
+    academicYear: defaultAcademicSession(new Date(), EMPTY_FORM.timezone),
+  }))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [errorCode, setErrorCode] = useState<string | null>(null)
@@ -547,34 +616,101 @@ export function ProvisionWizard({
   // Server-side availability answers for the CURRENT slug/code values.
   const [precheck, setPrecheck] = useState<PrecheckResult | null>(null)
 
+  // ── Draft persistence (full-page workspace) ─────────────────────────
+  // A draft from a previous visit is NEVER auto-loaded: the operator
+  // explicitly resumes or discards it via the banner. Auto-save stays
+  // paused until that decision is made so a fresh form can never
+  // silently clobber the stored draft.
+  const [draft, setDraft] = useState<WizardDraft | null>(null)
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null)
+
   useEffect(() => {
-    if (open) {
-      const today = new Date().toISOString().slice(0, 10)
-      setStep(1)
-      setForm({
-        ...EMPTY_FORM,
-        // Sensible defaults derived from the current date (mission §2
-        // STEPS 3–4): subscription starts today, the academic session
-        // follows the school-year rule in the operator's timezone.
-        subscriptionStartsOn: today,
-        academicYear: defaultAcademicSession(new Date(), EMPTY_FORM.timezone),
-      })
-      setError(null)
-      setErrorCode(null)
-      setResult(null)
-      setOpenSections({ bootstrap: false })
-      setAutoShortName(true)
-      setAutoSlug(true)
-      setAutoYear(true)
-      setPrecheck(null)
+    try {
+      const raw = window.sessionStorage.getItem(DRAFT_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Partial<WizardDraft> | null
+      if (parsed && typeof parsed.step === 'number' && parsed.form && typeof parsed.form === 'object') {
+        setDraft({
+          step: Math.min(Math.max(parsed.step, 1), STEPS.length),
+          autoShortName: parsed.autoShortName ?? true,
+          autoSlug: parsed.autoSlug ?? true,
+          autoYear: parsed.autoYear ?? true,
+          savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : new Date().toISOString(),
+          // SECURITY: any password value in storage is discarded unread.
+          form: { ...EMPTY_FORM, ...parsed.form, principalPassword: '' },
+        })
+      }
+    } catch {
+      /* unreadable draft — ignored; a fresh form starts */
     }
-  }, [open])
+  }, [])
+
+  const draftWhen = useMemo(() => {
+    if (!draft) return ''
+    const d = new Date(draft.savedAt)
+    return Number.isNaN(d.getTime())
+      ? 'earlier'
+      : d.toLocaleString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+  }, [draft])
+
+  const resumeDraft = () => {
+    if (!draft) return
+    setForm({ ...draft.form, principalPassword: '' })
+    setStep(draft.step)
+    setAutoShortName(draft.autoShortName)
+    setAutoSlug(draft.autoSlug)
+    setAutoYear(draft.autoYear)
+    setDraft(null)
+    setError(null)
+    setErrorCode(null)
+    toast.info('Draft resumed — continue where you left off')
+  }
+
+  const discardDraft = () => {
+    try {
+      window.sessionStorage.removeItem(DRAFT_KEY)
+    } catch {
+      /* nothing to remove */
+    }
+    setDraft(null)
+  }
+
+  // Debounced auto-save: the operator's progress survives a reload or
+  // a stray navigation. `principalPassword` is NEVER written to
+  // storage, and a pristine untouched form is never saved at all.
+  const autoSaveActive = !result && draft === null && isFormMeaningful(form)
+  useEffect(() => {
+    if (!autoSaveActive) return
+    const t = setTimeout(() => {
+      try {
+        window.sessionStorage.setItem(
+          DRAFT_KEY,
+          JSON.stringify({
+            form: { ...form, principalPassword: '' },
+            step,
+            autoShortName,
+            autoSlug,
+            autoYear,
+            savedAt: new Date().toISOString(),
+          } satisfies WizardDraft),
+        )
+        setDraftSavedAt(new Date().toISOString())
+      } catch {
+        /* storage unavailable — drafts silently unavailable */
+      }
+    }, 600)
+    return () => clearTimeout(t)
+  }, [autoSaveActive, form, step, autoShortName, autoSlug, autoYear])
 
   // ── Debounced server precheck (slug/code availability + generated
   // previews) as the operator edits identity fields. Read-only, never
   // a reservation — POST-time DB constraints are the authority. ──────
   useEffect(() => {
-    if (!open) return
     const name = form.name.trim()
     const slug = form.slug.trim()
     const code = form.code.trim()
@@ -603,7 +739,7 @@ export function ProvisionWizard({
       clearTimeout(timer)
       controller.abort()
     }
-  }, [form.name, form.slug, form.code, open])
+  }, [form.name, form.slug, form.code])
 
   const set = <K extends keyof WizardForm>(key: K, value: WizardForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -914,12 +1050,18 @@ export function ProvisionWizard({
         body: JSON.stringify(finalPayload),
       }, 90_000)
       setResult(res as unknown as ProvisionResult)
+      // The workspace completed — the draft is consumed.
+      try {
+        window.sessionStorage.removeItem(DRAFT_KEY)
+      } catch {
+        /* nothing stored */
+      }
+      setDraftSavedAt(null)
       if ((res as unknown as ProvisionResult).replayed) {
         toast.info('Matched an existing PENDING provision — no duplicate created')
       } else {
         toast.success('School created — activate it to enable sign-in')
       }
-      onProvisioned()
     } catch (e) {
       const err = e as PlatformApiError
       // SUBSCRIPTION_SYSTEM_PENDING (503) is kept IN the wizard (review
@@ -973,27 +1115,47 @@ export function ProvisionWizard({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto custom-scrollbar bg-white border-slate-200 text-slate-900 sm:max-w-2xl">
-        {result ? (
+    <div className="mx-auto w-full max-w-4xl">
+      {/* Breadcrumb — the workspace is a real page in the Schools
+          hierarchy: reachable by URL, reload-safe, and never a cramped
+          modal that one stray click can dismiss. */}
+      <nav aria-label="Breadcrumb" className="mb-4">
+        <ol className="flex flex-wrap items-center gap-1.5 text-xs">
+          <li>
+            <Link
+              href="/platform/schools"
+              className="rounded font-medium text-slate-500 transition-colors hover:text-teal-700 focus-ring"
+            >
+              Schools
+            </Link>
+          </li>
+          <li aria-hidden="true">
+            <ChevronRight className="h-3.5 w-3.5 text-slate-300" />
+          </li>
+          <li aria-current="page" className="font-semibold text-slate-900">
+            {result ? 'School created' : 'Add school'}
+          </li>
+        </ol>
+      </nav>
+      {result ? (
           // ── Success panel ────────────────────────────────────────────
           <div className="space-y-5">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
+            <header>
+              <h1 className="flex flex-wrap items-center gap-2.5 font-display text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
                 <span
-                  className={`flex h-8 w-8 items-center justify-center rounded-full text-white ${
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white ${
                     result.replayed ? 'bg-amber-500' : 'bg-teal-600'
                   }`}
                 >
                   {result.replayed ? (
-                    <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                    <AlertTriangle className="h-5 w-5" aria-hidden="true" />
                   ) : (
-                    <Check className="h-4 w-4" aria-hidden="true" />
+                    <Check className="h-5 w-5" aria-hidden="true" />
                   )}
                 </span>
                 {result.replayed ? `${result.school.name} — already provisioned` : `${result.school.name} created`}
-              </DialogTitle>
-              <DialogDescription className="text-slate-500">
+              </h1>
+              <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
                 {result.replayed ? (
                   <span>
                     This request matched a PENDING school you provisioned — an <span className="font-medium text-amber-700">idempotent replay</span>, no duplicate was created.
@@ -1005,8 +1167,8 @@ export function ProvisionWizard({
                     from the school record to enable sign-in.
                   </span>
                 )}
-              </DialogDescription>
-            </DialogHeader>
+              </p>
+            </header>
 
             {result.replayed ? (
               <div
@@ -1298,10 +1460,10 @@ export function ProvisionWizard({
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
               <Button
                 variant="outline"
-                onClick={() => onOpenChange(false)}
-                className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 h-10 focus-ring"
+                onClick={() => router.push('/platform/schools')}
+                className="h-10 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
               >
-                Close
+                Back to schools
               </Button>
               <Button
                 variant="outline"
@@ -1331,18 +1493,61 @@ export function ProvisionWizard({
         ) : (
           // ── Wizard ────────────────────────────────────────────────────
           <div className="space-y-5">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 font-display text-slate-900">
-                <Building2 className="h-4 w-4 text-teal-600" aria-hidden="true" />
+            <header>
+              <h1 className="flex items-center gap-2 font-display text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
+                <Building2 className="h-5 w-5 text-teal-600" aria-hidden="true" />
                 Add school
-              </DialogTitle>
-              <DialogDescription className="text-slate-500">
+              </h1>
+              <p className="mt-1 max-w-2xl text-sm text-slate-500">
                 Seven steps create the tenant ecosystem — identity, principal, subscription, academics,
                 branding, address and review. One platform, one database: the school is data, not a deployment.
-              </DialogDescription>
-            </DialogHeader>
+              </p>
+            </header>
 
-            <StepDots step={step} />
+            {/* Saved-draft decision — NEVER auto-loaded: the operator
+                resumes or discards it explicitly, and auto-save stays
+                paused until then so this fresh form cannot clobber the
+                stored draft before the decision is made. */}
+            {draft ? (
+              <div
+                role="status"
+                className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex items-start gap-2.5 text-xs text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <p>
+                    A saved draft from <span className="font-semibold">{draftWhen}</span> is waiting —{' '}
+                    {draft.form.name.trim() ? `“${draft.form.name.trim()}”` : 'an unfinished school'} at
+                    step {draft.step} of {STEPS.length}. Resume where you left off, or discard it and
+                    start fresh.
+                    <span className="mt-0.5 block text-[11px] opacity-80">
+                      For security, the principal password is never saved in drafts.
+                    </span>
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={discardDraft}
+                    className="h-9 border-amber-300 bg-white text-amber-800 hover:bg-amber-100 focus-ring"
+                  >
+                    Discard
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={resumeDraft}
+                    className="h-9 bg-teal-600 font-semibold text-white hover:bg-teal-700 focus-ring"
+                  >
+                    Resume draft
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm sm:px-4">
+              <StepDots step={step} onJump={jumpTo} />
+            </div>
 
             {error ? (
               <div
@@ -1375,6 +1580,7 @@ export function ProvisionWizard({
               </div>
             ) : null}
 
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
             {/* STEP 1 — SCHOOL IDENTITY */}
             {step === 1 ? (
               <div className="grid gap-4 sm:grid-cols-2">
@@ -2541,19 +2747,47 @@ export function ProvisionWizard({
                 </p>
               </div>
             ) : null}
+            </div>
 
-            <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-4">
-              <Button
-                variant="outline"
-                onClick={back}
-                disabled={step === 1 || busy}
-                className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 h-10 focus-ring"
-              >
-                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-                Back
-              </Button>
-              <p className="text-[11px] text-slate-400">
+            {/* Sticky workspace footer — the primary controls stay
+                reachable without scrolling. The draft indicator is
+                honest: a save failure shows nothing rather than a
+                false “saved”. */}
+            <div className="sticky bottom-0 z-20 mt-2 rounded-xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+              {step === 1 ? (
+                <Button
+                  variant="outline"
+                  onClick={() => router.push('/platform/schools')}
+                  disabled={busy}
+                  className="h-10 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+                  Exit
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  onClick={back}
+                  disabled={busy}
+                  className="h-10 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+                  Back
+                </Button>
+              )}
+              <p className="min-w-0 text-[11px] text-slate-400" aria-live="polite">
                 Step {step} of {STEPS.length}
+                <span className="hidden sm:inline">
+                  {draftSavedAt
+                    ? ` · Draft saved ${new Date(draftSavedAt).toLocaleTimeString(undefined, {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}`
+                    : isFormMeaningful(form)
+                      ? ' · Draft saves as you type'
+                      : ''}
+                </span>
               </p>
               {step < STEPS.length ? (
                 <Button
@@ -2572,10 +2806,10 @@ export function ProvisionWizard({
                   {busy ? 'Creating…' : 'Create school'}
                 </Button>
               )}
+              </div>
             </div>
           </div>
         )}
-      </DialogContent>
-    </Dialog>
+    </div>
   )
 }
