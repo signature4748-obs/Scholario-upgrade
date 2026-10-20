@@ -23,7 +23,7 @@
 // ============================================================
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Gift, KeyRound, Loader2, RefreshCw, Wallet } from 'lucide-react'
+import { AlertTriangle, Gift, KeyRound, Loader2, RefreshCw, Wallet } from 'lucide-react'
 import { platformApi, type PlatformApiError } from '../platform-client'
 import { isSubscriptionSchemaPending } from './pending-banner'
 import { Button } from '@/components/ui/button'
@@ -35,6 +35,10 @@ import { Switch } from '@/components/ui/switch'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
@@ -399,6 +403,11 @@ interface StudentHistoryData {
  * Per-student subscription history: entitlements / payments / codes,
  * with the lifecycle actions (revoke/suspend/reactivate — reason ≥ 10
  * chars, audited server-side) and code reissue (plaintext ONCE).
+ * Destructive-action reasons are collected in a themed AlertDialog and
+ * the reissued one-time code is displayed in a themed Dialog via
+ * OneTimeCodeBlock — never a native window.prompt/window.alert (they
+ * break the design language, block styling of the one-time warning and
+ * cannot offer a Copy affordance).
  * A failed load renders a retryable error panel — NEVER a skeleton
  * forever and never a fake "no history" empty state.
  */
@@ -406,6 +415,18 @@ export function StudentHistoryDialog({ student, onClose }: { student: StudentRow
   const [data, setData] = useState<StudentHistoryData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  /** Destructive lifecycle action awaiting its audited reason (null = dialog closed). */
+  const [reasonAction, setReasonAction] = useState<'revoke' | 'suspend' | null>(null)
+  const [reasonText, setReasonText] = useState('')
+  const [reasonError, setReasonError] = useState<string | null>(null)
+  /** Code reissue awaiting its audited reason (null = dialog closed). */
+  const [reissueFor, setReissueFor] = useState<string | null>(null)
+  const [reissueText, setReissueText] = useState('')
+  const [reissueError, setReissueError] = useState<string | null>(null)
+  const [reissueBusy, setReissueBusy] = useState(false)
+  /** The reissued code's one-time plaintext — the ONLY authorized display
+   *  moment, rendered in a themed dialog (OneTimeCodeBlock). */
+  const [reissued, setReissued] = useState<{ publicRef: string; code: string; expiresAt: string; message: string } | null>(null)
 
   const load = useCallback(async () => {
     setError(null)
@@ -419,48 +440,78 @@ export function StudentHistoryDialog({ student, onClose }: { student: StudentRow
 
   useEffect(() => { void load() }, [load])
 
-  const act = async (action: 'revoke' | 'suspend' | 'reactivate') => {
+  const act = async (action: 'revoke' | 'suspend' | 'reactivate', reason?: string): Promise<boolean> => {
     // Server requires a reason (min 10) for every lifecycle action —
-    // withdrawing/adjusting a paid entitlement is destructive.
-    const reason =
-      action === 'reactivate'
-        ? 'Reactivated by operator'
-        : window.prompt(`Reason for ${action}? (at least 10 characters — recorded in the audit trail)`)
-    if (action !== 'reactivate' && (!reason || reason.trim().length < 10)) {
-      if (reason !== null) toast.error('A reason of at least 10 characters is required.')
-      return
-    }
+    // withdrawing/adjusting a paid entitlement is destructive. The themed
+    // reason dialog collects it for revoke/suspend; reactivate records the
+    // operator's standard reactivation note.
+    const finalReason = (action === 'reactivate' ? 'Reactivated by operator' : (reason ?? '')).trim()
+    if (finalReason.length < 10) return false // guarded by the dialog's own validation
     setBusy(action)
     try {
       await platformApi(`/api/platform/students/${student.studentId}/subscription`, {
         method: 'PATCH',
-        body: JSON.stringify({ action, reason: reason?.trim() }),
+        body: JSON.stringify({ action, reason: finalReason }),
       })
       toast.success(`Entitlement ${action}d — financial records unchanged.`)
       await load()
+      return true
     } catch (e) {
       toast.error(`${action} failed`, { description: errMessage(e) })
+      return false
     } finally {
       setBusy(null)
     }
   }
 
-  const reissue = async (codeId: string) => {
-    const reason = window.prompt('Reason for reissue? (the old code becomes unusable)')
-    if (!reason || reason.trim().length < 4) return
-    setBusy(codeId)
+  /** Confirm the destructive action with its reason — the dialog stays
+   *  open on failure (retry or cancel); closing would imply success. */
+  const submitReason = async () => {
+    const text = reasonText.trim()
+    if (text.length < 10) {
+      setReasonError('A reason of at least 10 characters is required — it is recorded in the audit trail.')
+      return
+    }
+    const action = reasonAction
+    if (!action) return
+    const ok = await act(action, text)
+    if (ok) {
+      setReasonAction(null)
+      setReasonText('')
+      setReasonError(null)
+    }
+  }
+
+  const reissue = async () => {
+    if (!reissueFor) return
+    const text = reissueText.trim()
+    if (text.length < 4) {
+      setReissueError('A reason of at least 4 characters is required — it is recorded in the audit trail.')
+      return
+    }
+    setReissueBusy(true)
     try {
-      const d = await platformApi<{ code: string; publicRef: string; message: string }>(`/api/platform/subscriptions/codes/${codeId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ action: 'reissue', reason: reason.trim() }),
-      })
+      const d = await platformApi<{ code: string; publicRef: string; expiresAt: string; message: string }>(
+        `/api/platform/subscriptions/codes/${reissueFor}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ action: 'reissue', reason: text }),
+        },
+      )
       toast.success(d.message)
-      window.alert(`New activation code (${d.publicRef}):\n\n${d.code}\n\nCopy it now — it will not be visible again.`)
+      // The single authorized plaintext display — themed dialog with the
+      // mono block, Copy button and shown-only-once warning.
+      setReissued({ publicRef: d.publicRef, code: d.code, expiresAt: d.expiresAt, message: d.message })
+      setReissueFor(null)
+      setReissueText('')
+      setReissueError(null)
       await load()
     } catch (e) {
+      // Reason dialog stays open — the operator can fix the cause and
+      // retry, or cancel; nothing was reissued.
       toast.error('Reissue failed', { description: errMessage(e) })
     } finally {
-      setBusy(null)
+      setReissueBusy(false)
     }
   }
 
@@ -498,9 +549,21 @@ export function StudentHistoryDialog({ student, onClose }: { student: StudentRow
               ))}
               {data.entitlements.length === 0 && <p className="p-4 text-center text-sm text-muted-foreground">No entitlements yet.</p>}
               <div className="flex gap-2 pt-1">
-                <Button size="sm" variant="outline" disabled={busy === 'revoke'} onClick={() => void act('revoke')}>Revoke live</Button>
-                <Button size="sm" variant="outline" disabled={busy === 'suspend'} onClick={() => void act('suspend')}>Suspend live</Button>
-                <Button size="sm" variant="outline" disabled={busy === 'reactivate'} onClick={() => void act('reactivate')}>Reactivate</Button>
+                <Button
+                  size="sm" variant="outline" disabled={busy === 'revoke'}
+                  onClick={() => { setReasonAction('revoke'); setReasonText(''); setReasonError(null) }}
+                >
+                  Revoke live
+                </Button>
+                <Button
+                  size="sm" variant="outline" disabled={busy === 'suspend'}
+                  onClick={() => { setReasonAction('suspend'); setReasonText(''); setReasonError(null) }}
+                >
+                  Suspend live
+                </Button>
+                <Button size="sm" variant="outline" disabled={busy === 'reactivate'} onClick={() => void act('reactivate')}>
+                  Reactivate
+                </Button>
               </div>
             </TabsContent>
             <TabsContent value="payments" className="space-y-2">
@@ -520,8 +583,11 @@ export function StudentHistoryDialog({ student, onClose }: { student: StudentRow
                   <StateBadge state={c.status} />
                   <span className="text-xs text-muted-foreground">expires {dateStr(c.expiresAt)}</span>
                   {(c.status === 'ISSUED' || c.status === 'EXPIRED') && (
-                    <Button size="sm" variant="outline" disabled={busy === c.id} onClick={() => void reissue(c.id)}>
-                      {busy === c.id && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}Reissue
+                    <Button
+                      size="sm" variant="outline"
+                      onClick={() => { setReissueFor(c.id); setReissueText(''); setReissueError(null) }}
+                    >
+                      Reissue
                     </Button>
                   )}
                 </div>
@@ -530,6 +596,132 @@ export function StudentHistoryDialog({ student, onClose }: { student: StudentRow
             </TabsContent>
           </Tabs>
         )}
+
+        {/* Reason dialog for destructive lifecycle actions — themed
+            replacement for the old native window.prompt; the min-10-char
+            reason is validated inline and audited server-side. */}
+        <AlertDialog
+          open={reasonAction !== null}
+          onOpenChange={(o) => { if (!o && busy !== reasonAction) setReasonAction(null) }}
+        >
+          <AlertDialogContent className="border-slate-200 bg-white text-slate-900 sm:max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2 font-display text-red-700">
+                <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                {reasonAction === 'revoke' ? 'Revoke live entitlement?' : 'Suspend live entitlement?'}
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-slate-500">
+                {student.name}&apos;s live entitlement is being {reasonAction === 'revoke' ? 'revoked' : 'suspended'} — the
+                student loses subscription access until it is reactivated. Financial records stay unchanged; the reason
+                below is recorded in the audit trail.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div>
+              <Label htmlFor="entitlement-action-reason" className="text-xs text-slate-500">Reason (audited)</Label>
+              <Textarea
+                id="entitlement-action-reason"
+                rows={3}
+                value={reasonText}
+                onChange={(e) => { setReasonText(e.target.value); setReasonError(null) }}
+                placeholder={reasonAction === 'revoke' ? 'Why is this entitlement being revoked?' : 'Why is this entitlement being suspended?'}
+                className="mt-1 border-slate-300 bg-white"
+              />
+              {reasonError && <p role="alert" className="mt-1 text-xs text-red-600">{reasonError}</p>}
+            </div>
+            <AlertDialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setReasonAction(null)}
+                disabled={busy === reasonAction}
+                className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void submitReason()}
+                disabled={busy === reasonAction}
+                className="h-11 bg-red-600 font-semibold text-white hover:bg-red-500 focus-ring"
+              >
+                {busy === reasonAction && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-label="Applying action" />}
+                {reasonAction === 'revoke' ? 'Revoke entitlement' : 'Suspend entitlement'}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Reissue-reason dialog — themed replacement for the old native
+            window.prompt (server contract: reason min 4 chars, audited;
+            the previous code becomes permanently unusable). */}
+        <AlertDialog
+          open={reissueFor !== null}
+          onOpenChange={(o) => { if (!o && !reissueBusy) setReissueFor(null) }}
+        >
+          <AlertDialogContent className="border-slate-200 bg-white text-slate-900 sm:max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2 font-display">
+                <KeyRound className="h-4 w-4 text-teal-600" aria-hidden="true" />
+                Reissue activation code
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-slate-500">
+                The previous code becomes permanently unusable and a fresh code is issued inheriting the same plan and
+                validity. The new plaintext is shown exactly once; the reason below is recorded in the audit trail.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div>
+              <Label htmlFor="code-reissue-reason" className="text-xs text-slate-500">Reason (audited)</Label>
+              <Textarea
+                id="code-reissue-reason"
+                rows={3}
+                value={reissueText}
+                onChange={(e) => { setReissueText(e.target.value); setReissueError(null) }}
+                placeholder="Why is this code being reissued?"
+                className="mt-1 border-slate-300 bg-white"
+              />
+              {reissueError && <p role="alert" className="mt-1 text-xs text-red-600">{reissueError}</p>}
+            </div>
+            <AlertDialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setReissueFor(null)}
+                disabled={reissueBusy}
+                className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void reissue()}
+                disabled={reissueBusy}
+                className="h-11 bg-teal-600 font-semibold text-white hover:bg-teal-700 focus-ring"
+              >
+                {reissueBusy && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-label="Reissuing code" />}
+                {reissueBusy ? 'Reissuing…' : 'Reissue code'}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* The ONE authorized display of the reissued plaintext — themed
+            dialog with OneTimeCodeBlock (mono block + Copy + shown-only-
+            once warning); replaces the old native window.alert. */}
+        <Dialog open={reissued !== null} onOpenChange={(o) => { if (!o) setReissued(null) }}>
+          <DialogContent className="border-slate-200 bg-white text-slate-900 sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="font-display">New activation code</DialogTitle>
+              <DialogDescription>{reissued?.message}</DialogDescription>
+            </DialogHeader>
+            {reissued && (
+              <OneTimeCodeBlock
+                code={reissued}
+                hint="Show and copy the code now — it will not be visible again. Deliver it to the student out-of-band."
+              />
+            )}
+            <DialogFooter>
+              <Button onClick={() => setReissued(null)} className="bg-teal-600 font-semibold text-white hover:bg-teal-700 focus-ring">
+                Done
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   )

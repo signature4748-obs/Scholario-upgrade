@@ -53,6 +53,10 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
   Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle,
 } from '@/components/ui/drawer'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -95,12 +99,16 @@ interface SubscriptionRow {
 
 /** GET /api/platform/subscriptions/registry — summary nulls mean the
  *  subsystem is not provisioned on this database (never "zero").
- *  tenantStates + subscriptionsExpired are REGISTRY-WIDE computed-live
- *  tallies (legacy columns only — available under schema-pending too);
- *  the KPI cards must never present page-scoped rows as global counts. */
+ *  tenantStates + subscriptionsExpired + the fixed-30-day expiring count
+ *  are REGISTRY-WIDE computed-live tallies (legacy columns only —
+ *  available under schema-pending too); the KPI cards must never present
+ *  page- or filter-scoped rows as global counts. schools.total is the
+ *  FILTERED cohort (search + status + renewal window) and page/pageSize
+ *  drive the pager — the counter's denominator and the pager describe the
+ *  same filtered report. */
 interface RegistryData {
   subscriptionSchemaPending?: boolean
-  schools: { rows: SubscriptionRow[]; total: number }
+  schools: { rows: SubscriptionRow[]; total: number; page: number; pageSize: number }
   summary: {
     tenantStates?: Record<string, number>
     subscriptionsExpired?: number
@@ -153,6 +161,9 @@ const TENANT_STATUS_FILTERS = [
 
 const NEEDS_REVIEW_STATES = ['GRACE', 'RESTRICTED', 'SUSPENDED']
 const DAY_MS = 24 * 60 * 60 * 1000
+/** en-IN grouping — the repo's number format (matches the schools
+ *  directory's pager and counters). */
+const num = new Intl.NumberFormat('en-IN')
 
 /** SSR-safe media query (resolved before any overlay can be opened). */
 function useMediaQuery(query: string): boolean {
@@ -177,17 +188,20 @@ export function SubscriptionsModule() {
   const [registry, setRegistry] = useState<RegistryData | null>(null)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  /** Registry page — the API slices AFTER filtering, so the pager always
+   *  describes the filtered cohort. Filter changes reset it to 1. */
+  const [page, setPage] = useState(1)
   /** Page-level schema-pending signal lifted from any secondary surface. */
   const [secondaryPending, setSecondaryPending] = useState(false)
 
   const signalPending = useCallback(() => setSecondaryPending(true), [])
 
-  const load = useCallback(async (q: string, status: string) => {
+  const load = useCallback(async (q: string, status: string, pageNo: number) => {
     setLoading(true)
     setError(null)
     try {
       const reg = await platformApi<RegistryData>(
-        `/api/platform/subscriptions/registry?q=${encodeURIComponent(q)}${status ? `&status=${status}` : ''}&pageSize=50`,
+        `/api/platform/subscriptions/registry?q=${encodeURIComponent(q)}${status ? `&status=${status}` : ''}&page=${pageNo}&pageSize=50`,
       )
       setRegistry(reg)
     } catch (e) {
@@ -198,14 +212,23 @@ export function SubscriptionsModule() {
     }
   }, [])
 
-  useEffect(() => { void load('', '') }, [load])
+  useEffect(() => { void load('', '', 1) }, [load])
 
-  /** Search/filter application — the parent owns the query + status state
-   *  so the overview is always a single source of truth. */
+  /** Search/filter application — the parent owns the query + status +
+   *  page state so the overview is always a single source of truth.
+   *  Filters changing means the cohort changes — back to page 1. */
   const handleSearch = useCallback((q: string, status: string) => {
     setStatusFilter(status)
-    void load(q, status)
+    setPage(1)
+    void load(q, status, 1)
   }, [load])
+
+  /** Pager navigation — keeps the active filters, moves within the
+   *  filtered cohort (mirrors the schools directory's pager). */
+  const handlePageChange = useCallback((next: number) => {
+    setPage(next)
+    void load(query, statusFilter, next)
+  }, [load, query, statusFilter])
 
   const schemaPending = (registry != null && isSubscriptionSchemaPending(registry)) || secondaryPending
 
@@ -260,7 +283,7 @@ export function SubscriptionsModule() {
       ) : view === 'students' ? (
         <StudentEntitlementsSection
           onSchemaPending={signalPending}
-          onAssigned={() => void load(query, statusFilter)}
+          onAssigned={() => void load(query, statusFilter, page)}
         />
       ) : view === 'plans' ? (
         <PlansSection onSchemaPending={signalPending} />
@@ -271,9 +294,11 @@ export function SubscriptionsModule() {
           registry={registry}
           query={query}
           statusFilter={statusFilter}
+          page={page}
+          onPageChange={handlePageChange}
           onQueryChange={setQuery}
           onSearch={handleSearch}
-          onRetry={() => void load(query, statusFilter)}
+          onRetry={() => void load(query, statusFilter, page)}
         />
       )}
     </div>
@@ -283,13 +308,15 @@ export function SubscriptionsModule() {
 // ── overview (the routine experience) ──────────────────────────────────
 
 function OverviewSection({
-  loading, error, registry, query, statusFilter, onQueryChange, onSearch, onRetry,
+  loading, error, registry, query, statusFilter, page, onPageChange, onQueryChange, onSearch, onRetry,
 }: {
   loading: boolean
   error: string | null
   registry: RegistryData | null
   query: string
   statusFilter: string
+  page: number
+  onPageChange: (next: number) => void
   onQueryChange: (q: string) => void
   onSearch: (q: string, status: string) => void
   onRetry: () => void
@@ -298,6 +325,9 @@ function OverviewSection({
   const [detailRow, setDetailRow] = useState<SubscriptionRow | null>(null)
 
   const rows = registry?.schools.rows ?? []
+  const pageSize = registry?.schools.pageSize ?? 50
+  const total = registry?.schools.total ?? 0
+  const totalPages = registry ? Math.max(1, Math.ceil(total / pageSize)) : 1
   const now = Date.now()
   // REGISTRY-WIDE KPIs — served by the API's summary (computed live over
   // ALL SchoolSubscription rows, legacy columns only). The page-scoped row
@@ -429,7 +459,7 @@ function OverviewSection({
       ) : !error && (
         <>
           <p className="text-xs text-slate-500" aria-live="polite">
-            Showing {rows.length} of {registry?.schools.total ?? 0} school subscriptions
+            Showing {rows.length} of {total} school subscriptions
             {statusFilter ? ` · status: ${TENANT_STATUS_FILTERS.find((s) => s.value === statusFilter)?.label ?? statusFilter}` : ''}
           </p>
 
@@ -516,6 +546,42 @@ function OverviewSection({
               </tbody>
             </table>
           </div>
+
+          {/* Pager — mirrors the schools directory's pager (Prev/Next +
+              "Page X of Y" + the cohort size). Rendered only when the
+              filtered cohort has rows: with zero matches the empty state
+              above is the honest surface, not navigation to nothing. */}
+          {total > 0 && (
+            <nav
+              aria-label="Subscription registry pages"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
+            >
+              <p className="text-xs tabular-nums text-slate-500">
+                Page {page} of {totalPages}
+                {registry ? ` · ${num.format(total)} subscription${total === 1 ? '' : 's'}` : ''}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page <= 1 || loading}
+                  onClick={() => onPageChange(Math.max(1, page - 1))}
+                  className="h-9 min-w-[76px] border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  ← Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= totalPages || loading}
+                  onClick={() => onPageChange(page + 1)}
+                  className="h-9 min-w-[76px] border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  Next →
+                </Button>
+              </div>
+            </nav>
+          )}
         </>
       )}
 
@@ -1131,6 +1197,9 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
   /** The ACTIVE plan being edited (null = dialog closed). */
   const [editing, setEditing] = useState<PlanRow | null>(null)
   const [saving, setSaving] = useState(false)
+  /** The plan pending archive confirmation (null = AlertDialog closed). */
+  const [archiveFor, setArchiveFor] = useState<PlanRow | null>(null)
+  const [archiving, setArchiving] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -1166,12 +1235,18 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
   }
 
   const archive = async (id: string) => {
+    setArchiving(true)
     try {
       await platformApi(`/api/platform/subscriptions/plans/${id}`, { method: 'DELETE' })
       toast.success('Plan archived')
+      setArchiveFor(null)
       void load()
     } catch (e) {
+      // Keep the confirmation open — the operator sees the failure and
+      // can retry or cancel; closing would imply the archive happened.
       toast.error('Archive failed', { description: errMessage(e) })
+    } finally {
+      setArchiving(false)
     }
   }
 
@@ -1325,7 +1400,8 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
                           </Button>
                           <Button
                             size="sm" variant="outline" className="border-slate-300 text-slate-700"
-                            onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
+                            onClick={() => setArchiveFor(p)}
+                            aria-label={`Archive plan ${p.code}`}
                           >
                             Archive
                           </Button>
@@ -1375,7 +1451,8 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
                     </Button>
                     <Button
                       size="sm" variant="outline" className="flex-1 border-slate-300 text-slate-700"
-                      onClick={() => { if (window.confirm(`Archive plan ${p.code}? Historical purchases keep their snapshots.`)) void archive(p.id) }}
+                      onClick={() => setArchiveFor(p)}
+                      aria-label={`Archive plan ${p.code}`}
                     >
                       Archive
                     </Button>
@@ -1397,6 +1474,42 @@ function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
           onSaved={() => { setEditing(null); void load() }}
         />
       )}
+
+      {/* Archive confirmation — themed AlertDialog (replaces the old
+          native window.confirm), mirroring school-payment-gateway's
+          destructive-action pattern. */}
+      <AlertDialog open={archiveFor !== null} onOpenChange={(o) => { if (!o && !archiving) setArchiveFor(null) }}>
+        <AlertDialogContent className="border-slate-200 bg-white text-slate-900 sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 font-display text-red-700">
+              <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+              Archive plan {archiveFor?.code}?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-500">
+              Historical purchases keep their snapshots. Archived plans cannot be edited or purchased — archive is
+              irreversible; create a successor plan to replace it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setArchiveFor(null)}
+              disabled={archiving}
+              className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => { if (archiveFor) void archive(archiveFor.id) }}
+              disabled={archiving}
+              className="h-11 bg-red-600 font-semibold text-white hover:bg-red-500 focus-ring"
+            >
+              {archiving && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-label="Archiving plan" />}
+              {archiving ? 'Archiving…' : 'Archive plan'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

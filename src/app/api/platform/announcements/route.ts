@@ -3,24 +3,40 @@ import { z } from 'zod'
 import { db } from '@/lib/db'
 import { withPlatform } from '@/lib/platform/authz'
 import { platformAuditEvent } from '@/lib/platform/audit'
-import { parseJsonBody, strictBody, safeText, boundedInt } from '@/lib/security/validation'
+import { parseJsonBody, parseQuery, strictBody, safeText, boundedInt } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 
 export const runtime = 'nodejs'
 
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10_000).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
+})
+
 /**
  * GET /api/platform/announcements — manage list (all rows incl.
- * expired). Permission: announcements.manage.
+ * expired), paginated: page (1-based) + pageSize (default 20, cap 100),
+ * newest first, with the total row count for the pager. Additive: the
+ * `announcements` array keeps its exact per-row shape.
+ * Permission: announcements.manage.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   return withPlatform({ permission: 'announcements.manage' }, async () => {
-    const announcements = await db.platformAnnouncement.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    })
+    const query = parseQuery(req, listQuerySchema)
+    const page = query.page ?? 1
+    const pageSize = query.pageSize ?? 20
+
+    const [rows, total] = await Promise.all([
+      db.platformAnnouncement.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      db.platformAnnouncement.count(),
+    ])
     const now = Date.now()
     return {
-      announcements: announcements.map((a) => ({
+      announcements: rows.map((a) => ({
         id: a.id,
         title: a.title,
         body: a.body,
@@ -30,6 +46,9 @@ export async function GET() {
         expiresAt: a.expiresAt?.toISOString() ?? null,
         expired: a.expiresAt ? a.expiresAt.getTime() < now : false,
       })),
+      total,
+      page,
+      pageSize,
     }
   })
 }

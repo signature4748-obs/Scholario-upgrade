@@ -149,18 +149,31 @@ export function SessionsModule() {
                 <span className="text-slate-500">Expires </span>
                 {when(me.session.expiresAt)}
               </p>
-              {me.session.stepUpActive ? (
-                <p className="flex items-center gap-1.5 text-emerald-700">
-                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                  Step-up verified
-                  {me.session.stepUpUntil && (
-                    <span className="text-slate-500">until {when(me.session.stepUpUntil)}</span>
-                  )}
-                </p>
+              {/* PRODUCT-DIRECTION RESET (Part 1) — while platform TOTP is
+                  stood down (mfaEnabled=false) the amber "re-prompt"
+                  warning can never fire (a re-prompt would dead-end), so
+                  this renders an honest, calm note instead. The pill and
+                  its window behavior return unchanged when MFA is on. */}
+              {me.mfaEnabled ? (
+                me.session.stepUpActive ? (
+                  <p className="flex items-center gap-1.5 text-emerald-700">
+                    <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                    Step-up verified
+                    {me.session.stepUpUntil && (
+                      <span className="text-slate-500">until {when(me.session.stepUpUntil)}</span>
+                    )}
+                  </p>
+                ) : (
+                  <p className="flex items-center gap-1.5 text-amber-700">
+                    <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                    Step-up window closed — destructive actions will re-prompt
+                  </p>
+                )
               ) : (
-                <p className="flex items-center gap-1.5 text-amber-700">
-                  <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
-                  Step-up window closed — destructive actions will re-prompt
+                <p className="flex items-center gap-1.5 text-slate-500">
+                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                  Platform multi-factor verification is currently stood down; the step-up gate is
+                  dormant
                 </p>
               )}
             </div>

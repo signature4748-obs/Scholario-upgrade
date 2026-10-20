@@ -55,7 +55,6 @@ import {
   dateStr,
   errMessage,
   OneTimeCodeBlock,
-  PlanPicker,
   AssignEntitlementDialog,
   StudentHistoryDialog,
   type ActivationCodeRow,
@@ -439,9 +438,37 @@ function RecordPaymentDialog({
     billingModel: '',
   })
   const [plans, setPlans] = useState<PlanRow[]>([])
+  // HONEST PLANS LOAD — a failed fetch must never masquerade as "no
+  // plans exist": the picker region surfaces the error with a retry
+  // action. This single fetch feeds BOTH the picker options and the
+  // amount auto-fill (the shared PlanPicker's own duplicate fetch of the
+  // same endpoint was dropped in favour of this one so the error state
+  // covers everything the operator sees).
+  const [plansError, setPlansError] = useState<string | null>(null)
+  const [plansLoading, setPlansLoading] = useState(false)
+  const [plansSchemaPending, setPlansSchemaPending] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<RecordPaymentResult | null>(null)
+
+  const loadPlans = useCallback(async () => {
+    setPlansLoading(true)
+    setPlansError(null)
+    try {
+      const d = await platformApi<{ subscriptionSchemaPending?: boolean; plans: PlanRow[] }>(
+        '/api/platform/subscriptions/plans',
+      )
+      setPlans(d.plans.filter((p) => p.scope === 'SCHOOL' && p.status === 'ACTIVE' && p.allowOffline))
+      setPlansSchemaPending(isSubscriptionSchemaPending(d))
+    } catch (e) {
+      // ERROR ≠ EMPTY — clear the list so no stale plan drives the
+      // auto-fill, and keep the reason visible with a retry.
+      setPlans([])
+      setPlansError(errText(e))
+    } finally {
+      setPlansLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (open) {
@@ -460,11 +487,8 @@ function RecordPaymentDialog({
   }, [open, currentBillingModel])
 
   useEffect(() => {
-    if (!open) return
-    platformApi<{ plans: PlanRow[] }>('/api/platform/subscriptions/plans')
-      .then((d) => setPlans(d.plans.filter((p) => p.scope === 'SCHOOL' && p.status === 'ACTIVE' && p.allowOffline)))
-      .catch(() => {})
-  }, [open])
+    if (open) void loadPlans()
+  }, [open, loadPlans])
 
   // Auto-fill the amount from the selected plan's price (editable — the
   // server rejects a mismatch with an honest error).
@@ -561,7 +585,55 @@ function RecordPaymentDialog({
             {usePlan && (
               <div>
                 <Label className="text-xs">Plan (school scope, offline-enabled)</Label>
-                <PlanPicker scope="SCHOOL" value={form.planCode} onChange={(v) => setForm((f) => ({ ...f, planCode: v }))} />
+                {plansError ? (
+                  <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2"
+                  >
+                    <p className="min-w-0 text-xs text-red-700">
+                      Subscription plans could not be loaded — {plansError}
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void loadPlans()}
+                      disabled={plansLoading}
+                      className="h-8 shrink-0 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
+                    >
+                      <RefreshCw className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                      Retry
+                    </Button>
+                  </div>
+                ) : (
+                  <Select
+                    value={form.planCode}
+                    onValueChange={(v) => setForm((f) => ({ ...f, planCode: v }))}
+                    disabled={plansLoading}
+                  >
+                    <SelectTrigger className="bg-white" aria-label="Subscription plan">
+                      <SelectValue placeholder={plansLoading ? 'Loading plans…' : 'Select plan…'} />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      {plans.map((p) => (
+                        <SelectItem key={p.code} value={p.code}>
+                          {p.name} (
+                          {money(
+                            p.interval === 'MONTHLY' ? p.priceMonthly : p.priceAnnual,
+                            p.currency,
+                          )}
+                          )
+                        </SelectItem>
+                      ))}
+                      {plans.length === 0 && (
+                        <div className="px-2 py-1.5 text-xs text-slate-500">
+                          {plansSchemaPending
+                            ? 'Plan registry is not provisioned on this database yet.'
+                            : 'No active offline-enabled school plans configured.'}
+                        </div>
+                      )}
+                    </SelectContent>
+                  </Select>
+                )}
                 {selectedPlan && (
                   <p className="mt-1 text-[11px] text-slate-500">
                     {selectedPlan.name} · {selectedPlan.interval.toLowerCase()} ·{' '}
@@ -1155,8 +1227,10 @@ function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow
         </table>
       </div>
       <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400">
-        {filtered.length} of {total} code{total === 1 ? '' : 's'} on record for this school · guessing is rate-limited
-        server-side (5 attempts / 15 min)
+        {filtered.length} of {total} code{total === 1 ? '' : 's'} on record for this school
+        {total > codes.length && (
+          <> — showing the first {codes.length}; more exist beyond this view</>
+        )} · guessing is rate-limited server-side (5 attempts / 15 min)
       </p>
 
       {act && (
@@ -1308,6 +1382,12 @@ function StudentsCard({
 
 // ── Ledger card ──────────────────────────────────────────────────────────
 
+/** The subscription GET serves at most this many ledger rows per load
+ *  (server-side `take: 100`). When a full page comes back we cannot
+ *  know whether older records exist — the footer must say so honestly
+ *  instead of silently looking complete. */
+const LEDGER_PAGE_SIZE = 100
+
 function LedgerCard({ payments }: { payments: PaymentRow[] }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm" aria-label="Payment ledger">
@@ -1342,7 +1422,15 @@ function LedgerCard({ payments }: { payments: PaymentRow[] }) {
                   )}
                 </td>
                 <td className="px-3 py-2.5 tabular-nums text-slate-900">
-                  {new Intl.NumberFormat('en-IN', { style: 'currency', currency: p.currency, maximumFractionDigits: 0 }).format(p.amount)}
+                  {/* Exact-as-stored money: amounts live in Decimal(12,2),
+                      so paise render exactly as recorded — never rounded
+                      away by a maximumFractionDigits: 0 format. */}
+                  {new Intl.NumberFormat('en-IN', {
+                    style: 'currency',
+                    currency: p.currency,
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }).format(p.amount)}
                 </td>
                 <td className="px-3 py-2.5 text-slate-600">{p.mode.replace(/_/g, ' ').toLowerCase()}</td>
                 <td className="px-3 py-2.5 text-slate-600 tabular-nums">{fmtDate(p.paymentDate)}</td>
@@ -1360,6 +1448,15 @@ function LedgerCard({ payments }: { payments: PaymentRow[] }) {
           </tbody>
         </table>
       </div>
+      {/* HONEST TRUNCATION — a full page (take: 100) means older records
+          may exist beyond this view; the note says so instead of letting
+          the table silently look complete. */}
+      {payments.length >= LEDGER_PAGE_SIZE && (
+        <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400" role="note">
+          Showing the first {LEDGER_PAGE_SIZE} recorded payments — older records may exist beyond
+          this view.
+        </p>
+      )}
     </section>
   )
 }
@@ -1529,7 +1626,7 @@ export function SchoolSubscriptionTab({
         </TabsContent>
 
         <TabsContent value="students" className="space-y-4">
-                      <StudentsCard
+          <StudentsCard
             students={students}
             billingModel={billingModel}
             loading={studentsLoading}

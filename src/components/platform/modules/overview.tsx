@@ -39,6 +39,7 @@ import {
   ChevronRight,
   Clock,
   LifeBuoy,
+  Lock,
   Plus,
   RefreshCw,
   ScrollText,
@@ -148,6 +149,9 @@ function attentionReasons(
 ): string[] {
   const reasons: string[] = []
   if (row.status === 'PENDING') reasons.push('Setup not completed — awaiting activation')
+  // TRIAL rows are counted by the needs-attention metric — the list
+  // must show WHY they're here (metric/list alignment).
+  if (row.status === 'TRIAL') reasons.push('Trial subscription — review before it ends')
   const state = row.subscription.state
   if (state === 'GRACE') reasons.push('Subscription in grace period')
   else if (state === 'RESTRICTED') reasons.push('Subscription restricted')
@@ -235,13 +239,22 @@ function MetricSkeleton() {
 
 export function OverviewModule() {
   const { can } = usePlatformSession()
+  // The schools summary + drill-down need schools.read; without it the
+  // server correctly answers 403 — this module then renders an honest
+  // permission notice instead of an unfixable Retry loop.
+  const canReadSchools = can('schools.read')
   const [schools, setSchools] = useState<SchoolsSummaryData | null>(null)
   const [overview, setOverview] = useState<OverviewData | null>(null)
+  /** Global needs-attention rows (status=ATTENTION + expiringDays=30
+   *  server filters) — replaces the old page-1-only derivation. */
+  const [attentionRows, setAttentionRows] = useState<
+    SchoolsSummaryData['schools'] | null
+  >(null)
   const [loading, setLoading] = useState(true)
   const [schoolsError, setSchoolsError] = useState<string | null>(null)
   const [overviewError, setOverviewError] = useState<string | null>(null)
 
-  // Both fetches run in parallel; each one fails HONESTLY on its own
+  // All fetches run in parallel; each one fails HONESTLY on its own
   // (a failed metrics request never renders zeros, a failed activity
   // request never renders an empty success state).
   const load = useCallback(async () => {
@@ -250,6 +263,7 @@ export function OverviewModule() {
     setOverviewError(null)
     await Promise.all([
       (async () => {
+        if (!canReadSchools) return
         try {
           const data = await platformApi<SchoolsSummaryData>(
             '/api/platform/schools?summary=1&pageSize=25',
@@ -267,6 +281,31 @@ export function OverviewModule() {
         }
       })(),
       (async () => {
+        if (!canReadSchools) return
+        // The GLOBAL drill-down: the server's own ATTENTION (pending/
+        // trial) and expiring-soon filters, merged client-side and
+        // deduped — attention rows on any page, not just page 1. On
+        // failure the section falls back to the summary page's rows
+        // (labelled honestly as page-scope below).
+        try {
+          const [attention, expiring] = await Promise.all([
+            platformApi<SchoolsSummaryData>(
+              '/api/platform/schools?status=ATTENTION&pageSize=15',
+            ),
+            platformApi<SchoolsSummaryData>(
+              '/api/platform/schools?expiringDays=30&pageSize=15',
+            ),
+          ])
+          const byId = new Map<string, SchoolsSummaryData['schools'][number]>()
+          for (const row of [...(attention.schools ?? []), ...(expiring.schools ?? [])]) {
+            if (!byId.has(row.id)) byId.set(row.id, row)
+          }
+          setAttentionRows(byId.size > 0 ? Array.from(byId.values()) : [])
+        } catch {
+          setAttentionRows(null)
+        }
+      })(),
+      (async () => {
         try {
           setOverview(await platformApi<OverviewData>('/api/platform/overview'))
         } catch (e) {
@@ -276,7 +315,7 @@ export function OverviewModule() {
       })(),
     ])
     setLoading(false)
-  }, [])
+  }, [canReadSchools])
 
   useEffect(() => {
     void load()
@@ -289,15 +328,19 @@ export function OverviewModule() {
   const needsAttention = (byStatus['PENDING'] ?? 0) + (byStatus['TRIAL'] ?? 0)
   const expiringSoon = summary?.subscriptionsExpiringWithin30Days ?? 0
 
-  // Needs-attention drill-down — derived from the honest first page
-  // of rows (pageSize=25). Zero actionable rows → nothing rendered.
+  // Needs-attention drill-down — the GLOBAL server-filtered rows when
+  // the dedicated fetch succeeded; honest page-scope fallback (the
+  // summary request's first page) when it failed. Zero actionable
+  // rows → nothing rendered.
+  const attentionSource = attentionRows ?? schools?.schools ?? []
+  const attentionGlobal = attentionRows !== null
   const attention: Array<{
     id: string
     name: string
     reasons: string[]
     severe: boolean
   }> = []
-  for (const row of schools?.schools ?? []) {
+  for (const row of attentionSource) {
     const reasons = attentionReasons(row, Date.now())
     if (reasons.length === 0) continue
     attention.push({
@@ -308,6 +351,10 @@ export function OverviewModule() {
         row.subscription.state === 'SUSPENDED' || row.subscription.state === 'RESTRICTED',
     })
   }
+  attention.sort((a, b) => Number(b.severe) - Number(a.severe))
+  const ATTENTION_CAP = 10
+  const attentionCapped = attention.length > ATTENTION_CAP
+  const attentionShown = attention.slice(0, ATTENTION_CAP)
 
   return (
     <section aria-labelledby="overview-heading" className="space-y-6">
@@ -330,7 +377,7 @@ export function OverviewModule() {
               size="sm"
               className="h-10 bg-teal-600 hover:bg-teal-700 text-white font-semibold focus-ring"
             >
-              <Link href="/platform/schools?new=1">
+              <Link href="/platform/schools/new">
                 <Plus className="h-4 w-4" aria-hidden="true" />
                 Add school
               </Link>
@@ -353,8 +400,22 @@ export function OverviewModule() {
       {/* Honest schema-pending banner — exactly once, metrics still render */}
       {schools && isSubscriptionSchemaPending(schools) && <SubscriptionPendingBanner />}
 
-      {/* Metrics load failure — honest error, never zeros */}
-      {schoolsError && (
+      {/* Metrics load failure — honest error, never zeros. A 403 for
+          an admin without schools.read is NOT retryable: render the
+          honest permission notice instead. */}
+      {!canReadSchools && !loading ? (
+        <div
+          role="status"
+          className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm"
+        >
+          <Lock className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+          <p>
+            School metrics need the <span className="font-mono text-xs">schools.read</span>{' '}
+            permission — the Overview shows system health and platform activity only for your
+            account.
+          </p>
+        </div>
+      ) : schoolsError ? (
         <div
           role="alert"
           className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between"
@@ -373,11 +434,11 @@ export function OverviewModule() {
             Retry
           </Button>
         </div>
-      )}
+      ) : null}
 
       {/* The four metric cards (skeletons while loading; absent on a
           first-load failure — a failed request must not render zeros) */}
-      {(loading || summary) && (
+      {canReadSchools && (loading || summary) && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
           {loading ? (
             <>
@@ -434,16 +495,20 @@ export function OverviewModule() {
       <SystemHealthCard />
 
       {/* Needs attention — real actionable rows only (nothing when empty) */}
-      {!loading && attention.length > 0 && (
+      {!loading && attentionShown.length > 0 && (
         <motion.div {...fadeUp} transition={{ duration: 0.35, delay: 0.1 }} className="space-y-2">
           <div className="flex items-baseline justify-between gap-2 px-1">
             <h2 className="font-display text-sm font-bold text-slate-900">Needs attention</h2>
             <p className="text-xs text-slate-500">
-              {attention.length} school{attention.length === 1 ? '' : 's'} on this page
+              {attentionCapped
+                ? `${attention.length} schools in total — showing the first ${ATTENTION_CAP}`
+                : attentionGlobal
+                  ? `${attention.length} school${attention.length === 1 ? '' : 's'} across the registry`
+                  : `${attention.length} school${attention.length === 1 ? '' : 's'} on this page`}
             </p>
           </div>
           <ul className="space-y-2" aria-label="Schools that need attention">
-            {attention.map((row) => (
+            {attentionShown.map((row) => (
               <li key={row.id}>
                 <Link
                   href={`/platform/schools/${row.id}`}

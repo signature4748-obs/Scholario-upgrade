@@ -5,8 +5,10 @@
 // ------------------------------------------------------------
 // The root plane: platform admin roster, per-key permission grants,
 // account creation (with one-time TOTP enrollment) and
-// suspend/reactivate. Every mutation is step-up gated (the API
-// rejects stale MFA windows — the gate handles the retry).
+// suspend/reactivate. Every mutation is permission-gated, audited and
+// rate-limited; the APIs also declare step-up, which re-arms the MFA
+// re-prompt when platform TOTP is enabled (the gate is dormant while
+// MFA is stood down — the gate handles the retry).
 // ============================================================
 
 import React, { useCallback, useEffect, useState } from 'react'
@@ -104,6 +106,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   'schools.manage': 'Manage schools (suspend, delete, flags)',
   'schools.provision': 'Provision new schools',
   'billing.manage': 'Manage billing & plans',
+  'billing.complimentary': 'Complimentary entitlements — issue free student subscriptions',
   'announcements.manage': 'Manage announcements',
   'settings.manage': 'Manage platform settings',
   'audit.read': 'Read the audit trail',
@@ -170,6 +173,13 @@ export function AdminsModule() {
   // Suspend confirm
   const [suspendTarget, setSuspendTarget] = useState<AdminRow | null>(null)
   const [suspending, setSuspending] = useState(false)
+
+  // ACCOUNT-RECOVERY confirm dialogs — the same themed AlertDialog
+  // surface as the suspend confirm (no native browser dialogs on this
+  // plane). Each states the target admin and the real consequence.
+  const [resetTarget, setResetTarget] = useState<AdminRow | null>(null)
+  const [unlinkTarget, setUnlinkTarget] = useState<AdminRow | null>(null)
+  const [confirmTicket, setConfirmTicket] = useState<RecoveryTicketRow | null>(null)
 
   // ACCOUNT-RECOVERY — pending dual-control tickets (root recovery).
   const [recoveryTickets, setRecoveryTickets] = useState<RecoveryTicketRow[]>([])
@@ -347,15 +357,6 @@ export function AdminsModule() {
   // acting admin never sees a password). ROOT targets create a
   // dual-control ticket that a SECOND admins.manage holder must confirm.
   const resetPassword = async (admin: AdminRow) => {
-    if (
-      !window.confirm(
-        admin.isRoot
-          ? `Initiate a password reset for ROOT admin ${admin.name}? A second authorized administrator must confirm the ticket before the reset email is sent.`
-          : `Send a single-use password reset link to ${admin.email}? Their active sessions will be signed out when they set the new password.`,
-      )
-    ) {
-      return
-    }
     setBusy(true)
     try {
       const result = await gate(() =>
@@ -372,6 +373,7 @@ export function AdminsModule() {
       } else {
         toast.success(`Reset link sent to ${admin.email}`)
       }
+      setResetTarget(null)
       await load()
       await loadRecovery()
     } catch (e) {
@@ -385,15 +387,6 @@ export function AdminsModule() {
   // Emergency Google-identity removal for a locked-out admin (root
   // targets: dual-control ticket, same as password reset).
   const adminUnlinkGoogle = async (admin: AdminRow) => {
-    if (
-      !window.confirm(
-        admin.isRoot
-          ? `Unlink the Google identity from ROOT admin ${admin.name}? A second authorized administrator must confirm the ticket.`
-          : `Unlink the Google identity from ${admin.name}? Their sessions will be revoked.`,
-      )
-    ) {
-      return
-    }
     setBusy(true)
     try {
       const result = await gate(() =>
@@ -408,6 +401,7 @@ export function AdminsModule() {
       } else {
         toast.success(`Google identity unlinked from ${admin.name}`)
       }
+      setUnlinkTarget(null)
       await load()
       await loadRecovery()
     } catch (e) {
@@ -422,13 +416,6 @@ export function AdminsModule() {
   // person). The server refuses when the confirmer is the initiator or
   // the target — the button is hidden for those roles here as UX.
   const confirmRecovery = async (ticket: RecoveryTicketRow) => {
-    if (
-      !window.confirm(
-        `Confirm the ${ticket.action === 'PASSWORD_RESET' ? 'password reset' : 'Google unlink'} for ${ticket.target.name ?? ticket.target.id}? This executes the recovery action immediately.`,
-      )
-    ) {
-      return
-    }
     setBusy(true)
     try {
       const result = await gate(() =>
@@ -439,6 +426,7 @@ export function AdminsModule() {
       )
       if (result === undefined) return
       toast.success(result.message ?? 'Recovery ticket executed')
+      setConfirmTicket(null)
       await load()
       await loadRecovery()
     } catch (e) {
@@ -470,7 +458,7 @@ export function AdminsModule() {
         ) : (
           <p className="text-xs text-slate-500 mb-3">
             {admin.grants.length} of {admin.permissionCatalog.length} capabilities granted.
-            Changes require step-up verification and are audited.
+            Changes are audited and take effect immediately.
           </p>
         )}
         <ul className="space-y-0.5">
@@ -522,7 +510,8 @@ export function AdminsModule() {
           </h1>
           <p className="text-sm text-slate-500 mt-2 max-w-2xl">
             Platform administrators who can sign in to the control plane. Every change here is
-            step-up gated and audited.
+            permission-gated and audited; step-up verification re-arms when platform MFA is
+            enabled.
           </p>
         </div>
         <Button
@@ -609,7 +598,7 @@ export function AdminsModule() {
                       )}
                     </div>
                     <Button
-                      onClick={() => void confirmRecovery(t)}
+                      onClick={() => setConfirmTicket(t)}
                       disabled={busy || locked}
                       className="h-10 px-4 bg-amber-600 hover:bg-amber-700 text-white font-semibold focus-ring shrink-0"
                     >
@@ -796,7 +785,7 @@ export function AdminsModule() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => void resetPassword(a)}
+                              onClick={() => setResetTarget(a)}
                               disabled={busy || a.status !== 'ACTIVE'}
                               aria-label={`Send password reset link to ${a.name}`}
                               title="Email a single-use password reset link (root targets need a second admin's confirmation)"
@@ -809,7 +798,7 @@ export function AdminsModule() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => void adminUnlinkGoogle(a)}
+                                onClick={() => setUnlinkTarget(a)}
                                 disabled={busy}
                                 aria-label={`Unlink Google identity from ${a.name}`}
                                 title="Remove the linked Google identity (root targets need a second admin's confirmation)"
@@ -936,7 +925,7 @@ export function AdminsModule() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => void resetPassword(a)}
+                      onClick={() => setResetTarget(a)}
                       disabled={busy || a.status !== 'ACTIVE'}
                       className="h-11 border-slate-200 bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-ring"
                     >
@@ -947,7 +936,7 @@ export function AdminsModule() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => void adminUnlinkGoogle(a)}
+                        onClick={() => setUnlinkTarget(a)}
                         disabled={busy}
                         className="h-11 border-slate-200 bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900 focus-ring"
                       >
@@ -1082,6 +1071,7 @@ export function AdminsModule() {
                   'schools.manage',
                   'schools.provision',
                   'billing.manage',
+                  'billing.complimentary',
                   'announcements.manage',
                   'settings.manage',
                   'audit.read',
@@ -1245,6 +1235,200 @@ export function AdminsModule() {
               className="bg-red-600 hover:bg-red-500 text-white h-11 font-semibold"
             >
               {suspending ? 'Suspending…' : 'Suspend admin'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ACCOUNT-RECOVERY — password reset confirm. Root targets create
+          a dual-control ticket (nothing is sent until a second admin
+          confirms); non-root targets get the single-use reset email. */}
+      <AlertDialog
+        open={Boolean(resetTarget)}
+        onOpenChange={(v) => !v && setResetTarget(null)}
+      >
+        <AlertDialogContent className="bg-white border-slate-200 text-slate-900">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-900">
+              {resetTarget?.isRoot
+                ? `Initiate a password reset for ROOT admin ${resetTarget.name}?`
+                : `Send a password reset link to ${resetTarget?.name ?? ''}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-slate-500">
+                <p>
+                  Target:{' '}
+                  <span className="font-semibold text-slate-700">
+                    {resetTarget?.name} · {resetTarget?.email}
+                  </span>
+                </p>
+                {resetTarget?.isRoot ? (
+                  <p>
+                    A dual-control ticket is created —{' '}
+                    <span className="text-slate-700">
+                      a second authorized administrator must confirm it within 15 minutes
+                    </span>{' '}
+                    before the reset email is sent. Nothing changes for the account until then.
+                  </p>
+                ) : (
+                  <p>
+                    A single-use password reset link is emailed to the address above — you never
+                    see their password.{' '}
+                    <span className="text-slate-700">
+                      Their active sessions are signed out when they set the new password.
+                    </span>
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={busy}
+              className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 h-11"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                if (resetTarget) void resetPassword(resetTarget)
+              }}
+              disabled={busy}
+              className="bg-teal-600 hover:bg-teal-700 text-white h-11 font-semibold"
+            >
+              {busy
+                ? resetTarget?.isRoot
+                  ? 'Creating ticket…'
+                  : 'Sending…'
+                : resetTarget?.isRoot
+                  ? 'Create reset ticket'
+                  : 'Send reset link'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ACCOUNT-RECOVERY — Google identity unlink confirm. Non-root
+          targets: identity removed + live sessions revoked immediately;
+          root targets: dual-control ticket first. */}
+      <AlertDialog
+        open={Boolean(unlinkTarget)}
+        onOpenChange={(v) => !v && setUnlinkTarget(null)}
+      >
+        <AlertDialogContent className="bg-white border-slate-200 text-slate-900">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-900">
+              Unlink the Google identity from{' '}
+              {unlinkTarget?.isRoot ? `ROOT admin ${unlinkTarget?.name}` : unlinkTarget?.name}?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-slate-500">
+                <p>
+                  Target:{' '}
+                  <span className="font-semibold text-slate-700">
+                    {unlinkTarget?.name} · {unlinkTarget?.email}
+                  </span>
+                  {unlinkTarget?.googleEmail && (
+                    <>
+                      {' '}
+                      (Google: <span className="font-mono text-xs">{unlinkTarget.googleEmail}</span>)
+                    </>
+                  )}
+                </p>
+                {unlinkTarget?.isRoot ? (
+                  <p>
+                    A dual-control ticket is created —{' '}
+                    <span className="text-slate-700">
+                      a second authorized administrator must confirm it within 15 minutes
+                    </span>{' '}
+                    before the identity is removed.
+                  </p>
+                ) : (
+                  <p>
+                    <span className="text-slate-700">
+                      Their live sessions are revoked immediately
+                    </span>{' '}
+                    and Google sign-in stops working for this account; the password sign-in
+                    remains. The server refuses if this would remove their last usable sign-in
+                    method.
+                  </p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={busy}
+              className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 h-11"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                if (unlinkTarget) void adminUnlinkGoogle(unlinkTarget)
+              }}
+              disabled={busy}
+              className="bg-red-600 hover:bg-red-500 text-white h-11 font-semibold"
+            >
+              {busy ? 'Unlinking…' : 'Unlink Google identity'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ACCOUNT-RECOVERY — dual-control ticket confirm (the second
+          person of the two-person rule). Executing applies the ticketed
+          action to the root account immediately. */}
+      <AlertDialog
+        open={Boolean(confirmTicket)}
+        onOpenChange={(v) => !v && setConfirmTicket(null)}
+      >
+        <AlertDialogContent className="bg-white border-slate-200 text-slate-900">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-900">
+              Confirm the{' '}
+              {confirmTicket?.action === 'PASSWORD_RESET' ? 'password reset' : 'Google unlink'} for{' '}
+              {confirmTicket?.target.name ?? confirmTicket?.target.id}?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-slate-500">
+                <p>
+                  Root account:{' '}
+                  <span className="font-semibold text-slate-700">
+                    {confirmTicket?.target.name ?? confirmTicket?.target.id}
+                    {confirmTicket?.target.email ? ` · ${confirmTicket.target.email}` : ''}
+                  </span>
+                </p>
+                <p>
+                  <span className="text-slate-700">
+                    This executes the recovery action immediately
+                  </span>{' '}
+                  —{' '}
+                  {confirmTicket?.action === 'PASSWORD_RESET'
+                    ? 'a single-use reset link is emailed to the target and all their sessions are revoked.'
+                    : 'the linked Google identity is removed and all their sessions are revoked.'}
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={busy}
+              className="border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900 h-11"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                if (confirmTicket) void confirmRecovery(confirmTicket)
+              }}
+              disabled={busy}
+              className="bg-amber-600 hover:bg-amber-700 text-white h-11 font-semibold"
+            >
+              {busy ? 'Executing…' : 'Confirm & execute'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1883,6 +1883,12 @@ export function SchoolDetailModule() {
       value: school.recordPrefix ?? '—',
       mono: true,
     },
+    {
+      icon: <Info className="h-3.5 w-3.5" />,
+      label: 'Official code',
+      value: school.code,
+      mono: true,
+    },
     { icon: <Info className="h-3.5 w-3.5" />, label: 'Short name', value: school.shortName ?? '—' },
     { icon: <MapPin className="h-3.5 w-3.5" />, label: 'City', value: school.city ?? '—' },
     { icon: <Info className="h-3.5 w-3.5" />, label: 'Board', value: school.board },
@@ -1922,13 +1928,27 @@ export function SchoolDetailModule() {
       {/* Header */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <Link
-            href="/platform/schools"
-            className="inline-flex items-center gap-1.5 rounded text-xs font-semibold text-slate-600 hover:text-teal-700 focus-ring"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-            Back to schools
-          </Link>
+          {/* Breadcrumb — Schools / <this school> (the console IA:
+              every page declares its place in the hierarchy). */}
+          <nav aria-label="Breadcrumb">
+            <ol className="flex flex-wrap items-center gap-1.5 text-xs">
+              <li>
+                <Link
+                  href="/platform/schools"
+                  className="inline-flex items-center gap-1.5 rounded font-semibold text-slate-600 transition-colors hover:text-teal-700 focus-ring"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                  Schools
+                </Link>
+              </li>
+              <li aria-hidden="true">
+                <ChevronRight className="h-3.5 w-3.5 text-slate-300" />
+              </li>
+              <li aria-current="page" className="max-w-[16rem] truncate font-semibold text-slate-900">
+                {school.name}
+              </li>
+            </ol>
+          </nav>
           <div className="mt-2 flex flex-wrap items-center gap-2.5">
             <h1
               id="school-heading"
@@ -1959,10 +1979,43 @@ export function SchoolDetailModule() {
               </Badge>
             )}
           </div>
-          <p className="mt-1 font-mono text-xs text-slate-500">
-            {school.slug} · {school.code}
-            {school.recordPrefix ? ` · ${school.recordPrefix}` : null}
-          </p>
+          {/* The three identifiers, LABELLED — the official school
+              code (school-provided), the public slug, and the
+              internally-allocated record prefix are distinct concepts
+              and must never read as one anonymous string. */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <span
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5"
+              title="Public URL identifier (tenant slug)"
+            >
+              <span className="font-sans text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                slug
+              </span>
+              <span className="truncate font-mono text-[11px] text-slate-700">{school.slug}</span>
+            </span>
+            <span
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5"
+              title="Official school code — the school-provided identifier (never invented or overwritten)"
+            >
+              <span className="font-sans text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                code
+              </span>
+              <span className="truncate font-mono text-[11px] text-slate-700">{school.code}</span>
+            </span>
+            {school.recordPrefix ? (
+              <span
+                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-2 py-0.5"
+                title="Scholario record prefix — allocated internally at creation, unique and permanently stable"
+              >
+                <span className="font-sans text-[10px] font-bold uppercase tracking-wide text-teal-600">
+                  prefix
+                </span>
+                <span className="truncate font-mono text-[11px] text-teal-800">
+                  {school.recordPrefix}
+                </span>
+              </span>
+            ) : null}
+          </div>
         </div>
         {/* ARCHITECTURE RESET — explicit, boundary-respecting actions:
             · "Preview Website" opens the PUBLIC school website in a new tab

@@ -10,6 +10,12 @@
 // GET /api/platform/health route — an API that shipped fully
 // implemented but was never surfaced in the console UI.
 //
+// 2026-10-20 (control-plane mandate): the equally-shipped-but-
+// unsurfaced GET /api/platform/health/email diagnostics now feed a
+// fifth tile — active provider, 7-day outbox counts, latest failure
+// class, and a one-click LIVE provider check (read-only, explicit —
+// never on the 60s auto-refresh, so Resend is not polled).
+//
 // Contract rules honored:
 //   · Every value comes from the API — nothing is invented.
 //   · Honest loading (skeleton), error (role=alert + retry) and
@@ -27,6 +33,7 @@ import {
   AlertTriangle,
   Database,
   HeartPulse,
+  Mail,
   RefreshCw,
   Server,
   ShieldAlert,
@@ -48,6 +55,29 @@ interface SystemHealthData {
   security: { recentAuthFailures: number; recentAuthFailuresWindowDays?: number }
   process: { uptimeSec: number; rssMb: number; nodeEnv: string }
   checkedAt: string
+}
+
+/** GET /api/platform/health/email — secret-safe diagnostics. */
+interface EmailDiagnosticsData {
+  provider: {
+    id: string
+    selection: string
+    configured: boolean
+    configError?: string
+    emailProviderEnv: string
+  }
+  resend: {
+    apiKeyPresent: boolean
+    fromAddress: string
+    webhookSecretPresent: boolean
+    domains: { liveCheck: 'ok' | 'failed' | 'skipped'; total: number | null; verified: number | null }
+  }
+  gmailSmtp: { userPresent: boolean; maskedUser?: string; appPasswordPresent: boolean }
+  outbox: {
+    last7d: Record<string, number>
+    lastFailure?: { template: string; errorClass: string; lastError: string; failedAt: string }
+  }
+  generatedAt: string
 }
 
 /** Auto-refresh cadence — modest for an operator panel. */
@@ -114,6 +144,9 @@ function HealthTile({
 
 export function SystemHealthCard() {
   const [health, setHealth] = useState<SystemHealthData | null>(null)
+  const [email, setEmail] = useState<EmailDiagnosticsData | null>(null)
+  const [emailError, setEmailError] = useState<string | null>(null)
+  const [emailLiveBusy, setEmailLiveBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [tick, setTick] = useState(0) // re-render clock for "checked Xs ago"
@@ -121,18 +154,53 @@ export function SystemHealthCard() {
 
   const load = useCallback(async (background: boolean) => {
     if (background) setRefreshing(true)
+    // Health and email diagnostics fail INDEPENDENTLY — one being
+    // unavailable never blanks the other tile.
+    await Promise.allSettled([
+      (async () => {
+        try {
+          const data = await platformApi<SystemHealthData>('/api/platform/health')
+          if (!mounted.current) return
+          setHealth(data)
+          setError(null)
+        } catch (e) {
+          if (!mounted.current) return
+          const err = e as PlatformApiError
+          // Keep the last good reading visible; the error line explains it.
+          setError(err.error || 'Failed to load system health')
+        }
+      })(),
+      (async () => {
+        try {
+          const data = await platformApi<EmailDiagnosticsData>('/api/platform/health/email')
+          if (!mounted.current) return
+          setEmail(data)
+          setEmailError(null)
+        } catch (e) {
+          if (!mounted.current) return
+          const err = e as PlatformApiError
+          setEmailError(err.error || 'Email diagnostics unavailable')
+        }
+      })(),
+    ])
+    if (mounted.current) setRefreshing(false)
+  }, [])
+
+  /** Explicit LIVE provider check (?live=1) — a read-only Resend
+   *  domain query. Only ever on demand: the 60s auto-refresh never
+   *  triggers it, so the provider is never polled. */
+  const runLiveEmailCheck = useCallback(async () => {
+    setEmailLiveBusy(true)
     try {
-      const data = await platformApi<SystemHealthData>('/api/platform/health')
+      const data = await platformApi<EmailDiagnosticsData>('/api/platform/health/email?live=1')
       if (!mounted.current) return
-      setHealth(data)
-      setError(null)
-    } catch (e) {
-      if (!mounted.current) return
-      const err = e as PlatformApiError
-      // Keep the last good reading visible; the error line explains it.
-      setError(err.error || 'Failed to load system health')
+      setEmail(data)
+      setEmailError(null)
+    } catch {
+      // Honest: keep the last diagnostics; the failure is visible
+      // because the domains summary stays at its previous value.
     } finally {
-      if (mounted.current) setRefreshing(false)
+      if (mounted.current) setEmailLiveBusy(false)
     }
   }, [])
 
@@ -162,6 +230,17 @@ export function SystemHealthCard() {
   const failures = health?.security.recentAuthFailures ?? 0
   const windowDays = health?.security.recentAuthFailuresWindowDays ?? 7
   const degraded = health?.status === 'degraded' || health?.db.ok === false
+
+  // Email-tile aggregates (all from the diagnostics payload).
+  const sent7d = email?.outbox.last7d['SENT'] ?? 0
+  const failed7d = email?.outbox.last7d['FAILED'] ?? 0
+  const lastFailure = email?.outbox.lastFailure
+  const domains = email?.resend.domains
+  const testingMode =
+    domains?.liveCheck === 'ok' && (domains.verified ?? 0) === 0 && (domains.total ?? 0) > 0
+  const emailDanger = Boolean(
+    (email && !email.provider.configured) || failed7d > 0 || testingMode,
+  )
 
   return (
     <motion.div
@@ -232,8 +311,8 @@ export function SystemHealthCard() {
           </Button>
         </div>
       ) : !health ? (
-        <div className="grid grid-cols-2 gap-2.5 p-4 sm:grid-cols-4 sm:p-5">
-          {Array.from({ length: 4 }).map((_, i) => (
+        <div className="grid grid-cols-2 gap-2.5 p-4 sm:grid-cols-3 lg:grid-cols-5 sm:p-5">
+          {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5">
               <Skeleton className="h-3 w-20 bg-slate-200" />
               <Skeleton className="mt-2 h-4 w-24 bg-slate-200" />
@@ -242,7 +321,7 @@ export function SystemHealthCard() {
         </div>
       ) : (
         <div className="space-y-2.5 p-4 sm:p-5">
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
             <HealthTile
               icon={<Database className="h-3 w-3" />}
               label="Database"
@@ -283,6 +362,54 @@ export function SystemHealthCard() {
               <span className="tabular-nums">
                 up {uptime(health.process.uptimeSec)} · {health.process.rssMb} MB RSS
               </span>
+            </HealthTile>
+            <HealthTile icon={<Mail className="h-3 w-3" />} label="Email pipeline" danger={emailDanger}>
+              {email ? (
+                <div className="space-y-1">
+                  <p className="flex min-w-0 items-center gap-1.5">
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        email.provider.configured ? 'bg-teal-500' : 'bg-red-500'
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span className="truncate capitalize">{email.provider.id}</span>
+                    <span className="shrink-0 text-slate-400">·</span>
+                    <span className="shrink-0 tabular-nums">
+                      7d: {sent7d} sent{failed7d > 0 ? `, ${failed7d} failed` : ''}
+                    </span>
+                  </p>
+                  {lastFailure ? (
+                    <p
+                      className="truncate text-amber-600"
+                      title={`${lastFailure.template} · ${lastFailure.lastError}`}
+                    >
+                      last failure: {lastFailure.errorClass}
+                    </p>
+                  ) : null}
+                  {domains && domains.liveCheck === 'ok' ? (
+                    <p className={testingMode ? 'text-amber-600' : 'text-slate-500'}>
+                      Resend: {domains.verified}/{domains.total} domain
+                      {domains.total === 1 ? '' : 's'} verified
+                      {testingMode ? ' — testing mode' : ''}
+                    </p>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void runLiveEmailCheck()}
+                    disabled={emailLiveBusy}
+                    className="rounded text-[10px] font-semibold text-teal-700 underline-offset-2 transition-colors hover:underline focus-ring disabled:text-slate-400"
+                  >
+                    {emailLiveBusy ? 'Checking provider…' : 'Check provider live'}
+                  </button>
+                </div>
+              ) : emailError ? (
+                <span className="text-amber-600" title={emailError}>
+                  diagnostics unavailable
+                </span>
+              ) : (
+                <span className="text-slate-400">loading…</span>
+              )}
             </HealthTile>
           </div>
           <p className="px-1 text-[11px] text-slate-400">
