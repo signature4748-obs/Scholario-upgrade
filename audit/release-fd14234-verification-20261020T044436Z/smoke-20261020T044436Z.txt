@@ -1,0 +1,8 @@
+=== PRODUCTION SMOKE (2026-10-20T04:46:16Z) ===
+https://scholario-platform.vercel.app/health/ready                     HTTP 200
+https://scholario-platform.vercel.app/platform/login                   HTTP 200
+https://scholario-app-virid.vercel.app/health/ready                    HTTP 200
+https://scholario-app-virid.vercel.app/login                           HTTP 200
+https://scholario-app-virid.vercel.app/s/green-valley/login            HTTP 200
+https://scholario-app-virid.vercel.app/api/schools/public              HTTP 404
+https://scholario-app-virid.vercel.app/api/public/notices/rss          HTTP 200

@@ -1,0 +1,13 @@
+[prod-release:verify-deployment] ═══ PRODUCTION DEPLOYMENT VERIFICATION (two-plane) ═══
+  release sha : fd142344c607be4f6763c9dfc80386d22e8aa665
+  planes      : platform + school (both active planes required)
+
+  ── plane: scholario-platform (control plane) (prj_gIO4DmWcBkHMhwkVpmzqqHNWU0MW) ──
+  deployment  : dpl_AdpizAGsuwZxoCCGeU2X5hoT2LeX READY built from fd142344c6 ✓ (state READY, created 2026-10-20T00:01:43.692Z)
+  health      : 200 {"status":"ready","probe":"ready","checks":{"database":"ok","dbDurationMs":11},"durationMs":11,"timestamp":"2026-10-20T04:46:16.375Z"} ✓ (after 0s)
+
+  ── plane: scholario-app (school plane) (prj_oiKZtuC7UgOSsShQ63MWxS5nWu53) ──
+  deployment  : dpl_Hhsd3qp1mVDMs7GnnDB2hRY69qRM READY built from fd142344c6 ✓ (state READY, created 2026-10-20T00:01:43.766Z)
+  health      : 200 {"status":"ready","probe":"ready","checks":{"database":"ok","dbDurationMs":23},"durationMs":23,"timestamp":"2026-10-20T04:46:16.856Z"} ✓ (after 0s)
+
+[prod-release:verify-deployment] ✓ RELEASE LIVE AND VERIFIED ON EVERY ACTIVE PLANE
