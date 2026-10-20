@@ -126,6 +126,10 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
   const fixtureEmail = `ops-isolation-fixture-${randomUUID().slice(0, 8)}@scholario.test`
   let fixtureAdminId: string | null = null
 
+  // Remote-DB awareness: logins + fixture rows over the network need a
+  // generous hook budget (CI's ephemeral local postgres is faster — the
+  // ceiling only ever helps).
+  const HOOK_TIMEOUT = 120_000
   beforeAll(async () => {
     rootToken = await platformSession(ROOT_EMAIL, PLATFORM_ROOT_PASSWORD, PLATFORM_ROOT_TOTP_SECRET)
     principalToken = await schoolSession(DEMO_PRINCIPAL_EMAIL)
@@ -153,7 +157,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
 
     const principal = await db.user.findUnique({ where: { email: DEMO_PRINCIPAL_EMAIL } })
     hawkingsSchoolId = principal?.schoolId ?? null
-  })
+  }, HOOK_TIMEOUT)
 
   afterAll(async () => {
     // Fixture cleanup (suite-owned rows only).
@@ -162,7 +166,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
       await db.platformPermission.deleteMany({ where: { adminId: fixtureAdminId } })
       await db.platformAdmin.deleteMany({ where: { id: fixtureAdminId } })
     }
-  })
+  }, HOOK_TIMEOUT)
 
   test('root admin accesses every operations endpoint (ops.read implicit)', async () => {
     for (const route of OPS_ROUTES) {
@@ -171,7 +175,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
       const body = (await res.json()) as { ok: boolean }
       expect(body.ok).toBe(true)
     }
-  })
+  }, 90_000)
 
   test('non-root platform admin WITHOUT ops.read is FORBIDDEN on every route (fail-closed)', async () => {
     for (const route of OPS_ROUTES) {
@@ -181,7 +185,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
       expect(body.ok).toBe(false)
       expect(body.code).toBe('FORBIDDEN')
     }
-  })
+  }, 90_000)
 
   test('mutations (sync / health-run / ack) are permission-gated, not UI-gated', async () => {
     for (const [path, method] of [
@@ -197,7 +201,7 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
       })
       expect(res.status).toBe(403)
     }
-  })
+  }, 90_000)
 
   test('NO school credential reaches the operations surface (401 for every route)', async () => {
     for (const route of OPS_ROUTES) {
@@ -206,17 +210,19 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
       const body = (await res.json()) as { code?: string }
       expect(body.code).toBe('AUTH_REQUIRED')
     }
-  })
+  }, 90_000)
 
   test('unauthenticated requests are refused (401)', async () => {
     const res = await fetch(`${BASE}/api/platform/operations/overview`)
     expect(res.status).toBe(401)
-  })
+  }, 90_000)
 
   test('school usage metering attributes to the SERVER-derived tenant', async () => {
-    // The principal exercises an authenticated school API (real usage).
-    const me = await asSchool(principalToken, '/api/auth/me')
-    expect(me.status).toBe(200)
+    // The principal exercises an authenticated BUSINESS API (a withUser
+    // route — the metering point; /api/auth/me is the identity surface
+    // and deliberately does not meter).
+    const list = await asSchool(principalToken, '/api/classes')
+    expect(list.status).toBe(200)
 
     // The principal CANNOT read the usage surface (boundary first).
     const probe = await asSchool(principalToken, '/api/platform/operations/school-usage')
@@ -238,12 +244,12 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
       else await new Promise((r) => setTimeout(r, 400))
     }
     expect(attributed).toBe(true)
-  })
+  }, 120_000)
 
   test('the error-detail drill-down answers 401 to school identities, never a data-shaped response', async () => {
     const res = await asSchool(principalToken, `/api/platform/operations/errors/${'a'.repeat(40)}`)
     expect(res.status).toBe(401)
-  })
+  }, 90_000)
 
   test('the cron endpoint is not an unauthenticated backdoor', async () => {
     const res = await fetch(`${BASE}/api/cron/ops-sync`, { method: 'POST' })
@@ -255,5 +261,5 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
     } else {
       expect([401, 403]).toContain(res.status)
     }
-  })
+  }, 90_000)
 })

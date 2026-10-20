@@ -29,7 +29,12 @@ export async function GET(req: Request) {
     }
     if (severity) where.severity = severity
     if (category) where.category = category
-    if (status && status !== 'all') where.status = status
+    // Status accepts a comma-separated list ("open,acknowledged" = the
+    // UI's Unresolved preset) or a single value.
+    if (status && status !== 'all') {
+      const statuses = status.split(',').map((x) => x.trim()).filter(Boolean)
+      where.status = statuses.length === 1 ? statuses[0] : { in: statuses }
+    }
     if (schoolId) where.schoolId = schoolId
     if (provider) where.provider = provider
     if (routeQ) where.lastRoute = { contains: routeQ }

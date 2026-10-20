@@ -281,13 +281,25 @@ export async function evaluateAlertsAfterSync(_provider: ProviderId): Promise<vo
     },
   })
   const seen = new Set<string>()
+  const seenWithLimit = new Set<string>()
   for (const row of latest) {
     const key = `${row.provider}|${row.scope}|${row.metric}`
     if (seen.has(key)) continue
     seen.add(key)
-    if (row.limitValue === null || row.limitValue <= 0) continue
-    const percent = (row.value / row.limitValue) * 100
     const metricKey = `${row.provider}:${row.metric}`
+    if (row.limitValue !== null && row.limitValue > 0) seenWithLimit.add(metricKey)
+    if (row.limitValue === null || row.limitValue <= 0) {
+      // No reported limit: this metric can never breach. If an OLD alert
+      // for it still exists (e.g. from a retired spurious limit), it is
+      // auto-resolved with the explicit reason — never left dangling.
+      await autoResolveAlert(
+        'usage_threshold',
+        metricKey,
+        'Auto-resolved: the metric no longer reports a provider limit — the threshold alert is retracted.',
+      )
+      continue
+    }
+    const percent = (row.value / row.limitValue) * 100
     if (percent >= warn) {
       const severity = severityForPercent(percent, warn, high, critical)
       await upsertAlert({
@@ -313,6 +325,23 @@ export async function evaluateAlertsAfterSync(_provider: ProviderId): Promise<vo
         'usage_threshold',
         metricKey,
         `Auto-resolved: back within the warning threshold (${Math.round(percent * 10) / 10}% < ${warn}%).`,
+      )
+    }
+  }
+
+  // Orphan sweep: an open/acknowledged usage_threshold alert whose metric
+  // did not report a limit in this evaluation round is retracted (its
+  // metric was retired / no longer limit-bearing — never left dangling).
+  const liveAlerts = await db.platformAlert.findMany({
+    where: { type: 'usage_threshold', status: { in: ['open', 'acknowledged'] } },
+    select: { id: true, metricKey: true },
+  })
+  for (const a of liveAlerts) {
+    if (!seenWithLimit.has(a.metricKey)) {
+      await autoResolveAlert(
+        'usage_threshold',
+        a.metricKey,
+        'Auto-resolved: the metric is no longer reported with a provider limit — the threshold alert is retracted.',
       )
     }
   }

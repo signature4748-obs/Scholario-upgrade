@@ -165,56 +165,59 @@ async function resendApi(): Promise<HealthCheckResult> {
       kind: 'dependency',
     }
   }
-  const started = Date.now()
-  const r = await fetchProviderReachable('https://api.resend.com/domains', {
-    Authorization: `Bearer ${key}`,
-  })
-  const latency = Date.now() - started
-  if (!r.ok && r.status === null) {
+  // ONE bounded request: reachability + domain verification state together
+  // (never an unbounded second call on the check path — a hung provider
+  // must never hang the suite).
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 6_000)
+  let latency = 0
+  try {
+    const started = Date.now()
+    const res = await fetch('https://api.resend.com/domains', {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: controller.signal,
+      cache: 'no-store',
+    })
+    latency = Date.now() - started
+    if (!res.ok) {
+      return {
+        checkKey: 'resend_api',
+        checkLabel: 'Email provider (Resend) API',
+        status: res.status === 401 ? 'down' : 'degraded',
+        severity: res.status === 401 ? 'critical' : 'warning',
+        latencyMs: latency,
+        detail: `Resend API responded HTTP ${res.status}${res.status === 401 ? ' — the API key is missing/invalid/revoked; rotate it in the Resend dashboard and the deployment env.' : ''}.`,
+        kind: 'dependency',
+      }
+    }
+    const body = (await res.json().catch(() => null)) as { data?: Array<{ status?: string }> } | null
+    const total = Array.isArray(body?.data) ? body.data.length : 0
+    const verified = (body?.data ?? []).filter((d) => (d.status ?? '').toLowerCase() === 'verified').length
+    return {
+      checkKey: 'resend_api',
+      checkLabel: 'Email provider (Resend) API',
+      status: verified === 0 ? 'degraded' : 'healthy',
+      severity: verified === 0 ? 'warning' : 'info',
+      latencyMs: latency,
+      detail:
+        verified === 0
+          ? `API reachable (${latency} ms) but ZERO verified sending domains (${total} configured) — the account is in TESTING MODE: the provider only delivers to the account-owner address. This is the confirmed cause of historical invitation failures. Next step: verify a sending domain in the Resend dashboard. Do NOT rotate the API key — it is valid.`
+          : `API reachable (${latency} ms); ${verified}/${total} sending domains verified.`,
+      kind: 'dependency',
+      drilldownHint: 'Errors & Incidents — email failures diagnosis',
+    }
+  } catch (e) {
     return {
       checkKey: 'resend_api',
       checkLabel: 'Email provider (Resend) API',
       status: 'down',
       severity: 'critical',
       latencyMs: latency,
-      detail: `Resend API unreachable (${r.error}). Email sending will fail while this persists — sends are retried with bounded backoff, never silently dropped.`,
+      detail: `Resend API unreachable (${e instanceof Error ? e.message.slice(0, 160) : 'network error'}). Email sending will fail while this persists — sends are retried with bounded backoff, never silently dropped.`,
       kind: 'dependency',
     }
-  }
-  if (!r.ok) {
-    return {
-      checkKey: 'resend_api',
-      checkLabel: 'Email provider (Resend) API',
-      status: r.status === 401 ? 'down' : 'degraded',
-      severity: r.status === 401 ? 'critical' : 'warning',
-      latencyMs: latency,
-      detail: `Resend API responded HTTP ${r.status}${r.status === 401 ? ' — the API key is missing/invalid/revoked; rotate it in the Resend dashboard and the deployment env.' : ''}.`,
-      kind: 'dependency',
-    }
-  }
-  // Count verified domains (the testing-mode signal) without exposing them.
-  let verified = 0
-  let total = 0
-  try {
-    const res = await fetch('https://api.resend.com/domains', { headers: { Authorization: `Bearer ${key}` }, cache: 'no-store' })
-    const body = (await res.json()) as { data?: Array<{ status?: string }> }
-    total = Array.isArray(body?.data) ? body.data.length : 0
-    verified = (body.data ?? []).filter((d) => (d.status ?? '').toLowerCase() === 'verified').length
-  } catch {
-    /* domain detail is best-effort */
-  }
-  return {
-    checkKey: 'resend_api',
-    checkLabel: 'Email provider (Resend) API',
-    status: verified === 0 ? 'degraded' : 'healthy',
-    severity: verified === 0 ? 'warning' : 'info',
-    latencyMs: latency,
-    detail:
-      verified === 0
-        ? `API reachable (${latency} ms) but ZERO verified sending domains (${total} configured) — the account is in TESTING MODE: the provider only delivers to the account-owner address. This is the confirmed cause of historical invitation failures. Next step: verify a sending domain in the Resend dashboard.`
-        : `API reachable (${latency} ms); ${verified}/${total} sending domains verified.`,
-    kind: 'dependency',
-    drilldownHint: 'Errors & Incidents — email failures diagnosis',
+  } finally {
+    clearTimeout(timer)
   }
 }
 

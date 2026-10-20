@@ -168,11 +168,15 @@ export async function syncSupabase(): Promise<ProviderSyncResult> {
           metricLabel: 'Supabase services reporting healthy',
           value: healthyCount,
           unit: 'services',
-          limitValue: health.length,
+          // NOT a quota: limitValue is reserved for CONSUMPTION ceilings;
+          // "x of y services healthy" is a good-state count, and modeling
+          // it as a limit would fire a false 100%-consumed threshold alert.
+          // The total rides in meta.
+          limitValue: null,
           measured: true,
           availability: 'ok',
           meta: {
-            total: health.length,
+            servicesTotal: health.length,
             services: health.map((s) => ({ name: s.name, healthy: Boolean(s.healthy), status: s.status ?? null })),
           },
         })
