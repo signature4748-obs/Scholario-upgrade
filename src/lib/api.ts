@@ -3,8 +3,9 @@ import { headers } from 'next/headers'
 import { getCurrentUser, type AuthUser } from './auth'
 import { db } from './db'
 import { AppError, classifyError, newRequestId } from './security/errors'
-import { runWithContext, patchRequestContext } from './observability/context'
+import { runWithContext, patchRequestContext, getRequestContext } from './observability/context'
 import { log } from './observability/logger'
+import { meterSchoolApiOperation } from './ops/usage-meter'
 import { sanitizeRequestId } from './observability/http'
 import { entitlementForUser } from './entitlement/server'
 import { isEntitlementExemptRoute } from './entitlement/entitlement'
@@ -93,6 +94,33 @@ export async function api(handler: () => Promise<unknown>): Promise<Response> {
         errorCode: classified.code,
         detail: classified.internalDetail,
       })
+      // PLATFORM OPERATIONS CENTER — operational-error capture for the
+      // classes that mean incidents (5xx, cross-tenant denials,
+      // external-service failures). Benign 4xx security surface (401/404/
+      // 429) is deliberately NOT recorded (noise would bury signal; it is
+      // still logged above + audited where applicable). Fire-and-forget:
+      // capture never fails the request it observes.
+      if (
+        classified.status >= 500 ||
+        classified.code === 'TENANT_MISMATCH' ||
+        classified.code === 'EXTERNAL_SERVICE_FAILURE'
+      ) {
+        void (async () => {
+          const { recordOperationalError } = await import('@/lib/ops/errors')
+          const ctx = getRequestContext()
+          const detail = (classified.internalDetail ?? classified.publicMessage ?? '').slice(0, 240)
+          await recordOperationalError({
+            category: 'http',
+            severity: classified.status >= 500 ? 'error' : 'warning',
+            message: `${classified.code}: ${detail}`,
+            route: ctx?.route ?? 'unknown',
+            method: ctx?.operation?.split(' ')[0] ?? null,
+            statusCode: classified.status,
+            schoolId: ctx?.schoolId ?? null,
+            requestId: meta.requestId,
+          })
+        })().catch(() => null)
+      }
       const res = NextResponse.json(
         {
           ok: false,
@@ -255,6 +283,13 @@ export async function withUser(
     // Correlate the request with the authenticated identity (ids only —
     // never email/phone/PII).
     patchRequestContext({ userId: user.id, schoolId: user.schoolId ?? undefined })
+    // PLATFORM OPERATIONS CENTER — per-school usage metering (SERVER-
+    // derived tenant identity only; atomic upserts; failures never
+    // break the request). Platform identities (no schoolId) are out of
+    // scope for per-school usage by definition.
+    if (user.schoolId) {
+      void meterSchoolApiOperation(user.schoolId, user.id, user.role)
+    }
     return handler(user)
   })
 }

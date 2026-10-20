@@ -29,6 +29,14 @@ export const PLATFORM_PERMISSION_KEYS = [
   'audit.read', // platform audit trail
   'support.access', // support sessions + school-session tools
   'admins.manage', // platform admin accounts + permission grants
+  // PLATFORM OPERATIONS CENTER (2026-10) — cross-tenant observability:
+  // provider usage/limits, operational errors/incidents, service
+  // health, per-school usage, alerts + threshold settings. Root admins
+  // hold it implicitly; every other admin needs an explicit grant
+  // (fail-closed). Viewing AND operational actions (ack/resolve/sync/
+  // threshold edits) both ride this key — the center is a read-mostly
+  // operations capability, deliberately NOT a destructive-action gate.
+  'ops.read',
 ] as const
 
 export type PlatformPermissionKey = (typeof PLATFORM_PERMISSION_KEYS)[number]

@@ -28,6 +28,13 @@
  *   platform.admin.password_reset_initiated
  *   platform.admin.google_linked | .google_unlinked | .google_link_failed
  *   platform.recovery.initiated | .refused | .executed
+ *   PLATFORM OPERATIONS CENTER (ops.read capability space):
+ *   platform.ops.alert.opened | .auto_resolved | .reopened   (system rows)
+ *   platform.ops.alert.acknowledged | .resolved              (admin rows)
+ *   platform.ops.alert.settings_updated                      (threshold changes)
+ *   platform.ops.error.acknowledged | .resolved              (admin rows)
+ *   platform.ops.sync.triggered | platform.ops.health_checks.run
+ *   platform.ops.retention.run
  */
 
 import { db } from '@/lib/db'

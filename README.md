@@ -64,5 +64,6 @@ bun run test:e2e                  # end-to-end (needs the dev server running)
 | `docs/SCHOOL_FACTORY.md` | Provisioning a school end-to-end |
 | `docs/TENANT_ROUTING.md` | Tenant resolution + canonical school doors |
 | `docs/EMAIL.md` | Resend integration + domain verification state |
+| `docs/OPERATIONS.md` | Platform Operations center (observability, usage, errors, health) |
 | `docs/RELEASE.md` | Release pipeline and gates |
 | `docs/DEPLOYMENT.md` | Day-2 operations |
