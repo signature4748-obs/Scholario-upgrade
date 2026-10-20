@@ -107,14 +107,18 @@ Deployment provenance (two-plane contract):
     distinct test, same class.
   - Neither is a code regression: the identical tree passes the full
     matrix when the harness stays healthy (attempt 2 above; PR #41's
-    branch run). The flake ledger across the window: 4 red runs on 4
-    different transport-level single-test failures + 1 green rerun —
-    chronic GitHub-runner dev-server instability, matching the
-    mitigation history documented in `.github/workflows/ci.yml`
-    (supervisor, `DEV_OLD_SPACE_MB=4096`, E2E heap reset). A further
-    heap bump or suite split requires a `workflow`-scoped token push
-    (the repo's documented constraint) — owner decision, not attempted
-    here.
+    branch run). The flake ledger across the window: **6 runs of the
+    identical tree — 5 red, each on a single live-HTTP test at the
+    transport level (fee-gateway ECONNRESET ×2, tenant-slug 5s
+    timeout ×2, provisioning-race 2.12ms ×1) + 1 green (main fd14234
+    attempt 2)** — chronic GitHub-runner dev-server instability, matching
+    the mitigation history documented in `.github/workflows/ci.yml`
+    (supervisor, `DEV_OLD_SPACE_MB=4096`, E2E heap reset). This PR's
+    diff is `audit/` documentation only (text/JSON/PNG — nothing imports
+    it at runtime), so these red runs carry no regression signal for
+    the diff. A further heap bump or suite split requires a
+    `workflow`-scoped token push (the repo's documented constraint) —
+    owner decision, not attempted here.
 
 ## 5b. Release workflow (dispatch) — in-band gate record
 
