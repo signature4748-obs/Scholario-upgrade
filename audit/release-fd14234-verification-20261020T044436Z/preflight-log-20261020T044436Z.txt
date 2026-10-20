@@ -1,0 +1,19 @@
+[prod-migration:preflight] ═══ PRE-FLIGHT (read-only) ═══
+  project ref : kbyknezedewvgrnqervj
+  checkout    : fd142344c607be4f6763c9dfc80386d22e8aa665
+  token       : <present, never logged>
+
+  repository migrations : 26
+  production applied    : 26
+  pending (to apply)    : 0
+  object expectations   : clean ✓
+
+  snapshot written      : audit/release-fd14234-verification-20261020T044436Z/preflight-snapshot-20261020T044436Z.json
+    · public tables counted : 123
+    · users total            : 187 (school-plane 184, principals 4)
+    · platform admins         : 2 total, 0 google-linked, 2 with password (counts only)
+    · credential columns     : present
+    · financial ledger     : 226 rows · feeId pointers 223 · amount sum 602480.00 · digest a87ebe601cdf… (privacy-safe md5 over receipt|student|amount; cutoff 2026-10-20 04:44:42.518905+00)
+    · seed execution         : NEVER (pipeline runs migrations only)
+
+[prod-migration:preflight] ✓ PRE-FLIGHT GREEN — safe to apply
