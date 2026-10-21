@@ -245,6 +245,45 @@ async function main(): Promise<void> {
   }
   record('REAL platform login', true, `HTTP 200, session minted (token never printed)`)
 
+  // ── B2. IN-APP LIVE PROVIDER DIAGNOSTICS (the runtime key channel) ─────
+  say('── B2. IN-APP LIVE DIAGNOSTICS (?live=1 — runtime provider key) ──')
+  try {
+    const diagRes = await fetch(`${platformUrl}/api/platform/health/email?live=1`, {
+      headers: { 'x-platform-token': sessionToken },
+    })
+    if (diagRes.status !== 200) {
+      say(`  /api/platform/health/email?live=1 → HTTP ${diagRes.status} (envelope shape may differ; skipping)`)
+    } else {
+      const envelope = (await diagRes.json().catch(() => null)) as { data?: Record<string, unknown> } | null
+      const diag = (envelope?.data ?? {}) as Record<string, unknown>
+      const resend = (diag.resend ?? {}) as Record<string, unknown>
+      const domains = (resend.domains ?? {}) as Record<string, unknown>
+      const webhooks = (resend.webhooks ?? {}) as Record<string, unknown>
+      const endpoints = Array.isArray(webhooks.endpoints) ? (webhooks.endpoints as Array<Record<string, unknown>>) : []
+      const outbox = (diag.outbox ?? {}) as Record<string, unknown>
+      say(`  provider: ${str(diag.provider && (diag.provider as Record<string, unknown>).id)} configured=${str(diag.provider && (diag.provider as Record<string, unknown>).configured)}`)
+      say(`  sender:   ${str(resend.fromAddress)}`)
+      say(`  key present: ${str(resend.apiKeyPresent)} · webhook secret present: ${str(resend.webhookSecretPresent)}`)
+      say(`  live domains: ${str(domains.liveCheck)} → verified ${str(domains.verified)}/${str(domains.total)}`)
+      say(`  live webhook endpoints: ${str(webhooks.liveCheck)} → total ${str(webhooks.total)}`)
+      for (const w of endpoints) {
+        const events = Array.isArray(w.events) ? (w.events as string[]).join(',') : ''
+        say(`    · ${clip(str(w.url), 80)} events=${events || 'none'}${(events || '').includes('email.delivered') ? '' : ' (email.delivered NOT subscribed!)'}`)
+      }
+      if (str(webhooks.liveCheck) === 'ok' && endpoints.length === 0) {
+        say('    ⚠ ZERO webhook endpoints registered at the provider — delivered mail will stay QUEUED (EMAIL-3).')
+      }
+      say(`  outbox 7d: ${JSON.stringify(outbox.last7d ?? {})}`)
+      record(
+        'in-app live diagnostics readable',
+        true,
+        `provider ${str(diag.provider && (diag.provider as Record<string, unknown>).id)}, domains ${str(domains.verified)}/${str(domains.total)} verified, webhook endpoints ${str(webhooks.total)}`,
+      )
+    }
+  } catch (e) {
+    say(`  [warn] in-app diagnostics unreachable: ${clip((e as Error).message, 100)}`)
+  }
+
   // ── C. provision the fixture school THROUGH THE REAL API ──────────────
   say('── C. PRINCIPAL INVITATION (REAL provisioning API path) ─────────')
   const slug = `${MARK}`.toLowerCase()
