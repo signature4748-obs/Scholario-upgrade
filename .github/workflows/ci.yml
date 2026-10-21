@@ -324,6 +324,18 @@ jobs:
                       /api/student/timetable /health/live /; do
             curl -s -o /dev/null -m 60 "http://localhost:3000$path" || true
           done
+          # PLATFORM CONSOLE JOURNEYS (2026-10-21 routing-repair suite):
+          # same cold-compile lesson — pre-compile every sidebar route the
+          # platform journeys visit (unauthenticated page GETs still pay
+          # the route compile in dev; the console shell chunk is shared).
+          for path in /platform /platform/schools /platform/subscriptions \
+                      /platform/admins /platform/support /platform/announcements \
+                      /platform/audit /platform/settings /platform/sessions \
+                      /platform/operations; do
+            curl -s -o /dev/null -m 60 "http://localhost:3000$path" || true
+          done
+          curl -s -o /dev/null -m 60 -X POST "http://localhost:3000/api/platform/auth/login" \
+            -H "content-type: application/json" -d '{"email":"warm@invalid.test","password":"x"}' || true
           curl -s -o /dev/null -m 60 -X POST "http://localhost:3000/api/auth/login" \
             -H "content-type: application/json" -d '{"email":"warm@invalid.test","password":"x"}' || true
           # AUTHENTICATED warm (run 38203623586 lesson): one real fixture
