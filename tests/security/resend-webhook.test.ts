@@ -19,6 +19,14 @@
  *                      an already-SENT row is untouched (idempotent)
  *   5. non-activating— unknown event types are recorded + acknowledged
  *                      (processed:false), never an error
+ *   6. out-of-order  — failed→delivered: the failure verdict STANDS;
+ *                      delivered→bounced (delayed bounce): the newer
+ *                      terminal verdict wins (SENT→BOUNCED); duplicate
+ *                      terminal events under different svix-ids write
+ *                      the row once and record both events; duplicate
+ *                      delivered svix-ids count attempts without side
+ *                      effects (mission: "Handle duplicate and
+ *                      out-of-order events safely")
  *
  * SAFETY: no real Resend traffic — the route is exercised over live HTTP
  * against the dev server with a locally-configured test signing secret;
@@ -293,5 +301,86 @@ describe.skipIf(!SECRET)('RESEND-WEBHOOK · signed lifecycle', () => {
       'svix-signature': header,
     })
     expect(res.status).toBe(200)
+  })
+
+  // ─── out-of-order + duplicate provider events ──────────────────────────
+  // Providers redeliver and reorder; the row must converge sanely and
+  // duplicate side effects must never occur (mission: "Handle duplicate
+  // and out-of-order events safely").
+
+  test('OUT-OF-ORDER · email.failed then email.delivered for the same id → the failure verdict STANDS (delivered never upgrades a failure)', async () => {
+    const id = await deliveryRow('oo-fail-first', 'QUEUED')
+    const fail = await signedEvent('oo-fail-first-f', 'email.failed', {
+      id: msgId('oo-fail-first'),
+      reason: 'provider internal failure',
+    })
+    expect(fail.status).toBe(200)
+    expect(fail.body?.matched).toBe(1)
+
+    const late = await signedEvent('oo-fail-first-d', 'email.delivered', {
+      id: msgId('oo-fail-first'),
+    })
+    expect(late.status).toBe(200)
+    expect(late.body?.matched).toBe(0) // FAILED rows are not upgraded by delivered
+
+    const row = await db.emailDelivery.findUnique({ where: { id } })
+    expect(row?.status).toBe('FAILED')
+    expect(row?.lastError).toContain('provider failure: provider internal failure')
+  })
+
+  test('OUT-OF-ORDER · email.delivered then email.bounced (delayed hard bounce) → later terminal evidence wins: SENT → BOUNCED', async () => {
+    const id = await deliveryRow('oo-delivered-first', 'QUEUED')
+    const ok = await signedEvent('oo-delivered-first-d', 'email.delivered', {
+      id: msgId('oo-delivered-first'),
+    })
+    expect(ok.body?.matched).toBe(1)
+    expect((await db.emailDelivery.findUnique({ where: { id } }))?.status).toBe('SENT')
+
+    // A hard bounce reported AFTER delivery (real provider semantics):
+    // the newer terminal verdict overwrites the optimistic SENT.
+    const bounce = await signedEvent('oo-delivered-first-b', 'email.bounced', {
+      id: msgId('oo-delivered-first'),
+      bounce: { code: '5.1.1', message: 'user unknown (delayed report)' },
+    })
+    expect(bounce.status).toBe(200)
+    expect(bounce.body?.matched).toBe(1)
+
+    const row = await db.emailDelivery.findUnique({ where: { id } })
+    expect(row?.status).toBe('BOUNCED')
+    expect(row?.lastError).toContain('user unknown (delayed report)')
+  })
+
+  test('DUPLICATE terminal event (different svix-ids, same message) → row written ONCE, idempotent state, both events recorded', async () => {
+    const id = await deliveryRow('dup-terminal', 'QUEUED')
+    const first = await signedEvent('dup-terminal-1', 'email.complained', { id: msgId('dup-terminal') })
+    const second = await signedEvent('dup-terminal-2', 'email.complained', { id: msgId('dup-terminal') })
+    expect(first.body?.ok).toBe(true)
+    expect(second.body?.ok).toBe(true)
+
+    const row = await db.emailDelivery.findUnique({ where: { id } })
+    expect(row?.status).toBe('COMPLAINED')
+    expect(row?.lastError).toBe('complaint (feedback loop)')
+
+    // Both provider events are in the audit trail; the row converged once.
+    const events = await db.webhookEvent.findMany({
+      where: { eventId: { in: [svixId('dup-terminal-1'), svixId('dup-terminal-2')] } },
+    })
+    expect(events.length).toBe(2)
+    expect(events.every((e) => e.status === 'processed')).toBe(true)
+  })
+
+  test('convergence: delivered (QUEUED→SENT) → duplicate delivered svix-id → row stays SENT, attempts counted (no side effects)', async () => {
+    const id = await deliveryRow('conv', 'QUEUED')
+    const first = await signedEvent('conv', 'email.delivered', { id: msgId('conv') })
+    expect(first.body?.matched).toBe(1)
+
+    const replay = await signedEvent('conv', 'email.delivered', { id: msgId('conv') })
+    expect(replay.body?.duplicate).toBe(true)
+
+    const row = await db.emailDelivery.findUnique({ where: { id } })
+    expect(row?.status).toBe('SENT')
+    const evt = await db.webhookEvent.findUnique({ where: { eventId: svixId('conv') } })
+    expect(evt?.attempts).toBe(2)
+    expect(evt?.status).toBe('duplicate')
   })
 })

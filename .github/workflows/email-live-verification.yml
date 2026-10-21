@@ -1,0 +1,81 @@
+# ============================================================
+# EMAIL LIVE DELIVERY VERIFICATION — dispatchable ops tool
+# ------------------------------------------------------------
+# Runs scripts/prod-release/email-live-verification.ts against LIVE
+# production for the mission §5 end-to-end evidence, using an
+# EXPLICITLY AUTHORIZED controlled recipient (an input — never a
+# default; the mission forbids inventing recipients or sending
+# unsolicited mail).
+#
+# PROVES, with sanitized printed evidence:
+#   A. both planes healthy;
+#   B. a REAL principal invitation through the REAL provisioning API
+#      is provider-accepted (EmailDelivery QUEUED + real message id);
+#   C. the provider actually delivered it (GET /emails/{id});
+#   D. the signature-verified webhook upgraded the row QUEUED→SENT
+#      (WebhookEvent row for the message);
+#   E. the invitation redeems at the school door; the forced change
+#      completes; the old bootstrap credential is rejected on reuse;
+#   F. re-issue against the owned credential is refused (409);
+#   G. fixtures fully purged (honest counts; login audit rows retained).
+#
+# Dispatch: Actions → "Email Live Delivery Verification" → Run with
+#   inputs.recipient = the authorized controlled address. Only ever
+#   dispatch with an address whose owner has agreed to receive the test
+#   email. NOTE: under the provider testing sender this MUST be the
+#   Resend account owner's own address (the only deliverable one).
+# ============================================================
+name: Email Live Delivery Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipient:
+        description: 'Authorized controlled recipient (must have agreed to receive the test email)'
+        required: true
+        type: string
+      cleanup_only:
+        description: 'Only purge leftover fixtures from a crashed run (no email sent)'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: email-live-verification
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: End-to-end live delivery verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Report the exact commit
+        run: |
+          echo "verification commit: ${GITHUB_SHA}"
+          git log -1 --format='%H %s'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # Zero-dependency script (fetch + node builtins only) — no install.
+      - name: Run the live verification
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          PRODUCTION_URL_SCHOOL: ${{ secrets.PRODUCTION_URL_SCHOOL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          CONTROLLED_RECIPIENT: ${{ inputs.recipient }}
+        run: bun scripts/prod-release/email-live-verification.ts ${{ inputs.cleanup_only && '--cleanup-only' || '' }}

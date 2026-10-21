@@ -131,8 +131,29 @@ export async function GET(_req: Request, { params }: { params: Promise<{ fingerp
       select: { status: true, error: true, startedAt: true },
     })
 
+    // ── Delivery-evidence facts for EMAIL-3 (webhook gap) ────────────
+    // QUEUED rows carrying a provider message id can ONLY be confirmed
+    // delivered by the provider webhook; zero Resend WebhookEvent rows
+    // in the window + a missing signing secret = confirmed evidence gap.
+    const [queuedWithId, resendWebhookEvents] = await Promise.all([
+      db.emailDelivery.count({
+        where: { status: 'QUEUED', providerMessageId: { not: null }, createdAt: { gte: emailWindow } },
+      }),
+      db.webhookEvent.count({
+        where: { gatewayName: 'resend', receivedAt: { gte: emailWindow } },
+      }),
+    ])
+
     const diagnoses = composeDiagnoses({
-      email: { domainsTotal, domainsVerified, failureClasses, statusCounts },
+      email: {
+        domainsTotal,
+        domainsVerified,
+        failureClasses,
+        statusCounts,
+        webhookSecretConfigured: (process.env.RESEND_WEBHOOK_SECRET ?? '').trim().length > 0,
+        resendWebhookEvents,
+        queuedWithProviderMessageId: queuedWithId,
+      },
       db: {
         databaseFailureErrors: dbFailures,
         connectivity: (connectivityRow?.status as 'healthy' | 'degraded' | 'down' | 'unknown' | 'not_configured') ?? 'unknown',

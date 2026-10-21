@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { hashPassword } from '@/lib/auth'
-import { resolveProvisionedPassword } from '@/lib/account-provisioning'
+import { resolveProvisionedPassword, bootstrapCredentialExpiresAt } from '@/lib/account-provisioning'
 import { auditEvent } from '@/lib/security/audit'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/security/rate-limit'
 
@@ -71,7 +71,7 @@ export async function POST(
 
       // New one-time expiring bootstrap credential.
       const { password } = resolveProvisionedPassword(undefined)
-      const credentialExpiresAt = new Date(Date.now() + 48 * 3600 * 1000)
+      const credentialExpiresAt = bootstrapCredentialExpiresAt()
       await db.user.update({
         where: { id: account.id },
         data: {

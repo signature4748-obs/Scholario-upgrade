@@ -27,6 +27,15 @@
   `RESEND_API_KEY` → Gmail creds → dev-log). An EXPLICIT pin without its
   credentials fails every send LOUDLY with a `[provider-config]`
   EmailDelivery row — never a silent fallback.
+- **Production honesty guard**: the dev-log transport records a FAKE
+  successful delivery (the log line IS the delivery). In production
+  (`isProductionDatabase()`: `DATABASE_ENV=production`, or the Supabase
+  fail-safe when `DATABASE_ENV` is unset) dev-log is REFUSED — both as
+  the auto fallback with no real credentials and as an explicit pin.
+  Every send then fails VISIBLY: a `FAILED` row with
+  `[provider-config]` (surfaced in the admin diagnostics), never a
+  fabricated `SENT`. Production never records a delivery that did not
+  leave the machine; a credential outage is loud, not silent.
 - **Error classification** (`provider-errors.ts`): every provider failure
   gets a typed, machine-parseable class tag in `EmailDelivery.lastError` —
   `[auth-invalid]` (401: rotate the key), `[testing-recipient-restricted]`
@@ -162,13 +171,35 @@ Security and reliability contract (same shape as the payment webhook):
   its (clipped) raw payload — the delivery evidence trail.
 
 Owner action to activate (one-time): create the webhook endpoint at
-`https://<production-domain>/api/webhooks/resend` with the bounce /
-complaint / delivery events enabled (Resend dashboard → Webhooks, or the
-Resend Webhooks API which returns the endpoint's real signing secret),
-copy the endpoint's signing secret into the Vercel production env as
-`RESEND_WEBHOOK_SECRET` on both active projects and redeploy. Until then
-the route stays fail-closed, and provider-accepted rows simply stay
-`QUEUED` (no delivery evidence — honest, never misreported as delivered).
+`https://<production-domain>/api/webhooks/resend` with the six lifecycle
+events enabled (delivered / bounced / complained / failed / sent /
+delivery_delayed), copy the endpoint's signing secret into the Vercel
+production env as `RESEND_WEBHOOK_SECRET` on both active projects and
+redeploy. Until then the route stays fail-closed, and provider-accepted
+rows simply stay `QUEUED` (no delivery evidence — honest, never
+misreported as delivered).
+
+**Automated (the signing secret never has to be hand-copied):** the
+`Resend Webhook Configure/Repair` workflow
+(`.github/workflows/resend-webhook-configure.yml` →
+`scripts/prod-release/resend-webhook-configure.ts`) performs the whole
+activation against the live APIs — it creates the endpoint at
+`${PRODUCTION_URL}/api/webhooks/resend` when absent, PATCHes drifted
+events/URL, captures the signing secret IN MEMORY at create time and
+syncs it to BOTH planes (`RESEND_WEBHOOK_SECRET`, production target,
+encrypted), then triggers both deploy hooks and waits for READY. If a
+webhook already exists but its secret was never copied (or a mismatch is
+suspected), dispatch it with `recreate=true` — delete + create mints a
+fresh secret returned by the API (the API cannot read an existing
+endpoint's secret). The definitive end-to-end proof is the
+`Email Live Delivery Verification` workflow (below).
+
+**Standing diagnosis.** Operations Center rule `EMAIL-3` (delivery-evidence
+gap) fires when provider-accepted rows with a real message id exist while
+zero Resend webhook events have ever been recorded — the exact "delivered
+messages stay QUEUED" symptom — with the secret-presence boolean and the
+register/enable next step. `tests/unit/ops-diagnose.test.ts` pins its
+verdict table.
 
 ## Verification evidence (this phase)
 
@@ -214,6 +245,30 @@ emails not arriving?" without exposing a single credential:
 
 The route only READS state: it can never send email, rotate keys or
 mutate the outbox. No secrets, no full recipient addresses.
+
+**Sanitized live audit (provider-side facts, no secret handling).** The
+`Email/Webhook Live Audit` workflow
+(`.github/workflows/email-webhook-audit.yml` →
+`scripts/prod-release/email-webhook-audit.ts`) reports, with live
+evidence and zero secret exposure: Vercel env presence/targeting for the
+email keys on both planes, the live Resend domain list (verified count —
+the testing-mode answer), the registered webhook endpoints (URL +
+subscribed events, field-allowlisted), the `RESEND_WEBHOOK_SECRET`
+cross-plane consistency (boolean), and the read-only production outbox
+truth (status/template counts, recent failure classes, the
+QUEUED-with-message-id population, principal-invite rows with masked
+recipients, and every Resend `WebhookEvent` row ever recorded).
+
+**End-to-end live verification (controlled recipient).** The
+`Email Live Delivery Verification` workflow
+(`.github/workflows/email-live-verification.yml` →
+`scripts/prod-release/email-live-verification.ts`) proves the whole
+chain with an explicitly authorized recipient only: real provisioning
+invite → provider-accepted row with a real message id → provider
+`GET /emails/{id}` delivered evidence → signature-verified webhook
+upgrading the row `QUEUED → SENT` → redemption at the school door →
+forced change → old credential rejected on reuse → re-issue refused
+(409). Fixtures are fully purged with honest counts.
 
 ## Provider independence & the two-project topology
 

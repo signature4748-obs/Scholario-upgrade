@@ -42,7 +42,11 @@
 //      GMAIL_SMTP_APP_PASSWORD are set, else dev-log. An explicit
 //      override without its credentials fails LOUDLY (every send →
 //      FAILED with a [provider-config] class) — never a silent
-//      fallback.
+//      fallback. PRODUCTION HONESTY GUARD: dev-log is likewise
+//      REFUSED whenever the process is pointed at the production
+//      database (auto fallback with no real credentials, or an
+//      explicit pin) — production never records a fake SENT row;
+//      the send fails visibly with [provider-config] instead.
 //   g) every transport attempt logs 'email_attempt' {template, transport,
 //      attempt, status, errorClass?}; failure details NEVER contain
 //      the API key or SMTP password — request headers are never
@@ -66,6 +70,7 @@
 // ============================================================
 
 import { db } from '@/lib/db'
+import { isProductionDatabase } from '@/lib/env'
 import { log } from '@/lib/observability/logger'
 import { getRequestContext, runWithContext } from '@/lib/observability/context'
 import { newRequestId } from '@/lib/security/errors'
@@ -120,9 +125,22 @@ function resendApiKey(): string | null {
  * An explicit pin without credentials is a LOUD misconfiguration —
  * every send fails with a [provider-config] class instead of a
  * silent fallback.
+ *
+ * PRODUCTION HONESTY GUARD: the dev-log transport records a FAKE
+ * successful delivery (the log line IS the delivery — a SENT row with
+ * providerMessageId 'dev-log'). That is the correct DX convention for
+ * development and CI, but in production it would fabricate delivery
+ * evidence for mail that never left the machine. When the process is
+ * pointed at the production database (isProductionDatabase():
+ * DATABASE_ENV=production, or the Supabase fail-safe recognition),
+ * dev-log is REFUSED — both as the auto fallback with no real provider
+ * credentials and as an explicit pin. Every send then fails LOUDLY:
+ * a FAILED row with a [provider-config] class, surfaced to the admin
+ * diagnostics, never a fabricated SENT.
  */
 export function resolveProvider(): ResolvedProvider {
   const requested = (process.env.EMAIL_PROVIDER ?? '').trim().toLowerCase()
+  const production = isProductionDatabase() // live read, never memoized
   if (requested && requested !== 'auto') {
     if (requested === 'resend') {
       if (resendApiKey() === null) {
@@ -148,6 +166,15 @@ export function resolveProvider(): ResolvedProvider {
       return { id: 'gmail-smtp', selection: 'explicit', configured: true }
     }
     if (requested === 'dev-log') {
+      if (production) {
+        return {
+          id: 'dev-log',
+          selection: 'explicit',
+          configured: false,
+          configError:
+            'EMAIL_PROVIDER=dev-log is refused in production: the dev-log transport never delivers and would record a fake success. Configure a real provider (RESEND_API_KEY, or GMAIL_SMTP_USER + GMAIL_SMTP_APP_PASSWORD) and remove the EMAIL_PROVIDER pin.',
+        }
+      }
       return { id: 'dev-log', selection: 'explicit', configured: true }
     }
     return {
@@ -160,6 +187,15 @@ export function resolveProvider(): ResolvedProvider {
   // auto: credential detection, Resend first (production default).
   if (resendApiKey() !== null) return { id: 'resend', selection: 'auto', configured: true }
   if (gmailSmtpConfigured()) return { id: 'gmail-smtp', selection: 'auto', configured: true }
+  if (production) {
+    return {
+      id: 'dev-log',
+      selection: 'auto',
+      configured: false,
+      configError:
+        'No email provider credentials in production (RESEND_API_KEY / GMAIL_SMTP_USER + GMAIL_SMTP_APP_PASSWORD all unset) — the dev-log transport is refused rather than recording fake deliveries. Every send fails visibly with this [provider-config] error until a real provider is configured on the deployment.',
+    }
+  }
   return { id: 'dev-log', selection: 'auto', configured: true }
 }
 
