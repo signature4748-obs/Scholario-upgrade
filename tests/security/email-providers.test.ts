@@ -320,3 +320,81 @@ describe('maskEmail — diagnostics never exposes full addresses', () => {
     expect(maskEmail('x')).toBe('***')
   })
 })
+
+// ─── 7. live webhook diagnostics — STRICT FIELD ALLOWLIST ────────────────
+
+describe('fetchResendWebhookSummary — the provider webhook list never carries secret fields', () => {
+  const REAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = REAL_FETCH
+  })
+
+  test('id/url/events are surfaced; every other field (secret-looking included) is dropped', async () => {
+    const { fetchResendWebhookSummary } = await import('@/lib/email/diagnostics')
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: 'wh_abc123',
+              url: 'https://scholario-platform.vercel.app/api/webhooks/resend',
+              events: ['email.delivered', 'email.bounced'],
+              // hostile/secret-looking fields — must NEVER come through:
+              signing_secret: 'whsec_should_never_surface',
+              secret: 'x',
+              token: 'y',
+              svix: 'z',
+              ttl: 3600,
+              random_field: 'w',
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as typeof fetch
+    const summary = await fetchResendWebhookSummary('re_stub_not_a_real_key')
+    expect(summary.liveCheck).toBe('ok')
+    expect(summary.total).toBe(1)
+    expect(summary.endpoints.length).toBe(1)
+    const endpoint = summary.endpoints[0]!
+    expect(endpoint).toEqual({
+      id: 'wh_abc123',
+      url: 'https://scholario-platform.vercel.app/api/webhooks/resend',
+      events: ['email.delivered', 'email.bounced'],
+    })
+    expect(JSON.stringify(summary)).not.toContain('whsec_should_never_surface')
+    expect(JSON.stringify(summary)).not.toContain('random_field')
+  })
+
+  test('ZERO registered endpoints is an honest ok-with-empty-array (the delivered-stays-QUEUED root cause)', async () => {
+    const { fetchResendWebhookSummary } = await import('@/lib/email/diagnostics')
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })) as typeof fetch
+    const summary = await fetchResendWebhookSummary('re_stub_not_a_real_key')
+    expect(summary.liveCheck).toBe('ok')
+    expect(summary.total).toBe(0)
+    expect(summary.endpoints).toEqual([])
+  })
+
+  test('provider failure → liveCheck failed, no fabricated endpoints', async () => {
+    const { fetchResendWebhookSummary } = await import('@/lib/email/diagnostics')
+    globalThis.fetch = (async () => new Response('{"message":"Unauthorized"}', { status: 401 })) as typeof fetch
+    const summary = await fetchResendWebhookSummary('re_stub_not_a_real_key')
+    expect(summary.liveCheck).toBe('failed')
+    expect(summary.total).toBeNull()
+    expect(summary.endpoints).toEqual([])
+  })
+
+  test('network error → liveCheck failed (never throws)', async () => {
+    const { fetchResendWebhookSummary } = await import('@/lib/email/diagnostics')
+    globalThis.fetch = (async () => {
+      throw new Error('network down')
+    }) as typeof fetch
+    const summary = await fetchResendWebhookSummary('re_stub_not_a_real_key')
+    expect(summary.liveCheck).toBe('failed')
+    expect(summary.endpoints).toEqual([])
+  })
+})

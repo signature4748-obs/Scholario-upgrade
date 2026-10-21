@@ -287,16 +287,28 @@ async function main(): Promise<void> {
   say(` desired events:    ${WEBHOOK_EVENTS.join(', ')}`)
   say('')
 
-  // ── 1. Resend key from the platform plane's env (in memory) ─────────
-  say('── 1. RESEND_API_KEY (fetched in-memory from the platform plane) ──')
-  const platformEnvs = await listEnv(planes[0].projectId, orgId, vercelToken)
-  const keyRec = platformEnvs.find((e) => e.key === 'RESEND_API_KEY')
-  if (!keyRec || typeof keyRec.id !== 'string') {
-    throw new Error('RESEND_API_KEY is not set on the platform plane — nothing to configure with.')
+  // ── 1. Resend key (in memory): env override first, then the platform
+  //    plane's Vercel env (a dashboard-created Sensitive value is
+  //    write-only via API — the env override is the documented channel
+  //    for this case).
+  say('── 1. RESEND_API_KEY (env override → Vercel decrypt, in memory) ──')
+  let apiKey = (process.env.RESEND_API_KEY ?? '').trim()
+  if (apiKey) {
+    say('  RESEND_API_KEY provided via environment (value withheld) ✓')
+  } else {
+    const platformEnvs = await listEnv(planes[0].projectId, orgId, vercelToken)
+    const keyRec = platformEnvs.find((e) => e.key === 'RESEND_API_KEY')
+    if (!keyRec || typeof keyRec.id !== 'string') {
+      throw new Error('RESEND_API_KEY is not set on the platform plane — nothing to configure with.')
+    }
+    apiKey = (await fetchEnvValue(planes[0].projectId, orgId, vercelToken, keyRec.id)) ?? ''
+    if (!apiKey) {
+      throw new Error(
+        'RESEND_API_KEY value could not be read: the var is set but WRITE-ONLY via the Vercel API (dashboard-created Sensitive). Provide RESEND_API_KEY in this run\'s environment (e.g. a repository/environment secret) — it is fetched in memory only, never printed.',
+      )
+    }
+    say('  RESEND_API_KEY decrypted from the platform plane (value withheld) ✓')
   }
-  const apiKey = (await fetchEnvValue(planes[0].projectId, orgId, vercelToken, keyRec.id)) ?? ''
-  if (!apiKey) throw new Error('RESEND_API_KEY value could not be decrypted (never printed).')
-  say('  RESEND_API_KEY present (value withheld) ✓')
   const authHeaders = { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
   say('')
 

@@ -71,6 +71,11 @@ interface EmailDiagnosticsData {
     fromAddress: string
     webhookSecretPresent: boolean
     domains: { liveCheck: 'ok' | 'failed' | 'skipped'; total: number | null; verified: number | null }
+    webhooks?: {
+      liveCheck: 'ok' | 'failed' | 'skipped'
+      total: number | null
+      endpoints: Array<{ id: string; url: string; events: string[] }>
+    }
   }
   gmailSmtp: { userPresent: boolean; maskedUser?: string; appPasswordPresent: boolean }
   outbox: {
@@ -392,6 +397,23 @@ export function SystemHealthCard() {
                       Resend: {domains.verified}/{domains.total} domain
                       {domains.total === 1 ? '' : 's'} verified
                       {testingMode ? ' — testing mode' : ''}
+                    </p>
+                  ) : null}
+                  {email?.resend.webhooks && email.resend.webhooks.liveCheck === 'ok' ? (
+                    <p
+                      className={
+                        (email.resend.webhooks.endpoints.length ?? 0) === 0 ? 'text-amber-600' : 'text-slate-500'
+                      }
+                      title={email.resend.webhooks.endpoints
+                        .map((w) => `${w.url} · events: ${w.events.join(', ') || 'none'}`)
+                        .join(' | ')}
+                    >
+                      webhook endpoints: {email.resend.webhooks.total ?? 0}
+                      {(email.resend.webhooks.endpoints.length ?? 0) === 0
+                        ? ' — delivery evidence never arrives (delivered mail stays queued)'
+                        : (email.resend.webhooks.endpoints.some((w) => w.events.includes('email.delivered'))
+                            ? ' — delivered events subscribed'
+                            : ' — email.delivered NOT subscribed')}
                     </p>
                   ) : null}
                   <button
