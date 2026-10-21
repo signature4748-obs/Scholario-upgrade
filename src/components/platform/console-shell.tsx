@@ -444,12 +444,42 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
               : 'flex items-center gap-3 h-20 px-5 border-b border-slate-200'
           }
         >
-          <div
-            className="h-10 w-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-sm shrink-0"
-            title="SCHOLARIO Control Plane"
-          >
-            <Cloud className="h-5 w-5" aria-hidden="true" />
-          </div>
+          {/* ROOT-ADMIN ROUTING REPAIR — the logo is the canonical Home
+              control: it must return to the Super Admin Overview (/platform),
+              never the school portal or a login page. Same target as the
+              first sidebar item; the collapse control stays OUTSIDE the link. */}
+          {collapsed ? (
+            <Link
+              href="/platform"
+              aria-label="SCHOLARIO Control Plane — back to Overview"
+              title="Back to Overview"
+              className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-600 text-white shadow-sm shrink-0 transition-colors hover:bg-teal-700"
+            >
+              <Cloud className="h-5 w-5" aria-hidden="true" />
+            </Link>
+          ) : (
+            <Link
+              href="/platform"
+              aria-label="SCHOLARIO Control Plane — back to Overview"
+              title="Back to Overview"
+              className="flex min-w-0 flex-1 items-center gap-3 focus-ring rounded-lg"
+            >
+              <div
+                className="h-10 w-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-sm shrink-0"
+                aria-hidden="true"
+              >
+                <Cloud className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="font-display font-extrabold text-base tracking-tight text-slate-900 leading-none">
+                  SCHOLARIO
+                </p>
+                <p className="text-[10px] font-semibold tracking-[0.22em] text-teal-600 uppercase mt-1">
+                  Control Plane
+                </p>
+              </div>
+            </Link>
+          )}
           {collapsed ? (
             <Button
               variant="ghost"
@@ -462,26 +492,16 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
               <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
             </Button>
           ) : (
-            <>
-              <div className="min-w-0 flex-1">
-                <p className="font-display font-extrabold text-base tracking-tight text-slate-900 leading-none">
-                  SCHOLARIO
-                </p>
-                <p className="text-[10px] font-semibold tracking-[0.22em] text-teal-600 uppercase mt-1">
-                  Control Plane
-                </p>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleCollapsed}
-                aria-label="Collapse sidebar"
-                title="Collapse sidebar"
-                className="h-8 w-8 shrink-0 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-              >
-                <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            </>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleCollapsed}
+              aria-label="Collapse sidebar"
+              title="Collapse sidebar"
+              className="h-8 w-8 shrink-0 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
+            </Button>
           )}
         </div>
         {renderNavLinks(collapsed)}
@@ -494,12 +514,17 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
           <div className="absolute inset-0 bg-slate-900/40" onClick={() => setDrawerOpen(false)} />
           <div className="absolute inset-y-0 left-0 w-72 max-w-[85vw] bg-white border-r border-slate-200 flex flex-col shadow-xl">
             <div className="flex items-center justify-between h-20 px-5 border-b border-slate-200">
-              <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 rounded-lg bg-teal-600 flex items-center justify-center text-white">
-                  <Cloud className="h-4 w-4" aria-hidden="true" />
+              {/* Mobile drawer logo — same canonical Overview target. */}
+              <Link
+                href="/platform"
+                aria-label="SCHOLARIO Control Plane — back to Overview"
+                className="flex items-center gap-2.5 focus-ring rounded-lg"
+              >
+                <div className="h-8 w-8 rounded-lg bg-teal-600 flex items-center justify-center text-white" aria-hidden="true">
+                  <Cloud className="h-4 w-4" />
                 </div>
                 <span className="font-display font-extrabold text-sm text-slate-900">SCHOLARIO Control Plane</span>
-              </div>
+              </Link>
               <Button
                 variant="ghost"
                 size="icon"

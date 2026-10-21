@@ -12,29 +12,42 @@
 # DO NOT add runtime-required paths: src, public, prisma, package.json,
 # bun.lock, next.config.ts, tsconfig.json, postcss.config.mjs,
 # components.json, next-env.d.ts, eslint.config.mjs.
+#
+# ⚠ ANCHORING RULE (2026-10-21 production incident — see
+# tests/security/route-inventory.test.ts "vercelignore guard"):
+#   .vercelignore patterns are gitignore-style: a bare segment name like
+#   `audit` matches that name at ANY depth — it silently swallowed
+#   src/app/platform/(console)/audit/ (the Super Admin Audit Log page),
+#   src/app/api/platform/audit/ and BOTH school-plane audit APIs
+#   (src/app/api/homework/[id]/audit, src/app/api/exams/[id]/audit) from
+#   every Vercel source upload → those routes 404'd in production while
+#   local/CI builds (which never read .vercelignore) stayed green.
+#   Every pattern below therefore targets the REPOSITORY ROOT and is
+#   written with a LEADING SLASH. Bare un-anchored names are forbidden;
+#   the guard test enforces this for every runtime-required file.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # CI-only (GitHub Actions runs the full matrix; Vercel builds never run tests)
-tests
-.github
+/tests
+/.github
 
-# documentation-only
-docs
-audit
-README.md
+# documentation-only (ROOT-LEVEL folders only — see the anchoring rule above)
+/docs
+/audit
+/README.md
 
 # local sandbox / operations-only (never imported by the Next.js app)
-mini-services
-scripts
-Caddyfile
-keepalive.mjs
-db
+/mini-services
+/scripts
+/Caddyfile
+/keepalive.mjs
+/db
 
 # examples & dev-only tracked files
-.env.example
+/.env.example
 
 # local-only artifacts (gitignored already; belt-and-braces)
-.tmp-scripts
-tool-results
-agent-ctx
+/.tmp-scripts
+/tool-results
+/agent-ctx
 *.log

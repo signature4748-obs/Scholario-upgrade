@@ -391,6 +391,12 @@ async function main(): Promise<void> {
     ['tokenHash', 'text', false],
     ['usedAt', 'timestamp', true],
     ['expiresAt', 'timestamp', false],
+    // ROOT-ADMIN LOGIN REPAIR (20261021120000_platform_password_reset_new_
+    // email, merged in 1ca0b74913): the recovery token binds the candidate
+    // email — nullable text, adopted atomically at consume time. Without
+    // this row the verify stage false-flags the LIVE, shipped column as
+    // "unexpected" and the release gate fails on a healthy database.
+    ['newEmail', 'text', true],
     ['createdAt', 'timestamp', false],
     ['requestIp', 'text', true],
     ['userAgent', 'text', true],
@@ -441,7 +447,7 @@ async function main(): Promise<void> {
     }
   }
   console.log(
-    `  G. account recovery : PlatformAdmin.google{Sub,Email,LinkedAt} ✓ · PlatformPasswordReset (8 cols, UNIQUE tokenHash, FK) ✓ · PlatformRecoveryTicket (11 cols) ✓ · 6 indexes + 2 PKs ✓ · admin state: total ${admins.total}, with-password ${admins.withPassword} (never decreased; values never read)`,
+    `  G. account recovery : PlatformAdmin.google{Sub,Email,LinkedAt} ✓ · PlatformPasswordReset (9 cols incl. newEmail, UNIQUE tokenHash, FK) ✓ · PlatformRecoveryTicket (11 cols) ✓ · 6 indexes + 2 PKs ✓ · admin state: total ${admins.total}, with-password ${admins.withPassword} (never decreased; values never read)`,
   )
 
   if (problems.length) exitWithProblems('verify', problems)
