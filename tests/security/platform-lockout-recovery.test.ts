@@ -182,6 +182,22 @@ async function healFixtureBuckets(): Promise<void> {
   resetAllRateLimits()
 }
 
+/**
+ * Poll the shared bucket row until its windowStart moves past the seed
+ * (the fire-and-forget abuse restart settles asynchronously) — bounded
+ * to ~2s, then returns the CURRENT value so a never-fired restart
+ * still fails the caller's window-movement assertion honestly.
+ */
+async function pollWindowStart(key: string, seededStart: Date): Promise<Date> {
+  const deadline = Date.now() + 2000
+  for (;;) {
+    const row = await db.rateLimitBucket.findUniqueOrThrow({ where: { key } })
+    if (row.windowStart.getTime() > seededStart.getTime() + 60_000) return row.windowStart
+    if (Date.now() >= deadline) return row.windowStart
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+
 beforeAll(async () => {
   await healFixtureBuckets()
   await createFixtureAdmin(LOCK_EMAIL, LOCK_PASSWORD)
@@ -318,8 +334,9 @@ describe('ROOT-ADMIN LOGIN REPAIR · bounded shared-window abuse restart', () =>
     expect(deny1.allowed).toBe(false)
     let row = await db.rateLimitBucket.findUniqueOrThrow({ where: { key } })
     expect(row.count).toBe(10)
-    const restartedAt = row.windowStart
-    // The restart DID fire: the window moved from the seeded past to ~now.
+    // The restart is fire-and-forget (availability-over-blocking
+    // contract) — poll briefly for the shared row to settle.
+    const restartedAt = await pollWindowStart(key, seededStart)
     expect(restartedAt.getTime() - seededStart.getTime()).toBeGreaterThan(5 * 60_000)
 
     // Attempts #2/#3: counts 11, 12 → denied, but NO further restart
@@ -331,7 +348,6 @@ describe('ROOT-ADMIN LOGIN REPAIR · bounded shared-window abuse restart', () =>
     expect(row.count).toBe(12)
     expect(row.windowStart.getTime()).toBe(restartedAt.getTime()) // byte-identical → no restart
 
-    // The 250ms bounded-fallback path never applies here (real DB, fast).
     await db.rateLimitBucket.delete({ where: { key } }).catch(() => {})
   })
 })
@@ -498,7 +514,9 @@ describe('ROOT-ADMIN LOGIN REPAIR · lockout + verified recovery (live HTTP)', (
       orderBy: { createdAt: 'desc' },
     })
     expect(row).not.toBeNull()
-    expect(['sent', 'queued', 'skipped', 'failed']).toContain(row?.status ?? '')
+    // Honest status either casing (the DB row stores SENT/QUEUED/…; the
+    // sendEmail contract value is lowercase).
+    expect(['sent', 'queued', 'skipped', 'failed']).toContain((row?.status ?? '').toLowerCase())
     // The notification carries no credential material: the stored fields
     // are recipient + template (+ provider bookkeeping) only.
     for (const tok of mintedTokens) {
