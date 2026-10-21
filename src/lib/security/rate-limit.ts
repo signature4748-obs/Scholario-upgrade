@@ -45,11 +45,18 @@
  *
  * Deny-path abuse extension (≤2 roundtrips on DENY paths, 1 on allow):
  * the local progressive backoff is preserved verbatim (extensions 0–4,
- * decay on roll), AND sustained abuse extends the SHARED window: when a
- * denied attempt pushes the count to ≥ 2× the limit (a full extra budget
- * of rejected attempts), the background sync runs a second statement that
- * restarts the shared windowStart at now() — so a distributed hammer keeps
- * the block alive across instances, decaying only after the abuse stops.
+ * decay on roll), AND clear sustained abuse extends the SHARED window
+ * ONCE per count cycle: the single denied attempt whose atomic
+ * increment observes count === 2× limit (a full extra budget of
+ * rejected attempts) restarts the shared windowStart at now(). The
+ * BOUND is deliberate (ROOT-ADMIN LOGIN REPAIR — production incident
+ * 2026-10-21): with a ≥-match on every denied attempt, a desperate
+ * administrator's own retries — or an attacker's hammer — made the
+ * lockout effectively PERMANENT. With the ===-match the restart can
+ * fire at most once per cycle (increments are serialized, exactly one
+ * request observes the crossing), so the lockout always expires on
+ * schedule even under infinite retry pressure while still limiting
+ * guessing to `limit` credential-carrying attempts per window.
  *
  * Fail-open policy (mission §23 — availability over protection): the
  * synchronous decision NEVER consults the DB, so backend unavailability
@@ -192,6 +199,27 @@ function pruneIfNeeded() {
   }
 }
 
+// ─── ROOT-ADMIN LOGIN REPAIR — bounded shared-window abuse extension ───────
+//
+// INCIDENT (production, 2026-10-21): the platform root admin exhausted the
+// per-account login bucket (5/15min) and every further attempt RESTARTED
+// the shared window (old rule: count ≥ 2×limit ⇒ windowStart = now()), so
+// continued retries — the desperate-admin pattern, or a deliberate
+// attacker — made the lockout effectively PERMANENT. That is a forced-
+// lockout denial-of-service against the administrator.
+//
+// CORRECTION (evidence-based, narrow): restart the shared window ONLY
+// on the FIRST crossing of 2×limit per count cycle — `count === limit*2`
+// exactly. The atomic increment serializes counts, so exactly ONE
+// request can ever observe the crossing value; every later denied
+// attempt leaves the window alone and it EXPIRES on schedule (the count
+// rolls to 1 on the next increment past expiry). Anti-guessing is
+// preserved: a sustained hammer still gets only `limit` credential-
+// carrying attempts per window; the local progressive-extension ladder
+// (bounded at 4, decaying on roll) still adds graduated backoff. The
+// lockout is now provably expiring: at most ~2 windows + decay ladder
+// even under infinite retry pressure.
+
 // ─── Phase 8A: shared-database backend ─────────────────────────────────────
 
 interface DbBucketRow {
@@ -314,14 +342,15 @@ function scheduleDbSync(
     `) as DbBucketRow[]
     const row = rows[0]
     if (row) reconcile(key, profile, row)
-    // 2. Deny-path abuse extension: a full extra budget of rejected
-    //    attempts (count ≥ 2× limit) restarts the shared window so the
-    //    block outlives any single instance's view.
+    // 2. Deny-path abuse extension (BOUNDED — one restart per count
+    //    cycle, see module header): only the attempt that observes the
+    //    FIRST crossing of 2× limit restarts the shared window, so a
+    //    sustained hammer cannot extend the block indefinitely.
     if (opts.abuse) {
       await db.$executeRaw`
         UPDATE "RateLimitBucket"
         SET "windowStart" = now(), "updatedAt" = now()
-        WHERE "key" = ${key} AND "count" >= ${profile.limit * 2}
+        WHERE "key" = ${key} AND "count" = ${profile.limit * 2}
       `
     }
     await maybePrune(key)
@@ -366,7 +395,12 @@ export function checkRateLimit(
     b.count++ // count the rejected attempt too
     buckets.set(key, b)
     if (now === undefined && dbSyncEnabled()) {
-      scheduleDbSync(key, profile, { abuse: b.count >= profile.limit * 2 })
+      // BOUNDED abuse restart (see module header): only the attempt that
+      // observes the FIRST crossing of 2×limit requests the shared
+      // window restart — a sustained hammer can no longer extend the
+      // block indefinitely. (A reconciled-adopted count that skipped the
+      // crossing simply never restarts — the safe direction.)
+      scheduleDbSync(key, profile, { abuse: b.count === profile.limit * 2 })
     }
     return { allowed: false, remaining: 0, retryAfterSec }
   }
@@ -453,6 +487,24 @@ export function loginAccountKey(normalizedEmail: string): string {
   return `rl:login:acct:${normalizedEmail}`
 }
 
+/**
+ * ROOT-ADMIN LOGIN REPAIR — plane-separated platform account-bucket key.
+ *
+ * The platform login previously shared the school plane's
+ * `rl:login:acct:` namespace, so school-plane failed sign-ins for an
+ * address that also exists as a PlatformAdmin locked the PLATFORM login
+ * for that address (cross-plane forced lockout — a real risk once the
+ * root admin's identity is a Gmail that may also be a school user).
+ * The platform control plane now keeps its own account-bucket namespace,
+ * mirroring the already-separate `rl:pf-login:ip:` IP bucket; the school
+ * plane is byte-identical and untouched. Verified-recovery flows clear
+ * BOTH namespaces for an address (belt and braces — the legacy rows
+ * must not linger either).
+ */
+export function platformLoginAccountKey(normalizedEmail: string): string {
+  return `rl:pf-login:acct:${normalizedEmail}`
+}
+
 // ─── PHASE 8B (§21) — strict shared-budget gate for credential endpoints ────
 //
 // Serverless reality: many short-lived instances each hold a LOCAL bucket,
@@ -514,13 +566,15 @@ const defaultSharedIncrement: SharedIncrement = async (key, profile) => {
   return rows[0]
 }
 
-/** Deny-path shared-window abuse restart (extracted for both paths). */
-function fireAbuseExtension(key: string, profile: RateLimitProfile): Promise<void> {
+/** Deny-path shared-window abuse restart — BOUNDED to the single attempt
+ * that observes the FIRST 2×limit crossing (see module header). */
+function fireAbuseExtension(key: string, profile: RateLimitProfile, observedCount: number): Promise<void> {
+  if (observedCount !== profile.limit * 2) return Promise.resolve()
   return db
     .$executeRaw`
       UPDATE "RateLimitBucket"
       SET "windowStart" = now(), "updatedAt" = now()
-      WHERE "key" = ${key} AND "count" >= ${profile.limit * 2}
+      WHERE "key" = ${key} AND "count" = ${profile.limit * 2}
     `
     .then(() => undefined)
     .catch(() => undefined)
@@ -577,7 +631,9 @@ export async function checkRateLimitStrict(
       const windowLen = profile.windowMs * (1 + (b?.extensions ?? extensions))
       const resetAt = row.windowStart.getTime() + windowLen
       const retryAfterSec = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000))
-      void fireAbuseExtension(key, profile)
+      // Bounded abuse restart: fires only on the first 2×limit crossing
+      // observed by THIS attempt's atomic increment (see module header).
+      void fireAbuseExtension(key, profile, row.count)
       return { allowed: false, remaining: 0, retryAfterSec }
     }
     return { allowed: true, remaining: profile.limit - row.count, retryAfterSec: 0 }

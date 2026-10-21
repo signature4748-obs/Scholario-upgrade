@@ -32,6 +32,8 @@ export type TemplateId =
   | 'admission-enquiry-received'
   | 'salary-payment-recorded'
   | 'platform-password-reset'
+  | 'platform-recovery-link'
+  | 'platform-password-changed'
   | 'principal-invite'
 
 /** Props for 'admission-enquiry-received' (public form confirmation). */
@@ -67,6 +69,25 @@ export interface PlatformPasswordResetEmailProps {
   requestIp?: string
 }
 
+/**
+ * ROOT-ADMIN LOGIN REPAIR — Props for 'platform-recovery-link': the
+ * AUDITED recovery procedure's mail (delivered to the CANDIDATE
+ * mailbox). Consuming the link sets a new password AND designates
+ * the candidate address as the account identity. Deliberately NO
+ * requestIp footer (the requester is an operator, not the mailbox
+ * owner) and NO previous-address disclosure (forwardable-safe).
+ */
+export interface PlatformRecoveryLinkEmailProps {
+  adminName: string
+  resetUrl: string
+  expiresInMinutes: number
+}
+
+/** ROOT-ADMIN LOGIN REPAIR — Props for 'platform-password-changed'. */
+export interface PlatformPasswordChangedEmailProps {
+  adminName: string
+}
+
 /** Props for 'principal-invite' (founding-principal credential delivery). */
 export interface PrincipalInviteEmailProps {
   /** Principal display name (from the provisioned User row). */
@@ -92,6 +113,8 @@ export type EmailTemplateProps =
   | AdmissionEnquiryEmailProps
   | SalaryPaymentEmailProps
   | PlatformPasswordResetEmailProps
+  | PlatformRecoveryLinkEmailProps
+  | PlatformPasswordChangedEmailProps
   | PrincipalInviteEmailProps
 
 /**

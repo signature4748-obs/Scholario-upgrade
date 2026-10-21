@@ -22,6 +22,11 @@
 import { db } from '@/lib/db'
 import { randomBytes } from 'crypto'
 import { sendEmail } from '@/lib/email'
+import {
+  loginAccountKey,
+  platformLoginAccountKey,
+  resetRateLimit,
+} from '@/lib/security/rate-limit'
 import { hashToken } from './auth'
 
 /** Hard expiry window for a reset token. */
@@ -33,18 +38,62 @@ export interface IssuedResetToken {
   /** The RAW token — exists only in the caller's memory → the email body. */
   token: string
   expiresAt: Date
+  /** The candidate email bound to this token (audited recovery only). */
+  newEmail: string | null
+}
+
+/**
+ * ROOT-ADMIN LOGIN REPAIR — clear the per-account login lockout for an
+ * email on EVERY rate-limit namespace that can lock it (the platform
+ * plane's `rl:pf-login:acct:` and the legacy shared `rl:login:acct:`,
+ * belt and braces for rows minted before the namespace split).
+ *
+ * Called ONLY from verified-recovery completion (a CONSUMED single-use
+ * token — proof of mailbox ownership — never from a mere request) per
+ * the account-recovery contract: a locked-out administrator recovers
+ * through the emailed link, not by asking. The per-IP login bucket is
+ * deliberately NOT touched: it guards password guessing from one source
+ * across MANY accounts and self-expires on its own window.
+ */
+export function clearAccountLockout(normalizedEmail: string): void {
+  resetRateLimit(platformLoginAccountKey(normalizedEmail))
+  resetRateLimit(loginAccountKey(normalizedEmail))
+}
+
+/** PII-minimal email form for audit metadata: local part length + domain. */
+export function maskedEmailDomain(email: string): string {
+  const at = email.lastIndexOf('@')
+  if (at <= 0) return 'unknown-domain'
+  return email.slice(at + 1).toLowerCase()
 }
 
 /**
  * Mint a fresh reset token for an admin and supersede every previous
  * pending token for that admin (single outstanding token invariant).
+ *
+ * `newEmail` (ROOT-ADMIN LOGIN REPAIR): binds a candidate account email
+ * to the token — ONLY the audited recovery procedure (ops script) sets
+ * it; ordinary self-service resets pass nothing. The candidate must
+ * not belong to any other PlatformAdmin (uniqueness guard, fails
+ * closed) and is adopted at consume time by the reset route — the
+ * ownership proof being the emailed single-use token itself.
  */
 export async function issuePasswordReset(
   adminId: string,
-  context?: { requestIp?: string | null; userAgent?: string | null },
+  context?: { requestIp?: string | null; userAgent?: string | null; newEmail?: string },
 ): Promise<IssuedResetToken> {
   const token = randomBytes(32).toString('hex')
   const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS)
+
+  const newEmail = context?.newEmail?.trim().toLowerCase() || null
+  if (newEmail) {
+    const clash = await db.platformAdmin.findUnique({ where: { email: newEmail } })
+    if (clash) {
+      throw new Error(
+        `candidate email already belongs to a platform admin (domain=${maskedEmailDomain(newEmail)})`,
+      )
+    }
+  }
 
   // Supersede: previous pending tokens become used (they must never
   // consume later — the newest request is the only live path).
@@ -58,11 +107,12 @@ export async function issuePasswordReset(
       adminId,
       tokenHash: hashToken(token),
       expiresAt,
+      newEmail,
       requestIp: context?.requestIp?.slice(0, 60) ?? null,
       userAgent: context?.userAgent?.slice(0, 400) ?? null,
     },
   })
-  return { id: row.id, token, expiresAt }
+  return { id: row.id, token, expiresAt, newEmail }
 }
 
 export type ConsumeFailure = 'NOT_FOUND' | 'USED' | 'EXPIRED'
@@ -71,6 +121,10 @@ export interface ConsumeResult {
   ok: boolean
   failure?: ConsumeFailure
   adminId?: string
+  /** Consumed reset row id (notification dedupe key material). */
+  resetId?: string
+  /** The candidate email bound at issuance (audited recovery only). */
+  newEmail?: string | null
 }
 
 /**
@@ -94,7 +148,12 @@ export async function consumePasswordReset(rawToken: string): Promise<ConsumeRes
   })
   if (claimed.count === 1) {
     const row = await db.platformPasswordReset.findUnique({ where: { tokenHash } })
-    return { ok: true, adminId: row?.adminId }
+    return {
+      ok: true,
+      adminId: row?.adminId,
+      resetId: row?.id,
+      newEmail: row?.newEmail ?? null,
+    }
   }
   // Classify for the audit trail only.
   const row = await db.platformPasswordReset.findUnique({ where: { tokenHash } })
@@ -120,6 +179,15 @@ export async function invalidateAdminResetTokens(adminId: string): Promise<void>
  * provider ACCEPTED the message (delivery unconfirmed — see
  * docs/EMAIL.md honest status semantics); only 'failed' means the
  * recipient will definitely NOT get the email.
+ *
+ * ROOT-ADMIN LOGIN REPAIR — `candidateEmail` (audited recovery only):
+ * the recovery email is delivered TO the candidate mailbox (the
+ * ownership proof IS the delivery + single-use click-through) using
+ * the dedicated `platform-recovery-link` template, which explains
+ * that consuming the link sets a new password AND designates the
+ * candidate address as the account identity. The template stays
+ * PII-neutral beyond the recipient's own address (no old address is
+ * embedded — the recovery mail must be forwardable-safe).
  */
 export async function issueAndEmailPasswordReset(
   admin: { id: string; email: string; name: string },
@@ -128,22 +196,31 @@ export async function issueAndEmailPasswordReset(
     requestIp?: string | null
     userAgent?: string | null
     requestId?: string | null
+    candidateEmail?: string
   },
 ): Promise<{ issued: IssuedResetToken; emailStatus: 'sent' | 'queued' | 'skipped' | 'failed' }> {
   const issued = await issuePasswordReset(admin.id, {
     requestIp: opts.requestIp,
     userAgent: opts.userAgent,
+    newEmail: opts.candidateEmail,
   })
   const resetUrl = `${opts.origin.replace(/\/+$/, '')}/platform/reset-password?token=${issued.token}`
+  const isRecovery = Boolean(opts.candidateEmail)
   const result = await sendEmail({
-    to: admin.email,
-    template: 'platform-password-reset',
-    props: {
-      adminName: admin.name,
-      resetUrl,
-      expiresInMinutes: Math.floor(RESET_TOKEN_TTL_MS / 60_000),
-      requestIp: opts.requestIp ?? undefined,
-    },
+    to: isRecovery ? opts.candidateEmail! : admin.email,
+    template: isRecovery ? 'platform-recovery-link' : 'platform-password-reset',
+    props: isRecovery
+      ? {
+          adminName: admin.name,
+          resetUrl,
+          expiresInMinutes: Math.floor(RESET_TOKEN_TTL_MS / 60_000),
+        }
+      : {
+          adminName: admin.name,
+          resetUrl,
+          expiresInMinutes: Math.floor(RESET_TOKEN_TTL_MS / 60_000),
+          requestIp: opts.requestIp ?? undefined,
+        },
     dedupeKey: `platform-password-reset:${issued.id}`,
     requestId: opts.requestId ?? undefined,
   })
