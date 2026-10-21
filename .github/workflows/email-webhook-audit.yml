@@ -1,0 +1,69 @@
+# ============================================================
+# EMAIL / WEBHOOK LIVE AUDIT (sanitized) — dispatchable ops tool
+# ------------------------------------------------------------
+# Runs scripts/prod-release/email-webhook-audit.ts against LIVE
+# production configuration and reports, with ZERO secret exposure:
+#
+#   · Vercel env presence + targeting for the email-related keys
+#     (both active planes), config values (EMAIL_FROM/EMAIL_PROVIDER)
+#     and secret PRESENCE/consistency only;
+#   · Resend GET /domains + GET /webhooks (field-allowlisted);
+#   · read-only production outbox truth via the Supabase
+#     Management API (EmailDelivery + WebhookEvent SELECTs only).
+#
+# The workflow never writes, sends or mutates anything. It exists so
+# the email/webhook production state is verifiable WITHOUT anyone
+# ever handling raw provider credentials (they stay inside the
+# runner environment).
+#
+# Dispatch: Actions → "Email/Webhook Live Audit (sanitized)" → Run
+# (workflow_dispatch, any branch — the script reports its own commit).
+# ============================================================
+name: Email/Webhook Live Audit (sanitized)
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_db:
+        description: 'Skip the read-only production outbox queries'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: email-webhook-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Sanitized email/webhook audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Report the exact commit being audited from
+        run: |
+          echo "audit commit: ${GITHUB_SHA}"
+          git log -1 --format='%H %s'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # Zero-dependency script (fetch + node builtins only) — no install.
+      - name: Run the sanitized audit
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_PROJECT_ID_SCHOOL: ${{ secrets.VERCEL_PROJECT_ID_SCHOOL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: bun scripts/prod-release/email-webhook-audit.ts ${{ inputs.skip_db && '--skip-db' || '' }}
