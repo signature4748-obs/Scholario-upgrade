@@ -29,9 +29,16 @@ import { db } from './db'
 
 export async function resetLoginBuckets(emails: string[], loopbackIp = '127.0.0.1'): Promise<void> {
   const keys = new Set<string>([
-    ...emails.map((e) => `rl:login:acct:${e.toLowerCase()}`),
+    ...emails.flatMap((e) => [
+      `rl:login:acct:${e.toLowerCase()}`,
+      // ROOT-ADMIN LOGIN REPAIR — the platform plane's own account-bucket
+      // namespace (plane separation); heal it alongside the school key.
+      `rl:pf-login:acct:${e.toLowerCase()}`,
+    ]),
     'rl:login:ip:127.0.0.1',
     'rl:login:ip:::1',
+    'rl:pf-login:ip:127.0.0.1',
+    'rl:pf-login:ip:::1',
   ])
   if (loopbackIp !== '127.0.0.1' && loopbackIp !== '::1') {
     keys.add(`rl:login:ip:${loopbackIp}`)

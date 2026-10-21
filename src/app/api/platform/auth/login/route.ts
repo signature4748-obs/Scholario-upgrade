@@ -8,7 +8,7 @@ import {
   checkRateLimitStrict,
   resetRateLimit,
   clientIpFromHeaders,
-  loginAccountKey,
+  platformLoginAccountKey,
 } from '@/lib/security/rate-limit'
 import { parseJsonBody, strictBody, emailSchema, passwordInputSchema } from '@/lib/security/validation'
 import { platformAuditEvent } from '@/lib/platform/audit'
@@ -79,7 +79,11 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const accountKey = loginAccountKey(email)
+    // ROOT-ADMIN LOGIN REPAIR — the account bucket now lives in the
+    // platform plane's OWN namespace (rl:pf-login:acct:), so school-plane
+    // failed sign-ins for an address can never lock a platform admin (and
+    // vice versa). The school plane's rl:login:acct: behavior is unchanged.
+    const accountKey = platformLoginAccountKey(email)
     const accountVerdict = await checkRateLimitStrict(accountKey, RATE_LIMITS.platformLoginAccount)
     if (!accountVerdict.allowed) {
       await platformAuditEvent({

@@ -103,6 +103,29 @@ const platformPasswordResetPropsSchema = z.object({
   requestIp: z.string().trim().max(60).optional().default(''),
 })
 
+// ROOT-ADMIN LOGIN REPAIR — the AUDITED recovery procedure's mail. Same
+// token-hygiene contract as the reset above (raw token only in the link),
+// plus: the mail is addressed to the CANDIDATE mailbox (ownership proof
+// by delivery + single-use click-through), explains that consuming the
+// link ALSO verifies this address as the account identity, and never
+// mentions the previous account address (forwardable-safe).
+const platformRecoveryLinkPropsSchema = z.object({
+  adminName: z.string().trim().min(1).max(200),
+  resetUrl: z
+    .string()
+    .trim()
+    .min(16)
+    .max(2048)
+    .regex(/^https?:\/\//, 'resetUrl must be an absolute http(s) URL'),
+  expiresInMinutes: z.number().int().min(1).max(1440),
+})
+
+// ROOT-ADMIN LOGIN REPAIR — post-reset confirmation (no credentials, no
+// links — the reset already happened; this is the paper trail).
+const platformPasswordChangedPropsSchema = z.object({
+  adminName: z.string().trim().min(1).max(200),
+})
+
 // ─── shared branded wrapper ─────────────────────────────────────────────
 
 const PAGE_BG = '#f4f4f5' // neutral outer margin (monochrome gray)
@@ -288,6 +311,66 @@ function renderPlatformPasswordReset(
   }
 }
 
+// ─── 'platform-recovery-link' (ROOT-ADMIN LOGIN REPAIR) ────────────
+
+function renderPlatformRecoveryLink(
+  props: z.infer<typeof platformRecoveryLinkPropsSchema>,
+  branding: EmailBranding,
+): RenderedEmail {
+  const adminName = escapeHtml(props.adminName)
+  const resetHref = escapeHtml(props.resetUrl)
+  const minutes = escapeHtml(String(props.expiresInMinutes))
+
+  const body = [
+    heading('Recover your Scholario platform account'),
+    paragraph(`Dear <strong>${adminName}</strong>,`),
+    paragraph(
+      'A platform account recovery was initiated for the Scholario control plane through the audited operator procedure. This email was sent to the address designated to become the account identity.',
+    ),
+    paragraph(
+      'Opening the link below lets you choose a new password. Completing the form also <strong>verifies this email address and sets it as the administrator account identity</strong> for future sign-ins and account recovery.',
+    ),
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px 0;"><tr><td style="background:${sanitizeColor(branding.primaryColor)};border-radius:8px;">` +
+      `<a href="${resetHref}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Verify this address and set a new password</a>` +
+      `</td></tr></table>`,
+    paragraph(
+      `This link expires in <strong>${minutes} minutes</strong> and can be used only once. If you did not expect this recovery email, do not open the link — nothing changes on the account until the link is used.`,
+    ),
+    paragraph(
+      'For your security: after the reset, every active platform session for this account is signed out automatically.',
+    ),
+  ].join('\n')
+
+  return {
+    subject: 'Verify your email and recover your Scholario platform account',
+    html: brandedWrapper(branding, body),
+  }
+}
+
+// ─── 'platform-password-changed' (ROOT-ADMIN LOGIN REPAIR) ──────────
+
+function renderPlatformPasswordChanged(
+  props: z.infer<typeof platformPasswordChangedPropsSchema>,
+  branding: EmailBranding,
+): RenderedEmail {
+  const adminName = escapeHtml(props.adminName)
+  const body = [
+    heading('Your Scholario platform password was changed'),
+    paragraph(`Dear <strong>${adminName}</strong>,`),
+    paragraph(
+      'The password for your Scholario platform administrator account was just changed through a verified recovery link. All active platform sessions for this account were signed out.',
+    ),
+    paragraph(
+      'If this was you, no further action is needed — sign in with your new password. If this was NOT you, contact your platform operator immediately; every recovery and sign-in attempt is audited.',
+    ),
+  ].join('\n')
+
+  return {
+    subject: 'Your Scholario platform password was changed',
+    html: brandedWrapper(branding, body),
+  }
+}
+
 // ─── 'principal-invite' (founding principal credential delivery) ───────
 // PHASE 3 (school provisioning completion). The tempPassword prop is
 // only ever populated with a SERVER-GENERATED one-time bootstrap
@@ -408,6 +491,28 @@ export function renderTemplate(
         )
       }
       return renderPlatformPasswordReset(parsed.data, branding)
+    }
+    case 'platform-recovery-link': {
+      const parsed = platformRecoveryLinkPropsSchema.safeParse(props)
+      if (!parsed.success) {
+        throw new Error(
+          `invalid props for template 'platform-recovery-link': ${parsed.error.issues
+            .map((i) => `${i.path.join('.') || 'props'}: ${i.message}`)
+            .join('; ')}`,
+        )
+      }
+      return renderPlatformRecoveryLink(parsed.data, branding)
+    }
+    case 'platform-password-changed': {
+      const parsed = platformPasswordChangedPropsSchema.safeParse(props)
+      if (!parsed.success) {
+        throw new Error(
+          `invalid props for template 'platform-password-changed': ${parsed.error.issues
+            .map((i) => `${i.path.join('.') || 'props'}: ${i.message}`)
+            .join('; ')}`,
+        )
+      }
+      return renderPlatformPasswordChanged(parsed.data, branding)
     }
     case 'principal-invite': {
       const parsed = principalInvitePropsSchema.safeParse(props)

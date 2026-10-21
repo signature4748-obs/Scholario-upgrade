@@ -205,6 +205,86 @@ backdoors, auto-admin Google accounts, email-match login.
 
 ---
 
+## 3-A. Locked-out root admin with a dead recovery channel (ROOT-ADMIN
+LOGIN REPAIR — audited email-recovery procedure)
+
+Production incident (2026-10-21) that motivated this section: the root
+admin exhausted the per-account login bucket (5 failures / 15 min) and
+kept retrying; the account's configured address
+(`admin@scholario.cloud`) could not receive recovery mail (the Resend
+test-domain sender delivers ONLY to the account owner's address), and
+no second `admins.manage` holder existed for dual control. Three
+guarantees now hold:
+
+1. **Bounded lockouts** — the shared-bucket abuse restart fires at most
+   ONCE per count cycle (the single attempt observing the first 2×limit
+   crossing). Sustained retries can no longer extend a lockout
+   indefinitely; every lockout provably expires (local extensions
+   still add graduated backoff, bounded at 4 and decaying on roll).
+2. **Lockout supersession on verified recovery** — a CONSUMED
+   single-use reset token clears the per-account login buckets for the
+   admin's (and the adopted) email on both namespaces
+   (`rl:pf-login:acct:` + the legacy `rl:login:acct:`). The emailed
+   link is a stronger identity proof than waiting out the counter; a
+   locked-out administrator recovers through the link, not by asking.
+   The per-IP bucket is deliberately untouched (guards cross-account
+   guessing from one source; self-expires).
+3. **Plane-separated account buckets** — the platform login keeps its
+   own namespace (`rl:pf-login:acct:`), so school-plane failures for
+   an address can never lock a platform admin (and vice versa).
+
+### The audited recovery procedure (when the administrator is locked
+out AND the account address cannot receive mail)
+
+```
+Operator terminal (production DATABASE_URL holder — the same channel
+as the migration pipeline; NOT an application HTTP endpoint):
+
+  DATABASE_URL=… bun scripts/prod-release/root-email-recovery.ts \
+    --email admin@scholario.cloud \
+    --new-email owner@gmail.com [--origin https://…-platform…] [--dry-run]
+
+Guards (fail-closed): --email → ACTIVE, isRoot=true PlatformAdmin;
+--new-email → valid address NOT owned by any PlatformAdmin; production
+DB + https link origin required. Nothing is exposed; the raw token is
+printed NOWHERE.
+
+  → issuePasswordReset(admin, { newEmail })  (token binds the candidate)
+  → recovery link emailed TO THE CANDIDATE MAILBOX (platform-recovery-link)
+  → audit platform.account_recovery.initiated (masked domains only)
+
+THE OWNERSHIP VERIFICATION is the delivery itself: only the candidate
+mailbox can hold the single-use link. The Gmail holder clicks →
+/platform/reset-password → chooses a new password → consuming the token
+atomically:
+    · sets the new scrypt password,
+    · designates the VERIFIED candidate as the account email
+      (fresh uniqueness re-check inside the transaction — a claimed
+      candidate fails CLOSED: nothing changes),
+    · clears the per-account login lockout (both namespaces),
+    · revokes EVERY live platform session,
+    · sends the password-changed notification (honest delivery row),
+    · audits platform.password_reset.completed +
+      platform.account_email.changed.
+
+Until the link is consumed, NOTHING changes on the account — an
+attacker (or a typo) cannot redirect the account identity without
+controlling the candidate mailbox. A mere forgot-password request never
+clears a lockout and never proves anything.
+```
+
+The prior terminal-delivered bootstrap
+(`scripts/prod-release/root-credential-bootstrap.ts`) remains available
+but is strictly weaker (operator sees a one-time password; no mailbox
+ownership is proven; the account email stays unreachable). Prefer this
+procedure whenever a working recovery mailbox can be designated.
+
+Migration: `20261021120000_platform_password_reset_new_email`
+(`PlatformPasswordReset.newEmail`, additive, nullable — ordinary
+self-service resets keep `NULL` and behave byte-identically).
+
+---
+
 ## 4. API surface summary
 
 | Route | Auth | Notes |

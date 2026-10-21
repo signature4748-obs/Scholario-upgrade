@@ -2838,6 +2838,13 @@ model PlatformPasswordReset {
   usedAt    DateTime?
   /// Hard expiry (30 minutes from issuance). Expired rows are rejected.
   expiresAt DateTime
+  /// ROOT-ADMIN LOGIN REPAIR — the candidate account email designated by
+  /// the AUDITED recovery procedure (ops script). NULL = ordinary
+  /// self-service reset (no email change). Non-null rows adopt this
+  /// email atomically at consume time — the ownership proof being the
+  /// emailed single-use token itself (only the candidate mailbox can
+  /// present it). Uniqueness is enforced at issuance AND consume time.
+  newEmail  String?
   createdAt DateTime  @default(now())
   /// Request context for the audit viewer (never the raw token).
   requestIp  String?
