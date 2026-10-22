@@ -93,21 +93,28 @@ function scriptFetch(calls: ScriptedCall[]): { recorded: RecordedCall[] } {
 }
 
 /** The full provider surface for a happy-path repair run — the REAL
- *  Resend GET shape (endpointUrl, not url) as live-verified on
- *  2026-10-22. */
+ *  Resend API shapes: create body field `endpoint` (the provider's own
+ *  live 422 named it; documented), create response top-level
+ *  `{ id, signing_secret }` (documented), GET list `data[]` items with
+ *  `endpoint`/`endpointUrl` + `status` + `events` (documented +
+ *  live-observed). */
 const FRESH_SECRET = 'whsec_STUB_SECRET_VALUE_never_real_0123456789abcdef'
 
 function happyPathCalls(): ScriptedCall[] {
   return [
-    // Resend: GET the existing (stale, non-delivering) endpoints.
+    // Resend: GET the existing (stale, non-delivering) endpoints — the
+    // two rows use the two observed GET URL field shapes to pin the
+    // shape-agnostic parsing (and the documented per-item `status`
+    // enum: the live non-delivery posture is a registered-but-DISABLED
+    // endpoint — exactly what the pre-repair inspection surfaces).
     {
       method: 'GET',
       urlPrefix: 'https://api.resend.com/webhooks',
       status: 200,
       body: {
         data: [
-          { id: 'wh_live_old1', endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend', events: ['email.delivered'] },
-          { id: 'wh_live_old2', endpointUrl: 'https://stale.example.com/hook', events: [] },
+          { id: 'wh_live_old1', endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend', status: 'disabled', events: ['email.delivered'] },
+          { id: 'wh_live_old2', endpoint: 'https://stale.example.com/hook', status: 'enabled', events: [] },
         ],
       },
     },
@@ -118,7 +125,22 @@ function happyPathCalls(): ScriptedCall[] {
       status: 201,
       body: { id: 'wh_live_fresh', signing_secret: FRESH_SECRET },
     },
-    // Then the OLD endpoints are removed (the fresh one delivers).
+    // VALIDATION (post-create GET, documented list shape): the fresh
+    // endpoint is registered at the canonical URL, ENABLED, subscribed
+    // to the full lifecycle set — BEFORE any old endpoint is removed.
+    {
+      method: 'GET',
+      urlPrefix: 'https://api.resend.com/webhooks',
+      status: 200,
+      body: {
+        data: [
+          { id: 'wh_live_old1', endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend', status: 'disabled', events: ['email.delivered'] },
+          { id: 'wh_live_old2', endpoint: 'https://stale.example.com/hook', status: 'enabled', events: [] },
+          { id: 'wh_live_fresh', endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend', status: 'enabled', events: [...WEBHOOK_REPAIR_EVENTS] },
+        ],
+      },
+    },
+    // Only after validation passes are the OLD endpoints removed.
     {
       method: 'DELETE',
       urlPrefix: 'https://api.resend.com/webhooks/wh_live_old1',
@@ -258,13 +280,13 @@ describe('WEBHOOK REPAIR · fail-closed preflight', () => {
         method: 'GET',
         urlPrefix: 'https://api.resend.com/webhooks',
         status: 200,
-        body: { data: [{ id: 'wh_live_old1', endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend', events: ['email.delivered'] }] },
+        body: { data: [{ id: 'wh_live_old1', endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend', events: ['email.delivered'] }] },
       },
       {
         method: 'POST',
         urlPrefix: 'https://api.resend.com/webhooks',
         status: 422,
-        body: { message: 'endpointUrl is required' },
+        body: { statusCode: 422, message: 'Missing `endpoint` field.', name: 'missing_required_field' },
       },
     ]
     const { recorded } = scriptFetch(calls)
@@ -277,7 +299,7 @@ describe('WEBHOOK REPAIR · fail-closed preflight', () => {
     expect(caught).toBeInstanceOf(AppError)
     // The provider's own validation text is operator-facing — surfaced.
     expect(String((caught as AppError).publicMessage)).toContain('422')
-    expect(String((caught as AppError).publicMessage)).toContain('endpointUrl')
+    expect(String((caught as AppError).publicMessage)).toContain('Missing `endpoint` field')
     // NOTHING was deleted before the failed create (create-first).
     expect(recorded.some((c) => c.method === 'DELETE')).toBe(false)
     expect(String((caught as AppError).publicMessage)).not.toContain(FRESH_SECRET)
@@ -287,20 +309,28 @@ describe('WEBHOOK REPAIR · fail-closed preflight', () => {
 // ─── 2. the repair sequence itself ───────────────────────────────────────
 
 describe('WEBHOOK REPAIR · recreate + secret sync + redeploy', () => {
-  test('happy path: CREATE-FIRST at the canonical endpointUrl with all six events, then deletes the old endpoints, syncs + redeploys both planes', async () => {
+  test('happy path: CREATE-FIRST at the canonical endpointUrl with all six events, VALIDATES the fresh endpoint provider-side, then deletes the old endpoints, syncs + redeploys both planes', async () => {
     const { recorded } = scriptFetch(happyPathCalls())
     const result = await repairResendWebhook()
 
-    // Provider surface — the ORDER is the create-first contract: GET →
-    // POST create → DELETE old1 → DELETE old2 (never deletes before a
-    // successful create).
+    // Provider surface — the ORDER is the create-first + validate-before-
+    // delete contract: GET → POST create → GET validation → DELETE old1
+    // → DELETE old2 (never deletes before a successful, VALIDATED create).
     const createIdx = recorded.findIndex((c) => c.method === 'POST' && c.url === 'https://api.resend.com/webhooks')
     const firstDeleteIdx = recorded.findIndex((c) => c.method === 'DELETE')
     expect(createIdx).toBeGreaterThan(-1)
     expect(firstDeleteIdx).toBeGreaterThan(createIdx)
+    const validateGetIdx = recorded.findIndex(
+      (c, i) => c.method === 'GET' && c.url === 'https://api.resend.com/webhooks' && i > createIdx,
+    )
+    expect(validateGetIdx).toBeGreaterThan(createIdx)
+    expect(firstDeleteIdx).toBeGreaterThan(validateGetIdx)
     const create = recorded[createIdx]
+    // The create body field is `endpoint` — named by the provider's own
+    // 422 ("Missing `endpoint` field.") on the live second attempt and
+    // confirmed by the provider documentation.
     expect(create.body).toEqual({
-      endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend',
+      endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend',
       events: [...WEBHOOK_REPAIR_EVENTS],
       description: expect.any(String),
     })
@@ -342,6 +372,18 @@ describe('WEBHOOK REPAIR · recreate + secret sync + redeploy', () => {
       'https://scholario-platform.vercel.app/api/webhooks/resend',
       'https://stale.example.com/hook',
     ])
+    // The pre-repair inspection surfaced the enablement enum: the old
+    // canonical endpoint was registered-but-DISABLED at the provider.
+    expect(result.found.map((f) => f.status)).toEqual(['disabled', 'enabled'])
+    // The validated fresh endpoint: registered, canonical, ENABLED,
+    // full lifecycle event set — the provider-side proof the replacement
+    // delivers BEFORE any old endpoint was removed.
+    expect(result.validated).toEqual({
+      id: 'wh_live_fresh',
+      url: 'https://scholario-platform.vercel.app/api/webhooks/resend',
+      status: 'enabled',
+      events: [...WEBHOOK_REPAIR_EVENTS],
+    })
     expect(result.deleted.map((d) => d.id)).toEqual(['wh_live_old1', 'wh_live_old2'])
     expect(result.deleteWarnings).toEqual([])
     expect(result.secretSynced).toEqual({ 'scholario-platform': 'rotated', 'scholario-app': 'created' })
@@ -369,6 +411,123 @@ describe('WEBHOOK REPAIR · recreate + secret sync + redeploy', () => {
     const serialized = JSON.stringify(result)
     expect(serialized).not.toContain('whsec_')
     expect(serialized).not.toContain('signing')
+  })
+
+  test('a create response carrying the secret under the alternate `secret` name is still captured (shape-tolerant parsing)', async () => {
+    const calls = happyPathCalls()
+    const createIdx = calls.findIndex((c) => c.method === 'POST' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    calls[createIdx] = { method: 'POST', urlPrefix: 'https://api.resend.com/webhooks', status: 201, body: { id: 'wh_live_fresh', secret: FRESH_SECRET } }
+    scriptFetch(calls)
+    const result = await repairResendWebhook()
+    expect(result.ok).toBe(true)
+    expect(result.createdWebhookId).toBe('wh_live_fresh')
+    expect(JSON.stringify(result)).not.toContain(FRESH_SECRET)
+  })
+
+  // ─── 2a. validate the replacement BEFORE removing the old surface ──────
+
+  test('validation failure (fresh endpoint reported DISABLED) rolls the fresh webhook back and NEVER touches the old endpoints', async () => {
+    const calls = happyPathCalls()
+    const createIdx = calls.findIndex((c) => c.method === 'POST' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    const validationIdx = calls.findIndex((c, i) => i > createIdx && c.method === 'GET' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    calls[validationIdx] = {
+      method: 'GET',
+      urlPrefix: 'https://api.resend.com/webhooks',
+      status: 200,
+      body: {
+        data: [
+          { id: 'wh_live_old1', endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend', status: 'disabled', events: ['email.delivered'] },
+          { id: 'wh_live_old2', endpoint: 'https://stale.example.com/hook', status: 'enabled', events: [] },
+          { id: 'wh_live_fresh', endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend', status: 'disabled', events: [...WEBHOOK_REPAIR_EVENTS] },
+        ],
+      },
+    }
+    const { recorded } = scriptFetch(calls)
+    let caught: unknown
+    try {
+      await repairResendWebhook()
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(AppError)
+    const msg = String((caught as AppError).publicMessage)
+    expect(msg).toContain('FAILED provider-side validation')
+    expect(msg).toContain("status is 'disabled'")
+    expect(msg).toContain('left untouched')
+    expect(msg).not.toContain(FRESH_SECRET)
+    // The OLD endpoints were never deleted.
+    expect(recorded.some((c) => c.method === 'DELETE' && c.url.includes('wh_live_old'))).toBe(false)
+    // The fresh (invalid) webhook WAS rolled back.
+    expect(recorded.some((c) => c.method === 'DELETE' && c.url === 'https://api.resend.com/webhooks/wh_live_fresh')).toBe(true)
+  })
+
+  test('validation failure (fresh id missing from the provider list) rolls the fresh webhook back', async () => {
+    const calls = happyPathCalls()
+    const createIdx = calls.findIndex((c) => c.method === 'POST' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    const validationIdx = calls.findIndex((c, i) => i > createIdx && c.method === 'GET' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    calls[validationIdx] = {
+      method: 'GET',
+      urlPrefix: 'https://api.resend.com/webhooks',
+      status: 200,
+      body: { data: [{ id: 'wh_live_old1', endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend', status: 'disabled', events: ['email.delivered'] }] },
+    }
+    const { recorded } = scriptFetch(calls)
+    let caught: unknown
+    try {
+      await repairResendWebhook()
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(AppError)
+    expect(String((caught as AppError).publicMessage)).toContain('does not appear')
+    expect(recorded.some((c) => c.method === 'DELETE' && c.url.includes('wh_live_old'))).toBe(false)
+    expect(recorded.some((c) => c.method === 'DELETE' && c.url === 'https://api.resend.com/webhooks/wh_live_fresh')).toBe(true)
+  })
+
+  test('a fresh endpoint subscribed to a PARTIAL event set fails validation (the full lifecycle set is the contract)', async () => {
+    const calls = happyPathCalls()
+    const createIdx = calls.findIndex((c) => c.method === 'POST' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    const validationIdx = calls.findIndex((c, i) => i > createIdx && c.method === 'GET' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    calls[validationIdx] = {
+      method: 'GET',
+      urlPrefix: 'https://api.resend.com/webhooks',
+      status: 200,
+      body: {
+        data: [
+          { id: 'wh_live_fresh', endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend', status: 'enabled', events: ['email.delivered'] },
+        ],
+      },
+    }
+    const { recorded } = scriptFetch(calls)
+    let caught: unknown
+    try {
+      await repairResendWebhook()
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(AppError)
+    expect(String((caught as AppError).publicMessage)).toContain('missing events')
+    expect(recorded.some((c) => c.method === 'DELETE' && c.url === 'https://api.resend.com/webhooks/wh_live_fresh')).toBe(true)
+  })
+
+  test('a validation status that is not reported (field absent) still passes — only a reported non-enabled status fails', async () => {
+    const calls = happyPathCalls()
+    const createIdx = calls.findIndex((c) => c.method === 'POST' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    const validationIdx = calls.findIndex((c, i) => i > createIdx && c.method === 'GET' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    calls[validationIdx] = {
+      method: 'GET',
+      urlPrefix: 'https://api.resend.com/webhooks',
+      status: 200,
+      body: {
+        data: [
+          { id: 'wh_live_fresh', endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend', events: [...WEBHOOK_REPAIR_EVENTS] },
+        ],
+      },
+    }
+    scriptFetch(calls)
+    const result = await repairResendWebhook()
+    expect(result.ok).toBe(true)
+    expect(result.validated.status).toBe('')
   })
 
   test('recreate without a returned signing secret fails with the manual-step story', async () => {

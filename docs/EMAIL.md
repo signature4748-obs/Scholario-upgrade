@@ -203,10 +203,19 @@ while `GET /webhooks` looked perfect). The deployment itself holds the
 real key at runtime, so the repair also exists as an audited,
 permission-gated in-app action:
 `POST /api/platform/operations/email-webhook/repair` (permission
-`ops.read`; body `{ "confirm": "recreate-webhook" }`). It deletes the
-provider's webhook endpoints, recreates ONE endpoint at the canonical
-platform URL with all six lifecycle events, captures the fresh signing
-secret in memory, syncs `RESEND_WEBHOOK_SECRET` to both planes via the
+`ops.read`; body `{ "confirm": "recreate-webhook" }`). Using the
+provider's REAL API contract (live 422 + documented: create body field
+`endpoint`; create response top-level `{ id, signing_secret }`), it
+creates the fresh endpoint FIRST (a failed create can never destroy the
+existing webhook surface), then VALIDATES the replacement with a
+provider-side GET (the fresh endpoint must be registered at the
+canonical platform URL, subscribed to all six lifecycle events, and
+`enabled` when the provider reports the documented per-item `status`
+enum — a failed validation rolls the fresh webhook back and the
+pre-existing endpoints are never touched), and only then removes the
+OLD endpoints so the provider surface is exactly one canonical
+webhook. It captures the fresh signing secret in memory, syncs
+`RESEND_WEBHOOK_SECRET` to both planes via the
 ops Vercel token, triggers a redeploy of both planes (runtime env
 changes require a new deployment), and audits every outcome
 (`platform.ops.email_webhook.repaired` — the secret itself is never
@@ -219,7 +228,11 @@ email card ("Repair provider webhook"), and the dispatchable
 (`.github/workflows/email-webhook-repair.yml` →
 `scripts/prod-release/email-webhook-repair.ts`) performs the same
 through the REAL production session transport with a self-owned
-fixture admin, waits for BOTH redeploys to go READY, and purges the
+fixture admin, printing a READ-ONLY pre-repair inspection of the
+current provider webhook surface (registered / enabled / URL /
+subscribed events — the documented `status` enum is what makes
+"registered-but-DISABLED" visible) before any mutation, then waits
+for BOTH redeploys to go READY, and purges the
 fixture — then re-dispatch `Email Live Delivery Verification` to prove
 delivered events now upgrade rows QUEUED→SENT end-to-end.
 
