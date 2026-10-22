@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { randomBytes } from 'node:crypto'
 import { db } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
-import { resolveProvisionedPassword } from '@/lib/account-provisioning'
+import { bootstrapCredentialExpiresAt, resolveProvisionedPassword } from '@/lib/account-provisioning'
 import { AppError } from '@/lib/security/errors'
 import { withPlatform } from '@/lib/platform/authz'
 import { platformAuditEvent } from '@/lib/platform/audit'
@@ -787,7 +787,7 @@ export async function POST(req: NextRequest) {
           db.user.findFirst({
             where: { schoolId: existingBySlug.id, role: 'PRINCIPAL' },
             orderBy: { createdAt: 'asc' },
-            select: { id: true, email: true, name: true, mustChangePassword: true },
+            select: { id: true, email: true, name: true, mustChangePassword: true, credentialExpiresAt: true },
           }),
           db.platformAuditLog.findFirst({
             where: {
@@ -856,6 +856,10 @@ export async function POST(req: NextRequest) {
               previewUrl: `/?tenant=${encodeURIComponent(existingBySlug.slug)}`,
             },
             mustChangePassword: existingPrincipal.mustChangePassword,
+            // Still-pending bootstrap credential expiry (same additive
+            // field as the creation response — null only for grandfathered
+            // credentials provisioned before the TTL existed).
+            credentialExpiresAt: existingPrincipal.credentialExpiresAt?.toISOString() ?? null,
             invitation,
             nextStep: 'activate',
             replayNote:
@@ -915,7 +919,7 @@ export async function POST(req: NextRequest) {
         status: string
         plan: string
       }
-      let principal: { id: string; email: string; name: string | null }
+      let principal: { id: string; email: string; name: string | null; credentialExpiresAt: Date | null }
       let domainRecord: { hostname: string; status: string } | null = null
       let bootstrapCounts: { classes: number; sections: number; subjects: number; rooms: number } = {
         classes: 0,
@@ -1092,6 +1096,13 @@ export async function POST(req: NextRequest) {
               role: 'PRINCIPAL',
               status: 'ACTIVE',
               mustChangePassword: true,
+              // The one-time bootstrap credential is TIME-LIMITED (48h,
+              // the shared account-provisioning convention): login refuses
+              // an expired bootstrap credential with CREDENTIAL_EXPIRED;
+              // the recovery path is re-issue-credential (fresh credential
+              // + fresh window). securely generated ✓ time-limited ✓
+              // single-use (forced change) ✓.
+              credentialExpiresAt: bootstrapCredentialExpiresAt(),
               ...(body.principalPhone ? { phone: body.principalPhone } : {}),
             },
           })
@@ -1290,8 +1301,10 @@ export async function POST(req: NextRequest) {
         // replace it at first sign-in — server-enforced forced change).
         ...(generated ? { tempPassword: principalPassword } : {}),
         // The forced-change contract for the client: the principal's
-        // bootstrap credential is single-purpose.
+        // bootstrap credential is single-purpose AND time-limited (the
+        // operator can see when the one-time credential expires).
         mustChangePassword: true,
+        credentialExpiresAt: principal.credentialExpiresAt?.toISOString() ?? null,
         bootstrap: bootstrapCounts,
         // The AGREED commercial terms as persisted (mission §2 STEP 3).
         // paymentsRecorded is the honest count (0) — provisioning records

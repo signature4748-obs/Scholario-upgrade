@@ -66,6 +66,7 @@ truth for onboarding — copy everything you need from it:
 | `publicUrl` | the school's canonical public URL: `/s/<slug>` (307s to the tenant website) |
 | `tempPassword` | **present only when the server generated it** — shown once, never stored, never logged; the principal must replace it at first sign-in |
 | `mustChangePassword` | always `true` — the bootstrap credential is single-purpose |
+| `credentialExpiresAt` | the one-time bootstrap credential's expiry (48h, `BOOTSTRAP_CREDENTIAL_TTL_HOURS` — shared with the admissions/reset conventions). Login with an expired bootstrap credential is refused with `CREDENTIAL_EXPIRED`; the recovery is re-issue (fresh credential + fresh window). Credentials provisioned before the TTL existed have no expiry (grandfathered). |
 | `domain.customDomain` | `{ hostname, status: 'PENDING' }` if a custom domain was supplied |
 | `domain.tempDomain` | `<slug>.scholario.cloud` — the derived platform subdomain (data, never a custom domain) |
 | `domain.previewUrl` | `/?tenant=<slug>` — preview the website before DNS |

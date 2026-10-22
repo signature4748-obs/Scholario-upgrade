@@ -5,7 +5,7 @@ import { withAuthz } from '@/lib/security/authz'
 import { AppError, newRequestId } from '@/lib/security/errors'
 import { emailSchema } from '@/lib/security/validation'
 import { hashPassword } from '@/lib/auth'
-import { resolveProvisionedPassword } from '@/lib/account-provisioning'
+import { resolveProvisionedPassword, bootstrapCredentialExpiresAt } from '@/lib/account-provisioning'
 import { auditEvent } from '@/lib/security/audit'
 import { assertAdmissionsIssuanceEnabled } from '@/lib/admissions/feature-flag'
 import { requireSchoolAcademicYear } from '@/lib/admissions/academic-year'
@@ -57,7 +57,6 @@ const enrolBodySchema = z.object({
 })
 
 /** Bootstrap credential lifetime (hours). */
-const CREDENTIAL_TTL_HOURS = 48
 
 export async function POST(
   req: NextRequest,
@@ -253,7 +252,7 @@ async function enrolApplication(opts: {
       // 5 — the student account. The bootstrap credential is EXPIRING
       // and forces a first-password-change (existing machinery).
       const { password: bootstrap, generated } = resolveProvisionedPassword(password)
-      const credentialExpiresAt = new Date(Date.now() + CREDENTIAL_TTL_HOURS * 3600 * 1000)
+      const credentialExpiresAt = bootstrapCredentialExpiresAt()
       const user = await tx.user.create({
         data: {
           schoolId,

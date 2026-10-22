@@ -13,18 +13,30 @@ import {
   composeDiagnoses,
   diagnoseEmailTestingMode,
   diagnoseEmailAuthInvalid,
+  diagnoseEmailDeliveryEvidenceGap,
   diagnoseDatabaseIssues,
   diagnoseTenantMismatchBurst,
   diagnoseDeploymentFailure,
   diagnoseSyncFailure,
 } from '../../src/lib/ops/diagnose'
 
-const EMAIL_OK = { domainsTotal: 2, domainsVerified: 2, failureClasses: {}, statusCounts: {} }
+const EMAIL_OK = {
+  domainsTotal: 2,
+  domainsVerified: 2,
+  failureClasses: {},
+  statusCounts: {},
+  webhookSecretConfigured: true,
+  resendWebhookEvents: 5,
+  queuedWithProviderMessageId: 0,
+}
 const EMAIL_TESTING = {
   domainsTotal: 0,
   domainsVerified: 0,
   failureClasses: { 'testing-recipient-restricted': 7 },
   statusCounts: { FAILED: 7, SENT: 2 },
+  webhookSecretConfigured: false,
+  resendWebhookEvents: 0,
+  queuedWithProviderMessageId: 4,
 }
 const DB_OK = { databaseFailureErrors: 0, connectivity: 'healthy' as const, connectivityLatencyMs: 12 }
 const AUTHZ_OK = { tenantMismatches: 0, forbiddenTotal: 0, platformLoginFailures: 0 }
@@ -68,6 +80,42 @@ describe('EMAIL-2 — invalid API key', () => {
 
   test('no auth failures → does not fire', () => {
     expect(diagnoseEmailAuthInvalid(EMAIL_TESTING)).toBeNull()
+  })
+})
+
+describe('EMAIL-3 — delivery-evidence gap (webhook not delivering)', () => {
+  test('QUEUED-with-message-id rows + zero webhook events + no signing secret → CONFIRMED', () => {
+    const d = diagnoseEmailDeliveryEvidenceGap({
+      ...EMAIL_OK,
+      webhookSecretConfigured: false,
+      resendWebhookEvents: 0,
+      queuedWithProviderMessageId: 9,
+    })
+    expect(d).not.toBeNull()
+    expect(d!.status).toBe('confirmed')
+    expect(d!.rule).toBe('EMAIL-3')
+    expect(d!.evidence.some((e) => e.includes('ZERO Resend webhook events'))).toBe(true)
+    expect(d!.evidence.some((e) => e.includes('fail-closed'))).toBe(true)
+    expect(d!.nextStep).toContain('RESEND_WEBHOOK_SECRET')
+    expect(d!.nextStep).toContain('BOTH active projects')
+  })
+
+  test('QUEUED rows but events arriving (webhook partially fixed) → likely, never a silent pass', () => {
+    const d = diagnoseEmailDeliveryEvidenceGap({
+      ...EMAIL_OK,
+      webhookSecretConfigured: true,
+      resendWebhookEvents: 3,
+      queuedWithProviderMessageId: 4,
+    })
+    expect(d).not.toBeNull()
+    expect(d!.status).toBe('likely')
+    expect(d!.evidence.join(' ')).toContain('some evidence is arriving')
+  })
+
+  test('no provider-accepted mail awaiting evidence → does not fire', () => {
+    expect(
+      diagnoseEmailDeliveryEvidenceGap({ ...EMAIL_OK, queuedWithProviderMessageId: 0, resendWebhookEvents: 0, webhookSecretConfigured: false }),
+    ).toBeNull()
   })
 })
 
@@ -148,8 +196,10 @@ describe('composeDiagnoses — only evidence-backed verdicts surface', () => {
       deployment: { failedDeployments: 2, latestState: 'ERROR' },
       sync: { lastRunStatus: 'failed', lastRunError: 'boom', ageMinutes: 60 },
     })
-    expect(out.length).toBeGreaterThanOrEqual(5)
+    expect(out.length).toBeGreaterThanOrEqual(6)
     expect(out.every((d) => ['confirmed', 'likely', 'insufficient-evidence'].includes(d.status))).toBe(true)
     expect(out.every((d) => d.evidence.length > 0 && d.nextStep.length > 0)).toBe(true)
+    // EMAIL-3 is among them (EMAIL_TESTING carries queued rows + zero events + no secret)
+    expect(out.some((d) => d.rule === 'EMAIL-3')).toBe(true)
   })
 })

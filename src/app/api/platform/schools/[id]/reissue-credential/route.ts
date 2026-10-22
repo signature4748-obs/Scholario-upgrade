@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
-import { generateTempPassword } from '@/lib/account-provisioning'
+import { bootstrapCredentialExpiresAt, generateTempPassword } from '@/lib/account-provisioning'
 import { AppError } from '@/lib/security/errors'
 import { withPlatform } from '@/lib/platform/authz'
 import { platformAuditEvent } from '@/lib/platform/audit'
@@ -108,6 +108,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         data: {
           passwordHash: hashPassword(tempPassword),
           mustChangePassword: true,
+          // The re-issued bootstrap credential gets a FRESH 48h window
+          // (time-limited, same convention as the original invite).
+          credentialExpiresAt: bootstrapCredentialExpiresAt(),
         },
       })
 
@@ -144,9 +147,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         school: { id: school.id, slug: school.slug, name: school.name },
         principal: { id: principal.id, email: principal.email, name: principal.name },
         // The NEW one-time bootstrap credential — surfaced EXACTLY ONCE
-        // here (same convention as the provision response).
+        // here (same convention as the provision response) with its fresh
+        // expiry window.
         tempPassword,
         mustChangePassword: true,
+        credentialExpiresAt: bootstrapCredentialExpiresAt(reissuedAt).toISOString(),
         revokedSessions: revokedSessions.count,
         invitation,
       }

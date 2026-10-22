@@ -7,8 +7,11 @@
 //
 //   · which provider is active and why (explicit/auto, config state)
 //   · Resend: key present? webhook secret present? sender address?
-//     (optionally a LIVE read-only GET /domains — verified-domain
-//     count, so "testing mode / no domains" is visible in-app)
+//     (optionally LIVE read-only provider queries — GET /domains
+//     verified-domain count, so "testing mode / no domains" is visible
+//     in-app, AND GET /webhooks: the registered endpoints with their
+//     URLs + subscribed events, so "webhook missing/disabled/stale"
+//     answers "why do delivered emails stay QUEUED" in-app)
 //   · Gmail SMTP: creds present? masked account address?
 //   · outbox: status counts (last 7 days) + the latest failure's
 //     parsed error class — the 403 testing-restriction shows up as
@@ -27,12 +30,28 @@ import { resolveProvider } from './index'
 import type { EmailProviderId } from './types'
 
 const RESEND_DOMAINS_ENDPOINT = 'https://api.resend.com/domains'
+const RESEND_WEBHOOKS_ENDPOINT = 'https://api.resend.com/webhooks'
 const LIVE_CHECK_TIMEOUT_MS = 4_000
 
 export interface ResendDomainSummary {
   liveCheck: 'ok' | 'failed' | 'skipped'
   total: number | null
   verified: number | null
+}
+
+/** One registered provider webhook endpoint (field-allowlisted — id/url/events ONLY). */
+export interface ResendWebhookEndpoint {
+  id: string
+  url: string
+  events: string[]
+}
+
+export interface ResendWebhookSummary {
+  liveCheck: 'ok' | 'failed' | 'skipped'
+  total: number | null
+  /** Empty array with liveCheck 'ok' = ZERO endpoints registered (the
+   * delivered-mail-stays-QUEUED root cause, visible in-app). */
+  endpoints: ResendWebhookEndpoint[]
 }
 
 export interface EmailDiagnostics {
@@ -49,6 +68,7 @@ export interface EmailDiagnostics {
     fromAddress: string
     webhookSecretPresent: boolean
     domains: ResendDomainSummary
+    webhooks: ResendWebhookSummary
   }
   gmailSmtp: {
     userPresent: boolean
@@ -88,6 +108,36 @@ async function fetchResendDomainSummary(apiKey: string): Promise<ResendDomainSum
   }
 }
 
+/** Live, read-only Resend webhook endpoint list (GET /webhooks, 4s timeout).
+ * STRICT FIELD ALLOWLIST: id + url + events only — anything else the
+ * provider returns (in particular any secret-bearing field) is dropped
+ * before this function returns. Exported for the allowlist unit test. */
+export async function fetchResendWebhookSummary(apiKey: string): Promise<ResendWebhookSummary> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), LIVE_CHECK_TIMEOUT_MS)
+  try {
+    const res = await fetch(RESEND_WEBHOOKS_ENDPOINT, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    })
+    if (!res.ok) return { liveCheck: 'failed', total: null, endpoints: [] }
+    const body = (await res.json().catch(() => null)) as { data?: Array<Record<string, unknown>> } | null
+    const list = Array.isArray(body?.data) ? body.data : []
+    const endpoints: ResendWebhookEndpoint[] = []
+    for (const w of list) {
+      const id = typeof w.id === 'string' ? w.id : ''
+      const url = typeof w.url === 'string' ? w.url : ''
+      const events = Array.isArray(w.events) ? w.events.filter((e): e is string => typeof e === 'string') : []
+      if (id || url) endpoints.push({ id, url, events })
+    }
+    return { liveCheck: 'ok', total: list.length, endpoints }
+  } catch {
+    return { liveCheck: 'failed', total: null, endpoints: [] }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /**
  * Secret-safe email diagnostics. `liveProviderCheck` performs a
  * read-only authenticated GET /domains against Resend (only when the
@@ -104,6 +154,11 @@ export async function getEmailDiagnostics(liveProviderCheck = false): Promise<Em
       ? await fetchResendDomainSummary(apiKey)
       : { liveCheck: 'skipped', total: null, verified: null }
     : { liveCheck: 'skipped', total: null, verified: null }
+  const webhooks: ResendWebhookSummary = liveProviderCheck
+    ? apiKey
+      ? await fetchResendWebhookSummary(apiKey)
+      : { liveCheck: 'skipped', total: null, endpoints: [] }
+    : { liveCheck: 'skipped', total: null, endpoints: [] }
 
   // Outbox status counts (7-day window) + the latest failure with its
   // parsed error class.
@@ -149,6 +204,7 @@ export async function getEmailDiagnostics(liveProviderCheck = false): Promise<Em
       fromAddress: (process.env.EMAIL_FROM ?? '').trim() || 'Scholario <onboarding@resend.dev>',
       webhookSecretPresent: (process.env.RESEND_WEBHOOK_SECRET ?? '').trim().length > 0,
       domains,
+      webhooks,
     },
     gmailSmtp: {
       userPresent: gmail.user !== null,

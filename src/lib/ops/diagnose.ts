@@ -41,6 +41,13 @@ export interface EmailEvidence {
   failureClasses: Record<string, number>
   /** EmailDelivery status counts in the window. */
   statusCounts: Record<string, number>
+  /** Is the RESEND_WEBHOOK_SECRET signing secret configured (boolean)? */
+  webhookSecretConfigured: boolean
+  /** Resend WebhookEvent rows recorded in the window (delivery evidence). */
+  resendWebhookEvents: number
+  /** QUEUED EmailDelivery rows carrying a provider message id — the
+   * population whose delivery could only be confirmed by the webhook. */
+  queuedWithProviderMessageId: number
 }
 
 /**
@@ -90,6 +97,40 @@ export function diagnoseEmailAuthInvalid(ev: EmailEvidence): Diagnosis | null {
       'A 401 is a CREDENTIAL failure — distinct from the 403 testing-mode restriction (do not conflate them)',
     ],
     nextStep: 'Rotate the key in the provider dashboard, update the deployment env (RESEND_API_KEY), then trigger a test send from the Operations center.',
+  }
+}
+
+/**
+ * Rule EMAIL-3: delivery-evidence gap — provider-accepted mail is
+ * stuck QUEUED because the provider webhook is not delivering events.
+ * Confirmed when provider-accepted rows with a real message id exist
+ * while ZERO provider events have ever been recorded (and, when the
+ * caller can attest it, the signing secret is not configured — the
+ * route is fail-closed until it is). This is the diagnosis for the
+ * operational report "delivered messages stay marked QUEUED".
+ */
+export function diagnoseEmailDeliveryEvidenceGap(ev: EmailEvidence): Diagnosis | null {
+  if (ev.queuedWithProviderMessageId === 0) return null
+  const evidence: string[] = [
+    `${ev.queuedWithProviderMessageId} provider-accepted email(s) (status QUEUED with a provider message id) whose delivery can only be confirmed by the provider webhook`,
+    ev.resendWebhookEvents === 0
+      ? 'ZERO Resend webhook events recorded — no provider delivery/bounce/complaint event has ever reached this application'
+      : `${ev.resendWebhookEvents} webhook event(s) in the recent window (some evidence is arriving — check whether the QUEUED rows predate the webhook)`,
+    ev.webhookSecretConfigured
+      ? 'The webhook signing secret IS configured (signature verification is armed)'
+      : 'The webhook signing secret is NOT configured — the endpoint is fail-closed (401 for every provider event, sending unaffected)',
+  ]
+  const confirmed = ev.resendWebhookEvents === 0 && !ev.webhookSecretConfigured
+  return {
+    rule: 'EMAIL-3',
+    title: confirmed
+      ? 'Email delivery evidence is missing: the provider webhook is not delivering events, so delivered mail stays marked QUEUED'
+      : 'Email delivery evidence may be incomplete — provider-accepted mail predating the webhook remains QUEUED',
+    status: confirmed ? 'confirmed' : 'likely',
+    evidence,
+    nextStep: confirmed
+      ? 'Register/enable the webhook endpoint at the provider (POST https://<production-domain>/api/webhooks/resend with the delivered/bounced/complained/failed events), copy the endpoint signing secret into RESEND_WEBHOOK_SECRET on BOTH active projects, and redeploy — or run the sanitized Email/Webhook Live Audit workflow for the current provider-side state.'
+      : 'Run the sanitized Email/Webhook Live Audit workflow to compare the provider-side webhook configuration with the rows still QUEUED.',
   }
 }
 
@@ -222,6 +263,7 @@ export function composeDiagnoses(evidence: {
   const candidates: Array<Diagnosis | null> = [
     diagnoseEmailTestingMode(evidence.email),
     diagnoseEmailAuthInvalid(evidence.email),
+    diagnoseEmailDeliveryEvidenceGap(evidence.email),
     diagnoseDatabaseIssues(evidence.db),
     diagnoseTenantMismatchBurst(evidence.authz),
     diagnoseDeploymentFailure(evidence.deployment),

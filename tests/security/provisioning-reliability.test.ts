@@ -442,6 +442,78 @@ describe('PHASE 3 · credential re-issue', () => {
     expect(loginJson.data?.mustChangePassword).toBe(true)
   }, T)
 
+  test('the founding principal\'s bootstrap credential is TIME-LIMITED (48h window) and the response surfaces it', async () => {
+    const suffix = `${MARKER}-${randomBytes(3).toString('hex')}`
+    const body = provisionBody({
+      slug: `reliab-${suffix}`,
+      principalEmail: `principal-${suffix}@reliab.test`,
+      principalPassword: 'B00t!5x-time-limited',
+    })
+    const before = Date.now()
+    const res = await provision(rootToken, body)
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { data: { school: { id: string }; credentialExpiresAt?: string } }
+    const schoolId = json.data.school.id
+    cleanup.push(() => purgeSchool(schoolId))
+
+    // The response surfaces the one-time credential's expiry (additive field).
+    expect(json.data.credentialExpiresAt).toBeTruthy()
+    const expiry = new Date(json.data.credentialExpiresAt!).getTime()
+    const after = Date.now()
+    // ~48h from provisioning, bracketed by the request window.
+    expect(expiry).toBeGreaterThan(before + 47 * 3600_000)
+    expect(expiry).toBeLessThan(after + 49 * 3600_000)
+
+    // The principal row carries the same window (login enforces CREDENTIAL_EXPIRED).
+    const principal = await db.user.findFirst({
+      where: { schoolId, role: 'PRINCIPAL' },
+      select: { credentialExpiresAt: true },
+    })
+    expect(principal?.credentialExpiresAt).not.toBeNull()
+    expect(Math.abs(principal!.credentialExpiresAt!.getTime() - expiry)).toBeLessThan(1000)
+  }, T)
+
+  test('EXPIRED bootstrap credential → school login refused CREDENTIAL_EXPIRED; re-issue recovers with a FRESH window', async () => {
+    const suffix = `${MARKER}-${randomBytes(3).toString('hex')}`
+    const body = provisionBody({
+      slug: `reliab-${suffix}`,
+      principalEmail: `principal-${suffix}@reliab.test`,
+      principalPassword: 'B00t!6x-expiring',
+    })
+    const res = await provision(rootToken, body)
+    expect(res.status).toBe(200)
+    const schoolId = ((await res.json()) as { data: { school: { id: string } } }).data.school.id
+    cleanup.push(() => purgeSchool(schoolId))
+    expect((await activate(rootToken, schoolId)).status).toBe(200)
+
+    // Age the bootstrap credential past its 48h window (simulated time
+    // travel — the production field, not a test-only one).
+    await db.user.updateMany({
+      where: { schoolId, role: 'PRINCIPAL' },
+      data: { credentialExpiresAt: new Date(Date.now() - 60 * 60_000) },
+    })
+
+    await resetLoginBuckets([body.principalEmail])
+    const refused = await schoolLogin(body.principalEmail, 'B00t!6x-expiring')
+    expect(refused.status).toBe(401)
+    const refusedJson = (await refused.json()) as { code?: string }
+    expect(refusedJson.code).toBe('CREDENTIAL_EXPIRED')
+
+    // Recovery: re-issue mints a FRESH one-time credential + window.
+    const re = await reissue(rootToken, schoolId)
+    expect(re.status).toBe(200)
+    const reJson = (await re.json()) as { data: { tempPassword: string; credentialExpiresAt?: string } }
+    expect(reJson.data.tempPassword).toBeTruthy()
+    const freshExpiry = new Date(reJson.data.credentialExpiresAt!).getTime()
+    expect(freshExpiry).toBeGreaterThan(Date.now() + 47 * 3600_000)
+
+    await resetLoginBuckets([body.principalEmail])
+    const recovered = await schoolLogin(body.principalEmail, reJson.data.tempPassword)
+    expect(recovered.status).toBe(200)
+    const recoveredJson = (await recovered.json()) as { data?: { mustChangePassword?: boolean } }
+    expect(recoveredJson.data?.mustChangePassword).toBe(true)
+  }, T)
+
   test('re-issue is REFUSED once the principal owns their credential (no takeover vector)', async () => {
     const suffix = `${MARKER}-${randomBytes(3).toString('hex')}`
     const body = provisionBody({

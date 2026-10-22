@@ -350,13 +350,19 @@ async function main(): Promise<void> {
 
   for (const plane of planes) {
     const vals = values[plane.projectId]
+    const present = new Set(envByPlane[plane.projectId].map((e) => e.key))
     say(`  ${plane.label}`)
     for (const key of PRINTABLE_ENV_KEYS) {
       const v = vals[key]
-      say(`    ${key.padEnd(26)} ${v ? clip(v, 90) : '«unset → code default»'}`)
+      say(`    ${key.padEnd(26)} ${v ? clip(v, 90) : present.has(key) ? '«set, value write-only via API»' : '«unset → code default»'}`)
     }
     for (const key of SECRET_ENV_KEYS) {
-      say(`    ${key.padEnd(26)} ${vals[key] ? `present (value withheld, length ${vals[key]!.length})` : '«unset»'}`)
+      // Presence comes from the INVENTORY (authoritative); readability is
+      // separate — a dashboard-created Sensitive value is write-only via
+      // API even though the deployment runtime can read it fine.
+      say(
+        `    ${key.padEnd(26)} ${present.has(key) ? (vals[key] ? `set (value withheld, length ${vals[key]!.length})` : 'set — value WRITE-ONLY via API (dashboard Sensitive; the runtime still reads it)') : '«unset»'}`,
+      )
     }
   }
   const platformVals = values[planes[0].projectId]
@@ -372,7 +378,11 @@ async function main(): Promise<void> {
   say(`  RESEND_API_KEY cross-plane comparison:       ${keyAgreement}`)
   say('')
 
-  const apiKey = keyA ?? keyB
+  // Probe key: an explicit RESEND_API_KEY (e.g. repository secret in the
+  // runner) wins; else the decrypted Vercel values (empty when the var is
+  // dashboard-Sensitive — write-only via API).
+  const apiKey = ((process.env.RESEND_API_KEY ?? '').trim() || keyA || keyB || '') as string
+  const keyPresentInInventory = envByPlane[planes[0].projectId].some((e) => e.key === 'RESEND_API_KEY') || envByPlane[planes[1].projectId].some((e) => e.key === 'RESEND_API_KEY')
 
   // ── 3. Resend live probes ───────────────────────────────────────────────
   say('──────────────────────────────────────────────────────────────────')
@@ -382,7 +392,7 @@ async function main(): Promise<void> {
   let totalDomains = 0
   const webhooks: Array<Record<string, unknown>> = []
   if (!apiKey) {
-    say('  ⛔ no RESEND_API_KEY on either plane — cannot probe Resend.')
+    say('  ⛔ RESEND_API_KEY value not readable from this channel (set in the inventory but write-only via API, and no env override) — the provider-side probes need either an env-provided key or the IN-APP live diagnostics (GET /api/platform/health/email?live=1, which uses the deployment runtime key).')
   } else {
     try {
       const domainsDoc = (await getJson(
@@ -429,6 +439,11 @@ async function main(): Promise<void> {
   }
   say('')
 
+  // DB-derived verdict inputs (populated in §4 when the DB audit runs).
+  const recentFailures: Array<Record<string, unknown>> = []
+  let recentWebhookEventCount = 0
+  let lastWebhookEventAt = 'none in the last 14 days'
+
   // ── 4. Production outbox truth (read-only) ──────────────────────────────
   say('──────────────────────────────────────────────────────────────────')
   say(' 4. PRODUCTION OUTBOX (EmailDelivery + WebhookEvent — read-only)')
@@ -462,6 +477,7 @@ async function main(): Promise<void> {
         `SELECT template, "lastError", "updatedAt"::text AS at FROM "EmailDelivery" WHERE status IN ('FAILED','BOUNCED','COMPLAINED') ORDER BY "updatedAt" DESC LIMIT 8`,
         'recent failures',
       )
+      recentFailures.push(...failureRows)
       say('  recent failures (template + parsed error class — class tag only where parseable):')
       if (failureRows.length === 0) say('    · none on record')
       for (const r of failureRows) {
@@ -478,6 +494,43 @@ async function main(): Promise<void> {
         'QUEUED total',
       )
       say(`  QUEUED rows: ${num(queuedTotal[0]?.n)} total, ${num(queuedRows[0]?.n)} with a provider message id (webhook-eligible)`)
+
+      // QUEUED row detail — the exact rows waiting for delivery evidence.
+      const queuedDetail = await q(
+        `SELECT template, status, "providerMessageId", "createdAt"::text AS at FROM "EmailDelivery" WHERE status = 'QUEUED' ORDER BY "createdAt" DESC LIMIT 10`,
+        'QUEUED detail',
+      )
+      for (const r of queuedDetail) {
+        const pid = str(r.providerMessageId)
+        say(`    · QUEUED ${str(r.template).padEnd(26)} at ${str(r.at).slice(0, 19)} providerId=${pid === 'dev-log' ? '«dev-log!»' : clip(pid, 24)}`)
+      }
+
+      // SENT provenance — how did each SENT row get its evidence?
+      //   providerMessageId = 'dev-log'     → dev transport row (fabricated
+      //                                       delivery for the dev database;
+      //                                       in production this is the
+      //                                       fake-success smell the
+      //                                       production guard stops)
+      //   real provider id                  → upgraded by the webhook's
+      //                                       email.delivered event
+      const sentProvenance = await q(
+        `SELECT CASE WHEN "providerMessageId" = 'dev-log' THEN 'dev-log' WHEN "providerMessageId" IS NULL THEN 'no-id' ELSE 'webhook-upgraded' END AS kind, count(*)::int AS n, max("updatedAt")::text AS last FROM "EmailDelivery" WHERE status = 'SENT' GROUP BY kind`,
+        'SENT provenance',
+      )
+      say('  SENT row provenance:')
+      if (sentProvenance.length === 0) say('    · none')
+      for (const r of sentProvenance) {
+        say(`    · ${str(r.kind).padEnd(16)} n=${num(r.n).toString().padEnd(4)} last=${str(r.last).slice(0, 19)}`)
+      }
+
+      // When did each Resend webhook event arrive (the delivery-evidence trail)?
+      const whTimeline = await q(
+        `SELECT to_char("receivedAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*)::int AS n FROM "WebhookEvent" WHERE "gatewayName" = 'resend' GROUP BY day ORDER BY day DESC LIMIT 10`,
+        'webhook event timeline',
+      )
+      say('  Resend webhook events by day (UTC):')
+      if (whTimeline.length === 0) say('    · none')
+      for (const r of whTimeline) say(`    · ${str(r.day)}  n=${num(r.n)}`)
 
       const inviteRows = await q(
         `SELECT template, status, recipient, "updatedAt"::text AS at, "lastError" FROM "EmailDelivery" WHERE "dedupeKey" LIKE 'principal-invite:%' ORDER BY "updatedAt" DESC LIMIT 12`,
@@ -500,6 +553,12 @@ async function main(): Promise<void> {
         `SELECT count(*)::int AS n FROM "WebhookEvent" WHERE "gatewayName" = 'resend'`,
         'resend webhook count',
       )
+      const whRecent = await q(
+        `SELECT count(*)::int AS n, max("receivedAt")::text AS last FROM "WebhookEvent" WHERE "gatewayName" = 'resend' AND "receivedAt" >= NOW() - INTERVAL '14 days'`,
+        'recent resend webhook count',
+      )
+      recentWebhookEventCount = num(whRecent[0]?.n)
+      if (recentWebhookEventCount > 0) lastWebhookEventAt = str(whRecent[0]?.last).slice(0, 19)
       say(`  Resend WebhookEvent rows (total ${num(whCount[0]?.n)}):`)
       if (whRows.length === 0) say('    · none — no signed provider event has EVER reached production.')
       for (const r of whRows) {
@@ -515,13 +574,34 @@ async function main(): Promise<void> {
   say('──────────────────────────────────────────────────────────────────')
   say(' 5. VERDICT (mission questions, evidence-based)')
   say('──────────────────────────────────────────────────────────────────')
-  say(`  A. Resend API key configured in production: ${apiKey ? 'YES' : 'NO'}`)
   say(
-    `  B. Verified sending domain: ${verifiedDomains > 0 ? `YES (${verifiedDomains}/${totalDomains} verified)` : `NO (${totalDomains} domain(s), none verified) — sender remains testing-restricted: onboarding@resend.dev can ONLY deliver to the Resend account owner's address; principal invites to other addresses 403 [testing-recipient-restricted]`}`,
+    `  A. Resend API key configured in production: ${keyPresentInInventory ? (apiKey ? 'YES (readable in this channel)' : 'YES (set per inventory; value write-only via API — the runtime reads it fine)') : 'NO'}`,
   )
-  say(
-    `  C. Resend webhook endpoint registered: ${webhooks.length > 0 ? 'YES (see §3 URL/events)' : 'NO — delivery evidence never arrives; delivered mail stays QUEUED'}`,
-  )
+  const testingEvidence = recentFailures.find((r) => str(r.lastError).includes('testing-recipient-restricted'))
+  if (apiKey && verifiedDomains > 0) {
+    say(`  B. Verified sending domain: YES (${verifiedDomains}/${totalDomains} verified)`)
+  } else if (apiKey) {
+    say(
+      `  B. Verified sending domain: NO (${totalDomains} domain(s) live-probed, none verified) — testing mode: onboarding@resend.dev can ONLY deliver to the Resend account owner's address; invites to other addresses 403 [testing-recipient-restricted]`,
+    )
+  } else if (testingEvidence) {
+    say(
+      `  B. Verified sending domain: UNKNOWN via this channel (key write-only) — but the most recent [testing-recipient-restricted] failure at ${str(testingEvidence.updatedAt).slice(0, 19)} proves the provider still enforced owner-only delivery then (the in-app live diagnostics GET /api/platform/health/email?live=1 is the standing check)`,
+    )
+  } else {
+    say('  B. Verified sending domain: UNKNOWN via this channel (key write-only, no recent testing-restriction failure on record)')
+  }
+  if (apiKey && webhooks.length > 0) {
+    say(`  C. Resend webhook endpoint registered: YES (see §3 URL/events)`)
+  } else if (apiKey) {
+    say('  C. Resend webhook endpoint registered: NO (live-probed: zero endpoints) — delivery evidence never arrives; delivered mail stays QUEUED')
+  } else if (recentWebhookEventCount > 0) {
+    say(
+      `  C. Resend webhook endpoint registered: UNKNOWN via this channel (key write-only) — but ${recentWebhookEventCount} signature-verified Resend webhook event(s) were processed (latest ${lastWebhookEventAt}), so an endpoint + a MATCHING secret existed then; the in-app live diagnostics shows the current endpoint list`,
+    )
+  } else {
+    say('  C. Resend webhook endpoint registered: UNKNOWN via this channel (key write-only, zero webhook events on record)')
+  }
   say(
     `  D. Webhook signing secret on both planes: ${secA && secB ? (secA === secB ? 'YES + identical' : 'SET BUT MISMATCHED between planes') : 'NO/INCOMPLETE — route stays fail-closed (401) until set on BOTH planes'}`,
   )

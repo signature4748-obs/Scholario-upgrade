@@ -27,6 +27,25 @@ import { newPasswordSchema } from '@/lib/security/validation'
 const TEMP_PASSWORD_LENGTH = 12
 
 /**
+ * Lifetime of a server-provisioned ONE-TIME bootstrap credential (the
+ * password an account must change at first sign-in): 48 hours. The
+ * login route refuses an expired bootstrap credential with
+ * CREDENTIAL_EXPIRED (single-use + time-limited by construction); the
+ * recovery is the re-issue/reset flow, which mints a FRESH credential
+ * with a fresh window. Applies to every server-provisioned bootstrap
+ * credential — enrolled students, teacher/student resets, and the
+ * founding principal's provisioning invite credential (mission:
+ * invitation credentials must be securely generated, time-limited
+ * and single-use).
+ */
+export const BOOTSTRAP_CREDENTIAL_TTL_HOURS = 48
+
+/** Fresh expiry timestamp for a bootstrap credential (default: now+48h). */
+export function bootstrapCredentialExpiresAt(from: Date = new Date()): Date {
+  return new Date(from.getTime() + BOOTSTRAP_CREDENTIAL_TTL_HOURS * 3_600_000)
+}
+
+/**
  * Alphabet for generated passwords: alphanumeric without visually
  * ambiguous glyphs (no 0/O/1/I/l) so a hand-copied temp password is hard
  * to mistype.

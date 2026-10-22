@@ -1,0 +1,73 @@
+# ============================================================
+# RESEND WEBHOOK CONFIGURE/REPAIR — dispatchable ops tool
+# ------------------------------------------------------------
+# Runs scripts/prod-release/resend-webhook-configure.ts against the
+# LIVE provider + Vercel configuration to activate the documented
+# one-time owner action (docs/EMAIL.md §"Webhooks") without anyone ever
+# handling the raw signing secret:
+#
+#   · creates the webhook endpoint at
+#     ${PRODUCTION_URL}/api/webhooks/resend (all six lifecycle events)
+#     when absent, PATCHes drifted events/URL;
+#   · on create (--recreate also), captures the signing secret IN
+#     MEMORY and syncs it to BOTH active Vercel planes as
+#     RESEND_WEBHOOK_SECRET (production target, encrypted);
+#   · triggers both deploy hooks and waits for READY at the current
+#     commit SHA when the env changed.
+#
+# Dispatch: Actions → "Resend Webhook Configure/Repair" → Run
+#   inputs.recreate = true only when the live verification shows the
+#   existing secret is wrong/missing (delete+create mints a fresh one).
+# ============================================================
+name: Resend Webhook Configure/Repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      recreate:
+        description: 'Force delete + recreate the webhook (mint + sync a fresh signing secret)'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: resend-webhook-configure
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    name: Configure/repair the delivery webhook
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Report the exact commit
+        run: |
+          echo "configure commit: ${GITHUB_SHA}"
+          git log -1 --format='%H %s'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # Zero-dependency script (fetch + node builtins only) — no install.
+      # The Resend API key is fetched in-memory by the script itself from
+      # the platform plane's Vercel env (never printed, never in logs).
+      - name: Run the configure/repair
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_PROJECT_ID_SCHOOL: ${{ secrets.VERCEL_PROJECT_ID_SCHOOL }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          PRODUCTION_URL_SCHOOL: ${{ secrets.PRODUCTION_URL_SCHOOL }}
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+          VERCEL_DEPLOY_HOOK_URL_SCHOOL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL_SCHOOL }}
+        run: bun scripts/prod-release/resend-webhook-configure.ts ${{ inputs.recreate && '--recreate' || '' }}
