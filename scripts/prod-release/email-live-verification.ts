@@ -143,22 +143,45 @@ function hashPassword(password: string): string {
   return `${salt}:${hash}`
 }
 
-async function jsonFetch(
-  url: string,
-  init: RequestInit,
-  label: string,
-): Promise<{ status: number; body: Record<string, unknown> | null }> {
+interface FetchOutcome {
+  status: number
+  body: Record<string, unknown> | null
+  /** Cookie values set by the response (transport-only; never printed). */
+  cookies: Record<string, string>
+}
+
+/** PRODUCTION SESSION TRANSPORT: in production the HttpOnly cookie is the
+ * ONLY session channel (the body `sessionToken` field and the Bearer
+ * fallback are dev-preview conveniences, disabled when NODE_ENV=production
+ * — src/lib/auth.ts isDevSessionBearerEnabled + platform login route).
+ * This helper captures Set-Cookie so the script can ride the REAL
+ * production transport exactly like a browser session. */
+async function jsonFetch(url: string, init: RequestInit, label: string): Promise<FetchOutcome> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
   try {
     const res = await fetch(url, init)
     const body = (await res.json().catch(() => null)) as Record<string, unknown> | null
-    return { status: res.status, body }
+    const cookies: Record<string, string> = {}
+    // getSetCookie(): headers.getSetCookie() in undici/bun fetch.
+    const setCookies = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : []
+    for (const line of setCookies) {
+      const m = line.match(/^([^=;,\s]+)=([^;]*)/)
+      if (m) cookies[m[1]!] = m[2]!
+    }
+    return { status: res.status, body, cookies }
   } catch (e) {
     throw new Error(`${label} unreachable: ${clip((e as Error).message, 120)}`)
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** Serialize a cookie jar into a Cookie header value. */
+function cookieHeader(jar: Record<string, string>): string {
+  return Object.entries(jar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ')
 }
 
 // ─── main ────────────────────────────────────────────────────────────────
@@ -241,19 +264,27 @@ async function main(): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: fixtureEmail, password: fixturePassword }),
   }, 'platform login')
-  const sessionToken = str(login.body?.data && (login.body.data as Record<string, unknown>).sessionToken)
-  if (login.status !== 200 || !sessionToken) {
-    fail('REAL platform login', `HTTP ${login.status} (envelope ok=${str(login.body?.ok)})`)
+  // PRODUCTION TRANSPORT: the sessionToken body field is dev-preview only;
+  // the HttpOnly scholario_platform_session cookie is the production
+  // channel. Ride it exactly like the operator's browser does.
+  const platformSessionToken = login.cookies['scholario_platform_session'] ?? ''
+  SENSITIVE_VALUES.push(platformSessionToken)
+  if (login.status !== 200 || !platformSessionToken) {
+    fail(
+      'REAL platform login',
+      `HTTP ${login.status} (envelope ok=${str(login.body?.ok)}) — no session cookie set${str(login.body?.data && (login.body.data as Record<string, unknown>).sessionToken) ? ' (dev body-token present: this plane is not NODE_ENV=production?)' : ''}`,
+    )
     await cleanup(q, { adminId })
     return report()
   }
-  record('REAL platform login', true, `HTTP 200, session minted (token never printed)`)
+  const platformAuthHeaders = { cookie: cookieHeader(login.cookies), 'content-type': 'application/json' }
+  record('REAL platform login', true, `HTTP 200 + HttpOnly session cookie minted (production transport; token never printed)`)
 
   // ── B2. IN-APP LIVE PROVIDER DIAGNOSTICS (the runtime key channel) ─────
   say('── B2. IN-APP LIVE DIAGNOSTICS (?live=1 — runtime provider key) ──')
   try {
     const diagRes = await fetch(`${platformUrl}/api/platform/health/email?live=1`, {
-      headers: { 'x-platform-token': sessionToken },
+      headers: { cookie: cookieHeader(login.cookies) },
     })
     if (diagRes.status !== 200) {
       say(`  /api/platform/health/email?live=1 → HTTP ${diagRes.status} (envelope shape may differ; skipping)`)
@@ -293,7 +324,7 @@ async function main(): Promise<void> {
   const slug = `${MARK}`.toLowerCase()
   const provisionRes = await jsonFetch(`${platformUrl}/api/platform/schools`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-platform-token': sessionToken },
+    headers: platformAuthHeaders,
     body: JSON.stringify({
       name: `Email Live Verification ${MARK}`,
       slug,
@@ -341,10 +372,22 @@ async function main(): Promise<void> {
 
   // ── D. provider-side delivery evidence (Resend GET /emails/{id}) ──────
   say('── D. PROVIDER DELIVERY EVIDENCE (GET /emails/{id}) ──────────────')
-  // The Resend API key: RESEND_API_KEY when provided, else fetched
-  // IN-MEMORY from the platform plane's Vercel env (the workflow passes
-  // VERCEL_TOKEN/ORG_ID/PROJECT_ID instead of the key; either way it is
-  // never printed).
+  // Provider-side delivery evidence, two channels (both read-only):
+  //   1. IN-APP PROBE (preferred): GET /api/platform/health/email?message=<id>
+  //      — the production runtime holds the provider key and answers with
+  //      the allowlisted per-message state (the Vercel-stored key value is
+  //      write-only via API, so this is the standing channel).
+  //   2. Direct Resend GET /emails/{id} when RESEND_API_KEY is available
+  //      in this environment (local/dev or an env-provided value).
+  const inAppMessageProbe = async (mid: string): Promise<string> => {
+    const res = await fetch(`${platformUrl}/api/platform/health/email?message=${encodeURIComponent(mid)}`, {
+      headers: { cookie: cookieHeader(login.cookies) },
+    })
+    const envelope = (await res.json().catch(() => null)) as { data?: { resend?: { message?: { liveCheck?: string; lastEvent?: string | null } } } } | null
+    const probe = envelope?.data?.resend?.message
+    if (!probe || probe.liveCheck !== 'ok') return probe ? `probe:${probe.liveCheck}` : 'probe:unavailable'
+    return probe.lastEvent ?? 'unknown'
+  }
   let resendKey = (process.env.RESEND_API_KEY ?? '').trim()
   if (!resendKey && process.env.VERCEL_TOKEN && process.env.VERCEL_ORG_ID && process.env.VERCEL_PROJECT_ID) {
     const vt = requireEnv('VERCEL_TOKEN')
@@ -364,38 +407,44 @@ async function main(): Promise<void> {
       resendKey = (valBody?.value ?? '').trim()
     }
   }
-  if (!resendKey) {
-    fail('provider delivery check', 'RESEND_API_KEY unavailable (neither provided nor fetchable from Vercel) — provider-side delivery state cannot be read (the webhook evidence below is still checked independently)')
-  } else {
-    SENSITIVE_VALUES.push(resendKey)
-  }
-  SENSITIVE_VALUES.push(tempPassword, sessionToken, fixturePassword)
+  if (resendKey) SENSITIVE_VALUES.push(resendKey)
+  SENSITIVE_VALUES.push(tempPassword, fixturePassword, platformSessionToken)
   let providerDelivered = false
-  let lastEventSeen = 'key-missing'
+  let lastEventSeen = 'not-checked'
   const deadlineD = Date.now() + DELIVERY_TIMEOUT_MS
-  while (Date.now() < deadlineD && !providerDelivered && resendKey) {
+  while (Date.now() < deadlineD && !providerDelivered) {
     try {
-      const res = await fetch(`${RESEND_API_BASE}/emails/${encodeURIComponent(messageId)}`, {
-        headers: { Authorization: `Bearer ${resendKey}` },
-      })
-      if (res.ok) {
-        const body = (await res.json().catch(() => null)) as { last_event?: string; status?: string } | null
-        lastEventSeen = str(body?.last_event || body?.status)
-        if (lastEventSeen === 'delivered') providerDelivered = true
-      } else if (res.status === 404) {
-        lastEventSeen = 'not-found-at-provider'
-        break
+      if (resendKey) {
+        // Direct provider read (key available in this channel).
+        const res = await fetch(`${RESEND_API_BASE}/emails/${encodeURIComponent(messageId)}`, {
+          headers: { Authorization: `Bearer ${resendKey}` },
+        })
+        if (res.ok) {
+          const body = (await res.json().catch(() => null)) as { last_event?: string; status?: string } | null
+          lastEventSeen = str(body?.last_event || body?.status)
+        } else if (res.status === 404) {
+          lastEventSeen = 'not-found-at-provider'
+          break
+        } else {
+          lastEventSeen = `HTTP ${res.status}`
+        }
       } else {
-        lastEventSeen = `HTTP ${res.status}`
+        // In-app probe (the runtime-key channel).
+        lastEventSeen = await inAppMessageProbe(messageId)
       }
     } catch (e) {
       lastEventSeen = `transport: ${clip((e as Error).message, 60)}`
     }
+    if (lastEventSeen === 'delivered') providerDelivered = true
     if (!providerDelivered && lastEventSeen !== 'not-found-at-provider') {
       await sleep(DELIVERY_POLL_MS)
     }
   }
-  record('provider delivery', providerDelivered, `GET /emails/{id} last_event=${lastEventSeen || '?'}${providerDelivered ? ' — the provider actually delivered it' : ''}`)
+  record(
+    'provider delivery',
+    providerDelivered,
+    `per-message state last_event=${lastEventSeen || '?'} via ${resendKey ? 'direct GET /emails/{id}' : 'the in-app runtime-key probe'}${providerDelivered ? ' — the provider actually delivered it' : ''}`,
+  )
 
   // ── E. webhook end-to-end: delivered event → WebhookEvent row → row SENT ─
   say('── E. WEBHOOK END-TO-END (delivered → WebhookEvent → SENT) ───────')
@@ -429,7 +478,7 @@ async function main(): Promise<void> {
   // Activate the school first (PENDING blocks sign-in) — the REAL API.
   const activateRes = await jsonFetch(`${platformUrl}/api/platform/schools/${schoolId}/activate`, {
     method: 'POST',
-    headers: { 'x-platform-token': sessionToken },
+    headers: platformAuthHeaders,
   }, 'activate')
   record('school activation (REAL API)', activateRes.status === 200, `HTTP ${activateRes.status}`)
 
@@ -455,18 +504,25 @@ async function main(): Promise<void> {
     body: JSON.stringify({ email: recipient, password: tempPassword }),
   }, 'school login (bootstrap credential)')
   const firstLoginData = (firstLogin.body?.data ?? {}) as Record<string, unknown>
-  const principalToken = str(firstLoginData.sessionToken)
+  // PRODUCTION TRANSPORT: the erp_session HttpOnly cookie (the body's
+  // sessionToken is the dev-preview convenience, absent in production).
+  const principalSessionToken = firstLogin.cookies['erp_session'] ?? ''
+  SENSITIVE_VALUES.push(principalSessionToken)
   const mustChange = firstLoginData.mustChangePassword === true
-  record('bootstrap credential redeems at sign-in', firstLogin.status === 200 && !!principalToken && mustChange, `HTTP ${firstLogin.status}, mustChangePassword=${str(mustChange)} (forced change armed)`)
+  record(
+    'bootstrap credential redeems at sign-in',
+    firstLogin.status === 200 && !!principalSessionToken && mustChange,
+    `HTTP ${firstLogin.status}, mustChangePassword=${str(mustChange)} (forced change armed; session via HttpOnly cookie, never printed)`,
+  )
 
-  if (principalToken) {
-    SENSITIVE_VALUES.push(principalToken)
-    // Complete the forced change (the credential becomes OWNED).
+  if (principalSessionToken) {
+    // Complete the forced change (the credential becomes OWNED) — via the
+    // same HttpOnly cookie session (the Bearer fallback is dev-only).
     const newPassword = `Own-${randomBytes(18).toString('base64url')}!`
     SENSITIVE_VALUES.push(newPassword)
     const changeRes = await jsonFetch(`${schoolUrl}/api/auth/change-password`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', Authorization: `Bearer ${principalToken}` },
+      headers: { 'content-type': 'application/json', cookie: `erp_session=${principalSessionToken}` },
       body: JSON.stringify({ currentPassword: tempPassword, newPassword, confirmPassword: newPassword }),
     }, 'change-password')
     record('forced password change completes', changeRes.status === 200, `HTTP ${changeRes.status} (replacement credential never printed)`)
@@ -482,7 +538,7 @@ async function main(): Promise<void> {
     // Takeover guard: re-issue against an OWNED credential is refused.
     const reissueRes = await jsonFetch(`${platformUrl}/api/platform/schools/${schoolId}/reissue-credential`, {
       method: 'POST',
-      headers: { 'x-platform-token': sessionToken },
+      headers: platformAuthHeaders,
     }, 'reissue (owned credential)')
     const reissueCode = str(reissueRes.body?.code)
     record('duplicate re-issue refused (409)', reissueRes.status === 409 && reissueCode === 'CONFLICT', `HTTP ${reissueRes.status} code=${reissueCode || '?'} — the takeover guard stands`)
