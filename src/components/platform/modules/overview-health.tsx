@@ -239,6 +239,7 @@ export function SystemHealthCard() {
         canonicalEndpoint: string
         createdWebhookId: string
         deleted: Array<{ id: string; url: string }>
+        deleteWarnings: string[]
         secretSynced: Record<string, string>
         redeploy: Record<string, string>
       }>(
@@ -257,7 +258,7 @@ export function SystemHealthCard() {
         .map(([plane, outcome]) => `${plane}: ${outcome}`)
         .join(' · ')
       setRepairNote(
-        `recreated at ${result.canonicalEndpoint} (deleted ${result.deleted.length}) — secret synced [${sync}] — redeploy [${deploys}]. ` +
+        `recreated at ${result.canonicalEndpoint} (deleted ${result.deleted.length}${result.deleteWarnings?.length ? `, ${result.deleteWarnings.length} stale-delete warnings` : ''}) — secret synced [${sync}] — redeploy [${deploys}]. ` +
           'Redeploys take a few minutes; afterwards delivered events upgrade rows QUEUED→SENT (re-run the live check to confirm).',
       )
       setRepairOpen(false)
