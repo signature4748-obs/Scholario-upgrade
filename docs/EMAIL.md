@@ -231,8 +231,17 @@ through the REAL production session transport with a self-owned
 fixture admin, printing a READ-ONLY pre-repair inspection of the
 current provider webhook surface (registered / enabled / URL /
 subscribed events — the documented `status` enum is what makes
-"registered-but-DISABLED" visible) before any mutation, then waits
-for BOTH redeploys to go READY, and purges the
+"registered-but-DISABLED" visible) before any mutation. Because a
+Vercel env-var write alone never reaches the running deployment, the
+workflow then makes sure the fresh secret actually goes LIVE: any
+plane whose in-app redeploy trigger could not fire (live run
+39746765594: the duplication call answered HTTP 400 on both planes)
+gets its production deploy hook fired — the Release pipeline's own
+deploy mechanism — and the READY gate only counts deployments CREATED
+AFTER the repair started (epoch-ms comparison; the gate previously
+multiplied the already-millisecond `created` field by 1000, matched
+pre-repair deployments and false-passed the stale-secret platform
+plane). It then waits for BOTH redeploys to go READY and purges the
 fixture — then re-dispatch `Email Live Delivery Verification` to prove
 delivered events now upgrade rows QUEUED→SENT end-to-end.
 

@@ -518,7 +518,13 @@ async function main(): Promise<void> {
   if (principalSessionToken) {
     // Complete the forced change (the credential becomes OWNED) — via the
     // same HttpOnly cookie session (the Bearer fallback is dev-only).
-    const newPassword = `Own-${randomBytes(18).toString('base64url')}!`
+    // The trailing '7' GUARANTEES the newPasswordSchema policy (≥ 8 chars,
+    // letter + digit) deterministically: base64url's alphabet is
+    // [A-Za-z0-9_-], so the random part has NO digit ~47% of the time and
+    // a policy-blind draw flaked live run 39747385821 with a 422
+    // VALIDATION_FAILED (live evidence 2026-10-22). Runtime entropy is
+    // unchanged; the credential is never printed.
+    const newPassword = `Own-${randomBytes(18).toString('base64url')}!7`
     SENSITIVE_VALUES.push(newPassword)
     const changeRes = await jsonFetch(`${schoolUrl}/api/auth/change-password`, {
       method: 'POST',

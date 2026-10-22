@@ -161,8 +161,13 @@ async function vercelFetch(
   }
   const text = await res.text().catch(() => '')
   if (!res.ok) {
+    // Same convention as providerFetch: the API's own validation error
+    // text is operator-facing information (it names the rejected field —
+    // the live 400 on the redeploy trigger in run 39746765594 was
+    // undiagnosable from the evidence because the body was dropped) —
+    // include it, redacted and clipped, in the PUBLIC message.
     throw new AppError('EXTERNAL_SERVICE_FAILURE', {
-      publicMessage: `The Vercel API request (${label}) failed with HTTP ${res.status}. The provider webhook was NOT mutated by this request.`,
+      publicMessage: `The Vercel API request (${label}) failed with HTTP ${res.status}: ${redactDetail(text.slice(0, 200))}. The provider webhook was NOT mutated by this request.`,
       internalDetail: `HTTP ${res.status} ${redactDetail(text.slice(0, 400))}`,
     })
   }
