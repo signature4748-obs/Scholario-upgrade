@@ -214,9 +214,13 @@ async function main(): Promise<void> {
   say('── B. FIXTURE ADMIN (ops-isolation convention) + REAL LOGIN ──────')
   const fixtureEmail = `${MARK}@scholario.test`
   const fixturePassword = `Elv-${randomBytes(18).toString('base64url')}!`
+  // Runtime-random base32 TOTP secret (the column requires one; the
+  // step-up gate is dormant while platform TOTP is stood down — and a
+  // random value is never a demo-credential-exposure regression).
+  const fixtureTotpSecret = randomBytes(10).toString('base64').replace(/[^A-Z2-7]/gi, 'A').toUpperCase().padEnd(16, 'A').slice(0, 16)
   const adminRows = await q(
     `INSERT INTO "PlatformAdmin" (id, email, "passwordHash", name, status, "isRoot", "totpSecret", "createdAt", "updatedAt") ` +
-      `VALUES (md5(random()::text)||'${MARK}', ${sq(fixtureEmail)}, ${sq(hashPassword(fixturePassword))}, 'Email Live Verification Fixture', 'ACTIVE', false, 'JBSWY3DPEHPK3PXP', NOW(), NOW()) ` +
+      `VALUES (md5(random()::text)||'${MARK}', ${sq(fixtureEmail)}, ${sq(hashPassword(fixturePassword))}, 'Email Live Verification Fixture', 'ACTIVE', false, ${sq(fixtureTotpSecret)}, NOW(), NOW()) ` +
       `RETURNING id`,
   )
   const adminId = str(adminRows[0]?.id)
