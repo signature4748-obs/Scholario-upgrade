@@ -211,12 +211,13 @@ describe('Operations center — cross-tenant monitoring authorization', () => {
     }
   }, 90_000)
 
-  test('mutations (sync / health-run / ack) are permission-gated, not UI-gated', async () => {
+  test('mutations (sync / health-run / ack / webhook repair) are permission-gated, not UI-gated', async () => {
     for (const [path, method] of [
       ['/api/platform/operations/usage/sync', 'POST'],
       ['/api/platform/operations/health/run', 'POST'],
       ['/api/platform/operations/alerts/settings', 'PUT'],
       ['/api/platform/operations/errors/abc/resolve', 'POST'],
+      ['/api/platform/operations/email-webhook/repair', 'POST'],
     ] as const) {
       const res = await resilientFetch(`${BASE}${path}`, {
         method,

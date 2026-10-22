@@ -43,6 +43,16 @@ import { platformApi, type PlatformApiError } from '../platform-client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 /** GET /api/platform/health — the fields this panel consumes. */
 interface SystemHealthData {
@@ -155,6 +165,12 @@ export function SystemHealthCard() {
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [tick, setTick] = useState(0) // re-render clock for "checked Xs ago"
+  // Provider webhook repair (deliberate, audited action — see the
+  // repair route): confirm dialog state + sanitized result line.
+  const [repairOpen, setRepairOpen] = useState(false)
+  const [repairBusy, setRepairBusy] = useState(false)
+  const [repairNote, setRepairNote] = useState<string | null>(null)
+  const [repairError, setRepairError] = useState<string | null>(null)
   const mounted = useRef(true)
 
   const load = useCallback(async (background: boolean) => {
@@ -208,6 +224,54 @@ export function SystemHealthCard() {
       if (mounted.current) setEmailLiveBusy(false)
     }
   }, [])
+
+  /** Recreate the provider-side Resend webhook + rotate the app-side
+   *  signing secret (POST /api/platform/operations/email-webhook/repair
+   *  with the typed confirmation). Sanitized result only — the signing
+   *  secret never leaves the server. Slow provider/Vercel API chain —
+   *  generous timeout, busy state throughout. */
+  const runWebhookRepair = useCallback(async () => {
+    setRepairBusy(true)
+    setRepairError(null)
+    setRepairNote(null)
+    try {
+      const result = await platformApi<{
+        canonicalEndpoint: string
+        createdWebhookId: string
+        deleted: Array<{ id: string; url: string }>
+        secretSynced: Record<string, string>
+        redeploy: Record<string, string>
+      }>(
+        '/api/platform/operations/email-webhook/repair',
+        {
+          method: 'POST',
+          body: JSON.stringify({ confirm: 'recreate-webhook' }),
+        },
+        120_000,
+      )
+      if (!mounted.current) return
+      const sync = Object.entries(result.secretSynced)
+        .map(([plane, outcome]) => `${plane}: ${outcome}`)
+        .join(' · ')
+      const deploys = Object.entries(result.redeploy)
+        .map(([plane, outcome]) => `${plane}: ${outcome}`)
+        .join(' · ')
+      setRepairNote(
+        `recreated at ${result.canonicalEndpoint} (deleted ${result.deleted.length}) — secret synced [${sync}] — redeploy [${deploys}]. ` +
+          'Redeploys take a few minutes; afterwards delivered events upgrade rows QUEUED→SENT (re-run the live check to confirm).',
+      )
+      setRepairOpen(false)
+      // Refresh the diagnostics so the operator sees the new state.
+      void runLiveEmailCheck()
+    } catch (e) {
+      if (!mounted.current) return
+      const err = e as PlatformApiError
+      setRepairError(err.error || 'Webhook repair failed')
+      setRepairOpen(false)
+    } finally {
+      if (mounted.current) setRepairBusy(false)
+    }
+  }, [runLiveEmailCheck])
 
   useEffect(() => {
     mounted.current = true
@@ -424,6 +488,25 @@ export function SystemHealthCard() {
                   >
                     {emailLiveBusy ? 'Checking provider…' : 'Check provider live'}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setRepairOpen(true)}
+                    disabled={repairBusy || emailLiveBusy}
+                    title="For when the provider webhook is registered but delivered events never arrive (rows stay QUEUED): deletes and recreates the provider webhook, rotates its signing secret on both planes, triggers a redeploy. Audited."
+                    className="rounded text-[10px] font-semibold text-teal-700 underline-offset-2 transition-colors hover:underline focus-ring disabled:text-slate-400"
+                  >
+                    {repairBusy ? 'Repairing webhook…' : 'Repair provider webhook'}
+                  </button>
+                  {repairNote ? (
+                    <p className="text-[11px] leading-relaxed text-emerald-700" role="status">
+                      {repairNote}
+                    </p>
+                  ) : null}
+                  {repairError ? (
+                    <p className="text-[11px] leading-relaxed text-amber-700" role="alert">
+                      {repairError}
+                    </p>
+                  ) : null}
                 </div>
               ) : emailError ? (
                 <span className="text-amber-600" title={emailError}>
@@ -452,6 +535,36 @@ export function SystemHealthCard() {
           Last reading kept (checked {timeAgo(health.checkedAt)}) — {error}
         </p>
       )}
+
+      {/* Provider webhook repair — themed confirm dialog (mirrors the
+          subscriptions archive pattern): a deliberate, audited,
+          destructive provider-side action needs an explicit confirm. */}
+      <AlertDialog open={repairOpen} onOpenChange={(o) => { if (!o && !repairBusy) setRepairOpen(false) }}>
+        <AlertDialogContent className="border-slate-200 bg-white text-slate-900 sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Recreate the provider webhook?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This deletes the Resend webhook endpoints and creates a fresh one at the canonical platform URL,
+              rotates its signing secret into RESEND_WEBHOOK_SECRET on both planes, and triggers a redeploy of
+              both planes. Use it when delivered events never arrive (provider-accepted rows stay QUEUED).
+              Every step is audited; the signing secret is never displayed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={repairBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={repairBusy}
+              onClick={(e) => {
+                e.preventDefault() // keep the dialog open while busy; the callback closes it on settle
+                void runWebhookRepair()
+              }}
+              className="bg-teal-700 text-white hover:bg-teal-800"
+            >
+              {repairBusy ? 'Repairing…' : 'Recreate webhook'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </motion.div>
   )
 }
