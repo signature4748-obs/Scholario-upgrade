@@ -330,7 +330,7 @@ describe('fetchResendWebhookSummary — the provider webhook list never carries 
     globalThis.fetch = REAL_FETCH
   })
 
-  test('id/url/events are surfaced; every other field (secret-looking included) is dropped', async () => {
+  test('id/url/status/events are surfaced; every other field (secret-looking included) is dropped', async () => {
     const { fetchResendWebhookSummary } = await import('@/lib/email/diagnostics')
     globalThis.fetch = (async () =>
       new Response(
@@ -339,6 +339,7 @@ describe('fetchResendWebhookSummary — the provider webhook list never carries 
             {
               id: 'wh_abc123',
               url: 'https://scholario-platform.vercel.app/api/webhooks/resend',
+              status: 'enabled',
               events: ['email.delivered', 'email.bounced'],
               // hostile/secret-looking fields — must NEVER come through:
               signing_secret: 'whsec_should_never_surface',
@@ -360,10 +361,29 @@ describe('fetchResendWebhookSummary — the provider webhook list never carries 
     expect(endpoint).toEqual({
       id: 'wh_abc123',
       url: 'https://scholario-platform.vercel.app/api/webhooks/resend',
+      status: 'enabled',
       events: ['email.delivered', 'email.bounced'],
     })
     expect(JSON.stringify(summary)).not.toContain('whsec_should_never_surface')
     expect(JSON.stringify(summary)).not.toContain('random_field')
+  })
+
+  test('the documented per-item status enum surfaces (registered-but-DISABLED is the live non-delivery posture)', async () => {
+    const { fetchResendWebhookSummary } = await import('@/lib/email/diagnostics')
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          data: [{ id: 'wh_disabled', endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend', status: 'disabled', events: ['email.delivered'] }],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as typeof fetch
+    const summary = await fetchResendWebhookSummary('re_stub_not_a_real_key')
+    expect(summary.endpoints[0]).toEqual({
+      id: 'wh_disabled',
+      url: 'https://scholario-platform.vercel.app/api/webhooks/resend',
+      status: 'disabled',
+      events: ['email.delivered'],
+    })
   })
 
   test('ZERO registered endpoints is an honest ok-with-empty-array (the delivered-stays-QUEUED root cause)', async () => {

@@ -18,9 +18,16 @@
  * EVIDENCE LEDGER (each step sanitized):
  *   A. platform plane healthy before we touch anything
  *   B. fixture admin (ops-isolation convention) + REAL platform login
+ *   B2. READ-ONLY pre-repair inspection — the live in-app diagnostics
+ *       (GET /api/platform/health/email?live=1) prints the CURRENT
+ *       provider webhook surface (registered / enabled / URL /
+ *       subscribed events) BEFORE anything is mutated (inspect-then-
+ *       mutate: never repair blind, never delete what was not looked at)
  *   C. repair invoked through the REAL route (typed confirmation):
- *      endpoints found/deleted, fresh webhook id, per-plane secret
- *      sync outcomes, per-plane redeploy triggers — audited in-app
+ *      endpoints found (with status), the fresh webhook's provider-
+ *      side VALIDATION evidence (registered + canonical URL + events +
+ *      enabled), old endpoints deleted, per-plane secret sync
+ *      outcomes, per-plane redeploy triggers — audited in-app
  *   D. BOTH planes redeployed READY (the fresh secret is what the
  *      webhook route verifies signatures against at runtime)
  *   E. fixture admin fully purged (login audit rows retained — honest)
@@ -291,6 +298,40 @@ async function main(): Promise<void> {
     record('REAL platform login', true, 'HTTP 200 + HttpOnly session cookie minted (production transport; token never printed)')
     const authHeaders = { cookie: cookieHeader(login.cookies), 'content-type': 'application/json' }
 
+    // ── B2. READ-ONLY pre-repair inspection (inspect, then mutate) ──
+    say('── B2. PRE-REPAIR PROVIDER STATE (read-only live diagnostics) ──')
+    try {
+      const diag = await jsonFetch(`${platformUrl}/api/platform/health/email?live=1`, {
+        method: 'GET',
+        headers: authHeaders,
+      }, 'email diagnostics')
+      // Standard api() envelope: { ok, data } — data IS the diagnostics.
+      const body = (diag.body ?? {}) as Record<string, unknown>
+      const data = (body.data ?? {}) as Record<string, unknown>
+      const resend = (data.resend ?? {}) as Record<string, unknown>
+      const webhooks = (resend.webhooks ?? {}) as Record<string, unknown>
+      const endpoints = Array.isArray(webhooks.endpoints) ? (webhooks.endpoints as Array<Record<string, unknown>>) : []
+      say(`  provider webhook surface right now: liveCheck=${str(webhooks.liveCheck)} total=${str(webhooks.total)}`)
+      for (const w of endpoints) {
+        const events = Array.isArray(w.events) ? (w.events as string[]).join(',') : ''
+        say(`    · id=${str(w.id)} status=${str(w.status) || '«not reported»'} url=${clip(str(w.url), 90)} events=${events || 'none'}`)
+      }
+      if (str(webhooks.liveCheck) === 'ok' && endpoints.length === 0) {
+        say('    ⚠ ZERO registered endpoints — the repair will create the only one.')
+      }
+      record(
+        'pre-repair inspection (read-only)',
+        true,
+        `liveCheck=${str(webhooks.liveCheck)}, ${endpoints.length} registered endpoint(s) inspected BEFORE any mutation`,
+      )
+    } catch (e) {
+      // The inspection is evidence, not a gate — the repair's own
+      // GET /webhooks (step 1 of the route) still inspects before it
+      // mutates. A failed probe is reported honestly and the repair
+      // continues with the route's own inspection.
+      fail('pre-repair inspection (read-only)', `diagnostics probe unreachable: ${clip(redactSecrets((e as Error).message), 100)} (the repair route re-inspects before mutating)`)
+    }
+
     // ── C. invoke the repair through the REAL route ────────────────────
     say('── C. REPAIR (REAL route, typed confirmation, audited in-app) ────')
     const repairStartedAt = Date.now()
@@ -310,12 +351,14 @@ async function main(): Promise<void> {
     const data = envelope.data
     const canonicalEndpoint = str(data.canonicalEndpoint)
     const found = Array.isArray(data.found) ? (data.found as Array<Record<string, unknown>>) : []
+    const validated = (data.validated ?? {}) as Record<string, unknown>
     const deleteWarnings = Array.isArray(data.deleteWarnings) ? (data.deleteWarnings as string[]) : []
     const createdWebhookId = str(data.createdWebhookId)
     const secretSynced = (data.secretSynced ?? {}) as Record<string, string>
     const redeploy = (data.redeploy ?? {}) as Record<string, string>
-    for (const w of found) say(`    · found endpoint id=${str(w.id)} url=${clip(str(w.url), 90)}`)
+    for (const w of found) say(`    · found endpoint id=${str(w.id)} status=${str(w.status) || '«not reported»'} url=${clip(str(w.url), 90)}`)
     say(`  recreated webhook id=${createdWebhookId} at ${canonicalEndpoint}`)
+    say(`  provider-side validation: id=${str(validated.id)} status=${str(validated.status) || '«not reported»'} url=${clip(str(validated.url), 90)} events=${Array.isArray(validated.events) ? (validated.events as string[]).join(',') : ''}`)
     say(`  old endpoints deleted: ${Array.isArray(data.deleted) ? (data.deleted as unknown[]).length : 0}${deleteWarnings.length ? ` (warnings: ${deleteWarnings.join(' | ')})` : ''}`)
     say(`  secret synced: ${JSON.stringify(secretSynced)} (values never printed)`)
     say(`  redeploy triggers: ${JSON.stringify(redeploy)}`)

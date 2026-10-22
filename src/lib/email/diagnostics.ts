@@ -40,10 +40,16 @@ export interface ResendDomainSummary {
   verified: number | null
 }
 
-/** One registered provider webhook endpoint (field-allowlisted — id/url/events ONLY). */
+/** One registered provider webhook endpoint (field-allowlisted —
+ * id/url/status/events ONLY; `status` is the provider's documented
+ * 'enabled'/'disabled' enum, the live answer to "is the endpoint
+ * ENABLED?" — never a secret-bearing field). */
 export interface ResendWebhookEndpoint {
   id: string
   url: string
+  /** Provider enablement enum ('enabled'/'disabled'); '' when the
+   * provider response does not carry it. */
+  status: string
   events: string[]
 }
 
@@ -113,8 +119,8 @@ async function fetchResendDomainSummary(apiKey: string): Promise<ResendDomainSum
 }
 
 /** Live, read-only Resend webhook endpoint list (GET /webhooks, 4s timeout).
- * STRICT FIELD ALLOWLIST: id + url + events only — anything else the
- * provider returns (in particular any secret-bearing field) is dropped
+ * STRICT FIELD ALLOWLIST: id + url + status + events only — anything else
+ * the provider returns (in particular any secret-bearing field) is dropped
  * before this function returns. Exported for the allowlist unit test. */
 export async function fetchResendWebhookSummary(apiKey: string): Promise<ResendWebhookSummary> {
   const controller = new AbortController()
@@ -131,15 +137,21 @@ export async function fetchResendWebhookSummary(apiKey: string): Promise<ResendW
     for (const w of list) {
       const id = typeof w.id === 'string' ? w.id : ''
       // The provider's GET URL field is NOT `url` (live-verified
-      // 2026-10-22). Accept every observed shape: `endpointUrl`,
-      // `endpoint`, or `url`; the ALLOWLIST stays id + url + events.
+      // 2026-10-22; the documented GET shape is `endpoint`). Accept every
+      // observed shape: `endpointUrl`, `endpoint`, or `url`; the
+      // ALLOWLIST stays id + url + status + events.
       const url =
         typeof w.endpointUrl === 'string' ? w.endpointUrl
           : typeof w.endpoint === 'string' ? w.endpoint
             : typeof w.url === 'string' ? w.url
               : ''
+      // Documented per-item enum 'enabled'/'disabled' — the live
+      // "is the webhook actually enabled?" answer (a registered but
+      // disabled endpoint is precisely the delivered-mail-stays-QUEUED
+      // posture this diagnostics surface exists to expose).
+      const status = typeof w.status === 'string' ? w.status : ''
       const events = Array.isArray(w.events) ? w.events.filter((e): e is string => typeof e === 'string') : []
-      if (id || url) endpoints.push({ id, url, events })
+      if (id || url) endpoints.push({ id, url, status, events })
     }
     return { liveCheck: 'ok', total: list.length, endpoints }
   } catch {

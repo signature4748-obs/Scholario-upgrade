@@ -67,6 +67,10 @@ const FETCH_TIMEOUT_MS = 8_000
 export interface WebhookEndpointSummary {
   id: string
   url: string
+  /** Provider enablement enum ('enabled'/'disabled'; '' when the
+   * provider response does not carry it) — documented per-item field
+   * of the GET list response. */
+  status: string
   events: string[]
 }
 
@@ -76,6 +80,11 @@ export interface WebhookRepairResult {
   canonicalEndpoint: string
   /** What was found before the repair (sanitized view). */
   found: WebhookEndpointSummary[]
+  /** The fresh endpoint's provider-side state as VALIDATED by the
+   * post-create GET (registered + canonical URL + full event set +
+   * enabled-when-reported) — the live proof the replacement works
+   * BEFORE any old endpoint is removed. */
+  validated: WebhookEndpointSummary
   /** Old endpoints successfully deleted after the fresh one existed. */
   deleted: WebhookEndpointSummary[]
   /** Old endpoints that failed to delete (warnings — fresh one delivers). */
@@ -169,8 +178,9 @@ async function vercelFetch(
 function endpointView(w: Record<string, unknown>): WebhookEndpointSummary {
   // The provider's GET URL field name is NOT `url` (live-verified
   // 2026-10-22: the diagnostics line that printed an empty URL was
-  // this same discovery). Accept every observed shape: `endpointUrl`
-  // or `endpoint` or `url` — whichever the provider returns.
+  // this same discovery; the documented GET shape is `endpoint`).
+  // Accept every observed shape: `endpointUrl` or `endpoint` or `url`
+  // — whichever the provider returns.
   const rawUrl =
     typeof w.endpointUrl === 'string' ? w.endpointUrl
       : typeof w.endpoint === 'string' ? w.endpoint
@@ -179,6 +189,7 @@ function endpointView(w: Record<string, unknown>): WebhookEndpointSummary {
   return {
     id: String(w.id ?? '«no id»'),
     url: rawUrl,
+    status: typeof w.status === 'string' ? w.status : '',
     events: Array.isArray(w.events) ? (w.events as unknown[]).map((e) => String(e)) : [],
   }
 }
@@ -422,6 +433,49 @@ export async function repairResendWebhook(): Promise<WebhookRepairResult> {
     })
   }
 
+  // 2a. VALIDATE the replacement BEFORE removing anything (the
+  //     provider-side GET is the evidence source; the documented list
+  //     shape carries per-item `endpoint`, `status` and `events`).
+  //     The fresh endpoint must be registered at the canonical URL,
+  //     subscribed to the full lifecycle event set, and enabled when
+  //     the provider reports the field. A validation failure rolls the
+  //     fresh webhook back — the pre-existing endpoints are NEVER
+  //     touched by this path (a failed validation can never destroy a
+  //     working webhook surface).
+  const validationDoc = (await providerFetch('GET', `${RESEND_API_BASE}/webhooks`, { headers: resendAuth }, 'GET /webhooks (validation)')) as {
+    data?: Array<Record<string, unknown>>
+  } | null
+  const validationList = Array.isArray(validationDoc?.data) ? validationDoc.data : []
+  const freshRow = validationList.find((w) => String(w.id ?? '') === createdId)
+  const validated = freshRow ? endpointView(freshRow) : null
+  const missingEvents = [...WEBHOOK_REPAIR_EVENTS].filter((e) => !(validated?.events ?? []).includes(e))
+  const validationProblem = !validated
+    ? 'the fresh webhook id does not appear in the provider webhook list'
+    : validated.url !== canonicalEndpoint
+      ? `the fresh endpoint URL is ${validated.url}, expected ${canonicalEndpoint}`
+      : missingEvents.length > 0
+        ? `the fresh endpoint is missing events: ${missingEvents.join(', ')}`
+        : validated.status !== '' && validated.status !== 'enabled'
+          ? `the fresh endpoint status is '${validated.status}' at the provider (expected 'enabled')`
+          : ''
+  if (validationProblem) {
+    // Rollback: never keep a webhook whose delivery surface was not
+    // proven — delete the fresh one and report honestly. The
+    // pre-existing endpoints were not touched.
+    await providerFetch(
+      'DELETE',
+      `${RESEND_API_BASE}/webhooks/${encodeURIComponent(createdId)}`,
+      { headers: resendAuth },
+      'rollback DELETE /webhooks/{id} (validation)',
+    ).catch(() => undefined)
+    throw new AppError('EXTERNAL_SERVICE_FAILURE', {
+      publicMessage:
+        `The recreated webhook FAILED provider-side validation (${validationProblem}), ` +
+        'so it was deleted (rollback) and the pre-existing endpoints were left untouched. ' +
+        'No provider state was lost. Re-run the live email diagnostics to inspect the current provider webhook state before repairing again.',
+    })
+  }
+
   // 2b. The fresh endpoint exists — now remove every OLD endpoint so the
   //     provider surface is exactly the one canonical webhook. A stale
   //     endpoint failing to delete is a WARNING, never fatal (the fresh
@@ -488,6 +542,7 @@ export async function repairResendWebhook(): Promise<WebhookRepairResult> {
     ok: true,
     canonicalEndpoint,
     found,
+    validated: validated as WebhookEndpointSummary,
     deleted,
     deleteWarnings,
     createdWebhookId: createdId,
