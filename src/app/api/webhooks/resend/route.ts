@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createHmac, timingSafeEqual } from 'node:crypto'
 import { db } from '@/lib/db'
 import { enforceRateLimitStrict, RATE_LIMITS, clientIpFromHeaders } from '@/lib/security/rate-limit'
+import { verifySvixEnvelope } from '@/lib/email/svix-signature'
 
 export const runtime = 'nodejs'
 
@@ -21,7 +21,12 @@ export const runtime = 'nodejs'
  *     svix-signature. The signature is v1,<base64 HMAC-SHA256 over
  *     `${svix-id}.${svix-timestamp}.${rawBody}` keyed by the
  *     RESEND_WEBHOOK_SECRET signing secret (multiple v1 tokens may be
- *     space-separated; any match wins).
+ *     space-separated; any match wins). The HMAC key is accepted under
+ *     EITHER derivation (src/lib/email/svix-signature.ts): the legacy
+ *     full-string key (verified live 2026-10-11/12) or the
+ *     standardwebhooks derivation the provider's current stack signs
+ *     with (whsec_ prefix stripped, base64-decoded) — both derived from
+ *     the same deployment-held secret, still fail-closed together.
  *   · Replay protection: a svix-timestamp older than 5 minutes is
  *     rejected (401) — a captured request cannot be replayed later.
  *   · Fail-closed: no configured secret ⇒ every request is 401 and the
@@ -60,10 +65,9 @@ export const runtime = 'nodejs'
 const SIGNATURE_HEADER = 'svix-signature'
 const ID_HEADER = 'svix-id'
 const TIMESTAMP_HEADER = 'svix-timestamp'
-/** Svix-signed requests older than this are replays → reject. */
-const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000
 const RAW_PAYLOAD_MAX = 8000
 const LAST_ERROR_MAX = 500
+// (Svix verification + replay window live in src/lib/email/svix-signature.ts)
 
 /** Events that flip EmailDelivery into a terminal failure state. */
 const BOUNCED = 'email.bounced'
@@ -144,51 +148,7 @@ function clip(text: string, max: number): string {
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed
 }
 
-// ─── Svix signature verification ────────────────────────────────────────
-
-/**
- * Verify the Svix v1 signature envelope. Fail-closed on: missing secret
- * (route inert), missing headers, stale timestamp, no matching v1 token.
- * Timing-safe comparison per token.
- */
-function verifySvixSignature(
-  rawBody: string,
-  id: string | null,
-  timestamp: string | null,
-  signatureHeader: string | null,
-): { ok: true } | { ok: false; reason: string } {
-  const secret = (process.env.RESEND_WEBHOOK_SECRET ?? '').trim()
-  if (!secret) return { ok: false, reason: 'no signing secret configured' }
-  if (!id || !timestamp || !signatureHeader) {
-    return { ok: false, reason: 'missing svix headers' }
-  }
-
-  const ts = Number(timestamp)
-  if (!Number.isFinite(ts) || ts <= 0) return { ok: false, reason: 'malformed timestamp' }
-  const ageMs = Math.abs(Date.now() - ts * 1000)
-  if (ageMs > TIMESTAMP_TOLERANCE_MS) return { ok: false, reason: 'stale timestamp (replay)' }
-
-  const message = `${id}.${timestamp}.${rawBody}`
-  const expected = createHmac('sha256', secret).update(message).digest('base64')
-  const expectedBuf = Buffer.from(expected, 'utf8')
-
-  // Multiple schemes can be space-separated: "v1,AAA v1,BBB v1gpg,..." —
-  // any valid v1 token accepts the request.
-  const tokens = signatureHeader
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.startsWith('v1,'))
-  if (tokens.length === 0) return { ok: false, reason: 'no v1 signature token' }
-
-  for (const token of tokens) {
-    const providedBuf = Buffer.from(token.slice('v1,'.length), 'utf8')
-    if (providedBuf.length !== expectedBuf.length) continue
-    if (timingSafeEqual(providedBuf, expectedBuf)) return { ok: true }
-  }
-  return { ok: false, reason: 'signature mismatch' }
-}
-
-// ─── payload shape (defensive — provider schema may drift) ──────────────
+// ─── payload shape (defensive — provider schema may drift) ──────────
 
 interface ResendWebhookBody {
   type?: string
@@ -236,12 +196,13 @@ export async function POST(req: NextRequest) {
   // Gateway retries legitimately — the shared webhook budget.
   await enforceRateLimitStrict('rl:resend-wh:' + ip, RATE_LIMITS.webhook)
 
-  const verification = verifySvixSignature(
-    raw,
-    req.headers.get(ID_HEADER),
-    req.headers.get(TIMESTAMP_HEADER),
-    req.headers.get(SIGNATURE_HEADER),
-  )
+  const verification = verifySvixEnvelope({
+    secret: process.env.RESEND_WEBHOOK_SECRET ?? '',
+    rawBody: raw,
+    id: req.headers.get(ID_HEADER),
+    timestamp: req.headers.get(TIMESTAMP_HEADER),
+    signatureHeader: req.headers.get(SIGNATURE_HEADER),
+  })
   if (!verification.ok) {
     // Rejection-evidence ledger: record ONLY Svix-shaped attempts (all
     // three svix headers present). Header-less internet noise stays a
