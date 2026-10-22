@@ -170,6 +170,17 @@ jobs:
       PAYMENTS_SANDBOX: "1"
       PAYMENTS_SANDBOX_SECRET: "local-sandbox-secret"
       PLATFORM_PAYMENT_WEBHOOK_SECRET: "platform-webhook-test-secret"
+      # PARITY WITH ci.yml (2026-10-22, live evidence): the RESEND fixture
+      # was added to ci.yml on 2026-10-11 but never to THIS embedded CI
+      # copy — so the release stage's test matrix silently SKIPPED the
+      # entire signed-webhook contract (21 tests: the resend signed
+      # lifecycle incl. both Svix key derivations + the rejection-evidence
+      # ledger) while the PR-gate CI ran them. Release run 39797165140's
+      # CI stage on a8f93570 shows exactly 48 skips vs the ci.yml runs'
+      # 27 — the 21-test delta is this gap. Same whsec_-shaped fixture
+      # as ci.yml so the dual-scheme verifier is exercised end-to-end on
+      # every future release commit too.
+      RESEND_WEBHOOK_SECRET: "whsec_cmVzZW5kLXdlYmhvb2stdGVzdC1zZWNyZXQtY2ktZml4dHVyZQ=="
 
     steps:
       - name: Check out the exact release commit
