@@ -95,12 +95,23 @@ jobs:
       #    checkout contract (SandboxProvider, no network).
       #  · tests/security/saas-hardening.test.ts:537 signs the platform
       #    subscription webhook with PLATFORM_PAYMENT_WEBHOOK_SECRET.
+      #  · tests/security/resend-webhook.test.ts signs Svix requests with
+      #    RESEND_WEBHOOK_SECRET (same value in the dev server env — the
+      #    route verifies with it). WITHOUT this value the entire signed
+      #    lifecycle describe blocks SKIP in CI (fail-closed boundary still
+      #    runs): delivered-evidence upgrades, bounce/complaint/failure
+      #    state sync, svix-id idempotency AND the out-of-order/duplicate
+      #    transitions (email.failed→delivered, delivered→bounced, …) —
+      #    the suite header documented "CI sets it as a workflow secret"
+      #    but it was never wired, so the webhook contract was silently
+      #    uncovered in CI. Fixed with the parity-fix convention (2026-10-22).
       GOOGLE_OAUTH_CLIENT_ID: "test-google-client-id"
       GOOGLE_OAUTH_CLIENT_SECRET: "test-google-client-secret"
       RAZORPAY_WEBHOOK_SECRET: "batch2-test-webhook-secret"
       PAYMENTS_SANDBOX: "1"
       PAYMENTS_SANDBOX_SECRET: "local-sandbox-secret"
       PLATFORM_PAYMENT_WEBHOOK_SECRET: "platform-webhook-test-secret"
+      RESEND_WEBHOOK_SECRET: "resend-webhook-test-secret-ci-fixture"
 
     steps:
       # 1. Shallow checkout — CI needs the working tree, not history.
