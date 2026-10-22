@@ -30,6 +30,7 @@ import { resolveProvider } from './index'
 import type { EmailProviderId } from './types'
 
 const RESEND_DOMAINS_ENDPOINT = 'https://api.resend.com/domains'
+const RESEND_EMAILS_ENDPOINT = 'https://api.resend.com/emails'
 const RESEND_WEBHOOKS_ENDPOINT = 'https://api.resend.com/webhooks'
 const LIVE_CHECK_TIMEOUT_MS = 4_000
 
@@ -69,6 +70,9 @@ export interface EmailDiagnostics {
     webhookSecretPresent: boolean
     domains: ResendDomainSummary
     webhooks: ResendWebhookSummary
+    /** Present only when a ?message=<providerMessageId> probe was
+     * requested: the live per-message delivery state. */
+    message?: ResendMessageState
   }
   gmailSmtp: {
     userPresent: boolean
@@ -138,13 +142,58 @@ export async function fetchResendWebhookSummary(apiKey: string): Promise<ResendW
   }
 }
 
+/** One provider message's live delivery state (STRICT FIELD ALLOWLIST —
+ * id/last_event/status/created_at only; subject, body and recipients are
+ * provider PII the diagnostics surface never carries). */
+export interface ResendMessageState {
+  liveCheck: 'ok' | 'failed' | 'skipped'
+  id: string | null
+  lastEvent: string | null
+  status: string | null
+  createdAt: string | null
+}
+
+/**
+ * Live, read-only Resend GET /emails/{id} (4s timeout) — the
+ * per-message delivery answer ("did the provider actually deliver THIS
+ * message?") with the runtime provider key. The allowlisted fields only:
+ * subject/body/recipients never leave this module.
+ */
+export async function fetchResendMessageState(apiKey: string, messageId: string): Promise<ResendMessageState> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), LIVE_CHECK_TIMEOUT_MS)
+  try {
+    const res = await fetch(`${RESEND_EMAILS_ENDPOINT}/${encodeURIComponent(messageId)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    })
+    if (!res.ok) return { liveCheck: 'failed', id: null, lastEvent: null, status: null, createdAt: null }
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null
+    const pick = (k: string): string | null => {
+      const v = body?.[k]
+      return typeof v === 'string' ? v : null
+    }
+    return {
+      liveCheck: 'ok',
+      id: pick('id'),
+      lastEvent: pick('last_event'),
+      status: pick('status'),
+      createdAt: pick('created_at'),
+    }
+  } catch {
+    return { liveCheck: 'failed', id: null, lastEvent: null, status: null, createdAt: null }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /**
  * Secret-safe email diagnostics. `liveProviderCheck` performs a
  * read-only authenticated GET /domains against Resend (only when the
  * key is present) so "no verified domains → testing mode" is visible
  * in the admin console. Never sends email, never returns secrets.
  */
-export async function getEmailDiagnostics(liveProviderCheck = false): Promise<EmailDiagnostics> {
+export async function getEmailDiagnostics(liveProviderCheck = false, messageProbe?: string): Promise<EmailDiagnostics> {
   const provider = resolveProvider()
   const apiKey = (process.env.RESEND_API_KEY ?? '').trim()
   const gmail = gmailSmtpConfig()
@@ -159,6 +208,15 @@ export async function getEmailDiagnostics(liveProviderCheck = false): Promise<Em
       ? await fetchResendWebhookSummary(apiKey)
       : { liveCheck: 'skipped', total: null, endpoints: [] }
     : { liveCheck: 'skipped', total: null, endpoints: [] }
+  // Optional per-message delivery probe (?message=<providerMessageId>):
+  // runs whenever a message id is requested and the key is present —
+  // independent of the live flag (a targeted question, not a sweep).
+  const message: ResendMessageState | undefined =
+    messageProbe && apiKey
+      ? await fetchResendMessageState(apiKey, messageProbe)
+      : messageProbe
+        ? { liveCheck: 'skipped', id: null, lastEvent: null, status: null, createdAt: null }
+        : undefined
 
   // Outbox status counts (7-day window) + the latest failure with its
   // parsed error class.
@@ -205,6 +263,7 @@ export async function getEmailDiagnostics(liveProviderCheck = false): Promise<Em
       webhookSecretPresent: (process.env.RESEND_WEBHOOK_SECRET ?? '').trim().length > 0,
       domains,
       webhooks,
+      ...(message !== undefined ? { message } : {}),
     },
     gmailSmtp: {
       userPresent: gmail.user !== null,

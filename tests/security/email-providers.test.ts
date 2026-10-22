@@ -398,3 +398,64 @@ describe('fetchResendWebhookSummary — the provider webhook list never carries 
     expect(summary.endpoints).toEqual([])
   })
 })
+
+// ─── 8. per-message delivery probe — STRICT FIELD ALLOWLIST ───────────────
+
+describe('fetchResendMessageState — the live message probe carries only the delivery state', () => {
+  const REAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = REAL_FETCH
+  })
+
+  test('last_event/status surface; subject/body/to/from are dropped (PII never leaves the module)', async () => {
+    const { fetchResendMessageState } = await import('@/lib/email/diagnostics')
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          id: '01a15d89-1836-7641-b037-abcdef',
+          object: 'email',
+          to: ['secret.recipient@example.test'],
+          from: 'Scholario <onboarding@resend.dev>',
+          subject: 'Your one-time credential',
+          html: '<p>never surface</p>',
+          last_event: 'delivered',
+          status: 'delivered',
+          created_at: '2026-10-22T01:00:00.000Z',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as typeof fetch
+    const state = await fetchResendMessageState('re_stub_not_a_real_key', '01a15d89-1836-7641-b037-abcdef')
+    expect(state).toEqual({
+      liveCheck: 'ok',
+      id: '01a15d89-1836-7641-b037-abcdef',
+      lastEvent: 'delivered',
+      status: 'delivered',
+      createdAt: '2026-10-22T01:00:00.000Z',
+    })
+    const serialized = JSON.stringify(state)
+    expect(serialized).not.toContain('secret.recipient')
+    expect(serialized).not.toContain('subject')
+    expect(serialized).not.toContain('one-time credential')
+    expect(serialized).not.toContain('never surface')
+  })
+
+  test('non-2xx → liveCheck failed with null fields (no oracle)', async () => {
+    const { fetchResendMessageState } = await import('@/lib/email/diagnostics')
+    globalThis.fetch = (async () => new Response('{"message":"Not Found"}', { status: 404 })) as typeof fetch
+    const state = await fetchResendMessageState('re_stub_not_a_real_key', 're_missing')
+    expect(state.liveCheck).toBe('failed')
+    expect(state.id).toBeNull()
+    expect(state.lastEvent).toBeNull()
+  })
+
+  test('network error → liveCheck failed (never throws)', async () => {
+    const { fetchResendMessageState } = await import('@/lib/email/diagnostics')
+    globalThis.fetch = (async () => {
+      throw new Error('socket reset')
+    }) as typeof fetch
+    const state = await fetchResendMessageState('re_stub_not_a_real_key', 're_any')
+    expect(state.liveCheck).toBe('failed')
+    expect(state.lastEvent).toBeNull()
+  })
+})
