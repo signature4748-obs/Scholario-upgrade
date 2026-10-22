@@ -62,4 +62,13 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           VERCEL_PROJECT_ID_SCHOOL: ${{ secrets.VERCEL_PROJECT_ID_SCHOOL }}
+          # Deploy-hook FALLBACK (live run 39746765594: the in-app redeploy
+          # trigger answered HTTP 400 on BOTH planes and the stale-secret
+          # platform plane silently 401'd every provider event). When the
+          # route cannot trigger a redeploy itself, the script fires the
+          # SAME production deploy hooks the Release pipeline uses so the
+          # fresh signing secret actually reaches BOTH runtimes before
+          # gate D claims READY. Hook URLs are secrets — never echoed.
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+          VERCEL_DEPLOY_HOOK_URL_SCHOOL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL_SCHOOL }}
         run: bun scripts/prod-release/email-webhook-repair.ts

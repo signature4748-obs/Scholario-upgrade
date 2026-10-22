@@ -28,8 +28,13 @@
  *      side VALIDATION evidence (registered + canonical URL + events +
  *      enabled), old endpoints deleted, per-plane secret sync
  *      outcomes, per-plane redeploy triggers — audited in-app
+ *   C2. deploy-hook FALLBACK: for any plane whose in-app redeploy trigger
+ *      failed/skipped, the script fires that plane's production deploy
+ *      hook (the Release pipeline's own mechanism) so the fresh signing
+ *      secret REACHES the runtime — env-var writes alone never do
  *   D. BOTH planes redeployed READY (the fresh secret is what the
- *      webhook route verifies signatures against at runtime)
+ *      webhook route verifies signatures against at runtime; the gate
+ *      only counts deployments CREATED AFTER the repair started)
  *   E. fixture admin fully purged (login audit rows retained — honest)
  *
  * FAILS HONESTLY: if the runtime key lacks provider write scope or
@@ -200,6 +205,41 @@ async function latestDeployments(
   }
 }
 
+/**
+ * Fire ONE production deploy hook (the release pipeline's own deploy
+ * mechanism — scripts/prod-release/trigger-deploy-hooks.ts semantics:
+ * POST, 2xx = accepted — Vercel deploy hooks answer 201 Created with
+ * {"job":{"state":"PENDING"}} in practice; transport hiccups and 5xx are
+ * retried, a 4xx is an immediate honest failure). The hook URL carries
+ * deploy power: it is passed by reference, NEVER printed, and never
+ * stored — the console only ever carries the plane label + HTTP code.
+ */
+async function fireDeployHook(
+  hookUrl: string,
+  label: string,
+): Promise<{ ok: boolean; status: number }> {
+  let last: { ok: boolean; status: number } = { ok: false, status: 0 }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 30_000)
+    try {
+      const res = await fetch(hookUrl, { method: 'POST', signal: controller.signal })
+      if (res.ok) return { ok: true, status: res.status }
+      // 4xx = the hook itself is bad (unknown/unauthorized) — retrying
+      // cannot fix it; report the honest code immediately.
+      if (res.status < 500) return { ok: false, status: res.status }
+      last = { ok: false, status: res.status }
+    } catch {
+      last = { ok: false, status: 0 }
+    } finally {
+      clearTimeout(timer)
+    }
+    if (attempt < 3) await sleep(2_000 * attempt)
+  }
+  void label
+  return last
+}
+
 // ─── main ────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -368,6 +408,32 @@ async function main(): Promise<void> {
       `recreated ${createdWebhookId} at ${canonicalEndpoint}; secretSynced=${JSON.stringify(secretSynced)}; redeploy=${JSON.stringify(redeploy)}`,
     )
 
+    // ── C2. deploy-hook fallback for planes the in-app redeploy trigger ─
+    // Env-var writes reach the runtime ONLY through a NEW deployment. When
+    // the in-app trigger could not fire (live run 39746765594: both planes
+    // answered HTTP 400), the repair would otherwise leave the webhook live
+    // at the provider but the app still verifying the OLD signing secret —
+    // events 401'd fail-closed and no delivery evidence landed. The release
+    // pipeline's own production deploy hooks are the sanctioned trigger for
+    // exactly this; fire the affected plane's hook (URLs are secrets — they
+    // are read from the environment and NEVER printed; they only travel
+    // inside the fetch call). Gate D below then waits for the deployments.
+    const hookFor: Record<string, string> = {
+      'scholario-platform': (process.env.VERCEL_DEPLOY_HOOK_URL || '').trim(),
+      'scholario-app': (process.env.VERCEL_DEPLOY_HOOK_URL_SCHOOL || '').trim(),
+    }
+    for (const plane of planes) {
+      const outcome = redeploy[plane.label] ?? ''
+      if (!outcome.startsWith('failed') && !outcome.startsWith('skipped')) continue
+      const hookUrl = hookFor[plane.label] ?? ''
+      if (!hookUrl) {
+        say(`    ⚠ ${plane.label}: in-app redeploy trigger did not fire and no deploy hook is configured — trigger the redeploy manually (the secret IS synced; events will verify)`)
+        continue
+      }
+      const fired = await fireDeployHook(hookUrl, plane.label)
+      say(`    · ${plane.label} deploy hook fallback → HTTP ${fired.status} (2xx = deployment triggered; the URL is never printed)${fired.ok ? '' : ' — hook REJECTED'}`)
+    }
+
     // ── D. wait for BOTH redeploys READY ────────────────────────────────
     say('── D. BOTH PLANES REDEPLOYED READY (fresh secret live) ────────────')
     const deadline = Date.now() + DEPLOY_READY_TIMEOUT_MS
@@ -380,7 +446,13 @@ async function main(): Promise<void> {
       for (const plane of planes) {
         const list = await latestDeployments(vercelToken, orgId, plane.projectId)
         // A NEW production deployment created after the repair started.
-        const fresh = list.find((d) => d.target === 'production' && (d.created ?? 0) * 1000 > repairStartedAt)
+        // Vercel's v6 list `created` field is epoch MILLISECONDS — compare
+        // it DIRECTLY against Date.now() (the previous `* 1000` scaled ms
+        // into the far future and matched ANY deployment, which let live
+        // run 39746765594 pass gate D on the platform plane's pre-repair
+        // deployment — the stale-secret root cause of that run's missing
+        // webhook events).
+        const fresh = list.find((d) => d.target === 'production' && (d.created ?? 0) > repairStartedAt)
         const freshState = fresh?.state ?? 'none-yet'
         states.push(`${plane.label}=${freshState}`)
         if (fresh?.state === 'ERROR') errored = `${plane.label} redeploy errored`
