@@ -310,11 +310,13 @@ async function main(): Promise<void> {
     const data = envelope.data
     const canonicalEndpoint = str(data.canonicalEndpoint)
     const found = Array.isArray(data.found) ? (data.found as Array<Record<string, unknown>>) : []
+    const deleteWarnings = Array.isArray(data.deleteWarnings) ? (data.deleteWarnings as string[]) : []
     const createdWebhookId = str(data.createdWebhookId)
     const secretSynced = (data.secretSynced ?? {}) as Record<string, string>
     const redeploy = (data.redeploy ?? {}) as Record<string, string>
     for (const w of found) say(`    · found endpoint id=${str(w.id)} url=${clip(str(w.url), 90)}`)
     say(`  recreated webhook id=${createdWebhookId} at ${canonicalEndpoint}`)
+    say(`  old endpoints deleted: ${Array.isArray(data.deleted) ? (data.deleted as unknown[]).length : 0}${deleteWarnings.length ? ` (warnings: ${deleteWarnings.join(' | ')})` : ''}`)
     say(`  secret synced: ${JSON.stringify(secretSynced)} (values never printed)`)
     say(`  redeploy triggers: ${JSON.stringify(redeploy)}`)
     record(

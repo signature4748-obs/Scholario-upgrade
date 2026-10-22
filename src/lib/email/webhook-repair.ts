@@ -76,8 +76,10 @@ export interface WebhookRepairResult {
   canonicalEndpoint: string
   /** What was found before the repair (sanitized view). */
   found: WebhookEndpointSummary[]
-  /** Endpoints deleted as part of the recreate (id + url only). */
+  /** Old endpoints successfully deleted after the fresh one existed. */
   deleted: WebhookEndpointSummary[]
+  /** Old endpoints that failed to delete (warnings — fresh one delivers). */
+  deleteWarnings: string[]
   /** The fresh provider webhook id (NEVER its signing secret). */
   createdWebhookId: string
   /** The subscribed event set on the fresh endpoint. */
@@ -112,8 +114,12 @@ async function providerFetch(
   }
   const text = await res.text().catch(() => '')
   if (!res.ok) {
+    // The provider's own validation error text is operator-facing
+    // information (it names the rejected field) — include it, redacted
+    // and clipped, in the PUBLIC message so a failed repair is
+    // self-diagnosing from the workflow evidence alone.
     throw new AppError('EXTERNAL_SERVICE_FAILURE', {
-      publicMessage: `The Resend API request (${label}) failed with HTTP ${res.status}. Nothing was mutated by this request.`,
+      publicMessage: `The Resend API request (${label}) failed with HTTP ${res.status}: ${redactDetail(text.slice(0, 200))}`,
       internalDetail: `HTTP ${res.status} ${redactDetail(text.slice(0, 400))}`,
     })
   }
@@ -161,9 +167,13 @@ async function vercelFetch(
 // ─── endpoint (allowlisted) view of a provider webhook doc ───────────────
 
 function endpointView(w: Record<string, unknown>): WebhookEndpointSummary {
+  // The provider's GET returns `endpointUrl` (live-verified 2026-10-22:
+  // the `url` field does not exist in the GET response — the earlier
+  // repair attempt's empty-URL diagnostics line was this same discovery).
+  const url = typeof w.endpointUrl === 'string' ? w.endpointUrl : typeof w.url === 'string' ? w.url : '«no url»'
   return {
     id: String(w.id ?? '«no id»'),
-    url: String(w.url ?? '«no url»'),
+    url,
     events: Array.isArray(w.events) ? (w.events as unknown[]).map((e) => String(e)) : [],
   }
 }
@@ -363,22 +373,24 @@ export async function repairResendWebhook(): Promise<WebhookRepairResult> {
   const existing = Array.isArray(whDoc?.data) ? whDoc.data : []
   const found = existing.map(endpointView)
 
-  // 2. Recreate: delete every endpoint (they are all non-delivering /
-  //    stale — the recreate replaces the provider's webhook surface
-  //    with exactly one canonical endpoint), then create the fresh
-  //    one and capture its signing secret IN MEMORY.
-  for (const w of existing) {
-    await providerFetch(
-      'DELETE',
-      `${RESEND_API_BASE}/webhooks/${encodeURIComponent(String(w.id ?? ''))}`,
-      { headers: resendAuth },
-      `DELETE /webhooks/{id}`,
-    )
-  }
+  // 2. CREATE-FIRST (live-learned 2026-10-22): the first repair attempt
+  //    deleted the old endpoints and THEN failed create validation
+  //    (HTTP 422 — the create body field is `endpointUrl`, not `url`),
+  //    leaving the provider webhook-less. Correct ordering: create the
+  //    fresh endpoint FIRST — a create failure can then never destroy
+  //    the existing (even if non-delivering) webhook surface — and
+  //    only delete the OLD endpoints after the fresh one exists.
   const created = (await providerFetch(
     'POST',
     `${RESEND_API_BASE}/webhooks`,
-    { headers: resendAuth, body: { url: canonicalEndpoint, events: [...WEBHOOK_REPAIR_EVENTS] } },
+    {
+      headers: resendAuth,
+      body: {
+        endpointUrl: canonicalEndpoint,
+        events: [...WEBHOOK_REPAIR_EVENTS],
+        description: 'Scholario platform delivery lifecycle (auto-managed by the Operations Center repair action)',
+      },
+    },
     'POST /webhooks',
   )) as { id?: unknown; signing_secret?: unknown } | null
   const createdId = String(created?.id ?? '')
@@ -386,8 +398,29 @@ export async function repairResendWebhook(): Promise<WebhookRepairResult> {
   if (!createdId || !freshSecret) {
     throw new AppError('EXTERNAL_SERVICE_FAILURE', {
       publicMessage:
-        'The recreated webhook did not return an id + signing secret via the API, so the app-side secret could not be synced. Manual step: copy the webhook signing secret from the Resend dashboard into RESEND_WEBHOOK_SECRET on both planes, then redeploy.',
+        'The created webhook did not return an id + signing secret via the API, so the app-side secret could not be synced (the pre-existing endpoints were left untouched). Manual step: rotate the webhook from the Resend dashboard and copy the signing secret into RESEND_WEBHOOK_SECRET on both planes, then redeploy.',
     })
+  }
+
+  // 2b. The fresh endpoint exists — now remove every OLD endpoint so the
+  //     provider surface is exactly the one canonical webhook. A stale
+  //     endpoint failing to delete is a WARNING, never fatal (the fresh
+  //     endpoint is the one that delivers; the stale one is inert).
+  const deleted: WebhookEndpointSummary[] = []
+  const deleteWarnings: string[] = []
+  for (const w of existing) {
+    const view = endpointView(w)
+    try {
+      await providerFetch(
+        'DELETE',
+        `${RESEND_API_BASE}/webhooks/${encodeURIComponent(String(w.id ?? ''))}`,
+        { headers: resendAuth },
+        `DELETE /webhooks/{id} (stale ${view.id})`,
+      )
+      deleted.push(view)
+    } catch (e) {
+      deleteWarnings.push(`${view.id}: ${redactDetail(String((e as AppError).publicMessage ?? (e as Error).message)).slice(0, 120)}`)
+    }
   }
 
   // 3. Sync the fresh secret to EVERY plane. Rollback on failure: a
@@ -435,7 +468,8 @@ export async function repairResendWebhook(): Promise<WebhookRepairResult> {
     ok: true,
     canonicalEndpoint,
     found,
-    deleted: found,
+    deleted,
+    deleteWarnings,
     createdWebhookId: createdId,
     events: [...WEBHOOK_REPAIR_EVENTS],
     secretSynced,
