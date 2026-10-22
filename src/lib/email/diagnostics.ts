@@ -130,11 +130,14 @@ export async function fetchResendWebhookSummary(apiKey: string): Promise<ResendW
     const endpoints: ResendWebhookEndpoint[] = []
     for (const w of list) {
       const id = typeof w.id === 'string' ? w.id : ''
-      // The provider's GET returns `endpointUrl` (live-verified
-      // 2026-10-22: the `url` field is absent from the response — the
-      // empty-URL diagnostics line was this same discovery). Accept
-      // either name; the ALLOWLIST stays id + url + events.
-      const url = typeof w.endpointUrl === 'string' ? w.endpointUrl : typeof w.url === 'string' ? w.url : ''
+      // The provider's GET URL field is NOT `url` (live-verified
+      // 2026-10-22). Accept every observed shape: `endpointUrl`,
+      // `endpoint`, or `url`; the ALLOWLIST stays id + url + events.
+      const url =
+        typeof w.endpointUrl === 'string' ? w.endpointUrl
+          : typeof w.endpoint === 'string' ? w.endpoint
+            : typeof w.url === 'string' ? w.url
+              : ''
       const events = Array.isArray(w.events) ? w.events.filter((e): e is string => typeof e === 'string') : []
       if (id || url) endpoints.push({ id, url, events })
     }

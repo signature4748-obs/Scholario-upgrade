@@ -99,7 +99,9 @@ const FRESH_SECRET = 'whsec_STUB_SECRET_VALUE_never_real_0123456789abcdef'
 
 function happyPathCalls(): ScriptedCall[] {
   return [
-    // Resend: GET the existing (stale, non-delivering) endpoints.
+    // Resend: GET the existing (stale, non-delivering) endpoints — the
+    // two rows use the two observed GET URL field shapes to pin the
+    // shape-agnostic parsing.
     {
       method: 'GET',
       urlPrefix: 'https://api.resend.com/webhooks',
@@ -107,7 +109,7 @@ function happyPathCalls(): ScriptedCall[] {
       body: {
         data: [
           { id: 'wh_live_old1', endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend', events: ['email.delivered'] },
-          { id: 'wh_live_old2', endpointUrl: 'https://stale.example.com/hook', events: [] },
+          { id: 'wh_live_old2', endpoint: 'https://stale.example.com/hook', events: [] },
         ],
       },
     },
@@ -258,13 +260,13 @@ describe('WEBHOOK REPAIR · fail-closed preflight', () => {
         method: 'GET',
         urlPrefix: 'https://api.resend.com/webhooks',
         status: 200,
-        body: { data: [{ id: 'wh_live_old1', endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend', events: ['email.delivered'] }] },
+        body: { data: [{ id: 'wh_live_old1', endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend', events: ['email.delivered'] }] },
       },
       {
         method: 'POST',
         urlPrefix: 'https://api.resend.com/webhooks',
         status: 422,
-        body: { message: 'endpointUrl is required' },
+        body: { statusCode: 422, message: 'Missing `endpoint` field.', name: 'missing_required_field' },
       },
     ]
     const { recorded } = scriptFetch(calls)
@@ -277,7 +279,7 @@ describe('WEBHOOK REPAIR · fail-closed preflight', () => {
     expect(caught).toBeInstanceOf(AppError)
     // The provider's own validation text is operator-facing — surfaced.
     expect(String((caught as AppError).publicMessage)).toContain('422')
-    expect(String((caught as AppError).publicMessage)).toContain('endpointUrl')
+    expect(String((caught as AppError).publicMessage)).toContain('Missing `endpoint` field')
     // NOTHING was deleted before the failed create (create-first).
     expect(recorded.some((c) => c.method === 'DELETE')).toBe(false)
     expect(String((caught as AppError).publicMessage)).not.toContain(FRESH_SECRET)
@@ -299,8 +301,10 @@ describe('WEBHOOK REPAIR · recreate + secret sync + redeploy', () => {
     expect(createIdx).toBeGreaterThan(-1)
     expect(firstDeleteIdx).toBeGreaterThan(createIdx)
     const create = recorded[createIdx]
+    // The create body field is `endpoint` — named by the provider's own
+    // 422 ("Missing `endpoint` field.") on the live second attempt.
     expect(create.body).toEqual({
-      endpointUrl: 'https://scholario-platform.vercel.app/api/webhooks/resend',
+      endpoint: 'https://scholario-platform.vercel.app/api/webhooks/resend',
       events: [...WEBHOOK_REPAIR_EVENTS],
       description: expect.any(String),
     })
@@ -360,6 +364,17 @@ describe('WEBHOOK REPAIR · recreate + secret sync + redeploy', () => {
     expect(result.deleted.map((d) => d.id)).toEqual(['wh_live_old2'])
     expect(result.deleteWarnings.length).toBe(1)
     expect(result.deleteWarnings[0]).toContain('wh_live_old1')
+    expect(JSON.stringify(result)).not.toContain(FRESH_SECRET)
+  })
+
+  test('a create response carrying the secret under the alternate `secret` name is still captured (shape-tolerant parsing)', async () => {
+    const calls = happyPathCalls()
+    const createIdx = calls.findIndex((c) => c.method === 'POST' && c.urlPrefix === 'https://api.resend.com/webhooks')
+    calls[createIdx] = { method: 'POST', urlPrefix: 'https://api.resend.com/webhooks', status: 201, body: { id: 'wh_live_fresh', secret: FRESH_SECRET } }
+    scriptFetch(calls)
+    const result = await repairResendWebhook()
+    expect(result.ok).toBe(true)
+    expect(result.createdWebhookId).toBe('wh_live_fresh')
     expect(JSON.stringify(result)).not.toContain(FRESH_SECRET)
   })
 

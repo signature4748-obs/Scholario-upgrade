@@ -167,13 +167,18 @@ async function vercelFetch(
 // ─── endpoint (allowlisted) view of a provider webhook doc ───────────────
 
 function endpointView(w: Record<string, unknown>): WebhookEndpointSummary {
-  // The provider's GET returns `endpointUrl` (live-verified 2026-10-22:
-  // the `url` field does not exist in the GET response — the earlier
-  // repair attempt's empty-URL diagnostics line was this same discovery).
-  const url = typeof w.endpointUrl === 'string' ? w.endpointUrl : typeof w.url === 'string' ? w.url : '«no url»'
+  // The provider's GET URL field name is NOT `url` (live-verified
+  // 2026-10-22: the diagnostics line that printed an empty URL was
+  // this same discovery). Accept every observed shape: `endpointUrl`
+  // or `endpoint` or `url` — whichever the provider returns.
+  const rawUrl =
+    typeof w.endpointUrl === 'string' ? w.endpointUrl
+      : typeof w.endpoint === 'string' ? w.endpoint
+        : typeof w.url === 'string' ? w.url
+          : '«no url»'
   return {
     id: String(w.id ?? '«no id»'),
-    url,
+    url: rawUrl,
     events: Array.isArray(w.events) ? (w.events as unknown[]).map((e) => String(e)) : [],
   }
 }
@@ -386,15 +391,30 @@ export async function repairResendWebhook(): Promise<WebhookRepairResult> {
     {
       headers: resendAuth,
       body: {
-        endpointUrl: canonicalEndpoint,
+        // Live-verified against the REAL provider (2026-10-22, second
+        // repair attempt): the create body field is `endpoint` — the
+        // provider's own 422 validation text named it ("Missing `endpoint`
+        // field.") after `url` (attempt 1) and `endpointUrl` (attempt 2)
+        // were rejected. The surfaced provider error bodies made this
+        // self-diagnosing from the workflow evidence alone.
+        endpoint: canonicalEndpoint,
         events: [...WEBHOOK_REPAIR_EVENTS],
         description: 'Scholario platform delivery lifecycle (auto-managed by the Operations Center repair action)',
       },
     },
     'POST /webhooks',
-  )) as { id?: unknown; signing_secret?: unknown } | null
+  )) as { id?: unknown; signing_secret?: unknown; secret?: unknown; signingSecret?: unknown } | null
   const createdId = String(created?.id ?? '')
-  const freshSecret = typeof created?.signing_secret === 'string' ? created.signing_secret : ''
+  // The signing-secret field name in the create RESPONSE has never been
+  // observed live (the pre-repair webhook was dashboard-created, whose
+  // secret the API never returns). Accept the documented-possible
+  // names; a response carrying NONE of them fails honestly below — and
+  // create-first means that failure leaves the provider state intact.
+  const freshSecret =
+    typeof created?.signing_secret === 'string' ? created.signing_secret
+      : typeof created?.secret === 'string' ? created.secret
+        : typeof created?.signingSecret === 'string' ? created.signingSecret
+          : ''
   if (!createdId || !freshSecret) {
     throw new AppError('EXTERNAL_SERVICE_FAILURE', {
       publicMessage:

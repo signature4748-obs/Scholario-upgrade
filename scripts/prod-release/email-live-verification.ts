@@ -303,7 +303,7 @@ async function main(): Promise<void> {
       say(`  live webhook endpoints: ${str(webhooks.liveCheck)} → total ${str(webhooks.total)}`)
       for (const w of endpoints) {
         const events = Array.isArray(w.events) ? (w.events as string[]).join(',') : ''
-        say(`    · ${clip(str(w.url || w.endpointUrl), 80)} events=${events || 'none'}${(events || '').includes('email.delivered') ? '' : ' (email.delivered NOT subscribed!)'}`)
+        say(`    · ${clip(str(w.url || w.endpointUrl || w.endpoint), 80)} events=${events || 'none'}${(events || '').includes('email.delivered') ? '' : ' (email.delivered NOT subscribed!)'}`)
       }
       if (str(webhooks.liveCheck) === 'ok' && endpoints.length === 0) {
         say('    ⚠ ZERO webhook endpoints registered at the provider — delivered mail will stay QUEUED (EMAIL-3).')
