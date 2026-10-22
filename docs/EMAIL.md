@@ -158,7 +158,17 @@ Security and reliability contract (same shape as the payment webhook):
 - **Svix signature verification** — `svix-id` / `svix-timestamp` /
   `svix-signature` (v1 HMAC-SHA256 over `id.timestamp.body`, base64,
   multi-token headers honored), timing-safe compare, keyed by the
-  `RESEND_WEBHOOK_SECRET` env (server-only).
+  `RESEND_WEBHOOK_SECRET` env (server-only). **Dual key derivation**
+  (`src/lib/email/svix-signature.ts`): the HMAC key is accepted under
+  either the legacy full-string form (verified live 2026-10-11/12) or
+  the `standardwebhooks` derivation — `whsec_` prefix stripped,
+  base64-decoded — which is what the provider's CURRENT stack signs
+  with (their own SDK delegates to standardwebhooks; live evidence
+  2026-10-22: real Svix dispatches, 3× backoff retries recorded in the
+  rejection-evidence ledger, all failing the legacy derivation against
+  the `whsec_…` secret synced verbatim from the provider's own
+  create-webhook response). Both keys derive from the same
+  deployment-held secret; a forged request must still defeat both.
 - **Fail-closed** — no secret ⇒ every request is 401 and the route is inert;
   sending is unaffected.
 - **Replay protection** — a `svix-timestamp` older than 5 minutes is rejected.

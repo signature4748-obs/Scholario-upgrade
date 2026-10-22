@@ -377,6 +377,36 @@ describe.skipIf(!SECRET)('RESEND-WEBHOOK · signed lifecycle', () => {
     expect(events.every((e) => e.status === 'processed')).toBe(true)
   })
 
+  test('SCHEME B (standardwebhooks derivation: whsec_ stripped, base64-decoded key — the provider\'s CURRENT stack) delivered event → QUEUED→SENT exactly like scheme A', async () => {
+    if (!SECRET.startsWith('whsec_')) return // needs the whsec_-shaped fixture (CI default) — unit suite covers the shapes directly
+    const id = await deliveryRow('schemeb', 'QUEUED')
+    const decodedKey = Buffer.from(SECRET.replace(/^whsec_/, ''), 'base64')
+    const svxId = svixId('schemeb')
+    const ts = Math.floor(Date.now() / 1000)
+    const raw = JSON.stringify({ type: 'email.delivered', created_at: new Date().toISOString(), data: { id: msgId('schemeb') } })
+    const sig = `v1,${createHmac('sha256', decodedKey).update(`${svxId}.${ts}.${raw}`).digest('base64')}`
+    const res = await post(raw, { 'svix-id': svxId, 'svix-timestamp': String(ts), 'svix-signature': sig })
+    expect(res.status).toBe(200)
+    expect(res.body?.matched).toBe(1)
+    const row = await db.emailDelivery.findUnique({ where: { id } })
+    expect(row?.status).toBe('SENT')
+  })
+
+  test('DUAL-SCHEME header: scheme-A token and scheme-B token in ONE request → accepted once', async () => {
+    if (!SECRET.startsWith('whsec_')) return // needs the whsec_-shaped fixture
+    const id = await deliveryRow('dualscheme', 'QUEUED')
+    const decodedKey = Buffer.from(SECRET.replace(/^whsec_/, ''), 'base64')
+    const svxId = svixId('dualscheme')
+    const ts = Math.floor(Date.now() / 1000)
+    const raw = JSON.stringify({ type: 'email.delivered', created_at: new Date().toISOString(), data: { id: msgId('dualscheme') } })
+    const sigA = `v1,${createHmac('sha256', SECRET).update(`${svxId}.${ts}.${raw}`).digest('base64')}`
+    const sigB = `v1,${createHmac('sha256', decodedKey).update(`${svxId}.${ts}.${raw}`).digest('base64')}`
+    const res = await post(raw, { 'svix-id': svxId, 'svix-timestamp': String(ts), 'svix-signature': `${sigA} ${sigB}` })
+    expect(res.status).toBe(200)
+    const row = await db.emailDelivery.findUnique({ where: { id } })
+    expect(row?.status).toBe('SENT')
+  })
+
   test('convergence: delivered (QUEUED→SENT) → duplicate delivered svix-id → row stays SENT, attempts counted (no side effects)', async () => {
     const id = await deliveryRow('conv', 'QUEUED')
     const first = await signedEvent('conv', 'email.delivered', { id: msgId('conv') })

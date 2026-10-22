@@ -105,13 +105,20 @@ jobs:
       #    the suite header documented "CI sets it as a workflow secret"
       #    but it was never wired, so the webhook contract was silently
       #    uncovered in CI. Fixed with the parity-fix convention (2026-10-22).
+      #    The fixture is whsec_-shaped (production's provider secrets are
+      #    whsec_…): the dual-scheme verifier (src/lib/email/svix-signature.ts)
+      #    then covers BOTH HMAC key derivations end-to-end in CI — the
+      #    legacy full-string key AND the standardwebhooks derivation
+      #    (prefix stripped, base64-decoded) the provider's current stack
+      #    signs with (live evidence 2026-10-22: real dispatches failed
+      #    scheme A against a whsec_ secret; scheme B is what verifies).
       GOOGLE_OAUTH_CLIENT_ID: "test-google-client-id"
       GOOGLE_OAUTH_CLIENT_SECRET: "test-google-client-secret"
       RAZORPAY_WEBHOOK_SECRET: "batch2-test-webhook-secret"
       PAYMENTS_SANDBOX: "1"
       PAYMENTS_SANDBOX_SECRET: "local-sandbox-secret"
       PLATFORM_PAYMENT_WEBHOOK_SECRET: "platform-webhook-test-secret"
-      RESEND_WEBHOOK_SECRET: "resend-webhook-test-secret-ci-fixture"
+      RESEND_WEBHOOK_SECRET: "whsec_cmVzZW5kLXdlYmhvb2stdGVzdC1zZWNyZXQtY2ktZml4dHVyZQ=="
 
     steps:
       # 1. Shallow checkout — CI needs the working tree, not history.
