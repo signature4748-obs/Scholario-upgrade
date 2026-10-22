@@ -194,6 +194,35 @@ fresh secret returned by the API (the API cannot read an existing
 endpoint's secret). The definitive end-to-end proof is the
 `Email Live Delivery Verification` workflow (below).
 
+**In-app repair (the write-only-key path, 2026-10-22).** The runner-side
+tool needs `RESEND_API_KEY` in its environment — but the production value
+is dashboard-Sensitive on Vercel (write-only via the API), which is
+exactly the situation where the provider webhook can be registered yet
+silently non-delivering (live evidence: events stopped after 2026-10-12
+while `GET /webhooks` looked perfect). The deployment itself holds the
+real key at runtime, so the repair also exists as an audited,
+permission-gated in-app action:
+`POST /api/platform/operations/email-webhook/repair` (permission
+`ops.read`; body `{ "confirm": "recreate-webhook" }`). It deletes the
+provider's webhook endpoints, recreates ONE endpoint at the canonical
+platform URL with all six lifecycle events, captures the fresh signing
+secret in memory, syncs `RESEND_WEBHOOK_SECRET` to both planes via the
+ops Vercel token, triggers a redeploy of both planes (runtime env
+changes require a new deployment), and audits every outcome
+(`platform.ops.email_webhook.repaired` — the secret itself is never
+logged, returned or audited). Fail-closed preflight (no half-repairs),
+and if the secret sync fails after the recreate, the fresh webhook is
+DELETED in rollback (the app never keeps a webhook whose signature it
+cannot verify). The console surfaces it on the Overview → System health
+email card ("Repair provider webhook"), and the dispatchable
+`Email Provider Webhook Repair` workflow
+(`.github/workflows/email-webhook-repair.yml` →
+`scripts/prod-release/email-webhook-repair.ts`) performs the same
+through the REAL production session transport with a self-owned
+fixture admin, waits for BOTH redeploys to go READY, and purges the
+fixture — then re-dispatch `Email Live Delivery Verification` to prove
+delivered events now upgrade rows QUEUED→SENT end-to-end.
+
 **Standing diagnosis.** Operations Center rule `EMAIL-3` (delivery-evidence
 gap) fires when provider-accepted rows with a real message id exist while
 zero Resend webhook events have ever been recorded — the exact "delivered

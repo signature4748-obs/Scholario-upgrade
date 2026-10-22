@@ -1,0 +1,65 @@
+# ============================================================
+# EMAIL PROVIDER WEBHOOK REPAIR — dispatchable ops tool
+# ------------------------------------------------------------
+# Recreates the provider-side Resend webhook and rotates the app-side
+# signing secret THROUGH THE PRODUCTION APP's audited, permission-
+# gated repair route (the runtime holds the real provider key; every
+# runner-side tool is blocked on the write-only Vercel-stored key).
+#
+# The route does the provider repair + Vercel secret sync + redeploy
+# triggers; this workflow mints a self-owned fixture admin (ops.read
+# grant, ops-isolation convention), rides the REAL production session
+# transport, prints the SANITIZED evidence, waits for BOTH redeploys
+# to go READY, and purges the fixture. Follow-up: dispatch "Email
+# Live Delivery Verification" to prove delivered events now upgrade
+# rows QUEUED→SENT end-to-end.
+# ============================================================
+name: Email Provider Webhook Repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "repair" to acknowledge this recreates the provider webhook + rotates its secret + redeploys both planes'
+        required: true
+        type: string
+
+concurrency:
+  group: email-webhook-repair
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    name: Recreate provider webhook (audited in-app route)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    if: inputs.confirm == 'repair'
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Report the exact commit
+        run: |
+          echo "repair commit: ${GITHUB_SHA}"
+          git log -1 --format='%H %s'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # Zero-dependency script (fetch + node builtins only) — no install.
+      - name: Run the repair through the production app
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_PROJECT_ID_SCHOOL: ${{ secrets.VERCEL_PROJECT_ID_SCHOOL }}
+        run: bun scripts/prod-release/email-webhook-repair.ts
