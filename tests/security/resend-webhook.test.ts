@@ -27,6 +27,13 @@
  *                      delivered svix-ids count attempts without side
  *                      effects (mission: "Handle duplicate and
  *                      out-of-order events safely")
+ *   7. rejection     — Svix-SHAPED rejections (all three svix headers,
+ *                      signature/timestamp/secret failed) land in a
+ *                      bounded, namespaced evidence ledger (gateway
+ *                      'resend-rejected', one row per svix-id, daily
+ *                      cap, payload never stored); header-less noise
+ *                      stays a bare 401; ledger rows are never counted
+ *                      as provider delivery evidence by any consumer
  *
  * SAFETY: no real Resend traffic — the route is exercised over live HTTP
  * against the dev server with a locally-configured test signing secret;
@@ -107,6 +114,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // Sweep this suite's namespaces (crashed prior runs included).
   await db.webhookEvent.deleteMany({ where: { eventId: { startsWith: `msg_${MARKER}` } } })
+  await db.webhookEvent.deleteMany({ where: { eventId: { startsWith: `rejected:msg_${MARKER}` } } })
   await db.emailDelivery.deleteMany({ where: { dedupeKey: { startsWith: `RW-${MARKER}` } } })
 })
 
@@ -382,5 +390,121 @@ describe.skipIf(!SECRET)('RESEND-WEBHOOK · signed lifecycle', () => {
     const evt = await db.webhookEvent.findUnique({ where: { eventId: svixId('conv') } })
     expect(evt?.attempts).toBe(2)
     expect(evt?.status).toBe('duplicate')
+  })
+})
+
+// ─── 6. rejection-evidence ledger (the 401 observability gap) ──────────
+// Live motivation (2026-10-22): registered+enabled+validated provider
+// webhook, reachable endpoint, fresh secret on both planes — yet zero
+// events. The 401 path wrote nothing, so "dispatched but signature
+// fails" vs "never dispatched" was unobservable. The bounded ledger
+// records every Svix-SHAPED rejection so the next audit separates the
+// two hypotheses with hard data (payload never stored; daily-bounded;
+// namespaced away from every provider-event consumer).
+
+describe.skipIf(!SECRET)('RESEND-WEBHOOK · rejection-evidence ledger', () => {
+  const rejectedEventId = (name: string) => `rejected:${svixId(name)}`
+
+  /** A Svix-shaped request with a WRONG signature (the rejected shape). */
+  async function rejectedPost(name: string, raw: string, extraHeaders: Record<string, string> = {}): Promise<PostResult> {
+    return post(raw, {
+      'svix-id': svixId(name),
+      'svix-timestamp': String(Math.floor(Date.now() / 1000)),
+      'svix-signature': 'v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      ...extraHeaders,
+    })
+  }
+
+  test('Svix-shaped wrong signature → 401 + ONE ledger row with the reason (unverified payload NEVER stored)', async () => {
+    const raw = JSON.stringify({ type: 'email.delivered', data: { id: 'x', marker: 'payload-must-not-be-stored' } })
+    const res = await rejectedPost('ledger-badsig', raw)
+    expect(res.status).toBe(401)
+    expect(res.body?.ok).toBe(false)
+
+    const row = await db.webhookEvent.findUnique({ where: { eventId: rejectedEventId('ledger-badsig') } })
+    expect(row).not.toBeNull()
+    expect(row?.gatewayName).toBe('resend-rejected')
+    expect(row?.eventType).toBe('svix.rejected')
+    expect(row?.status).toBe('rejected')
+    expect(row?.error).toBe('signature mismatch')
+    expect(row?.rawPayload).not.toContain('payload-must-not-be-stored')
+    expect(row?.attempts).toBe(1)
+  })
+
+  test('Svix retries the SAME rejected id → attempts increment, never a second row', async () => {
+    const raw = JSON.stringify({ type: 'email.delivered', data: { id: 'x' } })
+    const first = await rejectedPost('ledger-retry', raw)
+    const retry = await rejectedPost('ledger-retry', raw)
+    expect(first.status).toBe(401)
+    expect(retry.status).toBe(401)
+
+    const rows = await db.webhookEvent.count({ where: { eventId: rejectedEventId('ledger-retry') } })
+    expect(rows).toBe(1)
+    const row = await db.webhookEvent.findUnique({ where: { eventId: rejectedEventId('ledger-retry') } })
+    expect(row?.attempts).toBe(2)
+  })
+
+  test('correct signature but STALE timestamp → 401 + ledger row with the replay reason', async () => {
+    const name = 'ledger-stale'
+    const oldTs = Math.floor(Date.now() / 1000) - 60 * 60 // one hour ago
+    const raw = JSON.stringify({ type: 'email.delivered', data: { id: 'x' } })
+    const res = await post(raw, {
+      'svix-id': svixId(name),
+      'svix-timestamp': String(oldTs),
+      'svix-signature': sign(svixId(name), oldTs, raw),
+    })
+    expect(res.status).toBe(401)
+    const row = await db.webhookEvent.findUnique({ where: { eventId: rejectedEventId(name) } })
+    expect(row?.error).toBe('stale timestamp (replay)')
+  })
+
+  test('missing svix headers (plain noise) → 401 with NO ledger row', async () => {
+    const before = await db.webhookEvent.count({ where: { gatewayName: 'resend-rejected' } })
+    const res = await post(JSON.stringify({ type: 'email.delivered', data: { id: 'x' } }), { 'x-irrelevant': '1' })
+    expect(res.status).toBe(401)
+    const after = await db.webhookEvent.count({ where: { gatewayName: 'resend-rejected' } })
+    expect(after).toBe(before)
+  })
+
+  test('namespaced: the provider-event poll (gatewayName resend) NEVER counts a rejection as delivery evidence', async () => {
+    const name = 'ledger-ns'
+    const raw = JSON.stringify({ type: 'email.delivered', data: { id: 'x' } })
+    const res = await rejectedPost(name, raw)
+    expect(res.status).toBe(401)
+
+    const asProviderEvent = await db.webhookEvent.findMany({
+      where: { gatewayName: 'resend', eventId: rejectedEventId(name) },
+    })
+    expect(asProviderEvent.length).toBe(0)
+    const inLedger = await db.webhookEvent.findUnique({ where: { eventId: rejectedEventId(name) } })
+    expect(inLedger?.gatewayName).toBe('resend-rejected')
+  })
+
+  test('daily cap: once the UTC-day ledger slice is full, further rejections stay 401 with NO row (unbounded growth impossible)', async () => {
+    // Pre-fill today's UTC slice directly to the cap (50) — run-unique
+    // ids so a crashed prior run cannot collide; all swept in afterAll.
+    const dayStart = new Date()
+    dayStart.setUTCHours(0, 0, 0, 0)
+    const have = await db.webhookEvent.count({
+      where: { gatewayName: 'resend-rejected', receivedAt: { gte: dayStart } },
+    })
+    const stamp = Date.now()
+    for (let i = have; i < 50; i++) {
+      await db.webhookEvent.create({
+        data: {
+          eventId: `rejected:msg_${MARKER}_capfill_${stamp}_${i}`,
+          eventType: 'svix.rejected',
+          gatewayName: 'resend-rejected',
+          rawPayload: 'cap filler',
+          status: 'rejected',
+          error: 'cap filler',
+        },
+      })
+    }
+    const raw = JSON.stringify({ type: 'email.delivered', data: { id: 'x' } })
+    const res = await rejectedPost('ledger-capped', raw)
+    expect(res.status).toBe(401)
+    const row = await db.webhookEvent.findUnique({ where: { eventId: rejectedEventId('ledger-capped') } })
+    expect(row).toBeNull()
   })
 })

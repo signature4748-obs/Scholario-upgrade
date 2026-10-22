@@ -566,6 +566,33 @@ async function main(): Promise<void> {
           `    · ${str(r.eventType).padEnd(18)} status=${str(r.status).padEnd(10)} at ${str(r.at).slice(0, 19)}${str(r.error) ? ` error=${clip(str(r.error), 60)}` : ''}${str(r.matchedTransactionId) ? ' matched=yes' : ''}`,
         )
       }
+
+      // Rejection-evidence ledger (gateway 'resend-rejected'): Svix-shaped
+      // dispatch attempts whose signature verification FAILED. Rows here
+      // PROVE the provider IS dispatching (fix the secret); rows absent
+      // while real deliveries occur PROVE the provider is NOT dispatching
+      // to the endpoint at all — the two were previously indistinguishable
+      // (no runtime log drain on this plan; the 401 path wrote nothing).
+      const rejRows = await q(
+        `SELECT "eventId", error, attempts, "receivedAt"::text AS at FROM "WebhookEvent" WHERE "gatewayName" = 'resend-rejected' ORDER BY "receivedAt" DESC LIMIT 10`,
+        'rejection ledger',
+      )
+      const rejCount = await q(
+        `SELECT count(*)::int AS n FROM "WebhookEvent" WHERE "gatewayName" = 'resend-rejected'`,
+        'rejection ledger count',
+      )
+      say(`  Svix rejection ledger (dispatch attempts that FAILED verification; total ${num(rejCount[0]?.n)}):`)
+      if (rejRows.length === 0) {
+        say('    · none since the ledger shipped — zero Svix-shaped attempts reached the endpoint.')
+        say('      If real deliveries occur while this is empty, the provider is NOT dispatching events to the registered URL (provider-side).')
+      } else {
+        for (const r of rejRows) {
+          say(
+            `    · ${str(r.eventId).slice(0, 42).padEnd(42)} attempts=${num(r.attempts)} at ${str(r.at).slice(0, 19)} reason=${clip(str(r.error) || '?', 60)}`,
+          )
+        }
+        say('      Rows here mean the provider IS dispatching — signature verification is the failing half (check RESEND_WEBHOOK_SECRET vs the provider signing secret).')
+      }
     }
   }
   say('')
