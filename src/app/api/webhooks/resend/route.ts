@@ -25,7 +25,9 @@ export const runtime = 'nodejs'
  *   · Replay protection: a svix-timestamp older than 5 minutes is
  *     rejected (401) — a captured request cannot be replayed later.
  *   · Fail-closed: no configured secret ⇒ every request is 401 and the
- *     route is inert. Email sending itself is unaffected.
+ *     route is inert (no state sync ever happens; the bounded
+ *     rejection-evidence ledger below may still record Svix-shaped
+ *     attempts — observability only). Email sending itself is unaffected.
  *   · Idempotency: svix-id is unique in WebhookEvent — a redelivered
  *     event is acknowledged (200) and counted, never re-processed.
  *
@@ -69,6 +71,73 @@ const COMPLAINED = 'email.complained'
 const FAILED = 'email.failed'
 /** The delivery-evidence event: upgrades QUEUED/PENDING → SENT. */
 const DELIVERED = 'email.delivered'
+
+// ─── rejection-evidence ledger (the 401 observability gap) ───────────────
+
+/**
+ * WHY THIS EXISTS (live evidence 2026-10-22): the provider webhook is
+ * registered + enabled + provider-validated, the endpoint is publicly
+ * reachable and answering 401 fail-closed, the signing secret is synced
+ * identically to both planes and baked into fresh deployments — yet ZERO
+ * provider events land. On this Vercel plan there is no runtime log
+ * drain, and the 401 path below writes NOTHING, so "the provider
+ * dispatches but the signature fails" and "the provider never
+ * dispatches" are indistinguishable from every evidence channel the app
+ * has. The DB is the only observable. This bounded ledger records every
+ * Svix-SHAPED rejection (all three svix headers present — internet
+ * noise without them stays unrecorded) so the next audit can tell the
+ * two hypotheses apart with hard data.
+ *
+ * SAFETY: rows are DAILY-BOUNDED (an attacker cannot grow the table;
+ * the request rate limiter already bounds volume), the UNVERIFIED
+ * payload is NEVER stored (attacker-controlled), the stored signature
+ * is the REJECTED header clipped to 64 chars, and the whole ledger is
+ * namespaced (gatewayName 'resend-rejected', eventType 'svix.rejected')
+ * so no provider-event consumer (diagnosis EMAIL-3, audits, the
+ * delivered-event polls) can ever count a rejection as delivery
+ * evidence. Best-effort: a ledger failure NEVER changes the 401.
+ */
+const REJECTED_GATEWAY = 'resend-rejected'
+const REJECTED_EVENT_TYPE = 'svix.rejected'
+const REJECTED_EVENT_ID_PREFIX = 'rejected:'
+/** Max rejection rows per UTC day — diagnosis needs a handful, not a firehose. */
+const REJECTED_LEDGER_MAX_PER_DAY = 50
+
+/** Record ONE Svix-shaped rejection (or count a retry of the same id). */
+async function recordRejectionEvidence(
+  svixId: string,
+  reason: string,
+  signatureHeader: string | null,
+): Promise<void> {
+  try {
+    const dayStart = new Date()
+    dayStart.setUTCHours(0, 0, 0, 0)
+    const todayCount = await db.webhookEvent.count({
+      where: { gatewayName: REJECTED_GATEWAY, receivedAt: { gte: dayStart } },
+    })
+    if (todayCount >= REJECTED_LEDGER_MAX_PER_DAY) return
+    const note = clip(reason, LAST_ERROR_MAX)
+    await db.webhookEvent.upsert({
+      where: { eventId: REJECTED_EVENT_ID_PREFIX + svixId },
+      create: {
+        eventId: REJECTED_EVENT_ID_PREFIX + svixId,
+        eventType: REJECTED_EVENT_TYPE,
+        gatewayName: REJECTED_GATEWAY,
+        signature: signatureHeader ? clip(signatureHeader, 64) : null,
+        rawPayload: 'unverified request — payload not stored (rejection-evidence ledger)',
+        status: 'rejected',
+        error: note,
+      },
+      update: {
+        attempts: { increment: 1 },
+        error: note,
+      },
+    })
+  } catch {
+    // Evidence is best-effort by contract: a ledger failure must never
+    // change the 401 answer or take the route down.
+  }
+}
 
 function clip(text: string, max: number): string {
   const trimmed = text.trim()
@@ -174,6 +243,15 @@ export async function POST(req: NextRequest) {
     req.headers.get(SIGNATURE_HEADER),
   )
   if (!verification.ok) {
+    // Rejection-evidence ledger: record ONLY Svix-shaped attempts (all
+    // three svix headers present). Header-less internet noise stays a
+    // bare 401 with no row; the answer itself is identical either way.
+    const id = req.headers.get(ID_HEADER)
+    const ts = req.headers.get(TIMESTAMP_HEADER)
+    const sig = req.headers.get(SIGNATURE_HEADER)
+    if (id && ts && sig) {
+      await recordRejectionEvidence(id, verification.reason, sig)
+    }
     return NextResponse.json({ ok: false, error: 'Invalid webhook signature.' }, { status: 401 })
   }
   const eventId = req.headers.get(ID_HEADER) as string

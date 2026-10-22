@@ -471,6 +471,19 @@ async function main(): Promise<void> {
       ? `Resend WebhookEvent row (email.delivered) id=${webhookEventId} — the SIGNATURE-VERIFIED provider event reached production`
       : 'no email.delivered WebhookEvent row for this message id (webhook not delivering — see the audit workflow)',
   )
+  // Rejection-evidence ledger state (the 401 observability channel): rows
+  // here are Svix-shaped dispatch attempts whose signature verification
+  // FAILED — their presence means the provider IS dispatching (and the
+  // runtime secret mismatches); their absence while real deliveries
+  // occur means the provider is NOT dispatching events to the endpoint.
+  // Either way this turns the honest gap into a named one.
+  const rejRows = await q(
+    `SELECT "eventId", error, attempts FROM "WebhookEvent" WHERE "gatewayName" = 'resend-rejected' ORDER BY "receivedAt" DESC LIMIT 5`,
+  )
+  const rejNote = rejRows.length
+    ? `${rejRows.length} rejection-ledger row(s) visible (dispatch IS reaching us; verification fails — top reason: ${clip(str(rejRows[0]?.error) || '?', 80)})`
+    : 'rejection ledger EMPTY — zero Svix-shaped attempts reached the endpoint (the provider is not dispatching events)'
+  say(`  · rejection-evidence ledger: ${rejNote}`)
   record('EmailDelivery row → SENT', rowStatusFinal === 'SENT', `status=${rowStatusFinal} (delivery evidence upgraded the provider-accepted QUEUED row)`)
 
   // ── F. redemption at the school door + single-use enforcement ─────────

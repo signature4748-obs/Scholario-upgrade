@@ -169,6 +169,24 @@ Security and reliability contract (same shape as the payment webhook):
   usable id is recorded with an honest error, never guessed.
 - Every event is recorded in `WebhookEvent` (`gatewayName: 'resend'`) with
   its (clipped) raw payload — the delivery evidence trail.
+- **Rejection-evidence ledger** — a Svix-shaped request (all three svix
+  headers present) that FAILS verification is recorded in `WebhookEvent`
+  under a dedicated namespace (`gatewayName: 'resend-rejected'`,
+  `eventType: 'svix.rejected'`, `status: 'rejected'`, `eventId:
+  'rejected:<svix-id>'` with `attempts` counting Svix retries) before the
+  401 is returned. The unverified payload is NEVER stored; the day's
+  ledger slice is capped (50 rows/UTC-day — no attacker-growable table);
+  header-less noise stays a bare 401 with no row; the namespace keeps
+  every provider-event consumer (diagnosis EMAIL-3, audits, the
+  delivered-event polls) from ever counting a rejection as delivery
+  evidence. WHY (live 2026-10-22): this plan has no runtime log drain
+  and the 401 path used to write nothing, making "provider dispatches
+  but the signature fails" indistinguishable from "the provider never
+  dispatches". Rows in the ledger ⇒ dispatch works, fix the secret
+  (the `error` field names the exact reason). Real deliveries while the
+  ledger is empty ⇒ the provider is not dispatching events to the
+  registered URL — provider-side, visible at a glance in the
+  `Email/Webhook Live Audit` workflow's ledger readout.
 
 Owner action to activate (one-time): create the webhook endpoint at
 `https://<production-domain>/api/webhooks/resend` with the six lifecycle
