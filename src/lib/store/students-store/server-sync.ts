@@ -107,9 +107,67 @@ interface RosterPayload {
 
 // ── mapping helpers ──────────────────────────────────────────────────
 
-const gradeFor = (g: string | null): number => {
+/** Numeric grade from the STORED gradeLevel when it is a valid positive
+ *  number — the authoritative value (never overridden by the name). */
+const gradeFromStored = (g: string | null): number | null => {
   const n = Number(g)
-  return Number.isFinite(n) && n > 0 ? n : 0
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** Numeric grade from the class NAME ("Class 6" → 6, "6-A" → 6,
+ *  "Grade 9 - A" → 9) — the same first-number parse the students
+ *  store's own createClass fallback (store.ts /(\d+)/) and the teacher
+ *  allocation picker (use-academic-allocation.ts) already use. */
+const gradeFromClassName = (name: string): number | null => {
+  const m = name.trim().match(/(\d+)/)
+  if (!m) return null
+  const n = parseInt(m[1], 10)
+  return Number.isFinite(n) && n >= 1 ? n : null
+}
+
+/** Pre-primary names — the teacher allocation picker's regex
+ *  (use-academic-allocation.ts groupLabelOf) extended with `ikg`, the
+ *  demo corpus's legacy pre-primary name (the picker's own regex misses
+ *  it — \bkg\b does not match inside "IKG" — but the seed corpus and the
+ *  store ladder both treat IKG as pre-primary). */
+const PRE_PRIMARY_NAME_RE = /nursery|lkg|ukg|ikg|\bkg\b|pre[- ]?primary|pre[- ]?nursery/i
+
+/** Resolved grade-group for one roster row (Phase 2 D1 fix).
+ *
+ *  The old gradeFor/groupKeyOf/groupLabelOf collapsed EVERY row whose
+ *  gradeLevel was null/''/non-numeric into one synthetic "Grade 0"
+ *  group — swallowing all wizard-created classes (gradeLevel NULL by
+ *  schema design; see /api/platform/schools academic bootstrap) as
+ *  "sections". Canonical policy (audit/phase2-…/CLASS-GROUPING-POLICY.md):
+ *    1. a valid stored gradeLevel is authoritative → G{grade}, label
+ *       "Grade N" (existing behavior for correctly-populated tenants
+ *       preserved exactly);
+ *    2. missing/empty/non-numeric gradeLevel → grade derived from the
+ *       class NAME, group labeled with the REAL name (never "Grade 0");
+ *    3. numberless names (Nursery/LKG/UKG/IKG, arbitrary custom names)
+ *       → their own NAMED group per name — never numeric 0, never
+ *       merged with anything else. */
+interface ResolvedGroup {
+  /** Stable group id (ClassRecord.id / StudentRecord.classId). */
+  key: string
+  /** Display label (ClassRecord.name / StudentRecord.className). */
+  label: string
+  /** Numeric grade for ordering/buckets (0 for named groups). */
+  grade: number
+}
+
+const resolveGroupOf = (c: RosterClassDto): ResolvedGroup => {
+  const suffix = c.stream === 'Science' ? '-SCI' : c.stream === 'Commerce' ? '-COM' : ''
+  const labelSuffix = c.stream === 'Science' ? ' (Science)' : c.stream === 'Commerce' ? ' (Commerce)' : ''
+  const stored = gradeFromStored(c.gradeLevel)
+  if (stored != null) {
+    return { key: `G${stored}${suffix}`, label: `Grade ${stored}${labelSuffix}`, grade: stored }
+  }
+  const fromName = gradeFromClassName(c.name)
+  if (fromName != null) {
+    return { key: `G${fromName}${suffix}`, label: `${c.name.trim()}${labelSuffix}`, grade: fromName }
+  }
+  return { key: `N:${c.name.trim().toLowerCase()}${suffix}`, label: `${c.name.trim()}${labelSuffix}`, grade: 0 }
 }
 
 const levelFor = (grade: number): ClassRecord['level'] => {
@@ -133,22 +191,9 @@ const monthLabel = (key: string): string => {
   return names[Number(m) - 1] ?? key
 }
 
-/** Group key for one grade-group (grade + stream) — stable synthetic id. */
-const groupKeyOf = (c: RosterClassDto): string => {
-  const grade = gradeFor(c.gradeLevel)
-  const base = `G${grade}`
-  if (c.stream === 'Science') return `${base}-SCI`
-  if (c.stream === 'Commerce') return `${base}-COM`
-  return base
-}
-
-const groupLabelOf = (c: RosterClassDto): string => {
-  const grade = gradeFor(c.gradeLevel)
-  const base = `Grade ${grade}`
-  if (c.stream === 'Science') return `${base} (Science)`
-  if (c.stream === 'Commerce') return `${base} (Commerce)`
-  return base
-}
+/** Group key for one grade-group (grade + stream) — stable synthetic id.
+ *  (Kept as the thin alias the rest of this module already calls.) */
+const groupKeyOf = (c: RosterClassDto): string => resolveGroupOf(c).key
 
 /** Map the roster payload onto store shapes. */
 export function mapRosterToRecords(payload: RosterPayload): {
@@ -160,13 +205,28 @@ export function mapRosterToRecords(payload: RosterPayload): {
   // Classes: group section-level rows into grade-group ClassRecords.
   const groups = new Map<
     string,
-    { label: string; grade: number; sections: RosterClassDto[] }
+    { label: string; grade: number; level: ClassRecord['level']; sections: RosterClassDto[] }
   >()
   for (const c of payload.classes) {
-    const key = groupKeyOf(c)
-    const grade = gradeFor(c.gradeLevel)
-    if (!groups.has(key)) groups.set(key, { label: groupLabelOf(c), grade, sections: [] })
-    groups.get(key)!.sections.push(c)
+    const grp = resolveGroupOf(c)
+    if (!groups.has(grp.key)) {
+      groups.set(grp.key, {
+        label: grp.label,
+        grade: grp.grade,
+        level:
+          grp.grade > 0
+            ? levelFor(grp.grade)
+            : // Named group: recognized pre-primary names get the store's
+              // own 'Pre-Primary' bucket (same ladder as store createClass
+              // and the allocation picker); arbitrary numberless names fall
+              // to the established unknown-grade bucket (documented).
+              PRE_PRIMARY_NAME_RE.test(c.name)
+              ? 'Pre-Primary'
+              : levelFor(0),
+        sections: [],
+      })
+    }
+    groups.get(grp.key)!.sections.push(c)
   }
 
   const classById = new Map(payload.classes.map((c) => [c.id, c]))
@@ -183,7 +243,7 @@ export function mapRosterToRecords(payload: RosterPayload): {
       id: key,
       name: g.label,
       grade: g.grade,
-      level: levelFor(g.grade),
+      level: g.level,
       sections: g.sections.map((sec) => ({
         id: sec.id, // canonical DB Class id (section-level)
         name: sec.section ?? 'A',

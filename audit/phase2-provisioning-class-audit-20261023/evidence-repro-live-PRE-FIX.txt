@@ -1,0 +1,92 @@
+Phase-2 live repro marker: 0b527eb1 (all tenants below are throwaway)
+
+=== CASE A: provision Class 1–12 × A → HTTP 200 ===
+school=Wizard Academy P2-0b527eb1-b797d7 slug=wizard-p2-0b527eb1-b797d7 status=PENDING
+bootstrap={"classes":12,"sections":12,"subjects":0,"rooms":0} (expected {classes:12, sections:12})
+
+[CASE A DB] persisted Class rows (12):
+  name="Class 1" gradeLevel=null section="A"
+  name="Class 2" gradeLevel=null section="A"
+  name="Class 3" gradeLevel=null section="A"
+  name="Class 4" gradeLevel=null section="A"
+  name="Class 5" gradeLevel=null section="A"
+  name="Class 6" gradeLevel=null section="A"
+  name="Class 7" gradeLevel=null section="A"
+  name="Class 8" gradeLevel=null section="A"
+  name="Class 9" gradeLevel=null section="A"
+  name="Class 10" gradeLevel=null section="A"
+  name="Class 11" gradeLevel=null section="A"
+  name="Class 12" gradeLevel=null section="A"
+gradeLevel NULL on 12/12 rows
+
+=== CASE H: repeat submit → HTTP 200 replayed=true sameId=true ===
+Class rows after replay: 12 (must remain 12 — no duplicates)
+
+activate → HTTP 200
+forced password change → HTTP 200
+principal login (own password) → HTTP 200 token=granted
+
+[CASE A roster (principal)] roster rows: 12 → grouped ClassRecords: 1
+  → id=G0 name="Grade 0" grade=0 level="Primary" sections=[A, A, A, A, A, A, A, A, A, A, A, A]
+
+=== CASE J: POST /api/classes gradeLevel "6" → HTTP 200 ===
+=== CASE I1: POST /api/classes gradeLevel omitted → HTTP 200 ===
+persisted gradeLevel for the omitted row: ""
+
+[CASE A+J+I1 roster] roster rows: 14 → grouped ClassRecords: 2
+  → id=G0 name="Grade 0" grade=0 level="Primary" sections=[I, A, A, A, A, A, A, A, A, A, A, A, A]
+  → id=G6 name="Grade 6" grade=6 level="Middle" sections=[J]
+groups: total=2 · grade-6 group="Grade 6" · grade-0 group="Grade 0" sections=13
+
+=== CASE C+D+E: multi-section + pre-primary + 9–10 → HTTP 200 ===
+bootstrap={"classes":6,"sections":8,"subjects":0,"rooms":0} (expected {classes:6, sections:8})
+
+[CASE C+D+E DB] persisted Class rows (8):
+  name="Class 5" gradeLevel=null section="A"
+  name="Class 5" gradeLevel=null section="B"
+  name="Class 5" gradeLevel=null section="C"
+  name="Nursery" gradeLevel=null section="A"
+  name="LKG" gradeLevel=null section="A"
+  name="UKG" gradeLevel=null section="A"
+  name="Class 9" gradeLevel=null section="A"
+  name="Class 10" gradeLevel=null section="A"
+forced password change → HTTP 200
+principal login (own password) → HTTP 200 token=granted
+
+[CASE C+D+E roster] roster rows: 8 → grouped ClassRecords: 1
+  → id=G0 name="Grade 0" grade=0 level="Primary" sections=[A, A, A, A, A, A, B, C]
+
+=== CASE F+G: one class, EMPTY sections list → HTTP 200 ===
+bootstrap={"classes":1,"sections":1,"subjects":0,"rooms":0}
+
+[CASE F+G DB] persisted Class rows (1):
+  name="Class 3" gradeLevel=null section=null
+forced password change → HTTP 200
+principal login (own password) → HTTP 200 token=granted
+
+[CASE F+G roster] roster rows: 1 → grouped ClassRecords: 1
+  → id=G0 name="Grade 0" grade=0 level="Primary" sections=[A]
+
+=== CASE G2: whitespace-only section string → HTTP 422 (expect 422 refusal) ===
+
+=== CASE K: Hawkings demo (READ-ONLY) — 15 rows → 13 groups ===
+  → id=G1 name="Grade 1" grade=1 sections=[A]
+  → id=G10 name="Grade 10" grade=10 sections=[A]
+  → id=G11-SCI name="Grade 11 (Science)" grade=11 sections=[A]
+  → id=G12-SCI name="Grade 12 (Science)" grade=12 sections=[A]
+  → id=G2 name="Grade 2" grade=2 sections=[A]
+  → id=G3 name="Grade 3" grade=3 sections=[A]
+  → id=G4 name="Grade 4" grade=4 sections=[A]
+  → id=G5 name="Grade 5" grade=5 sections=[A]
+  → id=G6 name="Grade 6" grade=6 sections=[A]
+  → id=G7 name="Grade 7" grade=7 sections=[A]
+  → id=G8 name="Grade 8" grade=8 sections=[A]
+  → id=G9 name="Grade 9" grade=9 sections=[A]
+  → id=G0 name="Grade 0" grade=0 sections=[A, A, A]
+
+— pre-fix summary —
+CASE A grouped count: 1 (expected 12; D1 if 1 "Grade 0")
+CASE A first group: {"id":"G0","name":"Grade 0","sections":12}
+CASE A+J grouped: grade0=Grade 0 (13 sections) — the Add-Class '' path joins the same defect
+
+teardown: purged 3 test tenants (+0 strays); school count back to 2

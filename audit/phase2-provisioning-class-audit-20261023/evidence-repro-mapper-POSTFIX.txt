@@ -1,0 +1,188 @@
+
+=== A: Preset Class 1–12 with section A (PRODUCTION SHAPE — gradeLevel NULL) ===
+input rows: 12
+  name="Class 1" gradeLevel=null section="A"
+  name="Class 2" gradeLevel=null section="A"
+  name="Class 3" gradeLevel=null section="A"
+  name="Class 4" gradeLevel=null section="A"
+  name="Class 5" gradeLevel=null section="A"
+  name="Class 6" gradeLevel=null section="A"
+  name="Class 7" gradeLevel=null section="A"
+  name="Class 8" gradeLevel=null section="A"
+  name="Class 9" gradeLevel=null section="A"
+  name="Class 10" gradeLevel=null section="A"
+  name="Class 11" gradeLevel=null section="A"
+  name="Class 12" gradeLevel=null section="A"
+grouped ClassRecords: 12
+  → id=G1 name="Class 1" grade=1 level="Primary" sections=[A]
+  → id=G2 name="Class 2" grade=2 level="Primary" sections=[A]
+  → id=G3 name="Class 3" grade=3 level="Primary" sections=[A]
+  → id=G4 name="Class 4" grade=4 level="Primary" sections=[A]
+  → id=G5 name="Class 5" grade=5 level="Primary" sections=[A]
+  → id=G6 name="Class 6" grade=6 level="Middle" sections=[A]
+  → id=G7 name="Class 7" grade=7 level="Middle" sections=[A]
+  → id=G8 name="Class 8" grade=8 level="Middle" sections=[A]
+  → id=G9 name="Class 9" grade=9 level="Secondary" sections=[A]
+  → id=G10 name="Class 10" grade=10 level="Secondary" sections=[A]
+  → id=G11 name="Class 11" grade=11 level="Senior Secondary" sections=[A]
+  → id=G12 name="Class 12" grade=12 level="Senior Secondary" sections=[A]
+
+=== B: Custom Class 1–12 with section A (operator-typed rows — identical wire shape) ===
+input rows: 12
+  name="Class 1" gradeLevel=null section="A"
+  name="Class 2" gradeLevel=null section="A"
+  name="Class 3" gradeLevel=null section="A"
+  name="Class 4" gradeLevel=null section="A"
+  name="Class 5" gradeLevel=null section="A"
+  name="Class 6" gradeLevel=null section="A"
+  name="Class 7" gradeLevel=null section="A"
+  name="Class 8" gradeLevel=null section="A"
+  name="Class 9" gradeLevel=null section="A"
+  name="Class 10" gradeLevel=null section="A"
+  name="Class 11" gradeLevel=null section="A"
+  name="Class 12" gradeLevel=null section="A"
+grouped ClassRecords: 12
+  → id=G1 name="Class 1" grade=1 level="Primary" sections=[A]
+  → id=G2 name="Class 2" grade=2 level="Primary" sections=[A]
+  → id=G3 name="Class 3" grade=3 level="Primary" sections=[A]
+  → id=G4 name="Class 4" grade=4 level="Primary" sections=[A]
+  → id=G5 name="Class 5" grade=5 level="Primary" sections=[A]
+  → id=G6 name="Class 6" grade=6 level="Middle" sections=[A]
+  → id=G7 name="Class 7" grade=7 level="Middle" sections=[A]
+  → id=G8 name="Class 8" grade=8 level="Middle" sections=[A]
+  → id=G9 name="Class 9" grade=9 level="Secondary" sections=[A]
+  → id=G10 name="Class 10" grade=10 level="Secondary" sections=[A]
+  → id=G11 name="Class 11" grade=11 level="Senior Secondary" sections=[A]
+  → id=G12 name="Class 12" grade=12 level="Senior Secondary" sections=[A]
+
+=== C: One class with sections A, B, C (gradeLevel NULL) ===
+input rows: 3
+  name="Class 5" gradeLevel=null section="A"
+  name="Class 5" gradeLevel=null section="B"
+  name="Class 5" gradeLevel=null section="C"
+grouped ClassRecords: 1
+  → id=G5 name="Class 5" grade=5 level="Primary" sections=[A, B, C]
+
+=== D: Nursery / LKG / UKG / IKG custom rows (gradeLevel NULL) ===
+input rows: 4
+  name="Nursery" gradeLevel=null section="A"
+  name="LKG" gradeLevel=null section="A"
+  name="UKG" gradeLevel=null section="A"
+  name="IKG" gradeLevel=null section="A"
+grouped ClassRecords: 4
+  → id=N:nursery name="Nursery" grade=0 level="Pre-Primary" sections=[A]
+  → id=N:lkg name="LKG" grade=0 level="Pre-Primary" sections=[A]
+  → id=N:ukg name="UKG" grade=0 level="Pre-Primary" sections=[A]
+  → id=N:ikg name="IKG" grade=0 level="Pre-Primary" sections=[A]
+
+=== E1: Preset Class 9–10 (gradeLevel NULL) ===
+input rows: 2
+  name="Class 9" gradeLevel=null section="A"
+  name="Class 10" gradeLevel=null section="A"
+grouped ClassRecords: 2
+  → id=G9 name="Class 9" grade=9 level="Secondary" sections=[A]
+  → id=G10 name="Class 10" grade=10 level="Secondary" sections=[A]
+
+=== E2: Preset Class 11–12 with streams (gradeLevel NULL) ===
+input rows: 2
+  name="Class 11" gradeLevel=null section="A"
+  name="Class 12" gradeLevel=null section="A"
+grouped ClassRecords: 2
+  → id=G11-SCI name="Class 11 (Science)" grade=11 level="Senior Secondary" sections=[A]
+  → id=G12-COM name="Class 12 (Commerce)" grade=12 level="Senior Secondary" sections=[A]
+
+=== F: No classes selected (empty classes[]) ===
+input rows: 0
+grouped ClassRecords: 0
+
+=== G: Row with section NULL (empty-section bootstrap path) ===
+input rows: 1
+  name="Class 3" gradeLevel=null section=null
+grouped ClassRecords: 1
+  → id=G3 name="Class 3" grade=3 level="Primary" sections=[A]
+
+=== I1: School-plane Add Class, gradeLevel omitted → persisted "" ===
+input rows: 1
+  name="Class 6" gradeLevel="" section="A"
+grouped ClassRecords: 1
+  → id=G6 name="Class 6" grade=6 level="Middle" sections=[A]
+
+=== I2: Timetable-publish auto-create (name "Grade 9 - A", gradeLevel NULL) ===
+input rows: 1
+  name="Grade 9 - A" gradeLevel=null section="A"
+grouped ClassRecords: 1
+  → id=G9 name="Grade 9 - A" grade=9 level="Secondary" sections=[A]
+
+=== J: Control: valid numeric gradeLevel "1".."12" (12 rows) ===
+input rows: 12
+  name="1-A" gradeLevel="1" section="A"
+  name="2-A" gradeLevel="2" section="A"
+  name="3-A" gradeLevel="3" section="A"
+  name="4-A" gradeLevel="4" section="A"
+  name="5-A" gradeLevel="5" section="A"
+  name="6-A" gradeLevel="6" section="A"
+  name="7-A" gradeLevel="7" section="A"
+  name="8-A" gradeLevel="8" section="A"
+  name="9-A" gradeLevel="9" section="A"
+  name="10-A" gradeLevel="10" section="A"
+  name="11-A" gradeLevel="11" section="A"
+  name="12-A" gradeLevel="12" section="A"
+grouped ClassRecords: 12
+  → id=G1 name="Grade 1" grade=1 level="Primary" sections=[A]
+  → id=G2 name="Grade 2" grade=2 level="Primary" sections=[A]
+  → id=G3 name="Grade 3" grade=3 level="Primary" sections=[A]
+  → id=G4 name="Grade 4" grade=4 level="Primary" sections=[A]
+  → id=G5 name="Grade 5" grade=5 level="Primary" sections=[A]
+  → id=G6 name="Grade 6" grade=6 level="Middle" sections=[A]
+  → id=G7 name="Grade 7" grade=7 level="Middle" sections=[A]
+  → id=G8 name="Grade 8" grade=8 level="Middle" sections=[A]
+  → id=G9 name="Grade 9" grade=9 level="Secondary" sections=[A]
+  → id=G10 name="Grade 10" grade=10 level="Secondary" sections=[A]
+  → id=G11 name="Grade 11" grade=11 level="Senior Secondary" sections=[A]
+  → id=G12 name="Grade 12" grade=12 level="Senior Secondary" sections=[A]
+
+=== K: Demo-tenant corpus (names Nursery-A/LKG-A/IKG-A/1-A..12-A, gradeLevel set) ===
+input rows: 15
+  name="Nursery-A" gradeLevel="Nursery" section="A"
+  name="LKG-A" gradeLevel="LKG" section="A"
+  name="IKG-A" gradeLevel="IKG" section="A"
+  name="1-A" gradeLevel="1" section="A"
+  name="2-A" gradeLevel="2" section="A"
+  name="3-A" gradeLevel="3" section="A"
+  name="4-A" gradeLevel="4" section="A"
+  name="5-A" gradeLevel="5" section="A"
+  name="6-A" gradeLevel="6" section="A"
+  name="7-A" gradeLevel="7" section="A"
+  name="8-A" gradeLevel="8" section="A"
+  name="9-A" gradeLevel="9" section="A"
+  name="10-A" gradeLevel="10" section="A"
+  name="11-A" gradeLevel="11" section="A"
+  name="12-A" gradeLevel="12" section="A"
+grouped ClassRecords: 15
+  → id=N:nursery-a name="Nursery-A" grade=0 level="Pre-Primary" sections=[A]
+  → id=N:lkg-a name="LKG-A" grade=0 level="Pre-Primary" sections=[A]
+  → id=N:ikg-a name="IKG-A" grade=0 level="Pre-Primary" sections=[A]
+  → id=G1 name="Grade 1" grade=1 level="Primary" sections=[A]
+  → id=G2 name="Grade 2" grade=2 level="Primary" sections=[A]
+  → id=G3 name="Grade 3" grade=3 level="Primary" sections=[A]
+  → id=G4 name="Grade 4" grade=4 level="Primary" sections=[A]
+  → id=G5 name="Grade 5" grade=5 level="Primary" sections=[A]
+  → id=G6 name="Grade 6" grade=6 level="Middle" sections=[A]
+  → id=G7 name="Grade 7" grade=7 level="Middle" sections=[A]
+  → id=G8 name="Grade 8" grade=8 level="Middle" sections=[A]
+  → id=G9 name="Grade 9" grade=9 level="Secondary" sections=[A]
+  → id=G10 name="Grade 10" grade=10 level="Secondary" sections=[A]
+  → id=G11 name="Grade 11" grade=11 level="Senior Secondary" sections=[A]
+  → id=G12 name="Grade 12" grade=12 level="Senior Secondary" sections=[A]
+
+=== X: gradeLevel "7" on name "Class 9" (stored valid grade must win) ===
+input rows: 1
+  name="Class 9" gradeLevel="7" section="A"
+grouped ClassRecords: 1
+  → id=G7 name="Grade 7" grade=7 level="Middle" sections=[A]
+
+=== Y: Arbitrary custom name without digits (gradeLevel NULL) ===
+input rows: 1
+  name="Diploma" gradeLevel=null section="A"
+grouped ClassRecords: 1
+  → id=N:diploma name="Diploma" grade=0 level="Primary" sections=[A]
