@@ -73,19 +73,72 @@ export async function POST(req: NextRequest) {
         if (existing) {
           classByKey.set(name, existing)
           payloadClassesExisting += 1
-        } else {
-          // Name may carry its own section ("Grade 9 - A") — keep the full
-          // label as the name (that's how the roster renders it) and derive
-          // a single-letter section when one trails the label.
-          const sectionMatch = name.match(/[-–\s]([A-Z])$/)
-          classByKey.set(
-            name,
-            await db.class.create({
-              data: { schoolId, name, section: sectionMatch ? sectionMatch[1] : null, capacity: 40 },
-              select: { id: true, name: true, section: true },
-            }),
-          )
+          continue
         }
+
+        // PHASE B (2026-10-23) — label-normalized fallback: the timetable
+        // editor addresses classes by their DISPLAY LABEL — "Class 1 - A"
+        // is the label classLabelOf, the editor classOptions and the
+        // auto-timetable dialog all emit for the wizard/provisioning
+        // shape {name:"Class 1", section:"A"} (name + SEPARATE section
+        // column). A name-only lookup misses that shape and previously
+        // CREATED a duplicate {name:"Class 1 - A"} row whose timetable
+        // rows silently orphaned every student enrolled in the original
+        // row (Phase A reproduction, audit pack 2026-10-23). When the
+        // payload name carries the canonical label suffix —
+        // BASE " - "/" – " SECTION — resolve to the EXISTING (base,
+        // section) row instead of creating one:
+        //   · the exact-name lookup above stays authoritative (a class
+        //     whose NAME is itself the label — seeded "1-A"-style rows,
+        //     and the duplicates on already-affected tenants — still
+        //     exact-hits; data repair for those tenants is a separate
+        //     owner decision, NOT done here);
+        //   · the fallback only ever REUSES — it never creates, renames
+        //     or merges; a miss falls through to the honest create path
+        //     below unchanged;
+        //   · matching is case-insensitive (the editor label mirrors the
+        //     stored row's case, hand-written payloads need not) — so two
+        //     case-colliding candidates are genuinely ambiguous and the
+        //     route refuses with INVALID_INPUT rather than guessing;
+        //   · fallback hits count as payloadClassesExisting, so the
+        //     stale-snapshot guard below can never be bypassed by the
+        //     normalized lookup.
+        const label = name.match(/^(.+?)\s+[-–]\s+([^\s-]{1,8})$/)
+        if (label) {
+          const base = label[1].trim()
+          const suffix = label[2].trim()
+          const candidates = await db.class.findMany({
+            where: {
+              schoolId,
+              name: { equals: base, mode: 'insensitive' },
+              section: { equals: suffix, mode: 'insensitive' },
+            },
+            select: { id: true, name: true, section: true },
+          })
+          if (candidates.length > 1) {
+            throw new AppError('INVALID_INPUT', {
+              publicMessage: `Ambiguous class reference "${name}" — multiple existing classes match it. Rename the duplicates in Academic Configuration and publish again.`,
+              internalDetail: `TIMETABLE_PUBLISH class-resolution ambiguity: ${candidates.length} rows match (name="${base}", section="${suffix}", case-insensitive) for payload class "${name}"`,
+            })
+          }
+          if (candidates.length === 1) {
+            classByKey.set(name, candidates[0])
+            payloadClassesExisting += 1
+            continue
+          }
+        }
+
+        // Name may carry its own section ("Grade 9 - A") — keep the full
+        // label as the name (that's how the roster renders it) and derive
+        // a single-letter section when one trails the label.
+        const sectionMatch = name.match(/[-–\s]([A-Z])$/)
+        classByKey.set(
+          name,
+          await db.class.create({
+            data: { schoolId, name, section: sectionMatch ? sectionMatch[1] : null, capacity: 40 },
+            select: { id: true, name: true, section: true },
+          }),
+        )
       }
 
       // 3 — subject names are resolved INSIDE the publish transaction below
