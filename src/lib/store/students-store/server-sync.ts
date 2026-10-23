@@ -114,15 +114,36 @@ const gradeFromStored = (g: string | null): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
+/** EXPLICIT academic-name patterns (final behaviour refinement, PR #57):
+ *  a name declares its number an ACADEMIC GRADE only through a format the
+ *  repository's own write paths produce or its conventions spell —
+ *    · keyword-anchored — "Class 6" (wizard presets), "Grade 9 - A"
+ *      (timetable-publish auto-create), "Std 8"/"Standard 8" (common
+ *      operator spellings); the keyword must be a WHOLE WORD ("Classroom 5"
+ *      is not "Class 5");
+ *    · section-first — "6-A" (the demo corpus's numeric row shape
+ *      "1-A".."12-A"), a 1–2-digit grade + dash family + section marker;
+ *    · pure number — "6" (a bare grade token; the WHOLE name is the
+ *      number, so years like "2026" can never parse).
+ *  Incidental numbers are NEVER grades: years ("Batch 2026", "2026"),
+ *  rooms ("Room 12") and custom group numbers ("Group 3") keep their own
+ *  NAMED group (rule 3) instead of landing in G2026/G12/G3 where they
+ *  would swallow or merge with a real academic grade. Deliberately NO
+ *  hard 1–12 parse cap: a non-matching name falls to its own named
+ *  group, so no unrelated name can ever collide into another's group. */
+const ACADEMIC_KEYWORD_RE = /\b(?:class|grade|std|standard)\b[\s._#:–-]*(\d+)/i
+const SECTION_FIRST_RE = /^(\d{1,2})\s*[–-]\s*\S+/
+const PURE_NUMBER_RE = /^(\d{1,2})$/
+
 /** Numeric grade from the class NAME ("Class 6" → 6, "6-A" → 6,
- *  "Grade 9 - A" → 9) — the same first-number parse the students
- *  store's own createClass fallback (store.ts /(\d+)/) and the teacher
- *  allocation picker (use-academic-allocation.ts) already use. */
+ *  "Grade 9 - A" → 9) — pattern-anchored, never an arbitrary first
+ *  number (see ACADEMIC_* above). */
 const gradeFromClassName = (name: string): number | null => {
-  const m = name.trim().match(/(\d+)/)
+  const n = name.trim()
+  const m = n.match(ACADEMIC_KEYWORD_RE) ?? n.match(SECTION_FIRST_RE) ?? n.match(PURE_NUMBER_RE)
   if (!m) return null
-  const n = parseInt(m[1], 10)
-  return Number.isFinite(n) && n >= 1 ? n : null
+  const g = parseInt(m[1], 10)
+  return Number.isFinite(g) && g >= 1 ? g : null
 }
 
 /** Pre-primary names — the teacher allocation picker's regex
@@ -143,14 +164,18 @@ const PRE_PRIMARY_NAME_RE = /nursery|lkg|ukg|ikg|\bkg\b|pre[- ]?primary|pre[- ]?
  *       "Grade N" (existing behavior for correctly-populated tenants
  *       preserved exactly);
  *    2. missing/empty/non-numeric gradeLevel → grade derived from the
- *       class NAME, group labeled with the REAL name (never "Grade 0");
- *       recognized pre-primary names are checked BEFORE the number
- *       parse (final-review follow-up 2026-10-23: "Nursery 2" is a
- *       pre-primary stage, not grade 2 — picker ordering parity — so it
- *       can never land in G2 and merge with the real "Class 2");
- *    3. numberless names (Nursery/LKG/UKG/IKG, arbitrary custom names)
- *       → their own NAMED group per name — never numeric 0, never
- *       merged with anything else. */
+ *       class NAME via EXPLICIT academic patterns only (keyword-anchored
+ *       "Class 6"/"Grade 9 - A"/"Std 8", section-first "6-A", pure
+ *       number "6" — see gradeFromClassName), group labeled with the
+ *       REAL name (never "Grade 0"); recognized pre-primary names are
+ *       checked BEFORE the number parse (final-review follow-up
+ *       2026-10-23: "Nursery 2" is a pre-primary stage, not grade 2 —
+ *       picker ordering parity — so it can never land in G2 and merge
+ *       with the real "Class 2");
+ *    3. everything else — numberless names (Nursery/LKG/UKG/IKG) AND
+ *       names whose numbers are incidental (years "Batch 2026", rooms
+ *       "Room 12", custom groups "Group 3", …) → their own NAMED group
+ *       per name — never numeric 0, never merged with anything else. */
 interface ResolvedGroup {
   /** Stable group id (ClassRecord.id / StudentRecord.classId). */
   key: string

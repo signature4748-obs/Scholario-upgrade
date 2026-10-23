@@ -27,8 +27,10 @@
  *      name) → group G{grade} (+stream), label "Grade N" — unchanged
  *      behavior for every correctly-populated tenant.
  *   2. Missing/empty/non-numeric gradeLevel → derive the grade from the
- *      class NAME's first number ("Class 6" → 6) and label the group with
- *      the REAL name — never a synthetic "Grade 0".
+ *      class NAME via EXPLICIT academic patterns ("Class 6" → 6, "6-A" → 6,
+ *      "Grade 9 - A" → 9; incidental numbers — years "Batch 2026"/"2026",
+ *      rooms "Room 12", custom groups "Group 3" — are NEVER grades) and
+ *      label the group with the REAL name — never a synthetic "Grade 0".
  *   3. Names without any number (Nursery/LKG/UKG/IKG, arbitrary custom
  *      names) → their own named group per name — never numeric 0, never
  *      merged with anything else. Recognized pre-primary names level as
@@ -363,20 +365,26 @@ describe('mapRosterToRecords — students inherit the fixed grouping', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// 6. Unusual / custom class names (final-review follow-up, 2026-10-23)
+// 6. Unusual / custom class names (final-review follow-up 2026-10-23 ·
+//    FINAL BEHAVIOUR REFINEMENT, same day — PR #57)
 //
 // Expected-behavior table agreed BEFORE pinning (ambiguities documented,
 // never guessed):
 //
-//  · "Batch 2026"   rule 2  grade 2026  key G2026  label "Batch 2026"
-//    level Senior Secondary (the ladder's else-bucket). AMBIGUITY (accepted,
-//    documented): a YEAR in a custom name parses as a grade — the same
-//    first-number parse the store createClass and the picker use. The group
-//    stays isolated (nothing else parses to 2026) and shows the real name,
-//    so no D1-family symptom can occur. Capping the parse was rejected:
-//    any cap (e.g. →12) would MERGE "Batch 2026" into a real grade group.
-//    Divergence noted: the picker's /(\d{1,2})/ parses "20" → 'Other' bucket;
-//    harmless (its buckets are display-only).
+//  · "Batch 2026"   rule 3 (named custom group). FINAL REFINEMENT — the
+//    earlier "year parses as grade 2026 → G2026" edge is REJECTED: a year
+//    is not an academic grade. Expected: grade 0, key N:batch 2026, label
+//    "Batch 2026", level Primary (the established unknown-grade bucket).
+//    Implemented by making the name→grade parse PATTERN-ANCHORED (explicit
+//    academic formats only), not "first number anywhere". A hard 1–12
+//    parse cap was considered and rejected — non-matching names fall to
+//    their OWN named group (rule 3), which is collision-free by design.
+//  · "Room 12"      rule 3 — named custom group N:room 12. A room number
+//    is never a grade; must never merge with the real "Class 12" (G12).
+//  · "Group 3"      rule 3 — named custom group N:group 3 unless repository
+//    evidence proves an academic format; census 2026-10-23 found NONE
+//    (wizard/publish/corpus/seeds use "Class N"/"Grade N - S"/"N-A"/
+//    pre-primary only) → must never merge with the real "Class 3" (G3).
 //  · "Nursery 2"    MUST resolve pre-primary-first (the allocation picker's
 //    own ordering: regex BEFORE number parse). Expected: grade 0, key
 //    N:nursery 2, label "Nursery 2", level Pre-Primary. The prior behavior
@@ -386,6 +394,20 @@ describe('mapRosterToRecords — students inherit the fixed grouping', () => {
 //  · "Grade 9 - A"  rule 2  grade 9  key G9  label "Grade 9 - A"
 //    level Secondary. Merging with "Class 9" is CORRECT (same academic
 //    grade — the grouping's purpose).
+//  · "6-A"          rule 2 (section-first academic format, gradeLevel NULL)
+//    grade 6  key G6  label "6-A"  level Middle. The demo corpus's own
+//    numeric row shape ("1-A".."12-A").
+//  · "Std 8" /
+//    "Standard 8"   rule 2 (keyword-anchored)  grade 8  key G8 — common
+//    operator spellings; merge with "Class 8" rows of the same grade.
+//  · "6"            rule 2 (pure-number name)  grade 6  key G6 — a bare
+//    number is unambiguous; merges with "Class 6" (zero-padding must not
+//    split a grade — same rule as "Class 01" → G1).
+//  · "2026"         rule 3 — a 4-digit year alone is NOT a grade; named
+//    group N:2026. (Grades are 1–2 digits; pure-number parse takes the
+//    WHOLE token so years can never parse.)
+//  · "Classroom 5"  rule 3 — the keyword regex is WORD-BOUNDARY anchored
+//    ("classroom" is not "class"); named group, never G5.
 //  · "Class 0"      rule 3 ("0" is not a valid grade)  grade 0  key
 //    N:class 0  label "Class 0"  level Primary (the established
 //    unknown-grade bucket). AMBIGUITY (documented, not guessed): some
@@ -398,24 +420,134 @@ describe('mapRosterToRecords — students inherit the fixed grouping', () => {
 //    min 1 after trim → 422; POST /api/classes throws 'Class name is
 //    required'; timetable-publish filters falsy names). Defensive pin only:
 //    the shared mapper must not crash if a future write path ever emits one.
+//
+//  The name-parse vocabulary (keyword/section-first/pure-number) is the
+//  FINAL REFINEMENT's parse; the store's createClass and the allocation
+//  picker keep their own first-number ladders (documented divergence —
+//  their groups are local/display-only; the canonical mapper is the one
+//  that builds the shared ClassRecord universe).
 // ─────────────────────────────────────────────────────────────────────
 
 describe('mapRosterToRecords — unusual / custom class names (final-review follow-up)', () => {
-  test('"Batch 2026" → isolated G2026 group labeled with the real name (year-parsed-as-grade edge, documented)', () => {
+  test('"Batch 2026" → own NAMED custom group, never the academic G2026 (final refinement)', () => {
     const grouped = map([row('Batch 2026', null, 'A')])
     expect(grouped.length).toBe(1)
-    expect(grouped[0].id).toBe('G2026')
+    expect(grouped[0].id).toBe('N:batch 2026')
     expect(grouped[0].name).toBe('Batch 2026')
-    expect(grouped[0].grade).toBe(2026)
-    // ladder else-bucket — cosmetic, isolated; never merges with real grades
-    expect(grouped[0].level).toBe('Senior Secondary')
+    expect(grouped[0].grade).toBe(0)
+    // named custom group → the established unknown-grade bucket
+    expect(grouped[0].level).toBe('Primary')
+    expect(grouped[0].id).not.toBe('G2026')
     expect(grouped.some((g) => g.name === 'Grade 0')).toBe(false)
   })
 
-  test('two year-named batches never merge ("Batch 2025" vs "Batch 2026")', () => {
-    const grouped = map([row('Batch 2025', null, 'A'), row('Batch 2026', null, 'A')])
+  test('"Batch 2026" does not merge with ANY academic group (collision guard)', () => {
+    const grouped = map([row('Batch 2026', null, 'A'), row('Class 2', null, 'A'), row('Class 12', null, 'A')])
+    expect(grouped.length).toBe(3)
+    const batch = grouped.find((g) => g.name === 'Batch 2026')
+    expect(batch?.id).toBe('N:batch 2026')
+    expect(batch?.grade).toBe(0)
+    expect(batch?.sections.map((s) => s.name)).toEqual(['A'])
+    expect(grouped.find((g) => g.id === 'G2')?.name).toBe('Class 2')
+    expect(grouped.find((g) => g.id === 'G12')?.name).toBe('Class 12')
+    expect(grouped.some((g) => g.id === 'G2026')).toBe(false)
+  })
+
+  test('two year-named batches stay TWO separate named groups ("Batch 2025" vs "Batch 2026")', () => {
+    const grouped = map([row('Batch 2025', null, 'A'), row('Batch 2026', null, 'B')])
     expect(grouped.length).toBe(2)
-    expect(grouped.map((g) => g.id).sort()).toEqual(['G2025', 'G2026'])
+    expect(grouped.map((g) => g.id).sort()).toEqual(['N:batch 2025', 'N:batch 2026'])
+    expect(grouped.every((g) => g.grade === 0)).toBe(true)
+  })
+
+  test('"Room 12" → own NAMED group; never merges with "Class 12" (collision guard)', () => {
+    const grouped = map([row('Room 12', null, 'A'), row('Class 12', null, 'B')])
+    expect(grouped.length).toBe(2)
+    const room = grouped.find((g) => g.id === 'N:room 12')
+    expect(room?.name).toBe('Room 12')
+    expect(room?.grade).toBe(0)
+    expect(room?.level).toBe('Primary') // unknown-grade bucket
+    expect(room?.sections.map((s) => s.name)).toEqual(['A'])
+    const class12 = grouped.find((g) => g.id === 'G12')
+    expect(class12?.name).toBe('Class 12')
+    expect(class12?.grade).toBe(12)
+    expect(class12?.level).toBe('Senior Secondary')
+    expect(class12?.sections.map((s) => s.name)).toEqual(['B'])
+  })
+
+  test('"Group 3" → own NAMED group; never merges with "Class 3" (collision guard)', () => {
+    const grouped = map([row('Group 3', null, 'A'), row('Class 3', null, 'B')])
+    expect(grouped.length).toBe(2)
+    const grp = grouped.find((g) => g.id === 'N:group 3')
+    expect(grp?.name).toBe('Group 3')
+    expect(grp?.grade).toBe(0)
+    expect(grp?.sections.map((s) => s.name)).toEqual(['A'])
+    const class3 = grouped.find((g) => g.id === 'G3')
+    expect(class3?.name).toBe('Class 3')
+    expect(class3?.grade).toBe(3)
+    expect(class3?.level).toBe('Primary')
+  })
+
+  test('two different custom names → two separate named groups ("Batch 2026" vs "Diploma")', () => {
+    const grouped = map([row('Batch 2026', null, 'A'), row('Diploma', null, 'A')])
+    expect(grouped.length).toBe(2)
+    expect(grouped.map((g) => g.id).sort()).toEqual(['N:batch 2026', 'N:diploma'])
+    expect(grouped.every((g) => g.grade === 0)).toBe(true)
+  })
+
+  test('keyword word-boundary: "Classroom 5" is NOT "Class 5" — named group, never G5', () => {
+    const grouped = map([row('Classroom 5', null, 'A'), row('Class 5', null, 'B')])
+    expect(grouped.length).toBe(2)
+    expect(grouped.find((g) => g.id === 'N:classroom 5')?.name).toBe('Classroom 5')
+    const class5 = grouped.find((g) => g.id === 'G5')
+    expect(class5?.name).toBe('Class 5')
+    expect(class5?.grade).toBe(5)
+  })
+
+  test('a pure-number name IS an academic grade ("6" → G6, merges with "Class 6")', () => {
+    const grouped = map([row('6', null, 'A'), row('Class 6', null, 'B')])
+    expect(grouped.length).toBe(1)
+    expect(grouped[0].id).toBe('G6')
+    expect(grouped[0].grade).toBe(6)
+    expect(grouped[0].level).toBe('Middle')
+    expect(grouped[0].sections.map((s) => s.name).sort()).toEqual(['A', 'B'])
+  })
+
+  test('a 4-digit year alone is NOT an academic grade ("2026" → named group)', () => {
+    const grouped = map([row('2026', null, 'A')])
+    expect(grouped.length).toBe(1)
+    expect(grouped[0].id).toBe('N:2026')
+    expect(grouped[0].name).toBe('2026')
+    expect(grouped[0].grade).toBe(0)
+    expect(grouped[0].id).not.toBe('G2026')
+  })
+
+  test('section-first "6-A" with gradeLevel NULL → academic grade 6 (the corpus row shape)', () => {
+    const grouped = map([row('6-A', null, 'A')])
+    expect(grouped.length).toBe(1)
+    expect(grouped[0].id).toBe('G6')
+    expect(grouped[0].name).toBe('6-A')
+    expect(grouped[0].grade).toBe(6)
+    expect(grouped[0].level).toBe('Middle')
+  })
+
+  test('"Std 8" / "Standard 8" are academic grade 8 and merge with "Class 8"', () => {
+    const grouped = map([row('Std 8', null, 'A'), row('Standard 8', null, 'B'), row('Class 8', null, 'C')])
+    expect(grouped.length).toBe(1)
+    expect(grouped[0].id).toBe('G8')
+    expect(grouped[0].grade).toBe(8)
+    expect(grouped[0].level).toBe('Middle')
+    expect(grouped[0].sections.map((s) => s.name).sort()).toEqual(['A', 'B', 'C'])
+  })
+
+  test('"Class 6" with sections A and B → ONE academic group, both sections retained', () => {
+    const grouped = map([row('Class 6', null, 'A'), row('Class 6', null, 'B')])
+    expect(grouped.length).toBe(1)
+    expect(grouped[0].id).toBe('G6')
+    expect(grouped[0].name).toBe('Class 6')
+    expect(grouped[0].grade).toBe(6)
+    expect(grouped[0].level).toBe('Middle')
+    expect(grouped[0].sections.map((s) => s.name)).toEqual(['A', 'B'])
   })
 
   test('"Nursery 2" resolves PRE-PRIMARY (picker parity): own named group, never G2', () => {
@@ -632,7 +764,7 @@ describe('mapRosterToRecords — student classId/className resolve to the correc
     row('Nursery 2', null, 'A'), // rule 3 (pre-primary-first), number-bearing
     row('Class 0', null, 'A'), // rule 3, "0" invalid as grade
     row('Class 01', null, 'A'), // rule 2, zero-padded
-    row('Batch 2026', null, 'A'), // rule 2, year edge
+    row('Batch 2026', null, 'A'), // rule 3 (final refinement), year-name custom group
     row('Grade 9 - A', null, 'A'), // rule 2, publish shape
     row('6-A', '6', 'A'), // rule 1, valid stored grade
     row('Class 6', null, 'B'), // rule 2 → SAME G6 group as 6-A (mixed data)
@@ -669,7 +801,7 @@ describe('mapRosterToRecords — student classId/className resolve to the correc
     expect(byId.get('s2')?.classId).toBe('N:class 0')
     expect(byId.get('s2')?.className).toBe('Class 0')
     expect(byId.get('s3')?.classId).toBe('G1')
-    expect(byId.get('s4')?.classId).toBe('G2026')
+    expect(byId.get('s4')?.classId).toBe('N:batch 2026')
     expect(byId.get('s4')?.className).toBe('Batch 2026')
     // the mixed-data pair: both on G6, one shared label, own sections
     expect(byId.get('s6')?.classId).toBe('G6')

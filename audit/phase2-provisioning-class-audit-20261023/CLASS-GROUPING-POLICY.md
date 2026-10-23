@@ -23,8 +23,8 @@ For each roster Class row, resolve in this order:
 | Priority | Condition | Grade | Group key | Group label | Level |
 |---|---|---|---|---|---|
 | 1 | stored `gradeLevel` is a valid number > 0 (`''`, null, `'0'`, `'abc'`, `'6x'` are NOT) | the stored value | `G{grade}` (+`-SCI`/`-COM` stream suffix) | `Grade {n}` (+ stream suffix) — **unchanged legacy behavior** | `levelFor(grade)` ladder (unchanged) |
-| 2 | stored value invalid/absent AND the class NAME contains a number AND the name does NOT match the pre-primary regex *(condition tightened by the final-review amendment, §7)* | parsed from the name (first number, ≥1; `"Class 6"→6`, `"6-A"→6`, `"Grade 9 - A"→9`) | `G{grade}` (+stream) | **the real class name** (+ stream suffix) — never a synthesized “Grade 0” | `levelFor(grade)` |
-| 3 | no valid stored grade AND (no number in the name OR the name matches the pre-primary regex) | 0 (internal only) | `N:{normalized name}` (+stream) | **the real class name** (+ stream suffix) | `Pre-Primary` when the name matches the pre-primary regex, else the established unknown-grade bucket (Primary) |
+| 2 | stored value invalid/absent AND the class NAME matches an EXPLICIT academic pattern — keyword-anchored (`Class`/`Grade`/`Std`/`Standard` as a whole word + number), section-first (`6-A`, 1–2 digits + dash family + marker), or a pure 1–2-digit number — AND the name does NOT match the pre-primary regex *(condition tightened twice: final-review amendment §7, final refinement §8)* | parsed from the name's declared grade (≥1; `"Class 6"→6`, `"6-A"→6`, `"Grade 9 - A"→9`, `"Std 8"→8`, `"6"→6`) | `G{grade}` (+stream) | **the real class name** (+ stream suffix) — never a synthesized “Grade 0” | `levelFor(grade)` |
+| 3 | no valid stored grade AND (no explicit academic pattern in the name OR the name matches the pre-primary regex) — years (`"Batch 2026"`, `"2026"`), rooms (`"Room 12"`), custom group numbers (`"Group 3"`) live here, by design | 0 (internal only) | `N:{normalized name}` (+stream) | **the real class name** (+ stream suffix) | `Pre-Primary` when the name matches the pre-primary regex, else the established unknown-grade bucket (Primary) |
 
 **Never:** numeric 0 as a group key, a synthesized “Grade 0” label, or merging unrelated classes into one group. **Never:** letting the name override a VALID stored grade (a disagreeing valid `gradeLevel` wins — pinned by test; matches the mission's “do not assume the class name is authoritative when an explicitly stored valid grade conflicts with it”).
 
@@ -90,10 +90,43 @@ For each roster Class row, resolve in this order:
 
 | Name (gradeLevel NULL unless noted) | Grade | Key | Label | Level | Note |
 |---|---|---|---|---|---|
-| `Batch 2026` | 2026 | `G2026` | `Batch 2026` | Senior Secondary (ladder else-bucket) | **accepted edge, documented**: a YEAR in a custom name parses as a grade (same first-number parse as store createClass); the group stays isolated and shows the real name, so no D1-family symptom is possible. A parse cap was REJECTED — any cap (e.g. →12) would merge the batch into a real grade group. Divergence noted: the picker's `/\d{1,2}/` reads "20" → its 'Other' bucket; display-only, harmless. |
+| `Batch 2026` | ~~2026 / `G2026` / Senior Secondary~~ **SUPERSEDED by the final refinement (§8)** → 0 / `N:batch 2026` / `Batch 2026` / Primary | a year is not an academic grade; the earlier accepted-edge position was replaced by the pattern-anchored parse the same day (see §8) |
 | `Nursery 2` | 0 | `N:nursery 2` | `Nursery 2` | Pre-Primary | D1a correction (this section) |
 | `Nursery 2` with stored `'2'` | 2 | `G2` | `Grade 2` | Primary | rule 1 — stored valid grade wins |
 | `Grade 9 - A` | 9 | `G9` | `Grade 9 - A` | Secondary | merges with `Class 9` = CORRECT (same academic grade) |
 | `Class 0` | 0 | `N:class 0` | `Class 0` | Primary (unknown-grade bucket) | **ambiguity documented, not guessed**: some curricula treat "Class 0" as pre-primary; the regex does not recognize it and was NOT extended on a guess. Invariants hold: own group, real name, never "Grade 0". |
 | `Class 01` | 1 | `G1` | `Class 01` (standalone) / `Grade 1` (when a stored-'1' row sorts first) | Primary | zero-padding must not split grade 1; cross-path merge with `Class 1`/stored-`1` rows is CORRECT |
 | `''` / `'   '` | 0 | `N:` | `''` | Primary | **API-FORBIDDEN** (wizard `safeText(40).min(1)` → 422; `/api/classes` throws 'Class name is required'; publish `.filter(Boolean)`); defensive mapper pin only: no crash, isolated group |
+
+---
+
+## 8. FINAL BEHAVIOUR REFINEMENT (2026-10-23, PR #57) — pattern-anchored name→grade parsing
+
+**Owner directive (same day as §7):** the earlier “year-in-name is an accepted edge” position was rejected by the owner — `"Batch 2026"` must NOT become academic grade 2026, `"Room 12"` must not merge into grade 12, `"Group 3"` must not merge into grade 3. **Do not parse the first arbitrary number from every class name** — a number is a grade only when the name declares it as one.
+
+**Amendment (smallest scoped change, same canonical mapper, one function):** `gradeFromClassName` is now PATTERN-ANCHORED instead of first-number-anywhere. Three explicit patterns, all backed by repository conventions:
+
+| Pattern | Regex | Repository evidence |
+|---|---|---|
+| keyword-anchored | `\b(class|grade|std|standard)\b[\s._#:–-]*(\d+)` (whole-word, case-insensitive) | wizard `CLASS_PRESETS` → `"Class N"`; timetable-publish → `"Grade 9 - A"`; `"Std 8"`/`"Standard 8"` supported common operator spellings (task directive). Word-boundary: `"Classroom 5"` is NOT `"Class 5"` |
+| section-first | `^(\d{1,2})\s*[–-]\s*\S+` | the demo corpus's own numeric row shape `"1-A".."12-A"`; the given example `"6-A"` |
+| pure number | `^(\d{1,2})$` (WHOLE token) | a bare `"6"` is unambiguous; taking the whole token means years (`"2026"`) can never parse |
+
+**No hard 1–12 cap** (directive honored): a non-matching name falls to its OWN named group (rule 3), so no cap can ever collide unrelated names into one group. A valid stored grade (rule 1) remains authoritative and is never overridden. Pre-primary recognition (§7) remains BEFORE the parse.
+
+**Case table added this refinement (grade / key / label / level):**
+
+| Name (gradeLevel NULL) | Grade | Key | Label | Level | Note |
+|---|---|---|---|---|---|
+| `Batch 2026` | 0 | `N:batch 2026` | `Batch 2026` | Primary (unknown-grade bucket) | never `G2026`; never merges with any academic group |
+| `Room 12` | 0 | `N:room 12` | `Room 12` | Primary | never merges with `G12` ("Room 101" exists only as a ROOM-model name in seeds — no class-naming convention uses rooms) |
+| `Group 3` | 0 | `N:group 3` | `Group 3` | Primary | never merges with `G3`; census found NO academic `"Group N"` format in any write path, seed, or corpus |
+| `Std 8` / `Standard 8` | 8 | `G8` | real name | Middle | merges with `Class 8` — same academic grade (directive: supported patterns) |
+| `6-A` (NULL) | 6 | `G6` | `6-A` | Middle | section-first; the corpus row shape |
+| `6` (pure number) | 6 | `G6` | `6` | Middle | merges with `Class 6` (zero-padding family — like `Class 01` → `G1`) |
+| `2026` (year alone) | 0 | `N:2026` | `2026` | Primary | 4-digit token cannot parse as a grade (pure-number takes the WHOLE token) |
+| `Classroom 5` | 0 | `N:classroom 5` | `Classroom 5` | Primary | whole-word keyword — `"classroom"` ≠ `"class"`; never `G5` |
+
+**Red-green proof (command output, TEST-RESULTS.md §12):** new battery 40 pass / **9 fail** against the pre-refinement implementation (exactly the incidental-number family: Batch ×3, Room 12, Group 3, Batch-vs-Diploma, Classroom 5, year "2026", corpus Batch-student resolution) → **49 pass / 0 fail** after the one-function change.
+
+**Documented divergence (unchanged, display-only surfaces):** the allocation picker (`use-academic-allocation.ts gradeNumberOf /\d{1,2}/`) and the store's local `createClass` (`/(\d+)/`, default grade 1) keep their own first-number ladders — their buckets/records are local and display-only; the canonical mapper is the one that builds the shared ClassRecord universe. The wizard-repro evidence (cases A–K, X, Y) remains BYTE-IDENTICAL under the refinement (verified by diff against `evidence-repro-mapper-POSTFIX.txt`).

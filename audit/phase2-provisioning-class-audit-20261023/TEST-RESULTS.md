@@ -95,3 +95,30 @@ New describe blocks 6–8 pin: **"Batch 2026"** (year-in-name edge, isolated `G2
 
 - Secret-pattern sweep of the full PR diff + audit pack (`password|token|secret|bearer|ghp_|sbp_|vcp_|re_…`): every match is a conceptual reference, a redaction marker, or runtime token-handling code — **no credential value anywhere** (verified again this session on 74f9e43 + the follow-up commit).
 - `git diff origin/main...HEAD --stat` re-inspected: src changes remain confined to `src/lib/store/students-store/server-sync.ts` + `tests/unit/students-store-class-grouping.test.ts` + this audit pack. No unrelated edits.
+
+---
+
+## 12. FINAL BEHAVIOUR REFINEMENT (2026-10-23, PR #57) — pattern-anchored name→grade parse
+
+**Owner directive:** incidental numbers in class names are never academic grades (`"Batch 2026"` ≠ G2026, `"Room 12"` must not merge into G12, `"Group 3"` must not merge into G3). Smallest scoped change: `gradeFromClassName` (canonical mapper only) is now pattern-anchored — keyword-anchored `Class|Grade|Std|Standard` (whole word), section-first `6-A`, pure 1–2-digit number. No hard 1–12 cap (non-matching names fall to their own named group — collision-free by construction). Rule 1 (valid stored grade) untouched; pre-primary-first ordering (§9) untouched.
+
+**Red-green proof (exact commands + counts, output preserved in session):**
+
+- `bun test tests/unit/students-store-class-grouping.test.ts` — **RED, pre-refinement implementation**: `40 pass / 9 fail / 295 expect() calls, 49 tests`. The 9 failures, verbatim from output: Batch 2026 named-group, Batch 2026 collision guard, two year-named batches, Room 12 collision, Group 3 collision, two custom names (Batch vs Diploma), Classroom 5 word-boundary, year "2026" alone, corpus Batch-student resolution — exactly the incidental-number family.
+- After the one-function change (+ one capture-group slip found by the run and fixed): **GREEN** — `49 pass / 0 fail / 333 expect() calls, 49 tests`.
+
+**Gates re-run post-refinement (exact commands + counts):**
+
+| Check | Command | Result | Baseline parity |
+|---|---|---|---|
+| Focused battery | `bun test tests/unit/students-store-class-grouping.test.ts` | 49 pass / 0 fail (333 expect) | new battery 21→39→49 |
+| Typecheck | `bun run typecheck` | 0 errors (exit 0) | ✓ |
+| Lint | `bun run lint` | 0 errors / 57 warnings (exit 0) | ✓ 57 = recorded baseline |
+| Unit | `bun run test:unit` | 305 pass / 0 fail (1168 expect, 24 files) | ✓ 295 baseline + 10 new tests |
+| Integration | `source scripts/dev-env.sh && bun run test:integration` | 49 pass / 0 fail (133 expect) | ✓ baseline parity |
+| Regression | `source scripts/dev-env.sh && bun run test:regression` | 178 pass / 0 fail (712 expect) | ✓ baseline parity |
+| Wizard/corpus evidence | `bun run audit/…/repro-mapper.ts` → diff vs `evidence-repro-mapper-POSTFIX.txt` | **BYTE-IDENTICAL** | ✓ A–K,X,Y unchanged |
+
+**No new type errors, no new lint errors, no new suite failures; no baseline relabelling.** The `bun run test` full battery (incl. api/security) + E2E runs in CI on the PR head — the merge gate requires that green on the exact head SHA.
+
+**Secret sweep + diff confinement re-verified post-refinement:** src changes confined to `server-sync.ts` (one function + comments) + the test battery + this audit pack; no unrelated modules, no DB schema, no migrations, no production records.
