@@ -107,9 +107,107 @@ interface RosterPayload {
 
 // ── mapping helpers ──────────────────────────────────────────────────
 
-const gradeFor = (g: string | null): number => {
+/** Numeric grade from the STORED gradeLevel when it is a valid positive
+ *  number — the authoritative value (never overridden by the name). */
+const gradeFromStored = (g: string | null): number | null => {
   const n = Number(g)
-  return Number.isFinite(n) && n > 0 ? n : 0
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** EXPLICIT academic-name patterns (final behaviour refinement, PR #57):
+ *  a name declares its number an ACADEMIC GRADE only through a format the
+ *  repository's own write paths produce or its conventions spell —
+ *    · keyword-anchored — "Class 6" (wizard presets), "Grade 9 - A"
+ *      (timetable-publish auto-create), "Std 8"/"Standard 8" (common
+ *      operator spellings); the keyword must be a WHOLE WORD ("Classroom 5"
+ *      is not "Class 5");
+ *    · section-first — "6-A" (the demo corpus's numeric row shape
+ *      "1-A".."12-A"), a 1–2-digit grade + dash family + section marker;
+ *    · pure number — "6" (a bare grade token; the WHOLE name is the
+ *      number, so years like "2026" can never parse).
+ *  Incidental numbers are NEVER grades: years ("Batch 2026", "2026"),
+ *  rooms ("Room 12") and custom group numbers ("Group 3") keep their own
+ *  NAMED group (rule 3) instead of landing in G2026/G12/G3 where they
+ *  would swallow or merge with a real academic grade. Deliberately NO
+ *  hard 1–12 parse cap: a non-matching name falls to its own named
+ *  group, so no unrelated name can ever collide into another's group. */
+const ACADEMIC_KEYWORD_RE = /\b(?:class|grade|std|standard)\b[\s._#:–-]*(\d+)/i
+const SECTION_FIRST_RE = /^(\d{1,2})\s*[–-]\s*\S+/
+const PURE_NUMBER_RE = /^(\d{1,2})$/
+
+/** Numeric grade from the class NAME ("Class 6" → 6, "6-A" → 6,
+ *  "Grade 9 - A" → 9) — pattern-anchored, never an arbitrary first
+ *  number (see ACADEMIC_* above). */
+const gradeFromClassName = (name: string): number | null => {
+  const n = name.trim()
+  const m = n.match(ACADEMIC_KEYWORD_RE) ?? n.match(SECTION_FIRST_RE) ?? n.match(PURE_NUMBER_RE)
+  if (!m) return null
+  const g = parseInt(m[1], 10)
+  return Number.isFinite(g) && g >= 1 ? g : null
+}
+
+/** Pre-primary names — the teacher allocation picker's regex
+ *  (use-academic-allocation.ts groupLabelOf) extended with `ikg`, the
+ *  demo corpus's legacy pre-primary name (the picker's own regex misses
+ *  it — \bkg\b does not match inside "IKG" — but the seed corpus and the
+ *  store ladder both treat IKG as pre-primary). */
+const PRE_PRIMARY_NAME_RE = /nursery|lkg|ukg|ikg|\bkg\b|pre[- ]?primary|pre[- ]?nursery/i
+
+/** Resolved grade-group for one roster row (Phase 2 D1 fix).
+ *
+ *  The old gradeFor/groupKeyOf/groupLabelOf collapsed EVERY row whose
+ *  gradeLevel was null/''/non-numeric into one synthetic "Grade 0"
+ *  group — swallowing all wizard-created classes (gradeLevel NULL by
+ *  schema design; see /api/platform/schools academic bootstrap) as
+ *  "sections". Canonical policy (audit/phase2-…/CLASS-GROUPING-POLICY.md):
+ *    1. a valid stored gradeLevel is authoritative → G{grade}, label
+ *       "Grade N" (existing behavior for correctly-populated tenants
+ *       preserved exactly);
+ *    2. missing/empty/non-numeric gradeLevel → grade derived from the
+ *       class NAME via EXPLICIT academic patterns only (keyword-anchored
+ *       "Class 6"/"Grade 9 - A"/"Std 8", section-first "6-A", pure
+ *       number "6" — see gradeFromClassName), group labeled with the
+ *       REAL name (never "Grade 0"); recognized pre-primary names are
+ *       checked BEFORE the number parse (final-review follow-up
+ *       2026-10-23: "Nursery 2" is a pre-primary stage, not grade 2 —
+ *       picker ordering parity — so it can never land in G2 and merge
+ *       with the real "Class 2");
+ *    3. everything else — numberless names (Nursery/LKG/UKG/IKG) AND
+ *       names whose numbers are incidental (years "Batch 2026", rooms
+ *       "Room 12", custom groups "Group 3", …) → their own NAMED group
+ *       per name — never numeric 0, never merged with anything else. */
+interface ResolvedGroup {
+  /** Stable group id (ClassRecord.id / StudentRecord.classId). */
+  key: string
+  /** Display label (ClassRecord.name / StudentRecord.className). */
+  label: string
+  /** Numeric grade for ordering/buckets (0 for named groups). */
+  grade: number
+}
+
+const resolveGroupOf = (c: RosterClassDto): ResolvedGroup => {
+  const suffix = c.stream === 'Science' ? '-SCI' : c.stream === 'Commerce' ? '-COM' : ''
+  const labelSuffix = c.stream === 'Science' ? ' (Science)' : c.stream === 'Commerce' ? ' (Commerce)' : ''
+  const stored = gradeFromStored(c.gradeLevel)
+  if (stored != null) {
+    return { key: `G${stored}${suffix}`, label: `Grade ${stored}${labelSuffix}`, grade: stored }
+  }
+  // Pre-primary FIRST (final-review follow-up 2026-10-23): a recognized
+  // pre-primary name is pre-primary even when it carries a number
+  // ("Nursery 2", "LKG 2", "KG 2", "Pre-Primary 1") — the same
+  // regex-before-number ordering the allocation picker's groupLabelOf
+  // uses. Without this, "Nursery 2" parsed as grade 2 and MERGED with
+  // the real "Class 2" — unrelated classes in one group, the exact
+  // invariant this fix forbids. A valid stored grade (rule 1 above)
+  // still wins and is never overridden by the name.
+  if (PRE_PRIMARY_NAME_RE.test(c.name)) {
+    return { key: `N:${c.name.trim().toLowerCase()}${suffix}`, label: `${c.name.trim()}${labelSuffix}`, grade: 0 }
+  }
+  const fromName = gradeFromClassName(c.name)
+  if (fromName != null) {
+    return { key: `G${fromName}${suffix}`, label: `${c.name.trim()}${labelSuffix}`, grade: fromName }
+  }
+  return { key: `N:${c.name.trim().toLowerCase()}${suffix}`, label: `${c.name.trim()}${labelSuffix}`, grade: 0 }
 }
 
 const levelFor = (grade: number): ClassRecord['level'] => {
@@ -133,22 +231,9 @@ const monthLabel = (key: string): string => {
   return names[Number(m) - 1] ?? key
 }
 
-/** Group key for one grade-group (grade + stream) — stable synthetic id. */
-const groupKeyOf = (c: RosterClassDto): string => {
-  const grade = gradeFor(c.gradeLevel)
-  const base = `G${grade}`
-  if (c.stream === 'Science') return `${base}-SCI`
-  if (c.stream === 'Commerce') return `${base}-COM`
-  return base
-}
-
-const groupLabelOf = (c: RosterClassDto): string => {
-  const grade = gradeFor(c.gradeLevel)
-  const base = `Grade ${grade}`
-  if (c.stream === 'Science') return `${base} (Science)`
-  if (c.stream === 'Commerce') return `${base} (Commerce)`
-  return base
-}
+/** Group key for one grade-group (grade + stream) — stable synthetic id.
+ *  (Kept as the thin alias the rest of this module already calls.) */
+const groupKeyOf = (c: RosterClassDto): string => resolveGroupOf(c).key
 
 /** Map the roster payload onto store shapes. */
 export function mapRosterToRecords(payload: RosterPayload): {
@@ -160,13 +245,28 @@ export function mapRosterToRecords(payload: RosterPayload): {
   // Classes: group section-level rows into grade-group ClassRecords.
   const groups = new Map<
     string,
-    { label: string; grade: number; sections: RosterClassDto[] }
+    { label: string; grade: number; level: ClassRecord['level']; sections: RosterClassDto[] }
   >()
   for (const c of payload.classes) {
-    const key = groupKeyOf(c)
-    const grade = gradeFor(c.gradeLevel)
-    if (!groups.has(key)) groups.set(key, { label: groupLabelOf(c), grade, sections: [] })
-    groups.get(key)!.sections.push(c)
+    const grp = resolveGroupOf(c)
+    if (!groups.has(grp.key)) {
+      groups.set(grp.key, {
+        label: grp.label,
+        grade: grp.grade,
+        level:
+          grp.grade > 0
+            ? levelFor(grp.grade)
+            : // Named group: recognized pre-primary names get the store's
+              // own 'Pre-Primary' bucket (same ladder as store createClass
+              // and the allocation picker); arbitrary numberless names fall
+              // to the established unknown-grade bucket (documented).
+              PRE_PRIMARY_NAME_RE.test(c.name)
+              ? 'Pre-Primary'
+              : levelFor(0),
+        sections: [],
+      })
+    }
+    groups.get(grp.key)!.sections.push(c)
   }
 
   const classById = new Map(payload.classes.map((c) => [c.id, c]))
@@ -183,7 +283,7 @@ export function mapRosterToRecords(payload: RosterPayload): {
       id: key,
       name: g.label,
       grade: g.grade,
-      level: levelFor(g.grade),
+      level: g.level,
       sections: g.sections.map((sec) => ({
         id: sec.id, // canonical DB Class id (section-level)
         name: sec.section ?? 'A',
