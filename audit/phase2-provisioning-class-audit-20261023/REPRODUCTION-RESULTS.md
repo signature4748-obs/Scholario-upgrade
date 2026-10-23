@@ -58,3 +58,29 @@ Screenshots: `ui-02-classes-grade0-PRE-FIX.png`, `ui-03-grade0-detail-PRE-FIX.pn
 ## Teardown verification
 
 `teardown: purged 3 test tenants (+0 strays); school count back to 2` (L2 runs) and the UI tenant purge → `schools remaining: green-valley, hawkings-prithvipur`. No test artifacts remain in the database; no seed tenant was modified.
+
+---
+
+# FINAL-REVIEW FOLLOW-UP (2026-10-23, PR #57 @ 74f9e43) — unusual/custom class-name matrix
+
+The final review requested targeted reproduction of six unusual class-name shapes. All reproduced **deterministically at the canonical-mapper level (L1)** — the D1 family is fully specified there; no live/UI run was needed for the follow-up (the live chain and UI walk above already prove the payload shapes reach the mapper unchanged, and no write path was touched).
+
+| Case | Input (gradeLevel unless noted) | Expected grade / key / label / level | Pre-correction actual | Verdict |
+|---|---|---|---|---|
+| Batch 2026 | `Batch 2026`, NULL | 2026 / `G2026` / `Batch 2026` / Senior Secondary (ladder else-bucket) — **accepted edge** (year parsed as grade; isolated group; parse-cap REJECTED: any cap would merge it into a real grade group) | same | **PASS** (pinned) |
+| Batch 2025+2026 | two rows, NULL | two groups `G2025`/`G2026` — batches never merge | same | **PASS** (pinned) |
+| Nursery 2 | `Nursery 2`, NULL | 0 / `N:nursery 2` / `Nursery 2` / Pre-Primary (picker parity: regex BEFORE number parse) | **grade 2 / `G2` / level Primary** — WRONG | **FAIL → D1a, fixed this follow-up** |
+| Nursery 2 + Class 2 | two rows, NULL | TWO groups (pre-primary stage never merges with an academic grade) | **ONE merged `G2` group** — unrelated classes merged (the D1 invariant violated) | **FAIL → D1a, fixed** |
+| LKG 2 / UKG 2 / KG 2 / Pre-Primary 1 | four rows, NULL | four named Pre-Primary groups, never `G1`/`G2` | **four `G2`/`G1` groups** | **FAIL → D1a, fixed** |
+| Nursery 2 + stored '2' | `Nursery 2`, gradeLevel `'2'` | 2 / `G2` / `Grade 2` (rule 1: stored valid grade wins) | same | **PASS** (pinned — fix must NOT override stored data) |
+| Grade 9 - A | `Grade 9 - A`, NULL | 9 / `G9` / `Grade 9 - A` / Secondary | same | **PASS** (pinned) |
+| Grade 9 - A + Class 9 | two rows, NULL | ONE `G9` group, 2 sections (same academic grade — CORRECT merge) | same | **PASS** (pinned) |
+| Class 0 | `Class 0`, NULL | 0 / `N:class 0` / `Class 0` / Primary (unknown-grade bucket) — **ambiguity documented**: could be pre-primary in some curricula; regex NOT extended on a guess | same | **PASS** (pinned; ambiguity recorded) |
+| Class 0 + Nursery + Class 10 | three rows, NULL | three distinct groups | same | **PASS** (pinned) |
+| Class 01 | `Class 01`, NULL | 1 / `G1` / `Class 01` / Primary (zero-padding must not split grade 1) | same | **PASS** (pinned) |
+| Class 01 + Class 1 + 1-A(stored '1') | three rows | ONE `G1` group, 3 sections, label follows first row (`Grade 1` when the stored row sorts first) | same | **PASS** (pinned) |
+| Empty / whitespace name | `''` + `'   '`, NULL | **API-FORBIDDEN** (wizard `safeText(40).min(1)` → 422; `/api/classes` throws 'Class name is required'; timetable-publish `.filter(Boolean)`) — defensive mapper pin: no crash, isolated `N:` group | same (no crash) | **PASS** (defensive pin; contract forbids the shape) |
+| Mixed data (stored '6' + NULL 'Class 6') | `6-A`(stored '6') + `Class 6`(NULL) | ONE `G6` group, sections [A,B]; label follows first row (stored sorts first → `Grade 6`); students on both rows share classId `G6` + label, keep own sections | same | **PASS** (pinned both orders) |
+| Student resolution across all the above | 8-row corpus + 8 students | every student's `classId` resolves to a real grouped ClassRecord with `name === className` and the student's section chip present | pre-correction: the `Nursery 2` student resolved to `G2` (wrong group) | **FAIL on the Nursery-2 student → fixed; PASS post** |
+
+**Summary: 4 deterministic FAILs pre-correction, all in the number-bearing pre-primary family (D1a); all green post-correction (39/0). Evidence: the test battery itself (tests/unit/students-store-class-grouping.test.ts, describe blocks 6–8) + TEST-RESULTS.md §8–§9.**

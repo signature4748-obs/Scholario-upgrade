@@ -23,8 +23,8 @@ For each roster Class row, resolve in this order:
 | Priority | Condition | Grade | Group key | Group label | Level |
 |---|---|---|---|---|---|
 | 1 | stored `gradeLevel` is a valid number > 0 (`''`, null, `'0'`, `'abc'`, `'6x'` are NOT) | the stored value | `G{grade}` (+`-SCI`/`-COM` stream suffix) | `Grade {n}` (+ stream suffix) — **unchanged legacy behavior** | `levelFor(grade)` ladder (unchanged) |
-| 2 | stored value invalid/absent AND the class NAME contains a number | parsed from the name (first number, ≥1; `"Class 6"→6`, `"6-A"→6`, `"Grade 9 - A"→9`) | `G{grade}` (+stream) | **the real class name** (+ stream suffix) — never a synthesized “Grade 0” | `levelFor(grade)` |
-| 3 | no valid stored grade AND no number in the name | 0 (internal only) | `N:{normalized name}` (+stream) | **the real class name** (+ stream suffix) | `Pre-Primary` when the name matches the pre-primary regex, else the established unknown-grade bucket (Primary) |
+| 2 | stored value invalid/absent AND the class NAME contains a number AND the name does NOT match the pre-primary regex *(condition tightened by the final-review amendment, §7)* | parsed from the name (first number, ≥1; `"Class 6"→6`, `"6-A"→6`, `"Grade 9 - A"→9`) | `G{grade}` (+stream) | **the real class name** (+ stream suffix) — never a synthesized “Grade 0” | `levelFor(grade)` |
+| 3 | no valid stored grade AND (no number in the name OR the name matches the pre-primary regex) | 0 (internal only) | `N:{normalized name}` (+stream) | **the real class name** (+ stream suffix) | `Pre-Primary` when the name matches the pre-primary regex, else the established unknown-grade bucket (Primary) |
 
 **Never:** numeric 0 as a group key, a synthesized “Grade 0” label, or merging unrelated classes into one group. **Never:** letting the name override a VALID stored grade (a disagreeing valid `gradeLevel` wins — pinned by test; matches the mission's “do not assume the class name is authoritative when an explicitly stored valid grade conflicts with it”).
 
@@ -68,8 +68,32 @@ For each roster Class row, resolve in this order:
 3. **Sort the Classes grid numerically** — deferred (display-order quirk above; orthogonal to the defect).
 4. **Extending `ClassRecord['level']` union with 'Other'** — rejected: level is display/filter-only and the union is shared; the established bucket keeps the type closed.
 
-## 6. Affected consumers (quantified)
+## 6. Affected consumers (quantified)  
 
 - `useStudentsStore` consumers: **53 files** (grep census 2026-10-23) — principal (Classes grid/cards/details, Students, Exams via resolver, Certificates, Transport, Messaging, Fees, Downloads, Settings), student panel, cross-cutting stores (fee/messaging/certificates/transport/library/rooms/class-responsibility).
 - All inherit the fix through the single canonical mapper; no per-consumer changes; no consumer pattern-matches the `G*` id format (grep-verified) so the new `N:*` keys are safe.
 - Platform plane (schools directory, wizard success panel, readiness, audit): does NOT read the store — unaffected.
+
+---
+
+## 7. FINAL-REVIEW AMENDMENT (2026-10-23, PR #57 follow-up on the same branch) — number-bearing pre-primary names
+
+**Finding (D1a):** the rule-2-first ordering parsed `"Nursery 2"` as grade 2 (`G2`) — so a tenant holding both a pre-primary `"Nursery 2"` and a real `"Class 2"` rendered ONE merged card (pre-primary stage swallowed as a section of an academic grade). That violates this policy's own §2 invariant ("never merging unrelated classes into one group") and diverges from the allocation picker — the implementation whose regex this mapper adopted — which checks its pre-primary regex BEFORE any number parse (`use-academic-allocation.ts groupLabelOf`: regex line first, `gradeNumberOf` second).
+
+**Amendment (smallest scoped correction, same canonical mapper):** in `resolveGroupOf`, the pre-primary regex is now consulted BEFORE the name-number parse (stored valid grades remain rule 1 and are never overridden). Consequences, all pinned by tests:
+
+- `"Nursery 2"` / `"LKG 2"` / `"UKG 2"` / `"KG 2"` / `"Pre-Primary 1"` → own NAMED group (`N:nursery 2`, …), grade 0, level **Pre-Primary** — never `G1`/`G2`, never merged with an academic class.
+- A row with a VALID stored grade keeps rule 1 regardless of its name (`"Nursery 2"` + gradeLevel `'2'` → `G2 "Grade 2"`) — the mission's stored-data-is-authoritative rule is untouched.
+- Numberless names (Nursery/LKG/UKG/IKG/Diploma/…) are unaffected (they reached rule 3 anyway).
+
+**Unusual-name case table agreed and pinned this follow-up (expected grade / key / label / level):**
+
+| Name (gradeLevel NULL unless noted) | Grade | Key | Label | Level | Note |
+|---|---|---|---|---|---|
+| `Batch 2026` | 2026 | `G2026` | `Batch 2026` | Senior Secondary (ladder else-bucket) | **accepted edge, documented**: a YEAR in a custom name parses as a grade (same first-number parse as store createClass); the group stays isolated and shows the real name, so no D1-family symptom is possible. A parse cap was REJECTED — any cap (e.g. →12) would merge the batch into a real grade group. Divergence noted: the picker's `/\d{1,2}/` reads "20" → its 'Other' bucket; display-only, harmless. |
+| `Nursery 2` | 0 | `N:nursery 2` | `Nursery 2` | Pre-Primary | D1a correction (this section) |
+| `Nursery 2` with stored `'2'` | 2 | `G2` | `Grade 2` | Primary | rule 1 — stored valid grade wins |
+| `Grade 9 - A` | 9 | `G9` | `Grade 9 - A` | Secondary | merges with `Class 9` = CORRECT (same academic grade) |
+| `Class 0` | 0 | `N:class 0` | `Class 0` | Primary (unknown-grade bucket) | **ambiguity documented, not guessed**: some curricula treat "Class 0" as pre-primary; the regex does not recognize it and was NOT extended on a guess. Invariants hold: own group, real name, never "Grade 0". |
+| `Class 01` | 1 | `G1` | `Class 01` (standalone) / `Grade 1` (when a stored-'1' row sorts first) | Primary | zero-padding must not split grade 1; cross-path merge with `Class 1`/stored-`1` rows is CORRECT |
+| `''` / `'   '` | 0 | `N:` | `''` | Primary | **API-FORBIDDEN** (wizard `safeText(40).min(1)` → 422; `/api/classes` throws 'Class name is required'; publish `.filter(Boolean)`); defensive mapper pin only: no crash, isolated group |

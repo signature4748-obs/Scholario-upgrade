@@ -144,6 +144,10 @@ const PRE_PRIMARY_NAME_RE = /nursery|lkg|ukg|ikg|\bkg\b|pre[- ]?primary|pre[- ]?
  *       preserved exactly);
  *    2. missing/empty/non-numeric gradeLevel → grade derived from the
  *       class NAME, group labeled with the REAL name (never "Grade 0");
+ *       recognized pre-primary names are checked BEFORE the number
+ *       parse (final-review follow-up 2026-10-23: "Nursery 2" is a
+ *       pre-primary stage, not grade 2 — picker ordering parity — so it
+ *       can never land in G2 and merge with the real "Class 2");
  *    3. numberless names (Nursery/LKG/UKG/IKG, arbitrary custom names)
  *       → their own NAMED group per name — never numeric 0, never
  *       merged with anything else. */
@@ -162,6 +166,17 @@ const resolveGroupOf = (c: RosterClassDto): ResolvedGroup => {
   const stored = gradeFromStored(c.gradeLevel)
   if (stored != null) {
     return { key: `G${stored}${suffix}`, label: `Grade ${stored}${labelSuffix}`, grade: stored }
+  }
+  // Pre-primary FIRST (final-review follow-up 2026-10-23): a recognized
+  // pre-primary name is pre-primary even when it carries a number
+  // ("Nursery 2", "LKG 2", "KG 2", "Pre-Primary 1") — the same
+  // regex-before-number ordering the allocation picker's groupLabelOf
+  // uses. Without this, "Nursery 2" parsed as grade 2 and MERGED with
+  // the real "Class 2" — unrelated classes in one group, the exact
+  // invariant this fix forbids. A valid stored grade (rule 1 above)
+  // still wins and is never overridden by the name.
+  if (PRE_PRIMARY_NAME_RE.test(c.name)) {
+    return { key: `N:${c.name.trim().toLowerCase()}${suffix}`, label: `${c.name.trim()}${labelSuffix}`, grade: 0 }
   }
   const fromName = gradeFromClassName(c.name)
   if (fromName != null) {

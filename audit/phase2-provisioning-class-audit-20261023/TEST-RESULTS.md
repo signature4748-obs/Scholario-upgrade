@@ -59,3 +59,39 @@ Legend: pre-fix = before the mapper change (evidence for the failing behavior); 
 
 - New tests: 21 (all passing post-fix) · Unit: 277/0 · Integration: 49/0 · Regression: 178/0 · Wizard live API: 18/0 · Readiness+empty-school: 15/0 · Overhaul: 11/0 · typecheck 0 · lint 0 errors.
 - Every count above was executed and recorded this session; nothing is inferred from CI runs.
+
+---
+
+# FINAL-REVIEW FOLLOW-UP (2026-10-23, PR #57 @ 74f9e43 — added on the same branch)
+
+Scope: unusual/custom class-name battery + full-diff inspection + one smallest-scoped correction (D1a, below). No merge, no deploy, no production touch.
+
+## 8. Follow-up battery: `tests/unit/students-store-class-grouping.test.ts` grew 21 → 39 tests
+
+New describe blocks 6–8 pin: **"Batch 2026"** (year-in-name edge, isolated `G2026`), **"Nursery 2"** (pre-primary-first — see D1a), **"Grade 9 - A"** (publish shape; correct same-grade merge with "Class 9"), **"Class 0"** (named group `N:class 0`, never synthetic "Grade 0"), **"Class 01"** (zero-padding → G1; cross-path merge with stored-"1" rows), **empty/whitespace names** (API-forbidden on all three write paths — defensive no-crash pin), the **mixed-data case** (valid stored '6' + NULL "Class 6" → ONE G6 group, both orders, students on both rows), and the **student-resolution invariant** (every student's classId resolves to a real grouped ClassRecord whose name === className, across the whole unusual-name corpus).
+
+| Command | When | Exit | Count |
+|---|---|---|---|
+| `bun test tests/unit/students-store-class-grouping.test.ts` | **pre-correction** | 0 (report) | **35 pass / 4 fail** ← the 4 reds are EXACTLY the number-bearing pre-primary family (D1a), all other new cases green |
+| same | **post-correction** | **0** | **39 pass / 0 fail** (275 expects) |
+
+## 9. Follow-up gates (post-correction, same session)
+
+| # | Command | Exit | Result | Baseline comparison |
+|---|---|---|---|---|
+| 10 | `bun run typecheck` | **0** | clean | identical |
+| 11 | `bun run lint` | **0** | 0 errors / 57 warnings | identical (baseline warning class only) |
+| 12 | `bun run test:unit` | **0** | **295 pass / 0 fail** (24 files, 1,110 expects) | prior 277/0 + **exactly the 18 new tests**, zero regressions |
+| 13 | `source scripts/dev-env.sh && bun run test:integration` | **0** | **49 pass / 0 fail** | identical |
+| 14 | `source scripts/dev-env.sh && bun run test:regression` | **0** | **178 pass / 0 fail** | identical |
+| 15 | `bun run audit/…/repro-mapper.ts` | **0** | cases A–F,G,I1,I2,J,K,X,Y **all identical to the committed POSTFIX evidence** | the D1a correction changed only the number-bearing pre-primary sub-family (not covered by A–K); no prior confirmed behavior disturbed |
+
+## 10. Follow-up environment note (recorded, not misclassified)
+
+- `bun run test:integration` **without** `source scripts/dev-env.sh` (first attempt): 29 tests ran, 18 failed with `PrismaClientInitializationError: the URL must start with postgresql://` — the documented sandbox shell-injection class (scripts/dev-env.sh header: ambient `DATABASE_URL=<sqlite template>` clobbers tool shells). Pure environment cause, corrected by the documented sourcing convention; single re-run → 49/0. Not counted as a product failure; no code relation (failures were auth-identity suites, untouched by this diff).
+- Live-HTTP wizard suites were NOT re-run this follow-up: the mapper change is client-side only and the provisioning API contract was already verified intact (§3); CI on the branch re-runs them.
+
+## 11. Follow-up security checks
+
+- Secret-pattern sweep of the full PR diff + audit pack (`password|token|secret|bearer|ghp_|sbp_|vcp_|re_…`): every match is a conceptual reference, a redaction marker, or runtime token-handling code — **no credential value anywhere** (verified again this session on 74f9e43 + the follow-up commit).
+- `git diff origin/main...HEAD --stat` re-inspected: src changes remain confined to `src/lib/store/students-store/server-sync.ts` + `tests/unit/students-store-class-grouping.test.ts` + this audit pack. No unrelated edits.

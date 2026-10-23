@@ -21,3 +21,14 @@ Mission: audit the complete school-creation and class/section configuration work
 ## One-line outcome
 
 The provisioning path is **correct** (payload, dedupe, idempotency, atomicity, persisted rows all verified); the reported “Class 0 / excessive sections” was a **display-layer grouping defect** (D1), reproduced at three levels pre-fix and verified fixed post-fix with a 21-test regression battery and all targeted suites green — the smallest compatible change, in the ONE canonical mapper, no write-path or production changes.
+
+---
+
+# FINAL-REVIEW FOLLOW-UP (2026-10-23, PR #57 @ 74f9e43 → follow-up commit on the same branch)
+
+Reviewer-requested battery for unusual/custom class names + full-diff inspection. Outcome:
+
+- **One real defect found and fixed (smallest scoped, same canonical mapper): D1a** — number-bearing pre-primary names (`"Nursery 2"`) parsed as academic grades and could merge with the real `"Class 2"`; now the pre-primary regex is consulted BEFORE the number parse (the allocation picker's own ordering). Rule 1 (valid stored grade wins) untouched and pinned.
+- The battery grew **21 → 39 tests** (red 4/39 pre-correction — exactly the D1a family → green 39/0 post); unit suite 295/0, integration 49/0, regression 178/0, typecheck 0, lint 0e/57w, repro-mapper A–K,X,Y unchanged.
+- Documented ambiguities (NOT guessed): `"Class 0"` level; year-in-name (`Batch 2026`) accepted edge; mixed-data group label follows first row; empty/whitespace names are API-FORBIDDEN (defensive no-crash pin only).
+- Details: `CLASS-GROUPING-POLICY.md` §7, `DEFECTS.md` (D1a + unresolved decisions), `REPRODUCTION-RESULTS.md` (follow-up matrix), `TEST-RESULTS.md` §8–§11.
