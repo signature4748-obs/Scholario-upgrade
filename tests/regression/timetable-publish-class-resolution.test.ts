@@ -26,11 +26,27 @@
  *          slots (mySlots non-empty, rows on the original classId);
  *       7. re-publication is idempotent w.r.t. class creation;
  *       8. the stale-snapshot guard still refuses a payload whose classes
- *          match NOTHING (normalized lookup cannot bypass it);
+ *          match NOTHING (normalized lookup cannot bypass it) and the
+ *          refusal leaves NO ghost class behind (guard runs BEFORE the
+ *          creation phase);
  *       9. cross-tenant: school B's "Class 1 - A" resolves ONLY within
  *          school B (same name+section must exist in both schools);
  *      10. the seeded Hawkings corpus (read-only) keeps its 15
- *          embedded-shape classes and 396 timetable rows untouched.
+ *          embedded-shape classes and 396 timetable rows untouched;
+ *      11. the en-dash variant of the canonical label ("Class 1 – A")
+ *          resolves to the same wizard row — both dash forms supported;
+ *      12. case-insensitive single-candidate resolution: a lowercase
+ *          payload label ("class 1 - a") hits the stored row;
+ *      13. CRITICAL partial-write pin: a genuinely-NEW class FIRST + an
+ *          ambiguous label AFTER → the request fails 422 and NO class
+ *          row was created by the failed request (resolution is
+ *          side-effect-free; creation is a separate, later phase);
+ *      14. the reversed order (ambiguous first, new class after) has
+ *          the same safe outcome;
+ *      15. legitimate new-class creation still works in a valid mixed
+ *          payload (existing label + genuinely-new name → exactly one
+ *          new row; the guard does not over-fire when at least one
+ *          payload class exists).
  *
  * FIXTURE POLICY (Phase B approval §4): the reproduced wizard-repro
  * failure state is PRESERVED as evidence — this suite never touches it.
@@ -398,9 +414,10 @@ describe('regression · Phase B timetable publish class resolution (wizard-shape
   )
 
   test(
-    '8 — stale-snapshot guard intact: a payload whose classes match NOTHING is still refused (normalized lookup cannot bypass the guard)',
+    '8 — stale-snapshot guard intact: a payload whose classes match NOTHING is still refused (normalized lookup cannot bypass the guard) and leaves NO ghost class behind',
     async () => {
       const rowsBefore = await db.timetable.count({ where: { schoolId: schoolAId } })
+      const classesBefore = await classCount(schoolAId)
       expect(rowsBefore).toBeGreaterThan(0)
 
       const res = await publish(cookieA, [slot('Monday', 1, MON1, `QA Ghost ${MARKER} - Z`)])
@@ -409,8 +426,13 @@ describe('regression · Phase B timetable publish class resolution (wizard-shape
       expect(body.ok).toBe(false)
       expect((body.error ?? '')).toContain('STALE_SNAPSHOT_REFUSED')
 
-      // The refusal left the school's real rows untouched.
+      // The refusal left the school's real rows untouched — AND created
+      // NO ghost class: the guard runs before the creation phase, so a
+      // refused (unhydrated) payload can never leave its classes behind.
       expect(await db.timetable.count({ where: { schoolId: schoolAId } })).toBe(rowsBefore)
+      expect(await classCount(schoolAId)).toBe(classesBefore)
+      const ghost = await db.class.findFirst({ where: { schoolId: schoolAId, name: `QA Ghost ${MARKER} - Z` } })
+      expect(ghost).toBeNull()
     },
     T,
   )
@@ -463,6 +485,121 @@ describe('regression · Phase B timetable publish class resolution (wizard-shape
         WHERE t."schoolId" = ${school!.id} AND c.id IS NULL
       `
       expect(orphans[0].n).toBe(0)
+    },
+    T,
+  )
+
+  test(
+    '11 — en-dash canonical label "Class 1 – A" resolves to the EXISTING {name:"Class 1", section:"A"} row — both dash forms of the label format are supported',
+    async () => {
+      const before = await classCount(schoolAId)
+      const res = await publish(cookieA, [slot('Monday', 1, MON1, 'Class 1 – A')])
+      expect(res.status).toBe(200)
+      expect(await classCount(schoolAId)).toBe(before)
+      const ghost = await db.class.findFirst({ where: { schoolId: schoolAId, name: 'Class 1 – A' } })
+      expect(ghost).toBeNull()
+      const rows = await timetableRows(schoolAId)
+      expect(rows.length).toBe(1)
+      expect(rows[0].classId).toBe(classA1.id)
+    },
+    T,
+  )
+
+  test(
+    '12 — case-insensitive resolution: a lowercase payload label "class 1 - a" resolves to the stored {name:"Class 1", section:"A"} row (single candidate)',
+    async () => {
+      const before = await classCount(schoolAId)
+      const res = await publish(cookieA, [slot('Monday', 1, MON1, 'class 1 - a')])
+      expect(res.status).toBe(200)
+      expect(await classCount(schoolAId)).toBe(before)
+      const rows = await timetableRows(schoolAId)
+      expect(rows.length).toBe(1)
+      expect(rows[0].classId).toBe(classA1.id)
+    },
+    T,
+  )
+
+  test(
+    '13 — CRITICAL partial-write: a genuinely-NEW class first + an AMBIGUOUS label after → 422 INVALID_INPUT and NO class row was created by the failed request',
+    async () => {
+      const rowsBefore = await timetableRows(schoolAId)
+      const classesBefore = await classCount(schoolAId)
+
+      const res = await publish(cookieA, [
+        slot('Monday', 1, MON1, `QA Brand New ${MARKER}`),
+        slot('Monday', 2, MON2, 'QA Amb Base - A'),
+      ])
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as Envelope<never>
+      expect(body.ok).toBe(false)
+      expect(body.code).toBe('INVALID_INPUT')
+      expect((body.error ?? '').toLowerCase()).toContain('ambiguous')
+
+      // The new class must NOT exist — the failed request created NOTHING.
+      const ghost = await db.class.findFirst({ where: { schoolId: schoolAId, name: `QA Brand New ${MARKER}` } })
+      expect(ghost).toBeNull()
+      expect(await classCount(schoolAId)).toBe(classesBefore)
+
+      // And the school's real timetable is byte-identical.
+      const rowsAfter = await timetableRows(schoolAId)
+      expect(rowsAfter.length).toBe(rowsBefore.length)
+      expect(rowsAfter.map((r) => r.classId).sort()).toEqual(rowsBefore.map((r) => r.classId).sort())
+    },
+    T,
+  )
+
+  test(
+    '14 — reversed order (AMBIGUOUS label first, genuinely-NEW class after) → same safe outcome: 422, nothing created, timetable untouched',
+    async () => {
+      const rowsBefore = await db.timetable.count({ where: { schoolId: schoolAId } })
+      const classesBefore = await classCount(schoolAId)
+
+      const res = await publish(cookieA, [
+        slot('Monday', 1, MON1, 'QA Amb Base - A'),
+        slot('Monday', 2, MON2, `QA Brand New ${MARKER}`),
+      ])
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as Envelope<never>
+      expect(body.code).toBe('INVALID_INPUT')
+
+      const ghost = await db.class.findFirst({ where: { schoolId: schoolAId, name: `QA Brand New ${MARKER}` } })
+      expect(ghost).toBeNull()
+      expect(await classCount(schoolAId)).toBe(classesBefore)
+      expect(await db.timetable.count({ where: { schoolId: schoolAId } })).toBe(rowsBefore)
+    },
+    T,
+  )
+
+  test(
+    '15 — legitimate new-class creation still works: an EXISTING label + a GENUINELY new class in ONE valid payload → 200, exactly ONE new row (honest shape), timetable hangs on real ids',
+    async () => {
+      const before = await classCount(schoolAId)
+      const newName = `QA Fresh ${MARKER}`
+
+      const res = await publish(cookieA, [
+        slot('Monday', 1, MON1, 'Class 1 - A'),
+        slot('Monday', 2, MON2, newName),
+      ])
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as Envelope<{ rowsWritten: number }>
+      expect(body.data?.rowsWritten).toBe(2)
+
+      // Exactly one new class row, honest create shape: no trailing
+      // single-letter section → section NULL, capacity default 40.
+      expect(await classCount(schoolAId)).toBe(before + 1)
+      const created = await db.class.findFirst({
+        where: { schoolId: schoolAId, name: newName },
+        select: { id: true, section: true, capacity: true },
+      })
+      expect(created).toBeTruthy()
+      expect(created!.section).toBeNull()
+      expect(created!.capacity).toBe(40)
+
+      // The publish replaced the school's rows with the new universe and
+      // every row hangs on a REAL id — the resolved ORIGINAL + the new row.
+      const rows = await timetableRows(schoolAId)
+      expect(rows.length).toBe(2)
+      expect(rows.map((r) => r.classId).sort()).toEqual([classA1.id, created!.id].sort())
     },
     T,
   )

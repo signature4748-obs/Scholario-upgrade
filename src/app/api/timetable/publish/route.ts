@@ -20,16 +20,21 @@ export const runtime = 'nodejs'
  * SEMANTICS — replace-all within the school (a publish IS the new truth):
  *   1. map slots → row drafts (ladder period → teaching period, time →
  *      "HH:MM", via the shared server-mapping algorithm);
- *   2. resolve each distinct className → Class row (match by name;
- *      create when the Principal schedules a class the school has not
- *      registered yet);
+ *   2. resolve each distinct className → Class row (exact-name match
+ *      first; label-normalized fallback for wizard-shaped {name,
+ *      section} rows). TWO-PHASE, side-effect-free: validate EVERY
+ *      payload class with zero writes first, then create the
+ *      genuinely-new ones only after the guard below — so an
+ *      ambiguous or refused payload can never leave half-created
+ *      classes behind;
  *   3. resolve each distinct subject → Subject row (match by name; create
  *      when missing — same honest rule);
  *   4. STALE-SNAPSHOT GUARD — if the school already has timetable rows but
  *      ZERO of the payload's classes exist in the DB, this is almost
  *      certainly an unhydrated/mock snapshot trying to replace real data
  *      (the client blocks offline publishes; this is the server-side
- *      backstop). Refused with 409.
+ *      backstop). Refused — and the guard runs BEFORE the creation
+ *      phase, so a refusal also leaves no ghost classes behind.
  *   5. delete all existing Timetable rows for the school, then write the
  *      new set in one createMany;
  *   6. log the publication to ActivityLog (platform audit trail).
@@ -60,11 +65,27 @@ export async function POST(req: NextRequest) {
       if (drafts.length === 0) throw new Error('UNPARSEABLE_SLOTS')
 
       // 2 — resolve classes (name → row; create genuinely new classes).
-      //     Track how many payload classes ALREADY exist — the stale-snapshot
-      //     guard below needs to know.
+      //     PHASE-B follow-up (2026-10-23): TWO-PHASE, side-effect-free
+      //     resolution. The original loop created each missing class the
+      //     MOMENT it was encountered, so a payload like [genuinely-new
+      //     class, ambiguous label] created the new row and only THEN
+      //     threw INVALID_INPUT at the ambiguous one — the failed request
+      //     left the new row behind (a partial write; the stale-snapshot
+      //     refusal had the same ghost-class shape, since the guard ran
+      //     after the loop). Now:
+      //       2a — resolve/validate EVERY payload class first, with ZERO
+      //            writes (exact name → label fallback → pending);
+      //            an ambiguous reference refuses HERE, before any row
+      //            exists;
+      //       2b — the stale-snapshot guard (identical condition) also
+      //            runs before any write — a refused snapshot leaves no
+      //            ghost classes behind;
+      //       2c — only then are the genuinely-new classes created, all
+      //            of them, from the validated pending list.
       const classNames = [...new Set(drafts.map((d) => d.className))].filter(Boolean)
       const classByKey = new Map<string, { id: string; name: string; section: string | null }>()
       let payloadClassesExisting = 0
+      const classesToCreate: { name: string; section: string | null }[] = []
       for (const name of classNames) {
         const existing = await db.class.findFirst({
           where: { schoolId, name },
@@ -128,14 +149,41 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Name may carry its own section ("Grade 9 - A") — keep the full
-        // label as the name (that's how the roster renders it) and derive
-        // a single-letter section when one trails the label.
+        // Genuinely new — DEFERRED: recorded here, created only after
+        // the WHOLE payload has validated (2c below), never as a
+        // side effect of resolving earlier entries. The name may carry
+        // its own section ("Grade 9 - A") — keep the full label as the
+        // name (that's how the roster renders it) and derive a
+        // single-letter section when one trails the label.
         const sectionMatch = name.match(/[-–\s]([A-Z])$/)
+        classesToCreate.push({ name, section: sectionMatch ? sectionMatch[1] : null })
+      }
+
+      // 2b — STALE-SNAPSHOT GUARD (data-integrity backstop): the school has
+      //     real rows, but NONE of the payload's classes match any existing
+      //     class → the snapshot was never hydrated from this school's
+      //     records. Refuse instead of wiping real schedules with a foreign
+      //     universe (e.g. the retired demo/mock classes). The CONDITION is
+      //     unchanged; the POSITION moved ahead of the creation phase (2c)
+      //     so a refusal also guarantees the payload's classes were never
+      //     created.
+      const existingRowCount = await db.timetable.count({ where: { schoolId } })
+      if (existingRowCount > 0 && payloadClassesExisting === 0) {
+        throw new Error(
+          'STALE_SNAPSHOT_REFUSED: this school already has a timetable, but none of the submitted classes match its records. Reload the Timetable module and publish again.',
+        )
+      }
+
+      // 2c — the deliberate creation phase: every genuinely-new class,
+      //     only after the FULL payload validated and the guard passed.
+      //     (Outside the publish transaction on purpose: the payload
+      //     conflict pre-check 4d below needs the created rows' ids to
+      //     key its (classId, day, period) dedup.)
+      for (const toCreate of classesToCreate) {
         classByKey.set(
-          name,
+          toCreate.name,
           await db.class.create({
-            data: { schoolId, name, section: sectionMatch ? sectionMatch[1] : null, capacity: 40 },
+            data: { schoolId, ...toCreate, capacity: 40 },
             select: { id: true, name: true, section: true },
           }),
         )
@@ -148,18 +196,6 @@ export async function POST(req: NextRequest) {
       //     a subject (schoolId, code) collision retries once with a
       //     deterministic suffix).
       const subjectNames = [...new Set(drafts.map((d) => d.subject))].filter(Boolean)
-
-      // 4 — STALE-SNAPSHOT GUARD (data-integrity backstop): the school has
-      //     real rows, but NONE of the payload's classes match any existing
-      //     class → the snapshot was never hydrated from this school's
-      //     records. Refuse instead of wiping real schedules with a foreign
-      //     universe (e.g. the retired demo/mock classes).
-      const existingRowCount = await db.timetable.count({ where: { schoolId } })
-      if (existingRowCount > 0 && payloadClassesExisting === 0) {
-        throw new Error(
-          'STALE_SNAPSHOT_REFUSED: this school already has a timetable, but none of the submitted classes match its records. Reload the Timetable module and publish again.',
-        )
-      }
 
       // 4b — resolve TEACHER names to relational ids (IQ3000 Phase 4):
       //     each draft's teacherName is matched against the school's
