@@ -153,9 +153,17 @@ function useLoginSchoolBranding(tenantSlug?: string): LoginBranding {
 
 export function LoginPage({
   onBackToWebsite,
+  onAuthenticated,
   tenantSlug,
 }: {
   onBackToWebsite?: () => void
+  /** Fired EXACTLY ONCE per successful sign-in — after the session
+   *  cookie exists and the client auth store flipped (the same point
+   *  the classic flow handed navigation to the surrounding route).
+   *  Doors use it for their DELIBERATE continue (to '/') instead of
+   *  inferring "fresh sign-in" from auth-store transitions, which
+   *  cannot distinguish a stale cached session from a new one. */
+  onAuthenticated?: () => void
   /** Canonical server-resolved tenant slug (the /s/<slug>/login door). */
   tenantSlug?: string
 }) {
@@ -271,6 +279,10 @@ export function LoginPage({
         ...(payload.data?.name ? { name: payload.data.name } : {}),
         ...(payload.data?.email ? { email: payload.data.email } : {}),
       })
+      // DOORS (2026-10 fix): a fresh sign-in completed — hand the
+      // surrounding door its deliberate continue. Never called on
+      // failure (the catch path returns to the form with the error).
+      onAuthenticated?.()
     } catch (e) {
       // 4) Failure returns to the form WITH a visible, actionable error —
       //    never a silent bounce back to the same screen. A non-AuthFailure
@@ -322,6 +334,7 @@ export function LoginPage({
       ...(data.name ? { name: data.name } : {}),
       ...(data.email ? { email: data.email } : {}),
     })
+    onAuthenticated?.()
   }
 
   return (

@@ -31,6 +31,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { motion } from 'framer-motion'
+import { scrollConsoleToTop } from '@/lib/platform/console-scroll'
 import {
   ArrowLeft,
   ExternalLink,
@@ -155,6 +156,10 @@ interface SchoolDetailData {
   access: {
     loginUrl: string
     publicUrl: string
+    /** The school's own public-website switch (settings JSON, provision
+     *  wizard default true). FALSE = the school has no public website:
+     *  the Access card must say so honestly instead of offering a link. */
+    websiteEnabled: boolean
     principal: {
       id: string
       email: string
@@ -333,17 +338,28 @@ function CopyIconButton({ value, label }: { value: string; label: string }) {
   )
 }
 
-/** One canonical door row: mono URL (truncating) + copy + open-in-new-tab. */
+/** One canonical door row: mono URL (truncating) + copy + open-in-new-tab.
+ *  `hint` is the quiet purpose line under the label (the 2026-10 relabel:
+ *  the old "School login URL" / "Public URL" pair read as near-synonyms;
+ *  the doors are DIFFERENT things and must say so). `notConfigured`
+ *  replaces the Open link with the honest amber "not configured"
+ *  status — never a link that pretends to work. */
 function AccessUrlRow({
   icon,
   label,
+  hint,
   url,
   openLabel,
+  notConfigured,
 }: {
   icon: React.ReactNode
   label: string
+  hint?: string
   url: string
   openLabel: string
+  /** When true, the Open action is replaced by the honest amber
+   *  "not configured" status — never a link that pretends to work. */
+  notConfigured?: boolean
 }) {
   return (
     <div className="min-w-0 space-y-1.5">
@@ -353,6 +369,7 @@ function AccessUrlRow({
         </span>
         {label}
       </p>
+      {hint ? <p className="text-[11px] text-slate-500">{hint}</p> : null}
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <code
           className="min-w-0 flex-1 truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-xs text-slate-700"
@@ -361,15 +378,25 @@ function AccessUrlRow({
           {url}
         </code>
         <CopyIconButton value={url} label={`Copy ${label.toLowerCase()}`} />
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
-        >
-          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-          {openLabel}
-        </a>
+        {notConfigured ? (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] font-semibold text-amber-700"
+            title="The school's public website is switched off in its configuration"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+            Public website not configured
+          </span>
+        ) : (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
+          >
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+            {openLabel}
+          </a>
+        )}
       </div>
     </div>
   )
@@ -512,22 +539,25 @@ function AccessCard({
       <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
         <h2 className="font-display text-sm font-bold text-slate-900">Access</h2>
         <p className="mt-0.5 text-xs text-slate-500">
-          The canonical doors this tenant is reached through — copied links always resolve to an absolute
-          address.
+          The two doors this tenant is reached through — a school has a PRIVATE sign-in door and a
+          PUBLIC homepage, and they are different things.
         </p>
       </div>
       <div className="grid gap-4 p-4 sm:px-5 lg:grid-cols-2 lg:gap-x-6">
         <AccessUrlRow
           icon={<LogIn className="h-3.5 w-3.5" />}
-          label="School login URL"
+          label="School Login"
+          hint="Staff & student sign-in for this school"
           url={access.loginUrl}
           openLabel="Open School"
         />
         <AccessUrlRow
           icon={<Globe className="h-3.5 w-3.5" />}
-          label="Public URL"
+          label="Public Website"
+          hint="The school's public homepage"
           url={access.publicUrl}
           openLabel="Open website"
+          notConfigured={!access.websiteEnabled}
         />
         <PrincipalAccessBlock
           principal={access.principal}
@@ -1200,7 +1230,13 @@ const LEGACY_TAB_REDIRECT: Record<string, TabTarget> = {
   users: { group: 'access', anchor: SUBSECTION_IDS.users },
   subscription: { group: 'subscription' },
   gateway: { group: 'subscription', anchor: SUBSECTION_IDS.gateway },
-  support: { group: 'support', anchor: SUBSECTION_IDS.support },
+  // 'support' maps to its group WITHOUT an anchor (§7 scroll fix): the
+  // group key 'support' IS the tab label — clicking the Support tab
+  // must land at the TOP of the group, not re-anchor to the old
+  // sub-section id (the anchor collision made the tab pin mid-page
+  // while legacy ?tab=support deep-links kept working through
+  // 'audit'/'danger' style mappings above).
+  support: { group: 'support' },
   audit: { group: 'support', anchor: SUBSECTION_IDS.audit },
   danger: { group: 'advanced', anchor: SUBSECTION_IDS.danger },
   configuration: { group: 'configuration' },
@@ -1231,7 +1267,7 @@ function GroupSection({
   children: React.ReactNode
 }) {
   return (
-    <section id={id} aria-labelledby={`${id}-heading`} className="scroll-mt-24">
+    <section id={id} aria-labelledby={`${id}-heading`}>
       <div className="border-b border-slate-200 pb-2">
         <h3 id={`${id}-heading`} className="font-display text-sm font-bold text-slate-900">
           {title}
@@ -1460,14 +1496,14 @@ export function SchoolDetailModule() {
   // sub-section anchor before the scroll lands.
   const lastWrittenTab = useRef<string | null>(null)
 
-  // §7 tab bar — after a plain group switch the operator must land back
-  // at the TOP of the new tab content. Keeping the previous scroll
-  // position leaves the tab bar hidden under the sticky console header
-  // (h-16, z-30) — the row becomes unclickable until the user scrolls
-  // manually (reproduced: clicking "Advanced" while scrolled into the
-  // Support & audit content hit the header instead). scroll-mt-20 on the
-  // TabsList makes scrollIntoView account for that header.
-  const tabsBarRef = useRef<HTMLDivElement | null>(null)
+  // §7 tab bar — after a plain group switch the operator must land at
+  // the TOP of the new tab content. The rewritten ConsoleShell keeps
+  // the pinned h-16 header OUTSIDE the single content scroller, so
+  // "top of content" is simply the scroller's scrollTop 0 — the old
+  // tabs-bar scrollIntoView + scroll-mt-20 pin hack (which landed the
+  // viewport BELOW the page top on every tab switch — the scroll-trap
+  // defect) is gone. scrollConsoleToTop() targets the scroller
+  // directly and scrolls instantly (never the iPadOS animation-fight).
 
   // URL → state (initial load, refresh, browser back/forward). A
   // legacy ?tab= value selects its mapped group AND normalizes the
@@ -1535,12 +1571,10 @@ export function SchoolDetailModule() {
       else next.set('tab', resolved.group)
       const qs = next.toString()
       router.push(qs ? `?${qs}` : '?', { scroll: false })
-      // Plain group switch (no sub-section anchor): bring the operator
-      // back to the tab bar — the top of the newly-mounted content.
+      // Plain group switch (no sub-section anchor): land at the TOP of
+      // the newly-mounted content — the page top, breadcrumb and all.
       if (!resolved.anchor) {
-        window.setTimeout(() => {
-          tabsBarRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }, 60)
+        scrollConsoleToTop()
       }
     },
     [router, searchParams, availableGroups],
@@ -2018,27 +2052,42 @@ export function SchoolDetailModule() {
           </div>
         </div>
         {/* ARCHITECTURE RESET — explicit, boundary-respecting actions:
-            · "Preview Website" opens the PUBLIC school website in a new tab
-              (an explicit look, never an inherited tenant context).
+            · "Public Website" (renamed from "Preview Website") opens the
+              PUBLIC school website in a new tab — an explicit look, never
+              an inherited tenant context, never a role dashboard.
             · "Open Support Session" (renamed from "Access School") is the
               explicit, audited, step-up-gated, read-only entry into the
               school's application context. */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* PLATFORM-ENTRY — the canonical cross-plane public URL from
-              the detail payload (schoolPublicUrl via the API; absolute
-              on the two-project topology, relative /?tenant= on the
-              unified fallback). The raw /?tenant= same-origin link
-              would 307 into /platform/login on the platform plane —
-              the public website lives on the school plane. */}
-          <a
-            href={data?.access?.publicUrl ?? `/?tenant=${encodeURIComponent(school.slug)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
-          >
-            <ExternalLink className="h-4 w-4" aria-hidden="true" />
-            Preview Website
-          </a>
+          {/* PUBLIC WEBSITE (renamed from "Preview Website" — the 2026-10
+              relabel says what the door IS). The canonical cross-plane
+              public URL from the detail payload (schoolPublicUrl via the
+              API; absolute on the two-project topology, relative
+              /?tenant= on the unified fallback). The routing fix makes
+              this link the PUBLIC homepage for every visitor — including
+              an already-authenticated operator (it never lands in a
+              role dashboard). When the school has no public website
+              (settings switch off), the button is honestly disabled
+              instead of pretending. */}
+          {data?.access?.websiteEnabled === false ? (
+            <span
+              className="inline-flex h-11 shrink-0 cursor-not-allowed items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 text-sm font-semibold text-amber-700"
+              title="The school's public website is switched off in its configuration"
+            >
+              <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+              Public website not configured
+            </span>
+          ) : (
+            <a
+              href={data?.access?.publicUrl ?? `/?tenant=${encodeURIComponent(school.slug)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-ring"
+            >
+              <ExternalLink className="h-4 w-4" aria-hidden="true" />
+              Public Website
+            </a>
+          )}
           {canSupport && (
             <Button
               onClick={() => setAccessOpen(true)}
@@ -2073,9 +2122,8 @@ export function SchoolDetailModule() {
             390px). Radix keeps aria-selected + roving keyboard focus on
             the triggers (arrow-key navigation). */}
         <TabsList
-          ref={tabsBarRef}
           aria-label="School workspace sections"
-          className="w-full bg-slate-100 border border-slate-200 h-auto p-1 gap-1 overflow-x-auto no-scrollbar justify-start scroll-mt-20"
+          className="w-full bg-slate-100 border border-slate-200 h-auto p-1 gap-1 overflow-x-auto no-scrollbar justify-start"
         >
           <TabsTrigger
             value="overview"
@@ -2736,7 +2784,7 @@ export function SchoolDetailModule() {
           <TabsContent value="advanced" className="space-y-8 sm:space-y-10">
             <div
               id={SUBSECTION_IDS.danger}
-              className="space-y-4 scroll-mt-24 rounded-xl border-2 border-red-200 bg-red-50/60 p-4 sm:p-6"
+              className="space-y-4 rounded-xl border-2 border-red-200 bg-red-50/60 p-4 sm:p-6"
             >
               <div className="flex items-start gap-3">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600">
