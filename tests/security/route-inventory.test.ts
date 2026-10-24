@@ -173,8 +173,16 @@ describe('ROUTE INVENTORY · sidebar + navigation sources', () => {
 
   test('the console logo is a link to the canonical Overview (/platform) — in collapsed, expanded and drawer forms', () => {
     const logoLinks = [...shellSrc.matchAll(/href="\/platform"\s+aria-label="SCHOLARIO Control Plane — back to Overview"/g)]
-    // desktop collapsed + desktop expanded + mobile drawer
-    expect(logoLinks.length).toBe(3)
+    // Desktop collapsed + desktop expanded share ONE source block since
+    // the 2026-10 shell rewrite (renderSidebarHeader(compact) renders the
+    // same <Link> for both forms — the canonical-Overview target cannot
+    // diverge between them), plus the mobile drawer's own <Link>.
+    // Both desktop forms + the drawer = 2 source occurrences covering
+    // all three rendered forms.
+    expect(logoLinks.length).toBe(2)
+    // The shared desktop header link must exist unconditionally — the
+    // collapsed form must never lose the canonical-Overview target.
+    expect(shellSrc).toContain('renderSidebarHeader(collapsed)')
   })
 
   test('the four routes swallowed by the 2026-10-21 vercelignore incident exist as tracked sources', () => {
