@@ -20,6 +20,7 @@ import { Activity, RefreshCw, ShieldCheck } from 'lucide-react'
 import { usePlatformSession } from '../../platform-client'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { scrollConsoleToTop } from '@/lib/platform/console-scroll'
 import { OverviewTab } from './tab-overview'
 import { UsageTab } from './tab-usage'
 import { ErrorsTab } from './tab-errors'
@@ -106,7 +107,17 @@ export function OperationsModule() {
         </Button>
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="gap-4">
+      {/* Tab switches land at the TOP of the new tab's content — the same
+          contract as the school dossier (scrollConsoleToTop targets the
+          shell's single content scroller; instant, never animated). */}
+      <Tabs
+        value={tab}
+        onValueChange={(v) => {
+          setTab(v as TabKey)
+          scrollConsoleToTop()
+        }}
+        className="gap-4"
+      >
         <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 custom-scrollbar">
           <TabsTrigger
             value="overview"

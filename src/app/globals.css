@@ -445,9 +445,21 @@ button:active:not(:disabled) {
   transition: transform 0.08s var(--ease-premium);
 }
 
-/* Smooth scroll for all scrollable areas */
-* {
-  scroll-behavior: smooth;
+/* SCROLL BEHAVIOR (super-admin scroll-trap fix, 2026-10): the blanket
+   `* { scroll-behavior: smooth }` is GONE — it animated EVERY
+   programmatic scroll (tab pins, back-to-top, inner-scroller resets),
+   which on iPadOS WebKit made scrolls interruptible and janky and was
+   half of the console scroll-trap defect. Smooth scrolling stays ONLY
+   at the html level (anchor/deep-link navigation), where it is
+   deliberate; code that wants animation passes `behavior: 'smooth'`
+   explicitly. */
+
+/* Fixed-viewport app shells (school AppShell + platform ConsoleShell):
+   100dvh with the classic 100vh fallback — iOS dynamic-viewport units
+   track the collapsing address bar instead of fighting it. */
+.app-shell-vh {
+  height: 100vh;
+  height: 100dvh;
 }
 
 /* Selection styling */

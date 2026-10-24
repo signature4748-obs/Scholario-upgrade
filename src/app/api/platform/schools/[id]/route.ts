@@ -97,9 +97,17 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // time) so the Access surface can show the truth. The ENFORCEMENT
     // is the User.subscriptionStatus LOCKED rows themselves.
     let studentAccessPause: { pausedAt: string; reason: string; affectedCount: number } | null = null
-    let settingsExtras: { pincode: string | null; district: string | null } = {
+    let settingsExtras: {
+      pincode: string | null
+      district: string | null
+      websiteEnabled: boolean
+    } = {
       pincode: null,
       district: null,
+      // The provision wizard defaults the switch ON; a missing settings
+      // key means the school's public website EXISTS (honest default,
+      // never a silent disable).
+      websiteEnabled: true,
     }
     try {
       const parsedSettings = school.settings
@@ -117,6 +125,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       }
       if (typeof parsedSettings.pincode === 'string') settingsExtras.pincode = parsedSettings.pincode
       if (typeof parsedSettings.district === 'string') settingsExtras.district = parsedSettings.district
+      // PUBLIC-WEBSITE TRUTH (2026-10 doors fix): the wizard writes the
+      // switch into the settings JSON; the detail API surfaces it so the
+      // Access card can say "not configured" instead of offering a
+      // link that does not exist. Strictly boolean — anything else falls
+      // back to the honest default above.
+      if (typeof parsedSettings.websiteEnabled === 'boolean') {
+        settingsExtras.websiteEnabled = parsedSettings.websiteEnabled
+      }
     } catch {
       /* unparseable settings — extras stay null, pause state stays null */
     }
@@ -160,6 +176,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       access: {
         loginUrl: schoolLoginUrl(school.slug),
         publicUrl: schoolPublicUrl(school.slug),
+        websiteEnabled: settingsExtras.websiteEnabled,
         principal: principal
           ? {
               id: principal.id,

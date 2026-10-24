@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import dynamic from 'next/dynamic'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/store/auth-store'
 import { useIsDemoTenant } from '@/lib/store/demo-tenant'
 import { useCurrentUser } from '@/lib/store/current-user-store'
@@ -43,9 +44,21 @@ function LoadingSpinner() {
 }
 
 export default function Home() {
+  // useSearchParams needs a Suspense boundary for prerendering (same
+  // pattern as /login) — the public-website signal below is the only
+  // new consumer.
+  return (
+    <Suspense fallback={<LoadingSpinner />}>
+      <HomeInner />
+    </Suspense>
+  )
+}
+
+function HomeInner() {
   const isAuthenticated = useAuth((s) => s.isAuthenticated)
   const user = useAuth((s) => s.user)
   const hydrated = useAuth((s) => s.hydrated)
+  const searchParams = useSearchParams()
   const [mounted, setMounted] = useState(false)
 
   // Unauthenticated view states: 'website' | 'portal'
@@ -213,6 +226,28 @@ export default function Home() {
       <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="h-12 w-12 rounded-2xl bg-slate-200 animate-pulse" />
       </div>
+    )
+  }
+
+  // PUBLIC-WEBSITE SIGNAL (doors fix, 2026-10): an explicit ?tenant= /
+  // ?slug= link means the visitor asked for THAT school's PUBLIC
+  // homepage — the console's "Open website" link, the /s/<slug> 307
+  // target and shared school links all arrive here. This must hold
+  // REGARDLESS of any authenticated session: the old behavior rendered
+  // the role dashboard for any school session (the reported "Open
+  // website lands in the Principal panel" defect — an operator-level
+  // session never gets one, but a principal/teacher/student session
+  // did). The dashboard stays at '/' (session-driven); custom-domain
+  // roots are unchanged (no param → this branch never fires). The
+  // branch intentionally sits BEFORE the session-probe gate: the public
+  // website is session-independent, so the public link never waits for
+  // (and never depends on) the /api/auth/me answer.
+  const tenantSignal = (searchParams.get('tenant') ?? searchParams.get('slug') ?? '').trim()
+  if (tenantSignal) {
+    return (
+      <AssetErrorBoundary>
+        <PublicWebsite />
+      </AssetErrorBoundary>
     )
   }
 
