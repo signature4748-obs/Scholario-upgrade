@@ -1,8 +1,14 @@
 import { useSchoolProfile } from '@/lib/school-profile'
+import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+import { getCollectedDocuments } from '../../admission/lib/documents'
 
 /** Page 2 of the A4 application form — mini header and Sections E–H. */
 export function ApplicationFormPage2({ academicSession }: { academicSession: string }) {
   const school = useSchoolProfile()
+  // The checklist mirrors the school's configurable document policy —
+  // 'not-collected' documents are omitted, required ones are marked.
+  const documentPolicy = useSchoolSettingsStore((s) => s.admissionSettings.documentPolicy)
+  const collectedDocuments = getCollectedDocuments(documentPolicy)
   return (
     <div className="space-y-6">
       {/* Header Mini Banner */}
@@ -99,35 +105,28 @@ export function ApplicationFormPage2({ academicSession }: { academicSession: str
       {/* SECTION G: DOCUMENT ATTACHMENT CHECKLIST */}
       <div className="space-y-3">
         <div className="bg-slate-100 border-l-4 border-slate-900 px-3 py-1 font-bold text-[11px] uppercase tracking-wide text-slate-800">
-          SECTION G: MANDATORY DOCUMENTS ATTACHMENT CHECKLIST
+          SECTION G: DOCUMENT ATTACHMENT CHECKLIST
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px] font-medium">
-          <div className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded">
-            <span className="h-3.5 w-3.5 border border-slate-600 rounded-sm inline-block"></span>
-            <span>Birth Certificate (Attested Copy)</span>
+        {collectedDocuments.length === 0 ? (
+          <p className="text-[10px] text-slate-500">
+            No documents are collected under this school&rsquo;s current admission settings.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px] font-medium">
+            {collectedDocuments.map((doc) => (
+              <div key={doc.key} className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded">
+                <span className="h-3.5 w-3.5 border border-slate-600 rounded-sm inline-block"></span>
+                <span>
+                  {doc.name}
+                  <span className={doc.required ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                    {' '}{doc.required ? '(Required)' : '(Optional)'}
+                  </span>
+                </span>
+              </div>
+            ))}
           </div>
-          <div className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded">
-            <span className="h-3.5 w-3.5 border border-slate-600 rounded-sm inline-block"></span>
-            <span>Transfer Certificate (Original TC)</span>
-          </div>
-          <div className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded">
-            <span className="h-3.5 w-3.5 border border-slate-600 rounded-sm inline-block"></span>
-            <span>Student Aadhaar Card Copy</span>
-          </div>
-          <div className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded">
-            <span className="h-3.5 w-3.5 border border-slate-600 rounded-sm inline-block"></span>
-            <span>Passport Size Photos (3 Copies)</span>
-          </div>
-          <div className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded">
-            <span className="h-3.5 w-3.5 border border-slate-600 rounded-sm inline-block"></span>
-            <span>Previous Class Marksheet / Grade Card</span>
-          </div>
-          <div className="flex items-center gap-1.5 p-1.5 border border-slate-200 rounded">
-            <span className="h-3.5 w-3.5 border border-slate-600 rounded-sm inline-block"></span>
-            <span>Parents Identity / Address Proof</span>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* SECTION H: PARENT UNDERTAKING & OFFICIAL SIGNATURES */}

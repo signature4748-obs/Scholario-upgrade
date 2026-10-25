@@ -1,4 +1,6 @@
 import { useSchoolProfile } from '@/lib/school-profile'
+import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
+import { resolveDocumentPolicy } from '../../admission/lib/documents'
 
 /** Standard Indian admission category checkboxes (blank form furniture,
  * not school data — the applicant ticks one). */
@@ -9,6 +11,10 @@ const ADMISSION_CATEGORIES = ['General', 'OBC', 'SC', 'ST', 'EWS']
  * settings → neutral); unconfigured fields print honestly. */
 export function ApplicationFormPage1({ academicSession }: { academicSession: string }) {
   const school = useSchoolProfile()
+  const documentPolicy = useSchoolSettingsStore((s) => s.admissionSettings.documentPolicy)
+  // The printed Aadhaar row appears ONLY when this school's policy collects
+  // it — the form never implies a universal legal requirement.
+  const aadhaarCollected = resolveDocumentPolicy(documentPolicy).aadhaar !== 'not-collected'
   return (
     <div className="space-y-6">
       {/* Header / School Info */}
@@ -91,10 +97,13 @@ export function ApplicationFormPage1({ academicSession }: { academicSession: str
             </div>
           </div>
 
-          <div className="col-span-2 flex items-center gap-2">
-            <span className="font-bold text-[11px] min-w-[130px]">6. Aadhaar Number:</span>
-            <div className="flex-1 border-b border-slate-400 h-6 font-mono tracking-widest"></div>
-          </div>
+          {aadhaarCollected && (
+            <div className="col-span-2 flex items-center gap-2">
+              <span className="font-bold text-[11px] min-w-[130px]">6. Aadhaar Number:</span>
+              <span className="text-[9px] text-slate-500 font-medium">(Optional)</span>
+              <div className="flex-1 border-b border-slate-400 h-6 font-mono tracking-widest"></div>
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <span className="font-bold text-[11px] min-w-[130px]">7. Religion:</span>
