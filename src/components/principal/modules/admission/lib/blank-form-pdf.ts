@@ -147,7 +147,6 @@ function lineField(p: Painter, f: BlankFormField, x: number, w: number) {
   doc.text(lines, x, p.y + 4)
 
   const lineX = x + LABEL_W
-  const lineW = w - LABEL_W
   setDraw(doc, RULE)
   doc.setLineWidth(0.25)
   doc.line(lineX, p.y + 5.5, x + w, p.y + 5.5)

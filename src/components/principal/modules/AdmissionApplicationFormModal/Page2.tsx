@@ -1,6 +1,6 @@
 import { useSchoolProfile } from '@/lib/school-profile'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
-import { getCollectedDocuments } from '../../admission/lib/documents'
+import { getCollectedDocuments } from '../admission/lib/documents'
 
 /** Page 2 of the A4 application form — mini header and Sections E–H. */
 export function ApplicationFormPage2({ academicSession }: { academicSession: string }) {

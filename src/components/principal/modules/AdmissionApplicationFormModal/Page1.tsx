@@ -1,6 +1,6 @@
 import { useSchoolProfile } from '@/lib/school-profile'
 import { useSchoolSettingsStore } from '@/lib/store/school-settings-store'
-import { resolveDocumentPolicy } from '../../admission/lib/documents'
+import { resolveDocumentPolicy } from '../admission/lib/documents'
 
 /** Standard Indian admission category checkboxes (blank form furniture,
  * not school data — the applicant ticks one). */
