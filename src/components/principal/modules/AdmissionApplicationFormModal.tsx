@@ -1,9 +1,12 @@
 'use client'
 
+import { useState } from 'react'
 import { motion } from 'framer-motion'
+import { toast } from 'sonner'
 import { getSchoolSettings } from '@/lib/school-settings'
 import { useSchoolProfile } from '@/lib/school-profile'
 import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
+import { downloadBlankAdmissionFormPdf } from './admission/lib/blank-form-download'
 import { ApplicationFormPrintStyles } from './AdmissionApplicationFormModal/PrintStyles'
 import { ModalTopBar } from './AdmissionApplicationFormModal/ModalTopBar'
 import { ApplicationFormPage1 } from './AdmissionApplicationFormModal/Page1'
@@ -12,6 +15,7 @@ import type { AdmissionApplicationFormModalProps } from './AdmissionApplicationF
 
 export function AdmissionApplicationFormModal({ open, onClose }: AdmissionApplicationFormModalProps) {
   useDismissOnEscape(onClose, open)
+  const [downloading, setDownloading] = useState(false)
   // Form session — the canonical identity cascade (server academic year
   // first), then the admissions engine's configured session; a school
   // with neither prints an honest em-dash, never a stale year.
@@ -23,6 +27,23 @@ export function AdmissionApplicationFormModal({ open, onClose }: AdmissionApplic
 
   const handlePrint = () => {
     window.print()
+  }
+
+  const handleDownloadPdf = async () => {
+    setDownloading(true)
+    try {
+      const { fileName } = await downloadBlankAdmissionFormPdf()
+      toast.success('Blank form PDF downloaded', {
+        description: `${fileName} — print A4 copies for distribution; parents fill and return them for scanning.`,
+      })
+    } catch (err) {
+      console.error('Blank form PDF download failed', err)
+      toast.error('Could not generate the PDF', {
+        description: 'Please try again, or use Print as a fallback.',
+      })
+    } finally {
+      setDownloading(false)
+    }
   }
 
   return (
@@ -42,7 +63,12 @@ export function AdmissionApplicationFormModal({ open, onClose }: AdmissionApplic
         className="relative w-full max-w-4xl rounded-2xl border border-border bg-background p-4 sm:p-6 shadow-2xl space-y-4 max-h-[95vh] overflow-y-auto no-scrollbar print:max-h-none print:overflow-visible print:p-0 print:border-none print:shadow-none print:bg-white print:max-w-none"
       >
         {/* Modal Top Control Bar (Hidden on Print) */}
-        <ModalTopBar onPrint={handlePrint} onClose={onClose} />
+        <ModalTopBar
+          onPrint={handlePrint}
+          onDownload={() => void handleDownloadPdf()}
+          downloading={downloading}
+          onClose={onClose}
+        />
 
         {/* ====================================================================== */}
         {/* A4 PRINTABLE FORM CONTAINER (PAGE 1 & PAGE 2)                           */}

@@ -1,10 +1,21 @@
-import { Printer, X, FileText } from 'lucide-react'
+import { Printer, X, FileText, FileDown, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
-/** Top control bar — title, print button and close (hidden on print). */
-export function ModalTopBar({ onPrint, onClose }: { onPrint: () => void; onClose: () => void }) {
+/** Top control bar — title, PDF download, print and close (hidden on print). */
+export function ModalTopBar({
+  onPrint,
+  onDownload,
+  downloading,
+  onClose,
+}: {
+  onPrint: () => void
+  /** Downloads the genuine A4 PDF (jsPDF artefact — not a print screenshot). */
+  onDownload: () => void
+  downloading?: boolean
+  onClose: () => void
+}) {
   return (
-    <div className="flex items-center justify-between border-b border-border pb-3 no-print">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3 no-print">
       <div className="flex items-center gap-2.5">
         <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold">
           <FileText className="h-5 w-5" />
@@ -12,7 +23,7 @@ export function ModalTopBar({ onPrint, onClose }: { onPrint: () => void; onClose
         <div>
           <h3 className="font-semibold text-base text-foreground">Admission Application Form</h3>
           <p className="text-xs text-muted-foreground">
-            Official 2-Page A4 Printable Blank Form · Updates automatically with School Settings
+            Official A4 blank form · Download as PDF or print · Filled copies can be scanned back
           </p>
         </div>
       </div>
@@ -20,10 +31,24 @@ export function ModalTopBar({ onPrint, onClose }: { onPrint: () => void; onClose
       <div className="flex items-center gap-2">
         <Button
           size="sm"
-          onClick={onPrint}
-          className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-xs shadow-md"
+          onClick={onDownload}
+          disabled={downloading}
+          className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-xs shadow-md gap-1.5"
         >
-          <Printer className="h-4 w-4 mr-1.5" /> Print / Save as PDF (A4)
+          {downloading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileDown className="h-4 w-4" />
+          )}
+          Download PDF (A4)
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onPrint}
+          className="text-xs font-semibold gap-1.5"
+        >
+          <Printer className="h-4 w-4" /> Print
         </Button>
         <button onClick={onClose} aria-label="Close application form" title="Close" className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted">
           <X className="h-5 w-5" />

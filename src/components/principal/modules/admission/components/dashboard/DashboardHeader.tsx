@@ -1,4 +1,4 @@
-import { Plus, SlidersHorizontal, UploadCloud } from 'lucide-react'
+import { Plus, SlidersHorizontal, UploadCloud, FileDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface DashboardHeaderProps {
@@ -7,6 +7,8 @@ interface DashboardHeaderProps {
   approved: number
   onOpenSettingsModal: () => void
   onOpenOcrModal?: () => void
+  /** Opens the official blank form (preview · download PDF · print). */
+  onOpenBlankFormModal?: () => void
   onOpenWizard: () => void
 }
 
@@ -16,26 +18,39 @@ export function DashboardHeader({
   approved,
   onOpenSettingsModal,
   onOpenOcrModal,
+  onOpenBlankFormModal,
   onOpenWizard,
 }: DashboardHeaderProps) {
   return (
     <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
       {/* Brief PART 1: NO duplicate page title — topbar already shows "Admissions".
-          Content begins directly with the contextual summary + controls. */}
-      <p className="text-xs text-muted-foreground">
-        {total} applications · {inReview} pending review · {approved} ready for issuance
-      </p>
-      <div className="flex items-center gap-2">
+          Content begins directly with the one-line purpose + contextual summary. */}
+      <div>
+        <p className="text-sm text-foreground">
+          Manage applications from form submission to enrollment.
+        </p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {total} applications · {inReview} pending review · {approved} ready for issuance
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
         {/* Settings */}
         <Button variant="outline" size="sm" onClick={onOpenSettingsModal} className="text-xs gap-1.5">
           <SlidersHorizontal className="h-3.5 w-3.5" />
           Settings
         </Button>
-        {/* Scan Filled Form (OCR) — downloads moved to dedicated Downloads sidebar module */}
+        {/* Download Blank Form — official A4 PDF, tenant-branded */}
+        {onOpenBlankFormModal && (
+          <Button variant="outline" size="sm" onClick={onOpenBlankFormModal} className="text-xs gap-1.5">
+            <FileDown className="h-3.5 w-3.5" />
+            Download Blank Form
+          </Button>
+        )}
+        {/* Scan Filled Form — on-device OCR into a reviewable draft */}
         {onOpenOcrModal && (
           <Button variant="outline" size="sm" onClick={onOpenOcrModal} className="text-xs gap-1.5">
             <UploadCloud className="h-3.5 w-3.5" />
-            Scan Form
+            Scan Filled Form
           </Button>
         )}
         {/* Single primary action */}
