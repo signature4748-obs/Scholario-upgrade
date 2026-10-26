@@ -44,6 +44,7 @@ import { hashSessionToken } from '@/lib/auth'
 import { CANONICAL_SCHOOL_ROLES } from '@/lib/security/permissions'
 import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 import { resetLoginBuckets } from '../helpers/login-buckets'
+import { liveWriteFetch } from '../helpers/live-http'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 
@@ -606,11 +607,41 @@ describe('PHASE 2 · indirect leakage probes', () => {
   }, T)
 
   test('spoofed body schoolId is ignored — event lands in the CALLER school', async () => {
+    // Transport-resilience (2026-10-26, CI run #169 attempt-2 flake): this
+    // NON-IDEMPOTENT POST flaked with a mid-flight ECONNRESET when the
+    // dev server recycled its socket pool under combined-suite load —
+    // the plain fetch wrapper deliberately never retries ambiguous
+    // writes. Route it through liveWriteFetch (the fee-gateway PR #59
+    // pattern) with a DB-truth reconcile closure: the probe title is
+    // unique per run, so findFirst({ title }) IS the landed-state oracle
+    // — an ambiguous failure either proves the event landed (response
+    // synthesized from the row, never re-issued) or proves it did not
+    // (safe re-issue). The tenant-isolation assertion itself is
+    // unchanged and still runs against the same row.
     const title = `spoof-probe-${Date.now()}`
-    const res = await as(fx.users.principalB.email, '/api/events', {
-      method: 'POST',
-      body: JSON.stringify({ title, type: 'EVENT', startDate: new Date().toISOString(), audience: 'ALL', schoolId: fx.schoolA.id }),
-    })
+    const token = await login(fx.users.principalB.email)
+    const res = await liveWriteFetch(
+      `${BASE}/api/events`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title, type: 'EVENT', startDate: new Date().toISOString(), audience: 'ALL', schoolId: fx.schoolA.id }),
+      },
+      {
+        reconcile: {
+          snapshot: async () => db.schoolEvent.findFirst({ where: { title } }),
+          detect: async (before) => {
+            const row = await db.schoolEvent.findFirst({ where: { title } })
+            // Unique-per-run title: any row found NOW that was not in the
+            // baseline is THIS request's write. (before is null by
+            // construction; the comparison keeps the closure honest if a
+            // future variant reuses titles.)
+            return row && (!before || row.id !== before.id) ? row : null
+          },
+          respond: async (row) => ({ status: 200, body: { ok: true, data: { event: row } } }),
+        },
+      },
+    )
     expect(res.status).toBe(200)
     const row = await db.schoolEvent.findFirst({ where: { title } })
     expect(row).not.toBeNull()

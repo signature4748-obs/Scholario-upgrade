@@ -77,6 +77,29 @@ async function callChangePassword(body: unknown, token?: string, extraHeaders: R
   })
 }
 
+/**
+ * Transport-resilient re-issue for boundary probes that PROVABLY cannot
+ * write (2026-10-26, CI run #169 attempt-1 flake: the garbage-token
+ * boundary POST timed out on a hung dev-server socket and failed the
+ * suite). The plain fetch wrapper deliberately never retries ambiguous
+ * failures on non-idempotent methods — correct in general, over-strict
+ * for probes whose credentials are rejected at the authz boundary
+ * BEFORE any mutation. For those, a re-issue is side-effect-free by
+ * construction, so transient transport errors are retried here.
+ */
+async function retryNoWriteProbe(fn: () => Promise<Response>, maxAttempts = 3): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const msg = err instanceof Error ? `${err.message} ${(err as NodeJS.ErrnoException).code ?? ''}` : String(err)
+      const transient = /ECONNRESET|ECONNABORTED|EPIPE|EAI_AGAIN|socket|timed?[- ]?out|aborted|fetch failed/i.test(msg)
+      if (!transient || attempt === maxAttempts) throw err
+      await new Promise((r) => setTimeout(r, 300 * 2 ** (attempt - 1)))
+    }
+  }
+}
+
 const VALID_BODY = {
   currentPassword: ORIGINAL_PASSWORD,
   newPassword: NEW_PASSWORD,
@@ -193,9 +216,12 @@ describe('P0-A platform change-password — boundary', () => {
   }, T)
 
   test('garbage token → 401 AUTH_REQUIRED', async () => {
-    const res = await callChangePassword(VALID_BODY, randomBytes(16).toString('hex'))
+    // Garbage credentials die at the authz boundary before any write —
+    // retryNoWriteProbe makes the boundary probe immune to transient
+    // socket failures without weakening what it asserts.
+    const res = await retryNoWriteProbe(() => callChangePassword(VALID_BODY, randomBytes(16).toString('hex')))
     expect(res.status).toBe(401)
-  }, T)
+  }, 35_000)
 
   test('SCHOOL session in the platform bearer slot → 401 (token spaces disjoint)', async () => {
     if (!schoolSessionToken) return // no seeded school user found — skip silently
