@@ -11,10 +11,17 @@
  *   1. Default GET → 200, every returned session has revokedAt === null
  *      (the default list is never silently mixed with revoked rows).
  *   2. includeRevoked=true → 200, at least one revoked session is
- *      returned (the dev corpus carries revoked support sessions — the
- *      QA-audit oversight fixture and the older isolation-suite
- *      probes) and every row carries the reason field (the registry
- *      renders it next to the revoked badge).
+ *      returned and every row carries the reason field (the registry
+ *      renders it next to the revoked badge). SELF-SUFFICIENT since
+ *      2026-10-26: the suite PLANTS its own revoked registry row in
+ *      beforeAll (the same direct-row auth-fixture convention as
+ *      directPlatformSession) and removes it in afterAll — previously
+ *      the assertion leaned on corpus history ("the QA-audit fixture
+ *      plus older isolation probes") or on an EARLIER suite in the
+ *      same battery having created+revoked sessions, an unintended
+ *      test-order dependency that failed on fresh corpora whenever
+ *      the preceding suite's writes died in a dev-server restart
+ *      window.
  *   3. Both calls require a platform session — 401 without a token
  *      (the same authz-negative convention as platform-isolation /
  *      subscription-entitlement's boundary block).
@@ -40,6 +47,7 @@ const T = 30_000
 const RUN_IP = `10.237.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 
 const createdSessionHashes: string[] = []
+const plantedSupportTokenHashes: string[] = []
 let rootToken = ''
 
 /** Direct PlatformAdminSession row (auth fixture — bypasses only the
@@ -109,11 +117,39 @@ async function listSessions(
   return { status: res.status, sessions: body?.data?.sessions ?? [] }
 }
 
+/** Plant ONE revoked support-session registry row (corpus fixture for
+ *  the includeRevoked contract — same direct-row convention as the auth
+ *  fixture above; the ROUTE under test is the registry read, which this
+ *  row never bypasses). Removed again in afterAll: the suite is
+ *  self-sufficient on fresh corpora and leaves no cross-run drift. */
+async function plantRevokedSupportSession(): Promise<void> {
+  const admin = await db.platformAdmin.findUnique({ where: { email: PLATFORM_ROOT_EMAIL } })
+  const school = await db.school.findFirst({ orderBy: { createdAt: 'asc' } })
+  if (!admin || !school) throw new Error('plantRevokedSupportSession: corpus missing admin/school')
+  const tokenHash = hashSessionToken(randomBytes(32).toString('hex'))
+  await db.supportSession.create({
+    data: {
+      adminId: admin.id,
+      schoolId: school.id,
+      reason: 'includeRevoked contract self-sufficiency fixture (planted by the suite)',
+      durationMinutes: 5,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 3600_000),
+      revokedAt: new Date(),
+    },
+  })
+  plantedSupportTokenHashes.push(tokenHash)
+}
+
 beforeAll(async () => {
   rootToken = await rootLogin()
+  await plantRevokedSupportSession()
 }, 60_000)
 
 afterAll(async () => {
+  for (const hash of plantedSupportTokenHashes) {
+    await db.supportSession.deleteMany({ where: { tokenHash: hash } })
+  }
   for (const hash of createdSessionHashes) {
     await db.platformAdminSession.updateMany({ where: { tokenHash: hash }, data: { revokedAt: new Date() } })
   }
@@ -144,9 +180,9 @@ describe('SUPPORT SESSIONS REGISTRY — includeRevoked contract', () => {
       ])
       expect(withRevoked.status).toBe(200)
       expect(Array.isArray(withRevoked.sessions)).toBe(true)
-      // The param must actually re-include the revoked registry rows
-      // (the dev corpus has revoked support sessions: the QA-audit
-      // read-only oversight fixture plus older isolation probes).
+      // The param must actually re-include the revoked registry rows —
+      // the suite PLANTS its own revoked row in beforeAll, so this holds
+      // on a fresh corpus with no other suite having run first.
       expect(withRevoked.sessions.some((s) => s.revokedAt !== null)).toBe(true)
       // The revoked registry renders a reason next to the revoked
       // badge — every row carries the field, and at least one revoked
