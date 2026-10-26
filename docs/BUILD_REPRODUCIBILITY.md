@@ -12,14 +12,31 @@ exact configuration is the repository's single build path.
 configuration lives IN the script, not in a one-off shell command):
 
 ```sh
-NODE_ENV=production NODE_OPTIONS=--max-old-space-size=3072 next build --webpack \
+NODE_ENV=production NODE_OPTIONS=--max-old-space-size=3072 prisma generate \
+  && next build --webpack \
   && cp -r .next/static .next/standalone/.next/ \
   && cp -r public .next/standalone/
 ```
 
-CI (`.github/ci.yml.disabled`, Gate 4) runs **exactly** `bun run build` — no
-duplicated env/engine flags — so local builds, CI builds and deployments all
-exercise ONE identical production build path.
+CI (`.github/workflows/ci.yml`, build gate) runs **exactly** `bun run build`
+— no duplicated env/engine flags — so local builds, CI builds and deployments
+all exercise ONE identical production build path. This is also byte-for-byte
+the deploy-time semantics: both Vercel projects' `buildCommand` is
+`npx prisma generate && npx next build --webpack`.
+
+**Migrations are NOT part of the build.** `prisma migrate deploy` was removed
+from `bun run build` (2026-10-26) so that no routine compilation — local
+`bun run build`, CI build gate, or any future build invocation with a
+production `DATABASE_URL` in scope — can ever apply production migrations as
+a side effect. The sanctioned channels are exactly:
+
+- **CI**: the explicit `bunx prisma migrate deploy` step against the
+  job-local ephemeral postgres (already ordered before the build gate).
+- **Production**: the Release workflow (`release.yml` /
+  `production-db-migration.yml`), which applies migrations through the
+  Supabase Management API inside the documented DATABASE-FIRST contract
+  (docs/RELEASE.md). `bun run db:migrate` remains the explicit, intentional
+  local/CI entry point.
 
 ## 2. Why webpack (not the Next 16 default Turbopack)
 
