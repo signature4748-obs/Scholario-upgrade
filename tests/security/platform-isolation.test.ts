@@ -711,12 +711,18 @@ describe('PHASE 6 · platform MFA and step-up', () => {
     // Use a throwaway email (avoids locking the REAL seeded accounts):
     // the per-IP bucket is shared, so keep attempts minimal — 5 rapid
     // failures for one nonexistent account trip the ACCOUNT bucket.
+    // 2026-10-26: the probe ALSO gets its own throwaway IP — burning 6
+    // attempts from the suite-shared RUN_IP took the per-IP platform
+    // login budget (10/15min) to its limit and every LATER login in
+    // this suite 429'd (observed live; same isolation convention the
+    // test already applies to the account identity).
     const email = `rl-probe-${Date.now()}@nonexistent.test`
+    const probeIp = `10.232.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
     let locked = false
     for (let i = 0; i < 6; i++) {
       const res = await fetch(`${BASE}/api/platform/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-forwarded-for': RUN_IP },
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': probeIp },
         body: JSON.stringify({ email, password: 'wrong-password', totpCode: '000000' }),
       })
       const body = (await res.json()) as { ok: boolean; code: string }
