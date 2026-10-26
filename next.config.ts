@@ -56,9 +56,11 @@ const nextConfig: NextConfig = {
     // trades build speed for substantially lower build memory with identical
     // output, keeping the canonical build runnable inside 4GB too.
     webpackMemoryOptimizations: true,
-    // Memory guidance for Turbopack runs (webpack mode ignores it; kept for
-    // the times the project is booted without --webpack).
-    turbopackMemoryLimit: 2200,
+    // NOTE (16.4.3 migration): experimental.turbopackMemoryLimit was REMOVED
+    // — Next 16.4 dropped it from the validated experimental schema (an
+    // unknown key now fails config validation). It only ever guided
+    // non-webpack boots; this project's canonical dev/build path is
+    // `--webpack`, which ignored it entirely.
   },
   images: {
     remotePatterns: [
