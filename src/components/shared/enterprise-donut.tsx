@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * EnterpriseDonut — restrained, precise donut chart for Scholario-OS analytics.
+ * EnterpriseDonut — restrained, precise donut chart for Scholario analytics.
  *
  * ONE reusable presentation shared across modules (Library · Category
  * Distribution, Transport · Route Distribution). Callers pass data only —

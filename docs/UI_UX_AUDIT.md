@@ -1,6 +1,6 @@
 # UI/UX AUDIT — Phase 5 Product Polish Baseline
 
-> **Scope**: Visual + UX quality pass across Scholario-OS (public website, school login,
+> **Scope**: Visual + UX quality pass across Scholario (public website, school login,
 > principal/teacher/student workspaces, dense-table modules, responsive behavior,
 > accessibility, performance, design-token consistency).
 > **Constraints honored**: no Supabase migration, no mock-data removal, no unnecessary

@@ -1,4 +1,4 @@
-# SCHOLARIO-OS — TESTING STRATEGY (PHASE 4)
+# Scholario — TESTING STRATEGY (PHASE 4)
 
 > Status: **implemented and repeatedly green** (2026-02-02).
 > Scope: the automated test hierarchy (unit / integration / API / security

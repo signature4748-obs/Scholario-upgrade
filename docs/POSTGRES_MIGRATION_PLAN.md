@@ -1,10 +1,10 @@
-# SCHOLARIO-OS — POSTGRES MIGRATION PLAN (PHASE 3 deliverable)
+# Scholario — POSTGRES MIGRATION PLAN (PHASE 3 deliverable)
 
 > Status: **PLAN ONLY — no migration executed** (per Phase-3 constraints:
 > production Supabase is not connected yet, mock data is not removed yet).
 > Source of truth for current state: `docs/DATABASE_INTEGRITY.md`.
 >
-> This is the runbook for moving Scholario-OS from local SQLite
+> This is the runbook for moving Scholario from local SQLite
 > (`db/custom.db`, **96 models** as of the pre-integration hardening audit,
 > 7 versioned migrations) to managed
 > PostgreSQL (target: Supabase) WITHOUT weakening a single Phase-1/2/3

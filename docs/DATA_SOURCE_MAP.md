@@ -1,4 +1,4 @@
-# DATA SOURCE MAP — Scholario-OS
+# DATA SOURCE MAP — Scholario
 
 > Phase 7 deliverable · the data-honesty contract. Every module's source
 > of truth, every seed, every remaining mock — classified, intentional,

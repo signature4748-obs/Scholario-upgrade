@@ -92,7 +92,7 @@ function downloadCsv(d: CollectionExportData, schoolName: string) {
     lines.push(cells.map(csvCell).join(','))
 
   // Header block — context rows first so the file is self-describing.
-  push('Scholario-OS — Additional Collection Report')
+  push('Scholario — Additional Collection Report')
   push('School', schoolName)
   push('Collection', d.charge.name)
   push('Category', d.charge.category)
@@ -292,7 +292,7 @@ function printReport(d: CollectionExportData, schoolName: string, g: {
 
   <div class="foot">
     <div class="sig">${esc(d.actor)} — Principal<br><span style="font-size:8px;">Authorised signatory</span></div>
-    <div>Scholario-OS · Additional Collections · ${esc(d.charge.id.slice(0, 8))}</div>
+    <div>Scholario · Additional Collections · ${esc(d.charge.id.slice(0, 8))}</div>
   </div>
 </body></html>`
 

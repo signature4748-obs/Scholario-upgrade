@@ -8,7 +8,7 @@
  * ResponsiveContainer + AreaChart with subtle horizontal-only gridlines,
  * quiet 9px axes, a restrained popover tooltip, and monotone curves
  * (no overshoot — mathematically honest). This keeps one chart language
- * across SCHOLARIO-OS instead of a bespoke SVG system per module.
+ * across Scholario instead of a bespoke SVG system per module.
  *
  * Differences from the Attendance trend are semantic, not visual:
  *  - two series (Collected emerald + Pending rose; Pending renders only

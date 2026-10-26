@@ -1,4 +1,4 @@
-# SCHOLARIO-OS — FAILURE RECOVERY PLAYBOOK (PHASE 4)
+# Scholario — FAILURE RECOVERY PLAYBOOK (PHASE 4)
 
 > Status: **operational runbook** (2026-02-02). Every detection signal quoted
 > below is a real log event / HTTP shape emitted by the code — the vocabulary

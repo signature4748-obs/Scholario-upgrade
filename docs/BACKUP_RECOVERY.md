@@ -1,4 +1,4 @@
-# Backup & Recovery — Scholario-OS (Phase 8A, mission §30)
+# Backup & Recovery — Scholario (Phase 8A, mission §30)
 
 > Status (2026-10-06): the authoritative recovery RUNBOOK is now
 > `docs/DISASTER_RECOVERY.md` (RPO/RTO, failure scenarios, procedures,

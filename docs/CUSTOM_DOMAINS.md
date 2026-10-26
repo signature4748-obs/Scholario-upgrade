@@ -1,4 +1,4 @@
-# SCHOLARIO-OS — Multi-Tenant Custom Domain Architecture (Phase 8B)
+# Scholario — Multi-Tenant Custom Domain Architecture (Phase 8B)
 
 One application serves many schools. A school's own domain
 (`school-a.com`, `school-b.in`, `school-c.edu.in`) resolves THAT school's

@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto'
 
 /**
- * SCHOLARIO-OS — Payment gateway abstraction (server-only).
+ * Scholario — Payment gateway abstraction (server-only).
  * ---------------------------------------------------------
  * SERVER-ONLY MODULE. Never import this from client components or
  * middleware — the module reads gateway secrets from process.env and

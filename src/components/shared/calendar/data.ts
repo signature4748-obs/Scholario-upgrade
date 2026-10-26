@@ -56,7 +56,7 @@ export function todayParts(dateISO: string = CANONICAL_TODAY): { year: number; m
  *               carries the meaning, the tint just groups it
  *   - `badge` : complete classes for the small type badge pill
  *               (bg + text + border, light and dark)
- * Matches the StatusBadge language used across Scholario-OS.
+ * Matches the StatusBadge language used across Scholario.
  * Competition uses teal per the spec's "blue/teal" (no indigo).
  */
 export interface TypeToken {

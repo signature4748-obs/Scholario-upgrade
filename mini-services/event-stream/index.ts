@@ -1,5 +1,5 @@
 /**
- * SCHOLARIO-OS — Real-time Event Stream Service
+ * Scholario — Real-time Event Stream Service
  * ----------------------------------------------
  * Broadcasts genuine database events (fee payments, announcements,
  * messages, timetable publications) to connected dashboards over

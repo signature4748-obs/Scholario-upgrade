@@ -1,5 +1,5 @@
 /**
- * SCHOLARIO-OS — payment method label conventions (server-only).
+ * Scholario — payment method label conventions (server-only).
  *
  * The codebase stores methods in two different conventions:
  *   · FeeTransaction.method — 'UPI' | 'CARD' | 'NET_BANKING' | 'CASH'

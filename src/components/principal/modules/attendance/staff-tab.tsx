@@ -5,7 +5,7 @@
  *
  * The fabricated STAFF_DEFS universe (20 invented staff records with
  * deterministic per-date attendance generators) is RETIRED: there is NO
- * database model for staff attendance in Scholario-OS yet, so this tab
+ * database model for staff attendance in Scholario yet, so this tab
  * now renders an honest "not configured" state instead of a fabricated
  * marking workflow. The UI shell (the tab itself) stays so the section
  * remains discoverable; the moment a real StaffAttendance model + API

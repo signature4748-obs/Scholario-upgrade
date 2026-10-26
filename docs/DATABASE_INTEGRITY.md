@@ -1,4 +1,4 @@
-# SCHOLARIO-OS — DATABASE INTEGRITY BASELINE (PHASE 3)
+# Scholario — DATABASE INTEGRITY BASELINE (PHASE 3)
 
 > Status: **implemented and test-verified** (2026-02-01).
 > Scope: complete Prisma schema audit + every database write path.

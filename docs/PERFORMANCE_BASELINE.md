@@ -1,4 +1,4 @@
-# SCHOLARIO-OS — PERFORMANCE BASELINE (Phase 8A, Supabase PostgreSQL)
+# Scholario — PERFORMANCE BASELINE (Phase 8A, Supabase PostgreSQL)
 
 > Measured live against the integration database (ap-south-1, Supavisor
 > session pooler) on 2026-10-01 by `scripts/db-perf-probe.ts`
