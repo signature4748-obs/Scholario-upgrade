@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   return NextResponse.json(
-    { app: "SCHOLARIO-OS", status: "ok", version: APP_VERSION },
+    { app: "Scholario", status: "ok", version: APP_VERSION },
     { headers: { "Cache-Control": "no-store, max-age=0" } }
   );
 }

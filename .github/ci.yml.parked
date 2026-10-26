@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Scholario-OS — CI (Phase 8B, Task 8B-16: CI restoration, PostgreSQL era)
+# Scholario — CI (Phase 8B, Task 8B-16: CI restoration, PostgreSQL era)
 #
 # WHAT THIS IS: the modern successor of the parked Phase-4/7-era workflow
 # (.github/ci.yml.disabled — SQLite DATABASE_URL, pre-8A seed set; DELETED).

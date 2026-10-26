@@ -3,7 +3,7 @@
  *
  * PHASE 2 — Multi-Tenant Isolation + Authorization.
  *
- * This is the AUTHORITATIVE server-side permission source for Scholario-OS.
+ * This is the AUTHORITATIVE server-side permission source for Scholario.
  * A client-side matrix may exist for UI affordances (hiding buttons), but
  * server routes MUST gate through this module (or an explicit role list) —
  * never through frontend hiding.

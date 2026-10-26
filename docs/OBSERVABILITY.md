@@ -1,4 +1,4 @@
-# SCHOLARIO-OS — OBSERVABILITY BASELINE (PHASE 4)
+# Scholario — OBSERVABILITY BASELINE (PHASE 4)
 
 > Status: **implemented and test-verified** (2026-02-02).
 > Scope: request correlation, structured logging, error taxonomy, API error

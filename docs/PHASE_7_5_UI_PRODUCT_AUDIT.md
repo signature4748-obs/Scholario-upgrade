@@ -1,6 +1,6 @@
 # PHASE 7.5 — UI Product Audit (Current State)
 
-> Evidence-based inspection of the Scholario-OS repository **before** Phase 7.5 changes.
+> Evidence-based inspection of the Scholario repository **before** Phase 7.5 changes.
 > Post-Phase-7 state (mock-data elimination, see `docs/DATA_SOURCE_MAP.md` register R1–R20).
 > DB fact: **two schools** exist — `Greenwood Public School` (slug `demo-school`, isDemo, ENTERPRISE, AY 2026-2027, themeColor `#0f766e`, logoUrl null) and `Bluebell International Academy` (slug `bluebell-academy`, STANDARD, AY 2025-2026). The product behaves as if only the first exists.
 

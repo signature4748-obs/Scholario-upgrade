@@ -1,6 +1,6 @@
 # PLATFORM SECURITY MODEL
 
-> Phase 6 deliverable · Scholario-OS · companion: [`PLATFORM_CONTROL_PLANE.md`](./PLATFORM_CONTROL_PLANE.md) (architecture & capabilities)
+> Phase 6 deliverable · Scholario · companion: [`PLATFORM_CONTROL_PLANE.md`](./PLATFORM_CONTROL_PLANE.md) (architecture & capabilities)
 
 ## 1. The invariant
 

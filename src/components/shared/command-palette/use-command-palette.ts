@@ -217,7 +217,7 @@ export function useCommandPalette({
     if ('logout signout exit session'.includes(q)) {
       actions.push({
         id: 'act-logout',
-        title: 'Sign out of SCHOLARIO-OS',
+        title: 'Sign out of Scholario',
         subtitle: 'Log out of administrative session',
         category: 'Settings & System',
         type: 'setting',

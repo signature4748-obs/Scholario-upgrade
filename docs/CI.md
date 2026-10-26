@@ -1,4 +1,4 @@
-# CI — Scholario-OS (Phase 8B, Task 8B-16)
+# CI — Scholario (Phase 8B, Task 8B-16)
 
 The workflow lives at `.github/workflows/ci.yml` (`name: CI`, job `verify`).
 It supersedes the parked Phase-4/7-era file `.github/ci.yml.disabled`

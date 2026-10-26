@@ -152,7 +152,7 @@ async function main() {
   }
 
   // ── report ──────────────────────────────────────────────────────────
-  console.log("\n════════ SCHOLARIO-OS · DATABASE INTEGRITY AUDIT (read-only) ════════\n");
+  console.log("\n════════ Scholario · DATABASE INTEGRITY AUDIT (read-only) ════════\n");
   let issues = 0;
   const show = (r: unknown) => JSON.stringify(r, (_k, v) => (typeof v === "bigint" ? Number(v) : v));
   for (const s of sections) {

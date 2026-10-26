@@ -1,4 +1,4 @@
-# Scholario-OS — Production Readiness Checklist (Phase 0)
+# Scholario — Production Readiness Checklist (Phase 0)
 
 Companion to `docs/PRODUCTION_READINESS_BASELINE.md`. Frozen-repo inventory of every readiness item with **status · evidence · affected files · severity · verification method**.
 

@@ -1,7 +1,7 @@
-# Tenant Isolation Model — Scholario-OS
+# Tenant Isolation Model — Scholario
 
 **Phase 2 — Multi-Tenant Isolation + Authorization.** This document is the
-authoritative description of how Scholario-OS enforces its fundamental
+authoritative description of how Scholario enforces its fundamental
 invariant:
 
 > **NO USER FROM SCHOOL A MAY READ, WRITE, MODIFY, DELETE, SEARCH, EXPORT,

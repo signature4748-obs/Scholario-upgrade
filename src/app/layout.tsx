@@ -37,20 +37,20 @@ const metadataOrigin =
 export const metadata: Metadata = {
   metadataBase: new URL(metadataOrigin),
   title: {
-    default: "SCHOLARIO-OS — Enterprise School ERP",
-    template: "%s · SCHOLARIO-OS",
+    default: "Scholario — Enterprise School ERP",
+    template: "%s · Scholario",
   },
   description:
     "The operating system for modern schools. Admissions, academics, finance, transport & analytics in one premium platform.",
   keywords: [
-    "SCHOLARIO-OS",
+    "Scholario",
     "School ERP",
     "Education Management",
     "School Administration",
     "School Management System",
   ],
   authors: [{ name: "SCHOLARIO" }],
-  applicationName: "SCHOLARIO-OS",
+  applicationName: "Scholario",
   category: "education",
   alternates: {
     canonical: "/",
@@ -62,8 +62,8 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "SCHOLARIO-OS",
-    title: "SCHOLARIO-OS — Enterprise School ERP",
+    siteName: "Scholario",
+    title: "Scholario — Enterprise School ERP",
     description:
       "The operating system for modern schools. Admissions, academics, finance, transport & analytics in one premium platform.",
     url: "/",
@@ -72,13 +72,13 @@ export const metadata: Metadata = {
         url: "/og-image.jpg",
         width: 1344,
         height: 768,
-        alt: "SCHOLARIO-OS — the operating system for modern schools",
+        alt: "Scholario — the operating system for modern schools",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "SCHOLARIO-OS — Enterprise School ERP",
+    title: "Scholario — Enterprise School ERP",
     description:
       "The operating system for modern schools. Admissions, academics, finance, transport & analytics in one platform.",
     images: ["/og-image.jpg"],

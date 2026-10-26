@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * MonthGrid — the month view, rendered in the clean Scholario-OS
+ * MonthGrid — the month view, rendered in the clean Scholario
  * enterprise language.
  *
  * Design notes:

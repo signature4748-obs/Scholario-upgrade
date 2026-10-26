@@ -1,6 +1,6 @@
 # PLATFORM CONTROL PLANE — Architecture & Operations
 
-> Phase 6 deliverable · Scholario-OS · status: **implemented & verified**
+> Phase 6 deliverable · Scholario · status: **implemented & verified**
 > Companion document: [`PLATFORM_SECURITY_MODEL.md`](./PLATFORM_SECURITY_MODEL.md) (identity boundary, MFA, threat model)
 
 ## 1. What changed and why

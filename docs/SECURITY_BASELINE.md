@@ -1,4 +1,4 @@
-# Scholario-OS — Security Baseline (Phase 1: Production Security Hardening)
+# Scholario — Security Baseline (Phase 1: Production Security Hardening)
 
 > **Phase**: 1 — Production security hardening for a hostile internet environment.
 > **Source of truth**: the Phase-0 baseline (`docs/PRODUCTION_READINESS_BASELINE.md`).

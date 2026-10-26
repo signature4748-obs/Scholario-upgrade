@@ -4,7 +4,7 @@
  * CalendarWorkspace — the shared calendar used by BOTH the Principal
  * panel (full management) and the Student panel (read-only).
  *
- * Visual language: the clean Scholario-OS enterprise system used by
+ * Visual language: the clean Scholario enterprise system used by
  * Finance / Messages — white card surfaces, hairline borders, subtle
  * shadows and a restrained Scholario green as the only UI accent.
  * Colour appears ONLY where it carries meaning: event-type dots and
@@ -27,7 +27,7 @@
  *
  * "Today" anchors to the app's canonical academic timeline
  * (Dec 10 2025) so the calendar opens on the month the rest of
- * Scholario-OS is showing.
+ * Scholario is showing.
  */
 
 import { useEffect, useMemo, useState } from 'react'

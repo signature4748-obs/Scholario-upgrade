@@ -4,7 +4,7 @@
  * calendar/primitives — small shared visual pieces for the Calendar
  * workspace: type badge, source pill, event rows (upcoming + day
  * variants) and the empty state. All surfaces follow the clean
- * Scholario-OS enterprise language — white cards, hairline borders,
+ * Scholario enterprise language — white cards, hairline borders,
  * muted neutrals, with colour reserved for the small functional
  * type indicators.
  */
