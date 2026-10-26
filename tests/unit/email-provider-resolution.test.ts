@@ -24,10 +24,28 @@ const SAVED = {
   gmailPass: process.env.GMAIL_SMTP_APP_PASSWORD,
 }
 
+// REAL environment-variable names for each SAVED key. process.env keys are
+// case-sensitive: restoring via the camelCase SAVED keys writes DIFFERENT
+// variables (process.env.databaseEnv) and silently no-ops the real ones —
+// DATABASE_ENV stayed 'production', the fake supabase DATABASE_URL from the
+// fail-safe test stayed set, and every LATER suite in the same bun process
+// inherited the poisoned environment (root cause of the combined-order
+// failure cascade; tests/helpers/db.ts additionally froze the poisoned URL
+// into its shared client when evaluated after this file).
+const ENV_NAMES: Record<keyof typeof SAVED, string> = {
+  databaseEnv: 'DATABASE_ENV',
+  databaseUrl: 'DATABASE_URL',
+  resendKey: 'RESEND_API_KEY',
+  emailProvider: 'EMAIL_PROVIDER',
+  gmailUser: 'GMAIL_SMTP_USER',
+  gmailPass: 'GMAIL_SMTP_APP_PASSWORD',
+}
+
 function restore(name: keyof typeof SAVED): void {
+  const envName = ENV_NAMES[name]
   const v = SAVED[name]
-  if (v === undefined) delete process.env[name]
-  else process.env[name] = v
+  if (v === undefined) delete process.env[envName]
+  else process.env[envName] = v
 }
 
 beforeEach(() => {
