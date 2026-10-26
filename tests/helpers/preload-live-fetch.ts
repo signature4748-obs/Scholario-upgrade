@@ -59,9 +59,12 @@
  *
  * BUDGETS: 20s wall-clock deadline (< every suite's 30s+ per-test
  * timeout and bun's 45s CLI timeout, so the TEST's budget stays the
- * binding ceiling), 8s per-attempt timeout (cuts abandoned sockets),
- * 300ms→3s capped backoff, 40-attempt cap. The FINAL attempt's error is
- * rethrown unchanged — a genuinely dead server still fails honestly.
+ * binding ceiling), 10s per-attempt timeout (liveFetch parity — "cold
+ * compiles on a slow runner can legitimately take seconds"; EVIDENCE
+ * 2026-10-26: a legitimate provision response measured 8.0s raced the
+ * earlier 8s cut by 2ms and cascaded 18 e2e failures), 300ms→3s capped
+ * backoff, 40-attempt cap. The FINAL attempt's error is rethrown
+ * unchanged — a genuinely dead server still fails honestly.
  *
  * STREAM-BODY GUARD: a retry must be able to re-send the body. Only
  * re-issuable bodies (string / ArrayBuffer / TypedArray / Blob /
@@ -165,7 +168,7 @@ export function createLiveFetch(
   opts: LiveFetchPreloadOpts = {},
 ): typeof fetch {
   const deadlineMs = Math.max(1, opts.deadlineMs ?? 20_000)
-  const perAttemptMs = Math.max(1, opts.perAttemptMs ?? 8_000)
+  const perAttemptMs = Math.max(1, opts.perAttemptMs ?? 10_000)
   const maxAttempts = Math.max(1, opts.maxAttempts ?? 40)
   const origins = opts.origins ?? eligibleOrigins()
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
