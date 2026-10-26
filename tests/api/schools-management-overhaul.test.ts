@@ -248,7 +248,16 @@ describe('Schools-management overhaul · directory filters/sort/summary', () => 
       expect(res.status).toBe(200)
       const body = (await res.json()) as { data: { schools: Array<{ name: string }> } }
       const names = body.data.schools.map((s) => s.name)
-      const sorted = [...names].sort((a, b) => a.localeCompare(b))
+      // Oracle parity: the route sorts with
+      //   new Intl.Collator('en', { sensitivity: 'base', numeric: true })
+      // (src/app/api/platform/schools/route.ts). A default localeCompare
+      // oracle is a DIFFERENT collation — it orders numeric substrings
+      // lexicographically ('Class 10' < 'Class 2') and treats case as
+      // significant, so it can contradict the API on corpora containing
+      // numeric or case-divergent names. The test must assert against the
+      // route's DOCUMENTED contract, not a collation the route never used.
+      const collator = new Intl.Collator('en', { sensitivity: 'base', numeric: true })
+      const sorted = [...names].sort(collator.compare)
       expect(names).toEqual(sorted)
 
       const res2 = await as(rootToken, '/api/platform/schools?sort=created_asc')
@@ -271,6 +280,38 @@ describe('Schools-management overhaul · directory filters/sort/summary', () => 
       const dbMin = await db.school.aggregate({ _min: { createdAt: true } })
       expect(dbMin._min.createdAt).not.toBeNull()
       expect(Date.parse(rows[0]?.createdAt ?? '')).toBe(dbMin._min.createdAt!.getTime())
+    },
+    T,
+  )
+
+  test(
+    'name_asc collation contract pin — numeric substrings + case-divergence (corpus-independent)',
+    () => {
+      // Pins the SORT CONTRACT the route documents (route.ts:295)
+      // independent of the seed corpus, so a future silent change of the
+      // server comparator (e.g. swapping in localeCompare) is caught even
+      // when the corpus of the day happens to satisfy both collations.
+      const collator = new Intl.Collator('en', { sensitivity: 'base', numeric: true })
+      // numeric:true — embedded numbers compare by VALUE: 'Class 2' < 'Class 10'.
+      expect(collator.compare('Class 2', 'Class 10')).toBeLessThan(0)
+      expect(collator.compare('Class 10', 'Class 2')).toBeGreaterThan(0)
+      // sensitivity:'base' — case (and accents) are IGNORED: equal → 0.
+      expect(collator.compare('hawkings', 'HAWKINGS')).toBe(0)
+      expect(collator.compare('Green Valley', 'green valley')).toBe(0)
+      // Full-name ordering is still deterministic for distinct names.
+      expect(collator.compare('Alpha High', 'Beta High')).toBeLessThan(0)
+      // The pin has teeth: the two collations genuinely diverge on these
+      // inputs (runtime-verified expected orders below).
+      const numericInput = ['Class 10', 'Class 2']
+      const lexicographic = [...numericInput].sort((a, b) => a.localeCompare(b))
+      const numeric = [...numericInput].sort(collator.compare)
+      expect(lexicographic[0]).toBe('Class 10')
+      expect(numeric[0]).toBe('Class 2')
+      expect(lexicographic).not.toEqual(numeric)
+      // End-to-end shape: a mixed list ordered exactly as the route would.
+      const mixed = ['Sunrise 10', 'sunrise 2', 'Hawkings', 'HAWKINGS', 'Class 10', 'Class 2']
+      const expected = ['Class 2', 'Class 10', 'Hawkings', 'HAWKINGS', 'sunrise 2', 'Sunrise 10']
+      expect([...mixed].sort((a, b) => collator.compare(a, b) || a.localeCompare(b))).toEqual(expected)
     },
     T,
   )
