@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "bash -c 'source scripts/dev-env.sh; NODE_OPTIONS=--max-old-space-size=${DEV_OLD_SPACE_MB:-1700} next dev --webpack -p 3000 2>&1 | tee -a dev.log'",
-    "build": "NODE_ENV=production NODE_OPTIONS=--max-old-space-size=3072 prisma generate && next build --webpack && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
+    "build": "bash -c 'export NODE_ENV=production NODE_OPTIONS=--max-old-space-size=3072; prisma generate && next build --webpack && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/'",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
     "db:push": "bun scripts/db-push-guard.ts",
