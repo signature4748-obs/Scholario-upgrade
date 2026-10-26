@@ -1,0 +1,31 @@
+# bunfig.toml — bun runtime configuration for this repository.
+#
+# [test] preload installs the GLOBAL live-fetch transport-resilience
+# wrapper for every `bun test` run (unit + integration + api + regression
+# + security + e2e — the same combined battery CI runs). Full contract:
+# tests/helpers/preload-live-fetch.ts. Summary:
+#
+#   · engages ONLY for the live dev-server origins (TENANT_TEST_BASE /
+#     API_TEST_BASE / LIVE_BASE / E2E_BASE_URL, default localhost:3000);
+#   · NEVER-DELIVERED transport failures (ECONNREFUSED …) are retried for
+#     any method — an unaccepted connection cannot have side effects;
+#   · AMBIGUOUS failures (ECONNRESET / abandoned-socket timeout) retry
+#     ONLY idempotent methods (GET/HEAD/OPTIONS) — everything else
+#     rethrows immediately, fail-closed against double-writes;
+#   · HTTP responses of ANY status are returned exactly once; product
+#     errors stay fully visible; no assertion anywhere is affected;
+#   · 20s deadline / 8s per-attempt / capped backoff; the FINAL error is
+#     rethrown unchanged, so a genuinely dead server still fails honestly;
+#   · deliberate dead-port probes and external hosts pass through
+#     UNWRAPPED; suites that mock global.fetch replace it wholesale;
+#   · kill switch: SCHOLARIO_LIVE_FETCH_PRELOAD=off.
+#
+# This is the root-level generalization of the per-suite rail the repo
+# already runs (tests/helpers/live-http.ts liveFetch — 10+ suites since
+# 2026-10-11, fee-gateway liveWriteFetch in PR #59): the supervised dev
+# server's restart windows (memory-guard exit → supervisor respawn) are
+# a DOCUMENTED property of the CI topology (see .github/workflows/ci.yml
+# "DEV-SERVER SUPERVISOR"), and the suites must observe product behavior
+# through those windows instead of failing on transport noise.
+[test]
+preload = ["./tests/helpers/preload-live-fetch.ts"]

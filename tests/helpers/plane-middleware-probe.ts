@@ -40,8 +40,19 @@ process.env.NODE_ENV = nodeEnv
 
 async function main() {
   try {
+    // Origin follows the SAME base-URL environment contract as the live
+    // suites (TENANT_TEST_BASE, default http://localhost:3000 = the CI dev
+    // server). The middleware's school-door slug validation probes
+    // `${origin}/api/schools/public?slug=…` — with a hard-coded :3000 that
+    // probe hits whatever ELSE listens on :3000 of the host (on shared
+    // sandboxes a foreign app), whose 404 marks every school door
+    // "unknown slug" and turns the plane-gate verdicts red EVEN THOUGH the
+    // middleware is correct (CI green, pristine-tree repro). Routing the
+    // synthetic origin through the documented env keeps the verdict about
+    // the MIDDLEWARE, not about which process owns :3000.
+    const BASE = (process.env.TENANT_TEST_BASE ?? 'http://localhost:3000').replace(/\/$/, '')
     const { middleware } = await import('@/middleware')
-    const req = new NextRequest(`http://localhost:3000${path}`, { method })
+    const req = new NextRequest(`${BASE}${path}`, { method })
     const res = await middleware(req)
     const out = {
       status: res.status,
