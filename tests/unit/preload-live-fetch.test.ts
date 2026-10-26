@@ -126,6 +126,26 @@ describe('createLiveFetch · transport state machine', () => {
     expect(calls.length).toBe(1)
   })
 
+  test('reset POST to a session-minting AUTH path → retried (the documented login exception)', async () => {
+    const { fn, calls } = scriptableFetch([resetError(), jsonResponse(200, { ok: true, data: { sessionToken: 'x' } })])
+    const res = await createLiveFetch(fn, FAST)(`${BASE}/api/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: 'a@b.c', password: 'x' }),
+    })
+    expect(res.status).toBe(200)
+    expect(calls.length).toBe(2)
+  })
+
+  test('reset POST to the PLATFORM auth path → retried (same documented exception)', async () => {
+    const { fn, calls } = scriptableFetch([resetError(), jsonResponse(200)])
+    const res = await createLiveFetch(fn, FAST)(`${BASE}/api/platform/auth/login`, {
+      method: 'POST',
+      body: '{}',
+    })
+    expect(res.status).toBe(200)
+    expect(calls.length).toBe(2)
+  })
+
   test('abandoned-socket timeout on GET → cut at perAttemptMs and retried', async () => {
     let n = 0
     // Signal-aware hang: like real fetch, an aborted attempt REJECTS

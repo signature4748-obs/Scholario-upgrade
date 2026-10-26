@@ -32,10 +32,19 @@
  *     was closed" / "socket hang up" / bun's aggregate "fetch failed"
  *     that is not provably refused / per-attempt timeout on an abandoned
  *     socket): the request MAY have been delivered and processed.
- *     Retried ONLY for idempotent methods (GET / HEAD / OPTIONS); every
- *     other method RETHROWS the original error immediately — fail-closed
- *     against double-writes, STRICTER than the per-suite liveFetch rail
- *     (which blind-retries these for the suites it was reviewed with).
+ *     Retried ONLY for idempotent methods (GET / HEAD / OPTIONS), with
+ *     ONE documented exception — the session-minting AUTH endpoints
+ *     (/api/auth/login, /api/platform/auth/login): a blind retry there
+ *     is the repo's reviewed position since 2026-10-11 (tests/helpers/
+ *     live-http.ts: "non-idempotent POSTs are safe to retry here … a
+ *     retried login only consumes one extra rate-limit budget slot";
+ *     a successful login also RESETS the account bucket, so retries do
+ *     not accumulate). A login mints a session, never a resource — the
+ *     worst case is a second unused session row. Every OTHER
+ *     non-idempotent method RETHROWS the original error immediately —
+ *     fail-closed against double-writes, STRICTER than the per-suite
+ *     liveFetch rail (which blind-retries these for the suites it was
+ *     reviewed with).
  *   · DETERMINISTIC (any HTTP response, any status; any non-transient
  *     error): returned / thrown exactly once. Product errors stay
  *     visible.
@@ -98,6 +107,13 @@ export function classifyTransportError(err: unknown): TransportClass {
 }
 
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+// The session-minting endpoints: blind retry after an AMBIGUOUS failure is
+// accepted for exactly these paths (see the header contract). Not a
+// resource-creating endpoint in sight — the worst case is one extra unused
+// session row, identical to what the per-suite liveFetch rail has shipped
+// for logins since 2026-10-11.
+const AUTH_RETRY_PATHS = new Set(['/api/auth/login', '/api/platform/auth/login'])
 
 // ── re-issuable body guard ──────────────────────────────────────────────
 
@@ -186,7 +202,13 @@ export function createLiveFetch(
     if (!eligible) return originalFetch(input as never, init as never)
 
     const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : null)
-    const idempotent = IDEMPOTENT_METHODS.has(method)
+    let authRetryPath = false
+    try {
+      authRetryPath = AUTH_RETRY_PATHS.has(new URL(url).pathname)
+    } catch {
+      authRetryPath = false
+    }
+    const idempotent = IDEMPOTENT_METHODS.has(method) || authRetryPath
     const bodyReIssuable =
       retryableInput &&
       (input instanceof Request || bodyIsReIssuable(init?.body))
