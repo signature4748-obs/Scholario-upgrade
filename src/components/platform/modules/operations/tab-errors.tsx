@@ -197,11 +197,11 @@ export function ErrorsTab({ refreshKey, initialFingerprint }: { refreshKey: numb
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hours, severity, category, status, refreshKey])
 
-  useEffect(() => {
-    if (detailFp) void openDetail(detailFp)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detailFp])
-
+  // Declared BEFORE the effect that calls it: the effect callback at the
+  // old position referenced `openDetail` ahead of its const declaration —
+  // a temporal-dead-zone hazard (any dep-array addition or render-time
+  // read would throw ReferenceError) surfaced by eslint-config-next 16.4's
+  // react-hooks analyzer. Reordered, not suppressed.
   const openDetail = useCallback(async (fp: string) => {
     setDetailLoading(true)
     setDetail(null)
@@ -218,6 +218,11 @@ export function ErrorsTab({ refreshKey, initialFingerprint }: { refreshKey: numb
       setDetailLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (detailFp) void openDetail(detailFp)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailFp])
 
   const act = useCallback(
     async (kind: 'ack' | 'resolve', fp: string) => {

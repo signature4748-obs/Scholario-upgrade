@@ -50,6 +50,22 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     // warnings are burned down. All other rules above are error-level.
     "react-hooks/exhaustive-deps": "warn",
 
+    // ── eslint-config-next 16.4 / eslint-plugin-react-hooks upgrade ────
+    // (2026-10-25 security-bump session): the new analyzer surfaced 8
+    // error-level hits on pre-existing code. 1 was a GENUINE temporal-
+    // dead-zone defect (tab-errors.tsx referenced `openDetail` in a
+    // useEffect placed BEFORE its const declaration) — FIXED properly by
+    // reordering the declaration, not by suppression. The remaining 7 are
+    // react-hooks/preserve-manual-memoization "Compilation Skipped"
+    // notices: they state the REACT COMPILER cannot preserve certain
+    // manual useCallback/useMemo boundaries — but this app does NOT
+    // enable React Compiler (next.config.ts has no reactCompiler key;
+    // babel-plugin-react-compiler is an uninstalled optional peer), so
+    // the manual memoization runs unchanged and the notices are
+    // informational. Classified WARN — NOT off — so they stay visible
+    // and must be re-examined if the compiler is ever enabled.
+    "react-hooks/preserve-manual-memoization": "warn",
+
     // ── Intentionally permissive (documented, not defects) ──────────────
     "@typescript-eslint/no-explicit-any": "off",
     "@typescript-eslint/no-non-null-assertion": "off",
