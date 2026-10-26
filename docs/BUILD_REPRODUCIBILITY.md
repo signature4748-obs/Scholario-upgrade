@@ -12,11 +12,19 @@ exact configuration is the repository's single build path.
 configuration lives IN the script, not in a one-off shell command):
 
 ```sh
-NODE_ENV=production NODE_OPTIONS=--max-old-space-size=3072 prisma generate \
+export NODE_ENV=production NODE_OPTIONS=--max-old-space-size=3072
+prisma generate \
   && next build --webpack \
   && cp -r .next/static .next/standalone/.next/ \
   && cp -r public .next/standalone/
 ```
+
+(The script wraps this in `bash -c 'export …; …'` — a bare
+`NODE_ENV=… NODE_OPTIONS=… prisma generate && next build` prefix only ever
+applied to `prisma generate`, never to `next build`: the documented 3072 MB
+heap ceiling was silently inert for the compile itself, masked on 16 GiB CI
+runners by the ~4 GiB default heap and fatal on the 4 GiB reference box —
+proven by an OOM at the ~2 GiB default cap before the fix, EXIT 0 after.)
 
 CI (`.github/workflows/ci.yml`, build gate) runs **exactly** `bun run build`
 — no duplicated env/engine flags — so local builds, CI builds and deployments
