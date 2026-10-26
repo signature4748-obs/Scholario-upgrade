@@ -4485,7 +4485,6 @@ export function useFeeData(academicYear: string = CURRENT_ACADEMIC_YEAR) {
   const concessions = useFeeStore((s) => s.concessions)
   const optionalHeadApplicability = useFeeStore((s) => s.optionalHeadApplicability)
 
-  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- deps list is exhaustive and correct; React Compiler cannot verify but memo semantics are preserved
   return useMemo(() => {
     const activeStudents = students.filter((s) => s.status === 'Active')
     const accounts = activeStudents.map((s) => computeAccount(s, transactions, lateFeeRule, additionalCharges, concessions, optionalHeadApplicability))

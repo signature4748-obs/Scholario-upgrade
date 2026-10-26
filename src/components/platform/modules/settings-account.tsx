@@ -330,6 +330,11 @@ export function SettingsAccountCard() {
                 disabled={googleConfigured !== true}
                 onClick={() => {
                   // Top-level navigation — the OAuth consent round-trip.
+                  // Deliberate window.location.href (NOT useRouter().push):
+                  // the /api/.../link/start handler 302s off-site to
+                  // Google's consent screen — a full document navigation is
+                  // the required transport for the OAuth round-trip.
+                  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
                   window.location.href = '/api/platform/auth/google/link/start'
                 }}
                 className="h-11 px-4 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus-ring"
