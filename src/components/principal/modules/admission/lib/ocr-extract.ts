@@ -94,6 +94,16 @@ const FIELD_SYNONYMS: Array<{
   { fieldKey: 'previousBoard', label: 'Previous Board', synonyms: ['previous board', 'board'] },
   { fieldKey: 'previousMarks', label: 'Previous Marks', synonyms: ['previous marks', 'marks obtained', 'last exam marks', 'previous grades'] },
   { fieldKey: 'className', label: 'Applying For Class', synonyms: ['class applied for', 'applying for class', 'class applying for', 'admission sought for', 'class applied', 'class'] , clean: titleCase },
+  // AF-2026.2 one-page form additions — the printed D-section fields and
+  // the preferred-section line are real wizard keys, so scans of the new
+  // sheet extract them too (labels append-only: nothing above changed).
+  { fieldKey: 'section', label: 'Preferred Section', synonyms: ['preferred section', 'section', 'class section'] },
+  { fieldKey: 'permAddress', label: 'Permanent Address', synonyms: ['permanent address'] },
+  { fieldKey: 'transportRoute', label: 'Transport Route / Landmark', synonyms: ['transport route landmark', 'transport route', 'route landmark', 'pickup drop route', 'bus route'] },
+  { fieldKey: 'allergies', label: 'Allergies', synonyms: ['allergies', 'known allergies', 'allergy'] },
+  { fieldKey: 'conditions', label: 'Medical Conditions', synonyms: ['medical conditions', 'medical condition', 'conditions'] },
+  { fieldKey: 'doctorName', label: 'Family Doctor', synonyms: ['family doctor', 'family doctor name', 'doctor name'], clean: titleCase },
+  { fieldKey: 'doctorPhone', label: 'Doctor Phone', synonyms: ['doctor phone', 'doctors phone', 'doctor mobile', 'doctor contact'], clean: cleanPhone },
 ]
 
 const LOW_CONFIDENCE_THRESHOLD = 85

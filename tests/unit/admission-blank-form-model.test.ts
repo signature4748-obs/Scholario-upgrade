@@ -7,11 +7,15 @@
  *      fabricated school names, addresses, contacts or approval claims.
  *   2. POLICY REFLECTION — the Aadhaar row and the document checklist
  *      follow the school's configurable document policy.
- *   3. STRUCTURE — Sections A–E exist in order; every mappable field has
- *      a stable OCR label (the scan-alignment contract).
+ *   3. STRUCTURE — Sections A–F exist in order (AF-2026.2 one-page
+ *      contract); every mappable field has a stable OCR label (the
+ *      scan-alignment contract).
  *   4. VERSIONING — the form schema version is stamped and stable, so a
  *      scanned old form still maps correctly after config changes
  *      (labels are matched by TEXT, and are append-only).
+ *   5. ASTERISK CONVENTION — required fields are flagged via `required`
+ *      (the painters print '*'); the words "(Required)"/"(Optional)"
+ *      never enter the model's printable content.
  */
 import { describe, test, expect } from 'bun:test'
 import {
@@ -48,20 +52,39 @@ function model(
 }
 
 describe('blank-form-model: structure', () => {
-  test('sections A–E exist in canonical order', () => {
+  test('sections A–F exist in canonical order (one-page contract)', () => {
     const m = model()
-    expect(m.sections.map((s) => s.key)).toEqual(['A', 'B', 'C', 'D', 'E'])
+    expect(m.sections.map((s) => s.key)).toEqual(['A', 'B', 'C', 'D', 'E', 'F'])
     expect(m.sections[0].title).toContain('STUDENT DETAILS')
     expect(m.sections[1].title).toContain('PARENT')
     expect(m.sections[2].title).toContain('ADDRESS & PREVIOUS ACADEMIC RECORD')
-    expect(m.sections[3].title).toContain('DOCUMENT CHECKLIST')
-    expect(m.sections[4].title).toContain('DECLARATION')
+    expect(m.sections[3].title).toContain('FACILITIES & MEDICAL DETAILS')
+    expect(m.sections[4].title).toContain('DOCUMENT CHECKLIST')
+    expect(m.sections[5].title).toContain('DECLARATION')
   })
 
   test('Section A carries the student identity fields incl. class applying for', () => {
     const keys = model().sections[0].fields.map((f) => f.key)
-    for (const k of ['firstName', 'lastName', 'dob', 'gender', 'bloodGroup', 'religion', 'nationality', 'className']) {
+    for (const k of ['firstName', 'lastName', 'dob', 'gender', 'bloodGroup', 'religion', 'nationality', 'className', 'section']) {
       expect(keys).toContain(k)
+    }
+  })
+
+  test('Section D carries the facilities & medical fields (wizard-collected)', () => {
+    const keys = model().sections[3].fields.map((f) => f.key)
+    for (const k of ['transportRequired', 'transportRoute', 'hostelRequired', 'allergies', 'doctorName', 'doctorPhone', 'conditions']) {
+      expect(keys).toContain(k)
+    }
+  })
+
+  test('no printable content uses the words "(Required)" or "(Optional)"', () => {
+    const m = model()
+    for (const s of m.sections) {
+      for (const f of s.fields) {
+        const printed = `${f.label} ${f.note ?? ''} ${(f.options ?? []).join(' ')}`
+        expect(printed).not.toContain('(Required)')
+        expect(printed).not.toContain('(Optional)')
+      }
     }
   })
 
@@ -71,7 +94,7 @@ describe('blank-form-model: structure', () => {
   })
 
   test('version stamp is stable and printed on the artefact', () => {
-    expect(BLANK_FORM_VERSION).toBe('AF-2026.1')
+    expect(BLANK_FORM_VERSION).toBe('AF-2026.2')
     expect(model().version).toBe(BLANK_FORM_VERSION)
   })
 })
@@ -107,11 +130,14 @@ describe('blank-form-model: tenant honesty', () => {
 })
 
 describe('blank-form-model: document policy reflection', () => {
-  test('default policy: Aadhaar row present (school collects it), labelled optional', () => {
+  test('default policy: Aadhaar row present (school collects it), optional → NO asterisk flag', () => {
     const m = model(TENANT, DEFAULT_DOCUMENT_POLICY)
     const aadhaar = m.sections[0].fields.find((f) => f.key === 'aadhaarNo')
     expect(aadhaar).toBeDefined()
-    expect(aadhaar!.note).toBe('(Optional)')
+    // Asterisk convention: optional fields carry neither an asterisk nor a
+    // printed "(Optional)" qualifier.
+    expect(aadhaar!.required).toBeFalsy()
+    expect(aadhaar!.note).toBeUndefined()
   })
 
   test('policy not-collected: Aadhaar row omitted entirely', () => {
@@ -146,7 +172,7 @@ describe('blank-form-model: document policy reflection', () => {
 describe('blank-form-model: OCR alignment contract', () => {
   test('every mappable printed label is stable, unique and non-empty', () => {
     const labels = Object.values(model().ocrFieldLabels)
-    expect(labels.length).toBeGreaterThan(15)
+    expect(labels.length).toBeGreaterThan(20)
     expect(new Set(labels).size).toBe(labels.length) // no duplicate labels
     for (const label of labels) expect(label.length).toBeGreaterThan(2)
   })
@@ -167,6 +193,8 @@ describe('blank-form-model: OCR alignment contract', () => {
       religion: 'Religion',
       nationality: 'Nationality',
       className: 'Class Applying For',
+      section: 'Preferred Section',
+      aadhaarNo: 'Aadhaar Number',
       fatherName: "Father's Name",
       fatherOccupation: "Father's Occupation",
       fatherPhone: "Father's Mobile",
@@ -179,6 +207,7 @@ describe('blank-form-model: OCR alignment contract', () => {
       emergencyRelation: 'Relationship',
       emergencyPhone: 'Emergency Phone',
       currentAddress: 'Current Address',
+      permAddress: 'Permanent Address',
       city: 'City / Town',
       district: 'District',
       state: 'State',
@@ -188,7 +217,11 @@ describe('blank-form-model: OCR alignment contract', () => {
       previousYear: 'Previous Academic Year',
       previousBoard: 'Previous Board',
       previousMarks: 'Previous Marks',
-      aadhaarNo: 'Aadhaar Number',
+      transportRoute: 'Transport Route / Landmark',
+      allergies: 'Allergies',
+      doctorName: 'Family Doctor',
+      doctorPhone: 'Doctor Phone',
+      conditions: 'Medical Conditions',
     })
   })
 })

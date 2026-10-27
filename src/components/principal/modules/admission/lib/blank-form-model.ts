@@ -2,9 +2,16 @@
  * blank-form-model — the canonical, versioned model behind the official
  * blank ADMISSION APPLICATION FORM.
  *
- * ONE model drives BOTH artefacts:
+ * ONE model drives BOTH artefacts (kept visually consistent):
  *   · the real downloadable PDF  (lib/blank-form-pdf.ts)
  *   · the on-screen A4 preview    (AdmissionApplicationFormModal)
+ *
+ * ONE-PAGE CONTRACT (AF-2026.2): the form is a SINGLE A4 portrait sheet —
+ * school staff print/scan one page per applicant. Sections are re-lettered
+ * A–F (A student · B parent · C address & previous academic · D facilities
+ * & medical · E document checklist · F declaration); required fields carry
+ * a trailing asterisk, optional fields carry nothing — the words
+ * "(Required)" / "(Optional)" never print.
  *
  * Honesty rules (form contract):
  *   · School identity comes ONLY from the live tenant profile
@@ -35,8 +42,8 @@ import {
   type AdmissionDocumentPolicy,
 } from './documents'
 
-/** Stable form schema version — printed on every page footer. */
-export const BLANK_FORM_VERSION = 'AF-2026.1'
+/** Stable form schema version — printed on the form footer. */
+export const BLANK_FORM_VERSION = 'AF-2026.2'
 
 /** Tenant identity shape consumed by the model (structurally compatible
  * with lib/school-profile SchoolProfile — kept structural so this module
@@ -71,12 +78,13 @@ export interface BlankFormField {
   required?: boolean
   /** Small honest guidance under the label. */
   note?: string
-  /** 1 = half-width column, 2 = full width. Default 1. */
-  span?: 1 | 2
+  /** Layout width: 1 = half column (default), 2 = full row, 3 = third.
+   * Consecutive same-width fields pack onto one printed row. */
+  span?: 1 | 2 | 3
 }
 
 export interface BlankFormSection {
-  key: 'A' | 'B' | 'C' | 'D' | 'E'
+  key: 'A' | 'B' | 'C' | 'D' | 'E' | 'F'
   title: string
   fields: BlankFormField[]
 }
@@ -138,27 +146,8 @@ export function buildBlankFormModel(input: BuildBlankFormInput): BlankFormModel 
         { key: 'firstName', label: 'First Name', kind: 'line', required: true, span: 1 },
         { key: 'lastName', label: 'Last Name', kind: 'line', required: true, span: 1 },
         { key: 'dob', label: 'Date of Birth', kind: 'line', required: true, note: 'dd / mm / yyyy', span: 1 },
-        { key: 'gender', label: 'Gender', kind: 'checkbox', options: GENDERS, span: 1 },
         { key: 'bloodGroup', label: 'Blood Group', kind: 'line', span: 1 },
-        {
-          key: 'category',
-          label: 'Category',
-          kind: 'checkbox',
-          options: ADMISSION_CATEGORIES,
-          span: 2,
-        },
-        ...(aadhaarCollected
-          ? [
-              {
-                key: 'aadhaarNo',
-                label: 'Aadhaar Number',
-                kind: 'line',
-                // The form NEVER claims Aadhaar is legally required.
-                note: '(Optional)',
-                span: 2,
-              } as BlankFormField,
-            ]
-          : []),
+        { key: 'gender', label: 'Gender', kind: 'checkbox', options: GENDERS, span: 1 },
         { key: 'religion', label: 'Religion', kind: 'line', span: 1 },
         {
           key: 'nationality',
@@ -168,6 +157,26 @@ export function buildBlankFormModel(input: BuildBlankFormInput): BlankFormModel 
           span: 1,
         },
         { key: 'className', label: 'Class Applying For', kind: 'line', required: true, span: 1 },
+        { key: 'section', label: 'Preferred Section', kind: 'line', span: 1 },
+        ...(aadhaarCollected
+          ? [
+              {
+                key: 'aadhaarNo',
+                label: 'Aadhaar Number',
+                kind: 'line',
+                // The form NEVER claims Aadhaar is legally required — it is
+                // optional, so no asterisk and no printed qualifier.
+                span: 1,
+              } as BlankFormField,
+            ]
+          : []),
+        {
+          key: 'category',
+          label: 'Category',
+          kind: 'checkbox',
+          options: ADMISSION_CATEGORIES,
+          span: 2,
+        },
       ],
     },
     {
@@ -182,9 +191,9 @@ export function buildBlankFormModel(input: BuildBlankFormInput): BlankFormModel 
         { key: 'motherOccupation', label: "Mother's Occupation", kind: 'line', span: 1 },
         { key: 'motherPhone', label: "Mother's Mobile", kind: 'line', span: 1 },
         { key: 'motherEmail', label: "Mother's Email", kind: 'line', span: 1 },
-        { key: 'emergencyName', label: 'Emergency Contact Name', kind: 'line', span: 1 },
-        { key: 'emergencyRelation', label: 'Relationship', kind: 'line', span: 1 },
-        { key: 'emergencyPhone', label: 'Emergency Phone', kind: 'line', span: 2 },
+        { key: 'emergencyName', label: 'Emergency Contact Name', kind: 'line', span: 3 },
+        { key: 'emergencyRelation', label: 'Relationship', kind: 'line', span: 3 },
+        { key: 'emergencyPhone', label: 'Emergency Phone', kind: 'line', span: 3 },
       ],
     },
     {
@@ -192,6 +201,7 @@ export function buildBlankFormModel(input: BuildBlankFormInput): BlankFormModel 
       title: 'SECTION C — ADDRESS & PREVIOUS ACADEMIC RECORD',
       fields: [
         { key: 'currentAddress', label: 'Current Address', kind: 'line', required: true, span: 2 },
+        { key: 'permAddress', label: 'Permanent Address', kind: 'line', span: 2 },
         { key: 'city', label: 'City / Town', kind: 'line', span: 1 },
         { key: 'district', label: 'District', kind: 'line', span: 1 },
         { key: 'state', label: 'State', kind: 'line', span: 1 },
@@ -212,35 +222,56 @@ export function buildBlankFormModel(input: BuildBlankFormInput): BlankFormModel 
     },
   ]
 
-  // Section D — policy-driven document checklist (never a legal claim).
-  const documentSection: BlankFormSection = {
+  // Section D — facilities & medical (transport/hostel/medical are real
+  // wizard-collected fields; printed so the blank form mirrors intake).
+  const facilitiesSection: BlankFormSection = {
     key: 'D',
-    title: 'SECTION D — DOCUMENT CHECKLIST',
+    title: 'SECTION D — FACILITIES & MEDICAL DETAILS',
+    fields: [
+      { key: 'transportRequired', label: 'School Transport Facility', kind: 'checkbox', options: ['Yes', 'No'], span: 1 },
+      { key: 'transportRoute', label: 'Transport Route / Landmark', kind: 'line', span: 1 },
+      { key: 'hostelRequired', label: 'School Hostel Facility', kind: 'checkbox', options: ['Yes', 'No'], span: 1 },
+      { key: 'allergies', label: 'Allergies', kind: 'line', span: 1 },
+      { key: 'doctorName', label: 'Family Doctor', kind: 'line', span: 1 },
+      { key: 'doctorPhone', label: 'Doctor Phone', kind: 'line', span: 1 },
+      { key: 'conditions', label: 'Medical Conditions', kind: 'line', span: 2 },
+    ],
+  }
+
+  // Section E — policy-driven document checklist (never a legal claim).
+  // Required documents print with an asterisk; optional ones print bare —
+  // the words "(Required)" / "(Optional)" never appear on the form.
+  const documentSection: BlankFormSection = {
+    key: 'E',
+    title: 'SECTION E — DOCUMENT CHECKLIST',
     fields: documents.map(
       (d): BlankFormField => ({
         key: '',
         label: d.name,
         kind: 'checkbox',
         required: d.required,
-        note: d.required ? '(Required)' : '(Optional)',
-        span: 2,
+        span: 3,
       })
     ),
   }
 
-  // Section E — declaration & signatures (office-use block rendered by the
+  // Section F — declaration & signatures (office-use block rendered by the
   // PDF/HTML painters; the model carries the text only).
   const declarationSection: BlankFormSection = {
-    key: 'E',
-    title: 'SECTION E — DECLARATION & SIGNATURES',
+    key: 'F',
+    title: 'SECTION F — DECLARATION & SIGNATURES',
     fields: [],
   }
 
-  const allSections = [...sections, documentSection, declarationSection]
+  const allSections = [...sections, facilitiesSection, documentSection, declarationSection]
 
-  // OCR contract — every mappable printed label, key → label.
+  // OCR contract — every mappable printed label, key → label. Built from
+  // ALL field-carrying sections (A–E; F carries no fields — its text is
+  // painted directly). Labels are append-only: new fields may join, the
+  // existing labels never change.
   const ocrFieldLabels: Record<string, string> = {}
-  for (const section of sections) {
+  for (const section of allSections) {
+    if (section.key === 'F') continue
     for (const f of section.fields) {
       if (f.key && f.kind !== 'checkbox') ocrFieldLabels[f.key] = f.label
     }

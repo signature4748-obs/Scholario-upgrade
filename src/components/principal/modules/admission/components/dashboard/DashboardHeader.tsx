@@ -24,12 +24,10 @@ export function DashboardHeader({
   return (
     <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
       {/* Brief PART 1: NO duplicate page title — topbar already shows "Admissions".
-          Content begins directly with the one-line purpose + contextual summary. */}
+          NO generic purpose line — the WorkflowStrip directly below already tells
+          the end-to-end story. Content begins with the contextual summary. */}
       <div>
-        <p className="text-sm text-foreground">
-          Manage applications from form submission to enrollment.
-        </p>
-        <p className="text-xs text-muted-foreground mt-0.5">
+        <p className="text-xs text-muted-foreground">
           {total} applications · {inReview} pending review · {approved} ready for issuance
         </p>
       </div>

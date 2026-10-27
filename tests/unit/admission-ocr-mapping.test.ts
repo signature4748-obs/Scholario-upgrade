@@ -45,6 +45,7 @@ describe('admission-ocr-mapping: official-form label alignment (version contract
       fatherPhone: '9876543210',
       motherPhone: '9876501234',
       emergencyPhone: '9812345678',
+      doctorPhone: '9876567890',
       fatherEmail: 'father@example.com',
       motherEmail: 'mother@example.com',
       dob: '12/03/2015',

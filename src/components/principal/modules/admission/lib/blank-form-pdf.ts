@@ -4,19 +4,24 @@
  *
  * A genuine PDF drawn with jsPDF vector primitives (the same export
  * infrastructure as Examinations / Salary / the marks sheet) — NOT a
- * browser-print screenshot. Exact A4 portrait geometry, print-safe
- * margins, white background, near-black text, thin borders, a restrained
- * brand accent (tenant primary color, defaulting to neutral slate), page
- * numbers + school identity on every page, and automatic page-break
- * safety so content is never clipped or overlapped.
+ * browser-print screenshot.
  *
- * Layout contract (kept in sync with the on-screen preview):
- *   Page 1 — school letterhead (tenant identity only), form banner,
- *            form-number + date blanks, passport-photo box,
- *            Section A (student) + Section B (parent/guardian).
- *   Page 2 — Section C (address & previous academic record),
- *            Section D (policy-driven document checklist),
- *            Section E (declaration, signatures, office-use block).
+ * ONE-PAGE CONTRACT (AF-2026.2): the complete form fits ONE A4 portrait
+ * sheet (210 × 297 mm) — school staff print or scan a single page per
+ * applicant. The layout itself is compact (two-column field grid,
+ * third-width checklist, tightened letterhead and footer); no scaling
+ * trick, no removed fields. Sections:
+ *   A student · B parent/guardian · C address & previous academic ·
+ *   D facilities & medical · E document checklist · F declaration.
+ * Required fields print a trailing asterisk; optional fields print bare —
+ * the words "(Required)" / "(Optional)" never appear on the form. The
+ * footer carries the school identity + form version only (no page
+ * numbers: the artefact is one page by design).
+ *
+ * Safety valve: if a pathological tenant configuration (e.g. a future
+ * document registry larger than the current six) would overflow the
+ * sheet, the painter continues on a continuation page instead of
+ * clipping — content integrity always wins over page count.
  *
  * jsPDF standard fonts have no ₹/Devanagari glyphs — the form stays
  * English-only (same accepted convention as the other PDF exports).
@@ -29,15 +34,19 @@ import {
   type BlankFormField,
 } from './blank-form-model'
 
-/* ─── Geometry (A4 portrait, mm) ─────────────────────────────────────── */
+/* ─── Geometry (A4 portrait, mm) — tuned for the one-page contract ───── */
 const PAGE_W = 210
 const PAGE_H = 297
-const MARGIN = 14
-const CONTENT_W = PAGE_W - MARGIN * 2 // 182
-const GAP = 6
-const COL_W = (CONTENT_W - GAP) / 2 // 88
-const LABEL_W = 46
-const BOTTOM_LIMIT = PAGE_H - 22 // footer zone starts at 283
+const MARGIN = 9
+const CONTENT_W = PAGE_W - MARGIN * 2 // 192
+const GAP = 4
+const HALF = (CONTENT_W - GAP) / 2 // 94
+const THIRD = (CONTENT_W - 2 * GAP) / 3 // 61.33
+const ROW = 6.0 // compact field row height (≈4.7 mm writing line — hand-fill safe)
+const LABEL_BASE = 34 // aligned label column (grows for long labels)
+const BOTTOM_LIMIT = PAGE_H - 13 // content must end above 284
+const FOOTER_RULE_Y = PAGE_H - 10.2
+const FOOTER_TEXT_Y = PAGE_H - 7.5
 
 /* ─── Palette — white paper, near-black text, restrained accent ─────── */
 const INK = { r: 17, g: 24, b: 39 } // #111827
@@ -92,26 +101,26 @@ function ensureSpace(p: Painter, needed: number) {
 function addPage(p: Painter) {
   p.doc.addPage()
   p.page += 1
-  p.y = MARGIN + 8
+  p.y = MARGIN + 6
 
   const { doc, model } = p
-  // Mini header (continuation pages)
+  // Mini header (continuation pages — safety valve only)
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(10)
+  doc.setFontSize(9)
   setRgb(doc, INK)
   doc.text((model.school.name || 'Our School').slice(0, 70).toUpperCase(), MARGIN, p.y)
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(7.5)
+  doc.setFontSize(7)
   setRgb(doc, MUTED)
   doc.text(
-    `Admission Application Form${model.session ? ` · Academic Session ${model.session}` : ''}`,
+    `Admission Application Form${model.session ? ` · Academic Session ${model.session}` : ''} (continued)`,
     MARGIN,
-    p.y + 4.5,
+    p.y + 4,
   )
   setRgb(doc, RULE)
   doc.setLineWidth(0.3)
-  doc.line(MARGIN, p.y + 7, PAGE_W - MARGIN, p.y + 7)
-  p.y += 13
+  doc.line(MARGIN, p.y + 6, PAGE_W - MARGIN, p.y + 6)
+  p.y += 11
 }
 
 function setRgb(doc: jsPDF, c: { r: number; g: number; b: number }) {
@@ -124,113 +133,138 @@ function setDraw(doc: jsPDF, c: { r: number; g: number; b: number }) {
 
 function sectionBar(p: Painter, title: string) {
   const { doc } = p
-  ensureSpace(p, 14)
+  ensureSpace(p, 12)
   doc.setFillColor(PAPER_BAR.r, PAPER_BAR.g, PAPER_BAR.b)
-  doc.rect(MARGIN, p.y, CONTENT_W, 6.5, 'F')
+  doc.rect(MARGIN, p.y, CONTENT_W, 5, 'F')
   doc.setFillColor(p.accent.r, p.accent.g, p.accent.b)
-  doc.rect(MARGIN, p.y, 1.4, 6.5, 'F')
+  doc.rect(MARGIN, p.y, 1.2, 5, 'F')
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(8.5)
+  doc.setFontSize(7.5)
   setRgb(doc, INK)
-  doc.text(title, MARGIN + 4, p.y + 4.4)
-  p.y += 6.5 + 3.5
+  doc.text(title, MARGIN + 3.4, p.y + 3.55)
+  p.y += 6.2
 }
 
-/** One labelled ruled blank (half or full width). */
+/** Label width: aligned column, but long labels may grow (line ≥ 20 mm). */
+function labelWidth(doc: jsPDF, label: string, colW: number): number {
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(7)
+  const needed = doc.getTextWidth(label) + 2.5
+  return Math.min(Math.max(LABEL_BASE, needed), colW - 20)
+}
+
+/**
+ * One labelled ruled blank (half / third / full width).
+ * The label prints with a required asterisk when applicable; optional
+ * guidance (`note`) is printed INLINE inside the ruled line, muted —
+ * never as an extra row (the one-page contract).
+ */
 function lineField(p: Painter, f: BlankFormField, x: number, w: number) {
   const { doc } = p
   const label = f.label + (f.required ? ' *' : '')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(8)
+  const labelW = labelWidth(doc, label, w)
   setRgb(doc, INK)
-  const lines = doc.splitTextToSize(label, LABEL_W - 2)
-  doc.text(lines, x, p.y + 4)
+  doc.text(label, x, p.y + 3.7)
 
-  const lineX = x + LABEL_W
+  const lineX = x + labelW
   setDraw(doc, RULE)
   doc.setLineWidth(0.25)
-  doc.line(lineX, p.y + 5.5, x + w, p.y + 5.5)
+  doc.line(lineX, p.y + 4.9, x + w, p.y + 4.9)
 
   if (f.prefill) {
     doc.setFont('helvetica', 'normal')
+    doc.setFontSize(6.8)
     setRgb(doc, MUTED)
-    doc.text(f.prefill, lineX + 1.5, p.y + 4)
+    doc.text(f.prefill, lineX + 1.5, p.y + 3.7)
   }
   if (f.note) {
     doc.setFont('helvetica', 'italic')
-    doc.setFontSize(6.5)
+    doc.setFontSize(5.8)
     setRgb(doc, MUTED)
-    doc.text(f.note, x + LABEL_W + 2, p.y + 8.6)
+    doc.text(f.note, lineX + 1.5, p.y + 3.7)
   }
-  p.y += 9
+  p.y += ROW
 }
 
-/** Label + square checkboxes (e.g. Gender, Category, TC, documents). */
+/** Label + square checkboxes (e.g. Gender, Category, TC), single row. */
 function checkboxField(p: Painter, f: BlankFormField, x: number, w: number) {
   const { doc } = p
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(8)
-  setRgb(doc, INK)
   const label = f.label + (f.required ? ' *' : '')
-  const labelW = LABEL_W - 2
-  const lines = doc.splitTextToSize(label, labelW)
-  doc.text(lines, x, p.y + 4)
+  const labelW = labelWidth(doc, label, w)
+  setRgb(doc, INK)
+  doc.text(label, x, p.y + 3.7)
 
-  let cx = x + LABEL_W
-  let cy = p.y + 1.6
+  let cx = x + labelW
+  const cy = p.y + 1.5
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(7.5)
+  doc.setFontSize(6.8)
   setRgb(doc, INK)
   for (const opt of f.options || []) {
     setDraw(doc, RULE)
     doc.setLineWidth(0.25)
-    doc.rect(cx, cy, 3.4, 3.4)
-    doc.text(opt, cx + 4.6, p.y + 4.1)
-    cx += 4.6 + doc.getTextWidth(opt) + 5
-    if (cx > x + w - 14 && opt !== (f.options || []).at(-1)) {
+    doc.rect(cx, cy, 3.1, 3.1)
+    doc.text(opt, cx + 4.3, p.y + 3.7)
+    cx += 4.3 + doc.getTextWidth(opt) + 3.2
+    if (cx > x + w - 12 && opt !== (f.options || []).at(-1)) {
       // wrap options to a second visual row inside the same field row
-      p.y += 5.5
-      cx = x + LABEL_W
-      cy = p.y + 1.6
+      p.y += 4.4
+      cx = x + labelW
     }
   }
-  if (f.note) {
-    doc.setFont('helvetica', 'italic')
-    doc.setFontSize(6.5)
-    setRgb(doc, MUTED)
-    doc.text(f.note, x, p.y + 8.6)
-  }
-  p.y += 9
+  p.y += ROW
 }
 
-/** Render a section's fields in the 2-column grid with auto page-break. */
+/**
+ * Document-checklist row (Section E): a tick box followed by the
+ * document name; required documents carry the asterisk, optional ones
+ * print bare.
+ */
+function checklistField(p: Painter, f: BlankFormField, x: number, w: number) {
+  const { doc } = p
+  setDraw(doc, RULE)
+  doc.setLineWidth(0.25)
+  doc.rect(x, p.y + 1.5, 3.1, 3.1)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(6.8)
+  setRgb(doc, INK)
+  const label = f.label + (f.required ? ' *' : '')
+  doc.text(doc.splitTextToSize(label, w - 5).slice(0, 1), x + 4.6, p.y + 3.7)
+  p.y += ROW
+}
+
+/** Render a section's fields on the compact grid (2-col / 3-col packing). */
 function sectionFields(p: Painter, fields: BlankFormField[]) {
   let i = 0
   while (i < fields.length) {
     const f = fields[i]
-    if (f.span === 2) {
-      ensureSpace(p, 11)
-      if (f.kind === 'checkbox') checkboxField(p, f, MARGIN, CONTENT_W)
-      else lineField(p, f, MARGIN, CONTENT_W)
-      i += 1
-      continue
-    }
-    // Half-width field — pair it with the next half-width field on one row.
-    const g: BlankFormField | undefined = fields[i + 1]
-    ensureSpace(p, 11)
+    const colW = f.span === 3 ? THIRD : f.span === 2 ? CONTENT_W : HALF
+    const pack = f.span === 3 ? 3 : f.span === 2 ? 1 : 2
+
+    ensureSpace(p, ROW + 2)
     const yBefore = p.y
-    if (f.kind === 'checkbox') checkboxField(p, f, MARGIN, COL_W)
-    else lineField(p, f, MARGIN, COL_W)
-    if (g && g.span !== 2) {
-      // Right half renders on the SAME visual row (rewind cursor).
+    renderField(p, f, MARGIN, colW)
+    let taken = 1
+    while (taken < pack) {
+      const g = fields[i + taken]
+      if (!g || (g.span ?? 1) !== (f.span ?? 1)) break
       p.y = yBefore
-      if (g.kind === 'checkbox') checkboxField(p, g, MARGIN + COL_W + GAP, COL_W)
-      else lineField(p, g, MARGIN + COL_W + GAP, COL_W)
-      i += 2
-    } else {
-      i += 1
+      const gx = MARGIN + taken * (colW + GAP)
+      renderField(p, g, gx, colW)
+      taken += 1
     }
+    i += taken
   }
+}
+
+function renderField(p: Painter, f: BlankFormField, x: number, w: number) {
+  if (isChecklistEntry(p, f)) checklistField(p, f, x, w)
+  else if (f.kind === 'checkbox') checkboxField(p, f, x, w)
+  else lineField(p, f, x, w)
+}
+
+/** Section E entries render as tick-box checklist rows. */
+function isChecklistEntry(p: Painter, f: BlankFormField): boolean {
+  return p.model.sections.find((s) => s.key === 'E')?.fields.includes(f) === true
 }
 
 /* ─── Page furniture ─────────────────────────────────────────────────── */
@@ -241,7 +275,7 @@ function drawHeader(p: Painter) {
   const y0 = MARGIN
 
   // Logo box — tenant logo when available; otherwise an honest empty box.
-  const LOGO = 20
+  const LOGO = 15
   doc.setLineWidth(0.3)
   setDraw(doc, RULE)
   if (logoDataUrl) {
@@ -253,190 +287,198 @@ function drawHeader(p: Painter) {
   } else {
     doc.rect(MARGIN, y0, LOGO, LOGO)
     doc.setFont('helvetica', 'italic')
-    doc.setFontSize(6)
+    doc.setFontSize(5.5)
     setRgb(doc, MUTED)
     doc.text('School Logo', MARGIN + LOGO / 2, y0 + LOGO / 2 + 1, { align: 'center' })
   }
 
-  // Identity block — ONLY what the tenant actually configured.
-  let ty = y0 + 7
+  // Identity block — ONLY what the tenant actually configured, capped at
+  // the letterhead height (a very long identity never collides with the
+  // passport-photo box or the divider).
+  const ID_BOTTOM = y0 + 25
+  const idLines: Array<{ text: string; size: number; bold: boolean }> = []
+  const name = (school.name || 'Our School').toUpperCase()
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(13)
-  setRgb(doc, INK)
-  const nameLines = doc.splitTextToSize((school.name || 'Our School').toUpperCase(), 118)
-  doc.text(nameLines, MARGIN + LOGO + 6, ty)
-  ty += nameLines.length * 5.4
-  if (school.affiliation) {
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(8)
-    setRgb(doc, MUTED)
-    doc.text(school.affiliation, MARGIN + LOGO + 6, ty)
-    ty += 4
-  }
+  doc.setFontSize(11)
+  const nameLines = doc.splitTextToSize(name, 120).slice(0, 2) as string[]
+  for (const l of nameLines) idLines.push({ text: l, size: 11, bold: true })
+
+  const info: string[] = []
+  if (school.affiliation) info.push(school.affiliation)
   if (school.address) {
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(8)
-    setRgb(doc, MUTED)
     const addr = school.city ? `${school.address}, ${school.city}` : school.address
-    doc.text(doc.splitTextToSize(addr, 118), MARGIN + LOGO + 6, ty)
-    ty += 4
+    info.push(...(doc.splitTextToSize(addr, 120) as string[]))
   }
   const contact = [
     school.phone ? `Phone: ${school.phone}` : '',
     school.email || '',
-    school.website || '',
+    school.website ? school.website.replace(/^https?:\/\//, '') : '',
   ]
     .filter(Boolean)
-    .join('  ·  ')
-  if (contact) {
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(8)
-    setRgb(doc, MUTED)
-    doc.text(doc.splitTextToSize(contact, 118), MARGIN + LOGO + 6, ty)
+    .join(' · ')
+  if (contact) info.push(...(doc.splitTextToSize(contact, 120) as string[]))
+
+  // Name lines consume ~4.6 mm each; info lines 3.4 mm each.
+  let nameH = nameLines.length * 4.6
+  const infoBudget = Math.max(0, Math.floor((ID_BOTTOM - (y0 + 7) - nameH) / 3.4))
+  const infoShown = info.slice(0, infoBudget)
+
+  let ty = y0 + 6.8
+  for (const l of nameLines) {
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(11)
+    setRgb(doc, INK)
+    doc.text(l, MARGIN + LOGO + 5, ty)
+    ty += 4.6
+  }
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(6.4)
+  setRgb(doc, MUTED)
+  for (const l of infoShown) {
+    doc.text(l, MARGIN + LOGO + 5, ty)
+    ty += 3.4
   }
 
   // Passport photo box (right)
-  const PH_W = 25
-  const PH_H = 32
+  const PH_W = 20
+  const PH_H = 24
   const PH_X = PAGE_W - MARGIN - PH_W
   doc.setLineWidth(0.3)
   setDraw(doc, RULE)
-  doc.setLineDashPattern([1.4, 1.2], 0)
+  doc.setLineDashPattern([1.3, 1.1], 0)
   doc.rect(PH_X, y0, PH_W, PH_H)
   doc.setLineDashPattern([], 0)
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(6)
-  setRgb(doc, MUTED)
-  doc.text('AFFIX RECENT', PH_X + PH_W / 2, y0 + 12, { align: 'center' })
-  doc.text('PASSPORT-SIZE', PH_X + PH_W / 2, y0 + 15.5, { align: 'center' })
-  doc.text('PHOTOGRAPH', PH_X + PH_W / 2, y0 + 19, { align: 'center' })
-  doc.setFont('helvetica', 'italic')
   doc.setFontSize(5.5)
-  doc.text('(Self-attested)', PH_X + PH_W / 2, y0 + 23, { align: 'center' })
+  setRgb(doc, MUTED)
+  doc.text('AFFIX RECENT', PH_X + PH_W / 2, y0 + 8.8, { align: 'center' })
+  doc.text('PASSPORT-SIZE', PH_X + PH_W / 2, y0 + 11.9, { align: 'center' })
+  doc.text('PHOTOGRAPH', PH_X + PH_W / 2, y0 + 15, { align: 'center' })
+  doc.setFont('helvetica', 'italic')
+  doc.setFontSize(5)
+  doc.text('(Self-attested)', PH_X + PH_W / 2, y0 + 18.4, { align: 'center' })
 
   // Header divider
-  const hy = y0 + Math.max(LOGO + 4, PH_H + 4)
+  const hy = y0 + 26.5
   setDraw(doc, INK)
-  doc.setLineWidth(0.6)
+  doc.setLineWidth(0.55)
   doc.line(MARGIN, hy, PAGE_W - MARGIN, hy)
-  p.y = hy + 5
+  p.y = hy + 3.5
 
   // Banner — restrained brand accent
-  ensureSpace(p, 16)
   doc.setFillColor(p.accent.r, p.accent.g, p.accent.b)
-  doc.rect(MARGIN, p.y, CONTENT_W, 9, 'F')
+  doc.rect(MARGIN, p.y, CONTENT_W, 6.2, 'F')
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(9.5)
+  doc.setFontSize(8.5)
   doc.setTextColor(255, 255, 255)
   const banner =
     `ADMISSION APPLICATION FORM` +
     (model.session ? `  —  ACADEMIC SESSION ${model.session}` : '')
-  doc.text(banner, PAGE_W / 2, p.y + 6.1, { align: 'center' })
-  p.y += 13
+  doc.text(banner, PAGE_W / 2, p.y + 4.25, { align: 'center' })
+  p.y += 6.2 + 1.2
 
   // Form number + application date blanks (hand-filled by the office)
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(8)
+  doc.setFontSize(7)
   setRgb(doc, INK)
-  doc.text(`Form No: ${model.formNoPrefix} / ____________`, MARGIN, p.y + 4)
-  doc.text('Date: ________ / ________ / ____________', PAGE_W - MARGIN, p.y + 4, {
+  doc.text(`Form No: ${model.formNoPrefix} / ____________`, MARGIN, p.y + 3.4)
+  doc.text('Date: ________ / ________ / ____________', PAGE_W - MARGIN, p.y + 3.4, {
     align: 'right',
   })
-  p.y += 10
+  p.y += 5.2
 }
 
 function drawDeclarationAndSignatures(p: Painter) {
   const { doc, model } = p
 
-  sectionBar(p, model.sections[4].title)
+  sectionBar(p, model.sections[5].title)
 
   // Declaration text
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(7.8)
+  doc.setFontSize(6.6)
   setRgb(doc, INK)
-  const decl = doc.splitTextToSize(model.declaration.text, CONTENT_W - 4)
-  ensureSpace(p, decl.length * 3.8 + 40)
-  doc.text(decl, MARGIN + 2, p.y + 3.5)
-  p.y += decl.length * 3.8 + 5
+  const decl = doc.splitTextToSize(model.declaration.text, CONTENT_W - 3)
+  ensureSpace(p, decl.length * 3.0 + 30)
+  doc.text(decl, MARGIN + 1.5, p.y + 2.8)
+  p.y += decl.length * 3.0 + 1.6
 
   // Place / Date row
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(8)
-  doc.text('Place:', MARGIN, p.y + 4)
-  doc.text('Date:', MARGIN + 90, p.y + 4)
+  doc.setFontSize(6.8)
+  doc.text('Place:', MARGIN, p.y + 3.4)
+  doc.text('Date:', MARGIN + 70, p.y + 3.4)
   setDraw(doc, RULE)
   doc.setLineWidth(0.25)
-  doc.line(MARGIN + 14, p.y + 5.2, MARGIN + 80, p.y + 5.2)
-  doc.line(MARGIN + 100, p.y + 5.2, MARGIN + 166, p.y + 5.2)
-  p.y += 14
+  doc.line(MARGIN + 12, p.y + 4.4, MARGIN + 62, p.y + 4.4)
+  doc.line(MARGIN + 78, p.y + 4.4, MARGIN + 128, p.y + 4.4)
+  p.y += 5.0
 
   // Signature row — parent | office | principal
-  ensureSpace(p, 34)
-  const sigY = p.y + 22
-  const third = CONTENT_W / 3
+  ensureSpace(p, 13)
+  const sigY = p.y + 4.6
+  const colW = (CONTENT_W - 2 * GAP) / 3
   setDraw(doc, INK)
-  doc.setLineWidth(0.35)
-  const xs = [MARGIN, MARGIN + third, MARGIN + third * 2]
-  xs.forEach((x) => doc.line(x, sigY, x + third - 8, sigY))
+  doc.setLineWidth(0.3)
+  const xs = [MARGIN, MARGIN + colW + GAP, MARGIN + (colW + GAP) * 2]
+  xs.forEach((x) => doc.line(x, sigY, x + colW - 4, sigY))
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(7.5)
+  doc.setFontSize(6.3)
   setRgb(doc, INK)
-  doc.text(model.declaration.parentSignLabel, xs[0], sigY + 4.5)
-  doc.text(model.declaration.officeSignLabel, xs[1], sigY + 4.5)
-  doc.text(model.declaration.principalSignLabel, xs[2], sigY + 4.5)
+  doc.text(model.declaration.parentSignLabel, xs[0], sigY + 3.1)
+  doc.text(model.declaration.officeSignLabel, xs[1], sigY + 3.1)
+  doc.text(model.declaration.principalSignLabel, xs[2], sigY + 3.1)
   doc.setFont('helvetica', 'italic')
-  doc.setFontSize(6.5)
+  doc.setFontSize(5.6)
   setRgb(doc, MUTED)
-  doc.text('(with date)', xs[0], sigY + 8.5)
-  doc.text('Documents checked & verified', xs[1], sigY + 8.5)
+  doc.text('(with date)', xs[0], sigY + 5.9)
+  doc.text('Documents checked & verified', xs[1], sigY + 5.9)
   doc.text(
     model.school.principal ? model.school.principal : '(Signature & school seal)',
     xs[2],
-    sigY + 8.5,
+    sigY + 5.9,
   )
-  p.y = sigY + 15
+  p.y = sigY + 7.4
 }
 
 function drawOfficeUseBlock(p: Painter) {
   const { doc } = p
-  const boxH = 26
-  ensureSpace(p, boxH + 6)
+  const boxH = 9.8
+  ensureSpace(p, boxH + 4)
   setDraw(doc, RULE)
-  doc.setLineWidth(0.35)
+  doc.setLineWidth(0.3)
   doc.rect(MARGIN, p.y, CONTENT_W, boxH)
 
   // label chip
   doc.setFillColor(PAPER_BAR.r, PAPER_BAR.g, PAPER_BAR.b)
-  doc.rect(MARGIN, p.y, 34, 6, 'F')
+  doc.rect(MARGIN, p.y, 28, 4.4, 'F')
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(7)
+  doc.setFontSize(6)
   setRgb(doc, INK)
-  doc.text('OFFICE USE ONLY', MARGIN + 2, p.y + 4)
+  doc.text('OFFICE USE ONLY', MARGIN + 1.8, p.y + 3.1)
 
-  const row1Y = p.y + 12
-  doc.setFontSize(7.5)
-  doc.text('Application No.:', MARGIN + 3, row1Y)
-  doc.text('Date Received:', MARGIN + 92, row1Y)
+  const row1Y = p.y + 5.9
+  doc.setFontSize(6.3)
+  doc.text('Application No.:', MARGIN + 2, row1Y)
+  doc.text('Date Received:', MARGIN + 62, row1Y)
+  doc.text('Verified by:', MARGIN + 122, row1Y)
   setDraw(doc, RULE)
-  doc.setLineWidth(0.25)
-  doc.line(MARGIN + 34, row1Y + 1.2, MARGIN + 86, row1Y + 1.2)
-  doc.line(MARGIN + 119, row1Y + 1.2, MARGIN + 176, row1Y + 1.2)
+  doc.setLineWidth(0.2)
+  doc.line(MARGIN + 26, row1Y + 0.9, MARGIN + 56, row1Y + 0.9)
+  doc.line(MARGIN + 80, row1Y + 0.9, MARGIN + 116, row1Y + 0.9)
+  doc.line(MARGIN + 139, row1Y + 0.9, MARGIN + 188, row1Y + 0.9)
 
-  const row2Y = p.y + 20
-  doc.text('Verified by:', MARGIN + 3, row2Y)
-  doc.text('Principal Decision:', MARGIN + 92, row2Y)
-  doc.line(MARGIN + 26, row2Y + 1.2, MARGIN + 86, row2Y + 1.2)
-
+  const row2Y = p.y + 8.9
+  doc.text('Principal Decision:', MARGIN + 2, row2Y)
   // decision checkboxes
-  let dx = MARGIN + 128
-  const cy = row2Y - 3.4
+  let dx = MARGIN + 30
+  const cy = row2Y - 2.4
   doc.setFont('helvetica', 'normal')
   for (const opt of ['Granted', 'Deferred', 'Rejected']) {
-    doc.rect(dx, cy, 3.2, 3.2)
-    doc.text(opt, dx + 4.2, row2Y)
-    dx += 4.2 + doc.getTextWidth(opt) + 4
+    doc.rect(dx, cy, 2.9, 2.9)
+    doc.text(opt, dx + 3.9, row2Y)
+    dx += 3.9 + doc.getTextWidth(opt) + 3.4
   }
-  p.y += boxH + 4
+  p.y += boxH + 2.6
 }
 
 function drawFooters(p: Painter) {
@@ -445,19 +487,16 @@ function drawFooters(p: Painter) {
   const schoolLine = `${model.school.name || 'Our School'} · Admission Application Form`
   for (let i = 1; i <= total; i++) {
     doc.setPage(i)
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(6.5)
-    setRgb(doc, MUTED)
-    doc.text(doc.splitTextToSize(schoolLine, 120).slice(0, 1), MARGIN, PAGE_H - 8)
-    doc.text(
-      `Page ${i} of ${total} · Form version ${BLANK_FORM_VERSION}`,
-      PAGE_W - MARGIN,
-      PAGE_H - 8,
-      { align: 'right' },
-    )
     setDraw(doc, RULE)
     doc.setLineWidth(0.2)
-    doc.line(MARGIN, PAGE_H - 11, PAGE_W - MARGIN, PAGE_H - 11)
+    doc.line(MARGIN, FOOTER_RULE_Y, PAGE_W - MARGIN, FOOTER_RULE_Y)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(6)
+    setRgb(doc, MUTED)
+    doc.text(doc.splitTextToSize(schoolLine, 120).slice(0, 1), MARGIN, FOOTER_TEXT_Y)
+    doc.text(`Form version ${BLANK_FORM_VERSION}`, PAGE_W - MARGIN, FOOTER_TEXT_Y, {
+      align: 'right',
+    })
   }
 }
 
@@ -470,6 +509,9 @@ export interface RenderBlankFormOptions {
 
 /**
  * Render the blank admission form as a jsPDF document (A4 portrait).
+ * The default tenant configuration renders EXACTLY ONE page; the
+ * painter only spills to a continuation page if a pathological
+ * configuration would otherwise clip content.
  * Pure: safe in Node (unit tests) and in the browser.
  */
 export function renderBlankAdmissionFormPdf(
@@ -488,18 +530,17 @@ export function renderBlankAdmissionFormPdf(
 
   drawHeader(p)
 
-  // Page 1: Sections A + B
+  // Sections A → F flow on the single sheet (packing keeps every row tight)
   sectionBar(p, model.sections[0].title)
   sectionFields(p, model.sections[0].fields)
   sectionBar(p, model.sections[1].title)
   sectionFields(p, model.sections[1].fields)
-
-  // Page 2: Sections C, D, E
-  addPage(p)
   sectionBar(p, model.sections[2].title)
   sectionFields(p, model.sections[2].fields)
   sectionBar(p, model.sections[3].title)
   sectionFields(p, model.sections[3].fields)
+  sectionBar(p, model.sections[4].title)
+  sectionFields(p, model.sections[4].fields)
   drawDeclarationAndSignatures(p)
   drawOfficeUseBlock(p)
 

@@ -9,8 +9,7 @@ import { useDismissOnEscape } from '@/hooks/use-dismiss-on-escape'
 import { downloadBlankAdmissionFormPdf } from './admission/lib/blank-form-download'
 import { ApplicationFormPrintStyles } from './AdmissionApplicationFormModal/PrintStyles'
 import { ModalTopBar } from './AdmissionApplicationFormModal/ModalTopBar'
-import { ApplicationFormPage1 } from './AdmissionApplicationFormModal/Page1'
-import { ApplicationFormPage2 } from './AdmissionApplicationFormModal/Page2'
+import { ApplicationFormPage } from './AdmissionApplicationFormModal/ApplicationFormPage'
 import type { AdmissionApplicationFormModalProps } from './AdmissionApplicationFormModal/types'
 
 export function AdmissionApplicationFormModal({ open, onClose }: AdmissionApplicationFormModalProps) {
@@ -71,20 +70,13 @@ export function AdmissionApplicationFormModal({ open, onClose }: AdmissionApplic
         />
 
         {/* ====================================================================== */}
-        {/* A4 PRINTABLE FORM CONTAINER (PAGE 1 & PAGE 2)                           */}
+        {/* A4 PRINTABLE FORM — the COMPLETE form on ONE A4 portrait sheet (AF-2026.2) */}
         {/* ====================================================================== */}
         <div
           id="a4-application-form"
-          className="bg-white text-slate-900 p-6 sm:p-10 rounded-xl border border-slate-300 shadow-sm space-y-8 font-sans text-xs max-w-[210mm] mx-auto print:border-none print:shadow-none print:p-0 print:w-full print:max-w-none"
+          className="bg-white text-slate-900 rounded-xl border border-slate-300 shadow-sm font-sans w-[210mm] max-w-full mx-auto px-[9mm] pt-[6mm] pb-[4mm] print:border-none print:shadow-none print:rounded-none print:w-[210mm] print:max-w-none"
         >
-          {/* ==================== PAGE 1 ==================== */}
-          <ApplicationFormPage1 academicSession={academicSession} />
-
-          {/* PAGE BREAK FOR PRINTING */}
-          <div className="page-break my-8 border-b-2 border-dashed border-slate-300 no-print" />
-
-          {/* ==================== PAGE 2 ==================== */}
-          <ApplicationFormPage2 academicSession={academicSession} />
+          <ApplicationFormPage academicSession={academicSession} />
         </div>
       </motion.div>
     </div>
