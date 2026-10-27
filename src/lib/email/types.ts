@@ -34,6 +34,8 @@ export type TemplateId =
   | 'platform-password-reset'
   | 'platform-recovery-link'
   | 'platform-password-changed'
+  | 'school-password-reset'
+  | 'school-password-changed'
   | 'principal-invite'
 
 /** Props for 'admission-enquiry-received' (public form confirmation). */
@@ -88,6 +90,29 @@ export interface PlatformPasswordChangedEmailProps {
   adminName: string
 }
 
+/**
+ * Props for 'school-password-reset' (school Student & Staff account
+ * recovery — docs/SCHOOL_ACCOUNT_RECOVERY.md). Same token-hygiene
+ * contract as the platform reset: the raw single-use token exists ONLY
+ * inside the emailed link.
+ */
+export interface SchoolPasswordResetEmailProps {
+  /** User display name (from the User row; falls back to a neutral salutation). */
+  userName: string
+  /** The full reset link INCLUDING the raw single-use token. */
+  resetUrl: string
+  /** Minutes until the link expires (display only). */
+  expiresInMinutes: number
+  /** Requester IP for the security notice footer (display only). */
+  requestIp?: string
+}
+
+/** Props for 'school-password-changed' (post-reset confirmation). */
+export interface SchoolPasswordChangedEmailProps {
+  /** User display name (from the User row). */
+  userName: string
+}
+
 /** Props for 'principal-invite' (founding-principal credential delivery). */
 export interface PrincipalInviteEmailProps {
   /** Principal display name (from the provisioned User row). */
@@ -115,6 +140,8 @@ export type EmailTemplateProps =
   | PlatformPasswordResetEmailProps
   | PlatformRecoveryLinkEmailProps
   | PlatformPasswordChangedEmailProps
+  | SchoolPasswordResetEmailProps
+  | SchoolPasswordChangedEmailProps
   | PrincipalInviteEmailProps
 
 /**

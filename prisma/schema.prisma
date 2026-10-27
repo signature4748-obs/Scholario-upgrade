@@ -282,6 +282,7 @@ model User {
   student            Student?
   driver             Driver?
   sessions           Session[]
+  passwordResets     SchoolPasswordReset[]
   activityLogs       ActivityLog[]
   sentNotifications  Notification[]
   createdAssignments Assignment[]
@@ -1331,6 +1332,34 @@ model Session {
 
   // PHASE 3 — auth/me lists a user's sessions (userId lookup).
   @@index([userId])
+}
+
+/// SCHOOL-PLANE ACCOUNT RECOVERY — forgot-password tokens for school users
+/// (Student & Staff). Same security contract as PlatformPasswordReset
+/// (docs/PLATFORM_ACCOUNT_RECOVERY.md §1, mirrored in
+/// docs/SCHOOL_ACCOUNT_RECOVERY.md):
+///   · 32 crypto-random bytes (256 bits), hex; at rest ONLY sha256(token).
+///   · Single-use (usedAt) + 30-minute hard expiry (expiresAt).
+///   · ONE outstanding token per user — a new request supersedes the old.
+///   · The raw token exists exactly once: inside the emailed reset link.
+///   · Never logged; audit rows carry ids/counts only.
+model SchoolPasswordReset {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// sha256(token) hex — never the raw token.
+  tokenHash String   @unique
+  /// Set on consumption (single-use). Null = still pending (until expiry).
+  usedAt    DateTime?
+  /// Hard expiry (30 minutes from issuance). Expired rows are rejected.
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  /// Request context for the audit viewer (never the raw token).
+  requestIp String?
+  userAgent String?
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 /// SS-1 — server-persisted user preferences (Settings).

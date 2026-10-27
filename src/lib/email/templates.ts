@@ -126,6 +126,26 @@ const platformPasswordChangedPropsSchema = z.object({
   adminName: z.string().trim().min(1).max(200),
 })
 
+// SCHOOL-PLANE ACCOUNT RECOVERY — school Student & Staff reset link
+// (same token-hygiene contract: raw token only in the link).
+const schoolPasswordResetPropsSchema = z.object({
+  userName: z.string().trim().min(1).max(200),
+  resetUrl: z
+    .string()
+    .trim()
+    .min(16)
+    .max(2048)
+    .regex(/^https?:\/\//, 'resetUrl must be an absolute http(s) URL'),
+  expiresInMinutes: z.number().int().min(1).max(1440),
+  requestIp: z.string().trim().max(60).optional().default(''),
+})
+
+// SCHOOL-PLANE ACCOUNT RECOVERY — post-reset confirmation (no credentials,
+// no links — the reset already happened; this is the paper trail).
+const schoolPasswordChangedPropsSchema = z.object({
+  userName: z.string().trim().min(1).max(200),
+})
+
 // ─── shared branded wrapper ─────────────────────────────────────────────
 
 const PAGE_BG = '#f4f4f5' // neutral outer margin (monochrome gray)
@@ -371,6 +391,71 @@ function renderPlatformPasswordChanged(
   }
 }
 
+// ─── 'school-password-reset' (SCHOOL-PLANE ACCOUNT RECOVERY) ────────
+
+function renderSchoolPasswordReset(
+  props: z.infer<typeof schoolPasswordResetPropsSchema>,
+  branding: EmailBranding,
+): RenderedEmail {
+  const userName = escapeHtml(props.userName)
+  // The reset link: ONLY the href is the full URL; the display text is a
+  // neutral label (long hex tokens make ugly, wrap-breaking link text).
+  const resetHref = escapeHtml(props.resetUrl)
+  const minutes = escapeHtml(String(props.expiresInMinutes))
+  const requestIp = escapeHtml(props.requestIp)
+
+  const body = [
+    heading('Reset your school account password'),
+    paragraph(`Dear <strong>${userName}</strong>,`),
+    paragraph(
+      `A password reset was requested for your ${escapeHtml(branding.schoolName)} Scholario account. Use the button below to choose a new password.`,
+    ),
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px 0;"><tr><td style="background:${sanitizeColor(branding.primaryColor)};border-radius:8px;">` +
+      `<a href="${resetHref}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Reset your password</a>` +
+      `</td></tr></table>`,
+    paragraph(
+      `This link expires in <strong>${minutes} minutes</strong> and can be used only once. If you did not request a password reset, you can safely ignore this email — your current password keeps working.`,
+    ),
+    requestIp
+      ? paragraph(`Request originated from IP address <strong>${requestIp}</strong>.`)
+      : '',
+    paragraph(
+      'For your security: after the reset, every active session for this account is signed out automatically.',
+    ),
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  return {
+    subject: 'Reset your school account password',
+    html: brandedWrapper(branding, body),
+  }
+}
+
+// ─── 'school-password-changed' (SCHOOL-PLANE ACCOUNT RECOVERY) ──────
+
+function renderSchoolPasswordChanged(
+  props: z.infer<typeof schoolPasswordChangedPropsSchema>,
+  branding: EmailBranding,
+): RenderedEmail {
+  const userName = escapeHtml(props.userName)
+  const body = [
+    heading('Your school account password was changed'),
+    paragraph(`Dear <strong>${userName}</strong>,`),
+    paragraph(
+      `The password for your ${escapeHtml(branding.schoolName)} Scholario account was just changed through a verified recovery link. All active sessions for this account were signed out.`,
+    ),
+    paragraph(
+      'If this was you, no further action is needed — sign in with your new password. If this was NOT you, contact your school administrator immediately; every recovery and sign-in attempt is audited.',
+    ),
+  ].join('\n')
+
+  return {
+    subject: 'Your school account password was changed',
+    html: brandedWrapper(branding, body),
+  }
+}
+
 // ─── 'principal-invite' (founding principal credential delivery) ───────
 // PHASE 3 (school provisioning completion). The tempPassword prop is
 // only ever populated with a SERVER-GENERATED one-time bootstrap
@@ -513,6 +598,28 @@ export function renderTemplate(
         )
       }
       return renderPlatformPasswordChanged(parsed.data, branding)
+    }
+    case 'school-password-reset': {
+      const parsed = schoolPasswordResetPropsSchema.safeParse(props)
+      if (!parsed.success) {
+        throw new Error(
+          `invalid props for template 'school-password-reset': ${parsed.error.issues
+            .map((i) => `${i.path.join('.') || 'props'}: ${i.message}`)
+            .join('; ')}`,
+        )
+      }
+      return renderSchoolPasswordReset(parsed.data, branding)
+    }
+    case 'school-password-changed': {
+      const parsed = schoolPasswordChangedPropsSchema.safeParse(props)
+      if (!parsed.success) {
+        throw new Error(
+          `invalid props for template 'school-password-changed': ${parsed.error.issues
+            .map((i) => `${i.path.join('.') || 'props'}: ${i.message}`)
+            .join('; ')}`,
+        )
+      }
+      return renderSchoolPasswordChanged(parsed.data, branding)
     }
     case 'principal-invite': {
       const parsed = principalInvitePropsSchema.safeParse(props)

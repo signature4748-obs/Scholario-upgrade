@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, type ComponentType, type CSSProperties } from 'react'
+import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import Image from 'next/image'
 import { Eye, EyeOff, Info, AlertTriangle } from 'lucide-react'
@@ -169,16 +170,40 @@ export function LoginPage({
 }) {
   const school = useLoginSchoolBranding(tenantSlug)
   const { startAuth, endAuth, login } = useAuth()
+  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [phase, setPhase] = useState<'form' | 'loading'>('form')
-  const [forgotOpen, setForgotOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   // AUTH GATE — structured failure model (src/lib/auth-failure.ts):
   // server rejections carry a safe message + stable code + requestId;
   // transport failures classify as AUTH_NETWORK_UNAVAILABLE. Raw
   // browser fetch errors ("Load failed") are never displayed.
   const [failure, setFailure] = useState<AuthFailure | null>(null)
+
+  /**
+   * SCHOOL-PLANE ACCOUNT RECOVERY — the "Forgot password?" action now
+   * routes to the REAL self-service recovery flow
+   * (docs/SCHOOL_ACCOUNT_RECOVERY.md): /forgot-password issues a
+   * single-use emailed reset link (30-minute expiry, hashed at rest);
+   * /reset-password consumes it. The address the user already typed is
+   * carried over as a PREFILL (still editable), and the return door is
+   * carried as a validated `from` so "Back to sign in" lands on the
+   * SAME door the user came from (/s/<slug>/login, /login?tenant=slug
+   * or /login).
+   */
+  const handleForgotPassword = () => {
+    const params = new URLSearchParams()
+    if (email.trim()) params.set('email', email.trim().slice(0, 254))
+    const door = typeof window !== 'undefined' ? window.location.pathname : '/login'
+    const from = /^\/s\/[a-zA-Z0-9-]+\/login\/?$/.test(door)
+      ? door.replace(/\/+$/, '')
+      : tenantSlug && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(tenantSlug)
+        ? `/login?tenant=${encodeURIComponent(tenantSlug)}`
+        : '/login'
+    params.set('from', from)
+    router.push(`/forgot-password?${params.toString()}`)
+  }
 
   const handleLogin = async () => {
     // 1) Validate BEFORE any network work — a doomed request must never
@@ -373,7 +398,7 @@ export function LoginPage({
                 setFailure(null)
               }}
               onLogin={() => handleLogin()}
-              onForgotPassword={() => setForgotOpen(true)}
+              onForgotPassword={handleForgotPassword}
               providerCard={
                 <SupabaseAuthCard
                   plane="school"
@@ -389,10 +414,6 @@ export function LoginPage({
           </div>
         )}
       </AnimatePresence>
-
-      {forgotOpen && (
-        <ForgotPasswordModal onClose={() => setForgotOpen(false)} />
-      )}
     </div>
   )
 }
@@ -784,116 +805,5 @@ function RightPane({
         {providerCard}
       </div>
     </section>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/*  Forgot password modal                                              */
-/* ------------------------------------------------------------------ */
-
-function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
-  const [email, setEmail] = useState('')
-  const [sent, setSent] = useState(false)
-
-  // PIH-6 — Escape closes the dialog (keyboard-escape parity with the app's
-  // other dialogs; the QA sweep found this was the only one missing it).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ scale: 0.95, y: 10 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.95, y: 10 }}
-        transition={{ duration: 0.2 }}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Reset your password"
-        className="w-full max-w-md bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xl"
-      >
-        {sent ? (
-          <div className="text-center space-y-3">
-            <div className="mx-auto w-12 h-12 rounded-full school-brand-soft flex items-center justify-center">
-              <svg className="w-6 h-6 school-brand-text" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-            </div>
-            <h3 className="font-display text-xl font-bold text-slate-900">Contact your administrator</h3>
-            <p className="text-sm text-slate-600">
-              {/* PIH-4c — no reset-email backend exists; the modal tells the
-                  user the truth instead of promising a link that never comes. */}
-              Password resets are handled by your school administrator — please contact them to reset the password for <span className="font-semibold text-slate-900">{email}</span>.
-            </p>
-            <button
-              onClick={onClose}
-              style={{ backgroundColor: 'var(--school-primary, #0f766e)' }}
-              className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold text-white transition-all hover:brightness-110 focus-ring"
-            >
-              Got it
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-5">
-            <div>
-              <h3 className="font-display text-xl font-bold text-slate-900">Forgot your password?</h3>
-              <p className="text-sm text-slate-600 mt-1">
-                {/* PIH-4c — honest copy: no reset link can be emailed yet
-                    (no email backend). The email identifies the account when
-                    the user contacts their school administrator. */}
-                Enter your registered email, then contact your school administrator to complete the password reset.
-              </p>
-            </div>
-            <form
-              method="POST"
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (email) setSent(true)
-              }}
-              className="space-y-4"
-            >
-              <input
-                type="email"
-                required
-                autoFocus
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@school.edu"
-                aria-label="Registered email address"
-                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-[var(--school-primary)] focus:ring-1 focus:ring-[var(--school-primary)]"
-              />
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="flex-1 px-5 py-2.5 rounded-lg text-sm font-semibold text-slate-700 border border-slate-300 hover:bg-slate-50 transition-colors focus-ring"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  style={{ backgroundColor: 'var(--school-primary, #0f766e)' }}
-                  className="flex-1 px-5 py-2.5 rounded-lg text-sm font-semibold text-white transition-all hover:brightness-110 focus-ring"
-                >
-                  Continue
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-      </motion.div>
-    </motion.div>
   )
 }

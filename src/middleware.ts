@@ -189,7 +189,15 @@ export async function middleware(req: NextRequest) {
   const isApi = pathname.startsWith('/api/') || pathname.startsWith('/health/')
   const isPlatformApi = pathname.startsWith('/api/platform/')
   const isPlatformPage = pathname.startsWith('/platform')
-  const isSchoolDoorPage = pathname === '/login' || pathname.startsWith('/s/') || pathname === '/s'
+  const isSchoolDoorPage =
+    pathname === '/login' ||
+    pathname.startsWith('/s/') ||
+    pathname === '/s' ||
+    // SCHOOL-PLANE ACCOUNT RECOVERY — the anonymous recovery pages are
+    // school-plane surfaces: they must not render on the platform
+    // deployment (their APIs do not exist there either).
+    pathname === '/forgot-password' ||
+    pathname === '/reset-password'
 
   // ── Deployment-plane gate (two-project architecture) ────────────────
   // Route existence per plane. Runs BEFORE every other boundary —
@@ -323,5 +331,14 @@ export const config = {
   // '/' — included ONLY for the platform-plane root redirect (the
   // school/unified planes run their normal checks and fall through;
   // the school-root experience is untouched there).
-  matcher: ['/api/:path*', '/health/:path*', '/platform/:path*', '/s/:path*', '/login', '/'],
+  matcher: [
+    '/api/:path*',
+    '/health/:path*',
+    '/platform/:path*',
+    '/s/:path*',
+    '/login',
+    '/forgot-password',
+    '/reset-password',
+    '/',
+  ],
 }

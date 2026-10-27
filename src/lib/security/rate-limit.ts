@@ -158,6 +158,15 @@ export const RATE_LIMITS = {
   // (per-user): POST /api/students/[id]/reset-credential reissues an
   // expiring one-time credential (same posture as the teacher surface).
   studentCredentialReset: { name: 'student-credential-reset', limit: 20, windowMs: 60 * 60_000 },
+  // SCHOOL-PLANE ACCOUNT RECOVERY — anonymous public endpoints of the
+  // school forgot-password / reset-password surface (docs/SCHOOL_ACCOUNT_
+  // RECOVERY.md). Same posture as the platform plane's buckets.
+  /** Forgot-password requests per-IP (anonymous; anti-enumeration surface). */
+  schoolForgotPassword: { name: 'school-forgot-password', limit: 5, windowMs: 60 * 60_000 },
+  /** Forgot-password requests per submitted account key (mail-bombing brake). */
+  schoolForgotPasswordAccount: { name: 'school-forgot-password-account', limit: 3, windowMs: 60 * 60_000 },
+  /** Reset-password consume attempts per-IP (token guessing brake). */
+  schoolResetPassword: { name: 'school-reset-password', limit: 10, windowMs: 60 * 60_000 },
   // SUBSCRIPTION & ENTITLEMENT SYSTEM — activation-code claims (per-user,
   // anti-guessing posture: 5 attempts / 15 min; a second stricter per-IP
   // bucket is applied at the route). The per-user count NEVER resets on

@@ -72,6 +72,8 @@
 | Admission enquiry accepted | `admission-enquiry-received` | `POST /api/admissions/public` (best-effort; the public response never depends on email) |
 | Salary payment recorded | `salary-payment-recorded` | `POST /api/salary/payments` (receipt to the teacher) |
 | Platform password reset requested | `platform-password-reset` | `POST /api/platform/auth/forgot-password` + admin-assisted `/api/platform/admins/[id]/reset-password` + recovery-confirm execution (single-use link; anti-enumeration generic response; see `docs/PLATFORM_ACCOUNT_RECOVERY.md`) |
+| School password reset requested | `school-password-reset` | `POST /api/auth/forgot-password` (school Student & Staff self-service recovery; single-use hashed token; anti-enumeration generic response; see `docs/SCHOOL_ACCOUNT_RECOVERY.md`) |
+| School password changed | `school-password-changed` | `POST /api/auth/reset-password` completion notification (paper trail only — never credentials) |
 
 ## Custom sending domain (status + runbook)
 
