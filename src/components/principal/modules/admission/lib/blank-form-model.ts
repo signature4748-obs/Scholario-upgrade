@@ -43,7 +43,7 @@ import {
 } from './documents'
 
 /** Stable form schema version — printed on the form footer. */
-export const BLANK_FORM_VERSION = 'AF-2026.2'
+export const BLANK_FORM_VERSION = 'AF-2026.3'
 
 /** Tenant identity shape consumed by the model (structurally compatible
  * with lib/school-profile SchoolProfile — kept structural so this module

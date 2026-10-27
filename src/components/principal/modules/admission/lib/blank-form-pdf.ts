@@ -142,7 +142,9 @@ function sectionBar(p: Painter, title: string) {
   doc.setFontSize(7.5)
   setRgb(doc, INK)
   doc.text(title, MARGIN + 3.4, p.y + 3.55)
-  p.y += 6.2
+  // 5 mm bar + 0.8 mm trailing gap — tightened from 1.2 mm (AF-2026.3) to
+  // help fund the taller two-row office-use block; visually imperceptible.
+  p.y += 5.8
 }
 
 /** Label width: aligned column, but long labels may grow (line ≥ 20 mm). */
@@ -411,11 +413,15 @@ function drawDeclarationAndSignatures(p: Painter) {
   doc.setLineWidth(0.25)
   doc.line(MARGIN + 12, p.y + 4.4, MARGIN + 62, p.y + 4.4)
   doc.line(MARGIN + 78, p.y + 4.4, MARGIN + 128, p.y + 4.4)
-  p.y += 5.0
+  // 4.6 mm row (AF-2026.3, was 5.0) — line sits at +4.4, next block follows
+  // 0.2 mm later; the freed space funds the taller office-use block.
+  p.y += 4.6
 
   // Signature row — parent | office | principal
   ensureSpace(p, 13)
-  const sigY = p.y + 4.6
+  // 4.0 mm writing space above the signature rule (AF-2026.3, was 4.6) —
+  // still a comfortable signature gap; funds the two-row office block.
+  const sigY = p.y + 4.0
   const colW = (CONTENT_W - 2 * GAP) / 3
   setDraw(doc, INK)
   doc.setLineWidth(0.3)
@@ -440,9 +446,26 @@ function drawDeclarationAndSignatures(p: Painter) {
   p.y = sigY + 7.4
 }
 
+/**
+ * Office Use Only — TWO clearly separated rows inside one bordered box:
+ *
+ *   row 1 · Application No.: ______   Date Received: ______   Verified by: ______
+ *   row 2 · Principal Decision:  ☐ Granted   ☐ Deferred   ☐ Rejected
+ *
+ * Geometry contract (mm from the box top): the box is 14.6 tall — it
+ * deliberately uses the whitespace left at the sheet bottom so each row
+ * gets ≥ 1.8 mm of clearance from its neighbours. Row 1's writing lines
+ * sit at 8.6 (baseline 7.6); row 2's checkboxes span 10.4 → 13.3 — fully
+ * BELOW row 1's lines, so no checkbox can ever intrude into the
+ * Application No. / Date Received / Verified by ruled blanks (regression:
+ * the pre-AF-2026.3 9.8 mm box drew both rows 3 mm apart and the decision
+ * boxes crossed the first row's lines). The three decision checkboxes are
+ * evenly pitched (26 mm) with their labels, and the three label/line
+ * columns share one 64 mm grid so the box's interior aligns cleanly.
+ */
 function drawOfficeUseBlock(p: Painter) {
   const { doc } = p
-  const boxH = 9.8
+  const boxH = 14.6
   ensureSpace(p, boxH + 4)
   setDraw(doc, RULE)
   doc.setLineWidth(0.3)
@@ -456,28 +479,43 @@ function drawOfficeUseBlock(p: Painter) {
   setRgb(doc, INK)
   doc.text('OFFICE USE ONLY', MARGIN + 1.8, p.y + 3.1)
 
-  const row1Y = p.y + 5.9
+  // Row 1 — three label/writing-line columns on one 64 mm grid.
+  // Line start = measured label end + 2.5 (no label/line collision is
+  // possible at any Helvetica metric); line end = column end − 2.
+  const row1Y = p.y + 7.6
+  doc.setFont('helvetica', 'bold')
   doc.setFontSize(6.3)
-  doc.text('Application No.:', MARGIN + 2, row1Y)
-  doc.text('Date Received:', MARGIN + 62, row1Y)
-  doc.text('Verified by:', MARGIN + 122, row1Y)
+  setRgb(doc, INK)
+  const cols = [
+    { label: 'Application No.:', x: MARGIN + 2, lineEnd: MARGIN + 62 },
+    { label: 'Date Received:', x: MARGIN + 66, lineEnd: MARGIN + 126 },
+    { label: 'Verified by:', x: MARGIN + 130, lineEnd: MARGIN + 188 },
+  ]
   setDraw(doc, RULE)
   doc.setLineWidth(0.2)
-  doc.line(MARGIN + 26, row1Y + 0.9, MARGIN + 56, row1Y + 0.9)
-  doc.line(MARGIN + 80, row1Y + 0.9, MARGIN + 116, row1Y + 0.9)
-  doc.line(MARGIN + 139, row1Y + 0.9, MARGIN + 188, row1Y + 0.9)
+  for (const c of cols) {
+    doc.text(c.label, c.x, row1Y)
+    const lineStart = c.x + doc.getTextWidth(c.label) + 2.5
+    doc.line(lineStart, row1Y + 1.0, c.lineEnd, row1Y + 1.0)
+  }
 
-  const row2Y = p.y + 8.9
+  // Row 2 — decision checkboxes on their own row, evenly pitched,
+  // fully below row 1's ruled lines (box top 10.4 vs lines at 8.6).
+  const row2Y = p.y + 12.6
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.3)
+  setRgb(doc, INK)
   doc.text('Principal Decision:', MARGIN + 2, row2Y)
-  // decision checkboxes
-  let dx = MARGIN + 30
-  const cy = row2Y - 2.4
   doc.setFont('helvetica', 'normal')
-  for (const opt of ['Granted', 'Deferred', 'Rejected']) {
+  const DECISION_PITCH = 26
+  const cy = row2Y - 2.2
+  ;['Granted', 'Deferred', 'Rejected'].forEach((opt, i) => {
+    const dx = MARGIN + 32 + i * DECISION_PITCH
+    setDraw(doc, RULE)
+    doc.setLineWidth(0.25)
     doc.rect(dx, cy, 2.9, 2.9)
     doc.text(opt, dx + 3.9, row2Y)
-    dx += 3.9 + doc.getTextWidth(opt) + 3.4
-  }
+  })
   p.y += boxH + 2.6
 }
 

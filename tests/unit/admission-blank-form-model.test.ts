@@ -94,7 +94,7 @@ describe('blank-form-model: structure', () => {
   })
 
   test('version stamp is stable and printed on the artefact', () => {
-    expect(BLANK_FORM_VERSION).toBe('AF-2026.2')
+    expect(BLANK_FORM_VERSION).toBe('AF-2026.3')
     expect(model().version).toBe(BLANK_FORM_VERSION)
   })
 })

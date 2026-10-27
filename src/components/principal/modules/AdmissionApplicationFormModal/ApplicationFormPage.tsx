@@ -268,14 +268,20 @@ export function ApplicationFormPage({ academicSession }: { academicSession: stri
         </div>
       </div>
 
-      {/* Office-use block */}
-      <div className="relative border-[0.3mm] border-slate-600 px-[2mm] pt-[4.6mm] pb-[1.4mm] grid grid-cols-2 gap-x-[4mm] mt-[1mm]">
+      {/* Office-use block — mirrors blank-form-pdf.ts exactly: row 1 is the
+          three ruled office blanks (Application No. | Date Received |
+          Verified by) on one grid, row 2 is the Principal Decision
+          checkboxes. Two distinct rows — nothing overlaps. */}
+      <div className="relative border-[0.3mm] border-slate-600 px-[2mm] pt-[4.6mm] pb-[1.2mm] mt-[1mm]">
         <span className="absolute top-[0.8mm] left-[2mm] bg-slate-100 px-[1.6mm] py-[0.4mm] font-bold text-[6pt] text-slate-800">
           OFFICE USE ONLY
         </span>
-        <Line label="Application No.:" className="!h-[4.6mm]" />
-        <Line label="Date Received:" className="!h-[4.6mm]" />
-        <div className="flex items-center gap-[1.6mm] h-[4.4mm]">
+        <div className="grid grid-cols-3 gap-x-[4mm]">
+          <Line label="Application No.:" className="!h-[4.6mm]" />
+          <Line label="Date Received:" className="!h-[4.6mm]" />
+          <Line label="Verified by:" className="!h-[4.6mm]" />
+        </div>
+        <div className="flex items-center gap-[1.6mm] h-[4.6mm] mt-[0.8mm]">
           <span className="font-bold text-[6.9pt] whitespace-nowrap">Principal Decision:</span>
           <div className="flex items-center gap-[3mm]">
             {['Granted', 'Deferred', 'Rejected'].map((opt) => (
@@ -286,7 +292,6 @@ export function ApplicationFormPage({ academicSession }: { academicSession: stri
             ))}
           </div>
         </div>
-        <Line label="Verified by:" className="!h-[4.6mm]" />
       </div>
 
       {/* Single-page footer — form version only, NO page numbering */}

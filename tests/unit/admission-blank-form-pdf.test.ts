@@ -176,6 +176,109 @@ describe('blank-form-pdf: layout robustness (one page, never clipped)', () => {
   })
 })
 
+describe('blank-form-pdf: office-use block geometry (two distinct rows, no overlap)', () => {
+  const MM = 72 / 25.4 // pt per mm
+  const PAGE_H_PT = 297 * (72 / 25.4)
+
+  /** Text ops from the (uncompressed) content stream — y measured FROM THE PAGE TOP. */
+  function textOps(stream: string): Array<{ label: string; x: number; yTop: number }> {
+    const ops: Array<{ label: string; x: number; yTop: number }> = []
+    for (const m of stream.matchAll(/(-?[\d.]+) (-?[\d.]+) Td\s*\(([^)]*)\) Tj/g)) {
+      ops.push({ label: m[3], x: parseFloat(m[1]), yTop: PAGE_H_PT - parseFloat(m[2]) })
+    }
+    return ops
+  }
+
+  /** Rect ops — yTop = top edge measured FROM THE PAGE TOP. */
+  function rectOps(stream: string): Array<{ x: number; yTop: number; w: number; h: number }> {
+    const ops: Array<{ x: number; yTop: number; w: number; h: number }> = []
+    for (const m of stream.matchAll(/(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) re/g)) {
+      const x = parseFloat(m[1])
+      const y = parseFloat(m[2])
+      const w = Math.abs(parseFloat(m[3]))
+      const h = Math.abs(parseFloat(m[4]))
+      ops.push({ x, w, h, yTop: parseFloat(m[4]) < 0 ? PAGE_H_PT - y : PAGE_H_PT - y - h })
+    }
+    return ops
+  }
+
+  /** Straight line segments (m…l…S) — yTop measured FROM THE PAGE TOP. */
+  function lineOps(stream: string): Array<{ x1: number; x2: number; yTop: number }> {
+    const ops: Array<{ x1: number; x2: number; yTop: number }> = []
+    for (const m of stream.matchAll(/(-?[\d.]+) (-?[\d.]+) m\s+(-?[\d.]+) (-?[\d.]+) l\s*S/g)) {
+      const y = Math.min(parseFloat(m[2]), parseFloat(m[4]))
+      ops.push({ x1: parseFloat(m[1]), x2: parseFloat(m[3]), yTop: PAGE_H_PT - y })
+    }
+    return ops
+  }
+
+  test('office blanks share row 1; decision checkboxes sit on a lower row 2 and never touch row 1 lines', () => {
+    const doc = render()
+    // The office-use block is the LAST element painted — parse the FINAL
+    // page's stream only (doc.internal.pages is 1-indexed per-page op
+    // arrays) so ops from earlier pages can never be mistaken for it.
+    const pageOps = (doc.internal as unknown as { pages: string[][] }).pages[doc.getNumberOfPages()]
+    const stream = (pageOps as unknown as string[]).join('\n')
+    const texts = textOps(stream)
+    const at = (label: string) => {
+      const op = texts.find((t) => t.label === label)
+      expect(op, `text op "${label}" must be printed exactly once`).toBeDefined()
+      return op!
+    }
+    const appNo = at('Application No.:')
+    const dateRec = at('Date Received:')
+    const verified = at('Verified by:')
+    const decision = at('Principal Decision:')
+
+    // Row 1 — the three office blanks share ONE baseline (single row).
+    expect(Math.abs(dateRec.yTop - appNo.yTop)).toBeLessThan(0.2)
+    expect(Math.abs(verified.yTop - appNo.yTop)).toBeLessThan(0.2)
+
+    // Row 2 — Principal Decision baseline is ≥ 4.5 mm BELOW row 1: a clearly
+    // distinct row (the old overlapping layout had only 3.0 mm and the
+    // checkboxes crossed the row-1 lines).
+    expect(decision.yTop - appNo.yTop).toBeGreaterThan(4.5 * MM)
+
+    // The three decision checkboxes are the only 2.9 mm squares on the sheet
+    // (section checkboxes are 3.1 mm), on one shared row, evenly pitched.
+    const boxes = rectOps(stream)
+      .filter((r) => Math.abs(r.w - 2.9 * MM) < 0.2 && Math.abs(r.h - 2.9 * MM) < 0.2)
+      .sort((a, b) => a.x - b.x)
+    expect(boxes.length).toBe(3)
+    expect(Math.abs(boxes[1].yTop - boxes[0].yTop)).toBeLessThan(0.2)
+    expect(Math.abs(boxes[2].yTop - boxes[0].yTop)).toBeLessThan(0.2)
+    expect(Math.abs((boxes[1].x - boxes[0].x) / MM - 26)).toBeLessThan(1)
+    expect(Math.abs((boxes[2].x - boxes[1].x) / MM - 26)).toBeLessThan(1)
+
+    // The office-use box is the only 192 × 14.6 mm rect — everything above
+    // must live inside it.
+    const officeBox = rectOps(stream).find(
+      (r) => Math.abs(r.w - 192 * MM) < 1 && Math.abs(r.h - 14.6 * MM) < 1,
+    )
+    expect(officeBox, 'office-use bordered box must be present').toBeDefined()
+    const boxTop = officeBox!.yTop
+    for (const b of boxes) {
+      expect(b.yTop).toBeGreaterThan(boxTop)
+      expect(b.yTop + 2.9 * MM).toBeLessThan(boxTop + 14.6 * MM)
+    }
+
+    // NON-OVERLAP REGRESSION LOCK: the Application No. writing line (the
+    // ruled segment just below its label, inside the office box) must sit
+    // ≥ 1.5 mm ABOVE every decision checkbox top — no intrusion, ever.
+    const appNoLine = lineOps(stream).find(
+      (l) =>
+        l.yTop > boxTop + 5 * MM &&
+        l.yTop < boxTop + 11 * MM &&
+        Math.abs(l.yTop - (appNo.yTop + 1.0 * MM)) < 1.2 * MM &&
+        l.x1 < appNo.x + 40 * MM,
+    )
+    expect(appNoLine, 'Application No. writing line must be present in the office box').toBeDefined()
+    for (const b of boxes) {
+      expect(b.yTop - appNoLine!.yTop).toBeGreaterThan(1.5 * MM)
+    }
+  })
+})
+
 describe('blank-form-pdf: artefact naming', () => {
   test('file name is school- and session-scoped, slugified', () => {
     expect(blankFormFileName('Saraswati Vidya Mandir', '2026-2027')).toBe(
