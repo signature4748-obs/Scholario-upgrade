@@ -30,6 +30,11 @@
 // TESTABILITY: the SMTP send function is injectable — production
 // uses createNodemailerSendMail (nodemailer loaded lazily via
 // dynamic import so tests never load it); tests inject a stub.
+//
+// MULTIPART: when both html and text are provided (RenderedEmail
+// always carries both since the deliverability patch), nodemailer
+// composes multipart/alternative — text/plain preferred by text-only
+// clients, HTML for the rest. No extra headers are added.
 // ============================================================
 
 import { classifyProviderTransportError, formatProviderError } from '../provider-errors'
@@ -160,6 +165,10 @@ export async function gmailSmtpAttempt(
       to,
       subject: rendered.subject,
       html: rendered.html,
+      // Both parts → nodemailer emits multipart/alternative (text/plain
+      // alternative for text-only clients; same essential information
+      // as the HTML by renderer construction).
+      text: rendered.text,
     })
     if (info.rejected && info.rejected.length > 0) {
       return {

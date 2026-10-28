@@ -42,7 +42,7 @@ import { resolveProvider } from '@/lib/email'
 const RESEND_TESTING_403 =
   '{"message": "You can only send testing emails to your own email address (owner@example.com). To send emails to other recipients, please verify a domain at resend.com/domains, and change the `from` address to an email using this domain.", "name": "validation_error", "statusCode": 403}'
 
-const RENDERED = { subject: 'Test subject', html: '<p>Test body</p>' }
+const RENDERED = { subject: 'Test subject', html: '<p>Test body</p>', text: 'Test body' }
 
 const SAVED_ENV = {
   resendKey: process.env.RESEND_API_KEY,
@@ -190,6 +190,28 @@ describe('formatProviderError / parseErrorClass round-trip', () => {
 // ─── 4. Gmail SMTP adapter (injected stub — nodemailer never loads) ──────
 
 describe('gmailSmtpAttempt — Gmail SMTP adapter', () => {
+  test('forwards BOTH html and text to the transport (multipart/alternative ready)', async () => {
+    const captured: Array<Record<string, unknown>> = []
+    const sendMail: SmtpSendMail = async (options) => {
+      captured.push(options as unknown as Record<string, unknown>)
+      return { messageId: '<abc123@gmail.com>', response: '250 2.0.0 OK', rejected: [] }
+    }
+    const rendered = {
+      subject: 'Scholario | Reset your school account password',
+      html: '<p>Reset here</p>',
+      text: 'Open this link to choose a new password:\nhttps://scholario-app-virid.vercel.app/reset-password?token=abc',
+    }
+    const outcome = await gmailSmtpAttempt(sendMail, 'Scholario <t@example.test>', 'r@example.test', rendered)
+    expect(outcome.ok).toBe(true)
+    expect(captured.length).toBe(1)
+    expect(captured[0]?.subject).toBe(rendered.subject)
+    expect(captured[0]?.html).toBe(rendered.html)
+    expect(captured[0]?.text).toBe(rendered.text)
+    // The reset URL rides ONLY in the message parts — never in the envelope.
+    expect(String(captured[0]?.from)).toBe('Scholario <t@example.test>')
+    expect(String(captured[0]?.to)).toBe('r@example.test')
+  })
+
   test('250 response, no rejections → ok + messageId', async () => {
     const sendMail: SmtpSendMail = async () => ({
       messageId: '<abc123@gmail.com>',

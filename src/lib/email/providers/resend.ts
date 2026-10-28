@@ -45,7 +45,15 @@ export async function resendAttempt(
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ from, to, subject: rendered.subject, html: rendered.html }),
+      body: JSON.stringify({
+        from,
+        to,
+        subject: rendered.subject,
+        html: rendered.html,
+        // Plain-text alternative (multipart handling is Resend's job);
+        // same essential information as the HTML by renderer construction.
+        text: rendered.text,
+      }),
       signal: controller.signal,
     })
     if (res.ok) {

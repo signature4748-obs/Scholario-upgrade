@@ -133,11 +133,21 @@ email can reach real recipients without a verified domain:
   nodemailer is imported lazily server-side; timeouts (10 s connection /
   15 s socket) and the same bounded retry policy apply (auth failures
   permanent `[auth-invalid]`, network failures retried).
-- **Live delivery NOT yet verified** — no Gmail credentials exist in this
-  environment (only the owner can create the App Password). The adapter
-  is unit-tested with injected SMTP stubs; once the owner configures
-  credentials, `/api/platform/health/email` reports the provider active
-  and the first real trigger verifies end-to-end.
+- **Live delivery verified (2026-10-28)** — a real school-plane password
+  reset reached the recipient via Gmail SMTP (SPF/DKIM/DMARC all PASS in
+  the received headers; the recipient completed the reset through the
+  emailed link). First-contact mail from a consumer Gmail account can
+  still be classified as Spam by the recipient's filter — that is a
+  reputation/relationship judgment, not an authentication failure;
+  recipients should use "Not spam" / a `from:` filter for the sender.
+- **Multipart/alternative (deliverability patch, 2026-10-28)** — every
+  template renders BOTH `text/plain` and `text/html` from the same
+  validated props (`RenderedEmail.text`); the Gmail transport sends both
+  (nodemailer composes `multipart/alternative`), Resend receives the
+  `text` field as well. The two school-plane recovery subjects are
+  brand-anchored (`Scholario | Reset your school account password`,
+  `Scholario | Your school account password was changed`). Multipart is
+  a content-quality improvement, NOT a guaranteed inbox fix.
 
 ## Webhooks (delivery lifecycle — bounce/complaint/failure state sync)
 

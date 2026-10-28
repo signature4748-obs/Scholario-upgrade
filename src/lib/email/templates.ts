@@ -1,7 +1,13 @@
 // ============================================================
 // 8B-7-e — Central email infrastructure: TEMPLATES
 // ------------------------------------------------------------
-// renderTemplate(template, props, branding) → { subject, html }.
+// renderTemplate(template, props, branding) → { subject, html, text }.
+//
+// Each renderer authors BOTH representations (multipart/alternative)
+// from the same validated props: `html` is the branded wrapper; `text`
+// is the plain-text alternative carrying the same essential
+// information (facts, link URLs, notices) for text-only clients — see
+// textBlock below.
 //
 // Design rules (mission §7):
 //   · Plain-string HTML with a shared BRANDED WRAPPER — header (school
@@ -217,6 +223,31 @@ function bullet(text: string): string {
   return `<li style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:${TEXT_BODY};">${escapeHtml(text)}</li>`
 }
 
+// ─── text/plain composition (multipart/alternative) ─────────────────────
+
+/**
+ * The text/plain footer mirrors the branded wrapper's HTML footer.
+ */
+function textFooter(schoolName: string): string {
+  return `Sent by ${schoolName} via Scholario`
+}
+
+/**
+ * Compose a plain-text part from optional lines (false/'' entries are
+ * dropped, mirroring the HTML renderers' .filter(Boolean) pattern).
+ * Renderers interpolate the RAW zod-validated props — escapeHtml is an
+ * HTML-context concern; the text part must show literal values (a
+ * school named "A&B School" reads "A&B School" in text, not "A&amp;B").
+ * No HTML→text conversion heuristics: each renderer authors its text
+ * alongside its HTML from the same facts, so both representations carry
+ * the same essential information by construction.
+ */
+function textBlock(...lines: Array<string | false | undefined>): string {
+  return lines
+    .filter((line): line is string => typeof line === 'string' && line.length > 0)
+    .join('\n\n')
+}
+
 // ─── 'admission-enquiry-received' ───────────────────────────────────────
 
 function renderAdmissionEnquiry(
@@ -256,9 +287,28 @@ function renderAdmissionEnquiry(
     .filter(Boolean)
     .join('\n')
 
+  const text = textBlock(
+    'We received your admission enquiry',
+    `Dear Parent / Guardian of ${props.studentName},`,
+    `Thank you for reaching out to ${branding.schoolName}. Your admission enquiry for ${props.studentName} has been received and is now with our admissions team.`,
+    props.grade
+      ? `The enquiry is for admission to ${props.grade}.`
+      : 'The grade requested will be confirmed by our admissions team when they contact you.',
+    'Here is what happens next:',
+    '- Our admissions team reviews every enquiry carefully.',
+    props.contactEmail
+      ? '- We will contact you at this email address and at the phone number you provided.'
+      : '- We will contact you at the phone number you provided.',
+    '- Please keep your reference id handy when you get in touch — it helps us find your enquiry immediately.',
+    props.referenceId ? `Your reference id: ${props.referenceId}` : '',
+    'We look forward to welcoming you to our school community.',
+    textFooter(branding.schoolName),
+  )
+
   return {
     subject: `We received your admission enquiry — ${schoolName}`,
     html: brandedWrapper(branding, body),
+    text,
   }
 }
 
@@ -284,9 +334,19 @@ function renderSalaryPayment(
     ),
   ].join('\n')
 
+  const text = textBlock(
+    `Salary payment recorded for ${props.month}`,
+    `Dear ${props.teacherName},`,
+    `This email confirms that your fixed monthly salary payment for ${props.month} has been recorded by ${branding.schoolName}.`,
+    `Recorded amount: ₹${props.amount}`,
+    'This is a confirmation of the salary payment entry. If you have any questions about this payment, please contact the school office.',
+    textFooter(branding.schoolName),
+  )
+
   return {
     subject: `Salary recorded for ${props.month} — ${branding.schoolName}`,
     html: brandedWrapper(branding, body),
+    text,
   }
 }
 
@@ -325,9 +385,21 @@ function renderPlatformPasswordReset(
     .filter(Boolean)
     .join('\n')
 
+  const text = textBlock(
+    'Reset your Scholario platform password',
+    `Dear ${props.adminName},`,
+    'A password reset was requested for your Scholario platform administrator account. Open the link below to choose a new password:',
+    props.resetUrl,
+    `This link expires in ${props.expiresInMinutes} minutes and can be used only once. If you did not request a password reset, you can safely ignore this email — your current password keeps working.`,
+    props.requestIp ? `Request originated from IP address ${props.requestIp}.` : '',
+    'For your security: after the reset, every active platform session for this account is signed out automatically.',
+    textFooter(branding.schoolName),
+  )
+
   return {
     subject: 'Reset your Scholario platform password',
     html: brandedWrapper(branding, body),
+    text,
   }
 }
 
@@ -361,9 +433,21 @@ function renderPlatformRecoveryLink(
     ),
   ].join('\n')
 
+  const text = textBlock(
+    'Recover your Scholario platform account',
+    `Dear ${props.adminName},`,
+    'A platform account recovery was initiated for the Scholario control plane through the audited operator procedure. This email was sent to the address designated to become the account identity.',
+    'Opening the link below lets you choose a new password. Completing the form also verifies this email address and sets it as the administrator account identity for future sign-ins and account recovery.',
+    props.resetUrl,
+    `This link expires in ${props.expiresInMinutes} minutes and can be used only once. If you did not expect this recovery email, do not open the link — nothing changes on the account until the link is used.`,
+    'For your security: after the reset, every active platform session for this account is signed out automatically.',
+    textFooter(branding.schoolName),
+  )
+
   return {
     subject: 'Verify your email and recover your Scholario platform account',
     html: brandedWrapper(branding, body),
+    text,
   }
 }
 
@@ -385,9 +469,18 @@ function renderPlatformPasswordChanged(
     ),
   ].join('\n')
 
+  const text = textBlock(
+    'Your Scholario platform password was changed',
+    `Dear ${props.adminName},`,
+    'The password for your Scholario platform administrator account was just changed through a verified recovery link. All active platform sessions for this account were signed out.',
+    'If this was you, no further action is needed — sign in with your new password. If this was NOT you, contact your platform operator immediately; every recovery and sign-in attempt is audited.',
+    textFooter(branding.schoolName),
+  )
+
   return {
     subject: 'Your Scholario platform password was changed',
     html: brandedWrapper(branding, body),
+    text,
   }
 }
 
@@ -426,9 +519,25 @@ function renderSchoolPasswordReset(
     .filter(Boolean)
     .join('\n')
 
+  const text = textBlock(
+    'Reset your school account password',
+    `Dear ${props.userName},`,
+    `A password reset was requested for your ${branding.schoolName} Scholario account. Open the link below to choose a new password:`,
+    props.resetUrl,
+    `This link expires in ${props.expiresInMinutes} minutes and can be used only once. If you did not request a password reset, you can safely ignore this email — your current password keeps working.`,
+    props.requestIp ? `Request originated from IP address ${props.requestIp}.` : '',
+    'For your security: after the reset, every active session for this account is signed out automatically.',
+    textFooter(branding.schoolName),
+  )
+
   return {
-    subject: 'Reset your school account password',
+    // DELIVERABILITY: the two school-plane recovery subjects were the only
+    // brand-less subjects in the set (every other template already carries
+    // 'Scholario' or the school name) — a brand-anchored subject aligns
+    // the inbox preview with the From display name.
+    subject: 'Scholario | Reset your school account password',
     html: brandedWrapper(branding, body),
+    text,
   }
 }
 
@@ -450,9 +559,19 @@ function renderSchoolPasswordChanged(
     ),
   ].join('\n')
 
+  const text = textBlock(
+    'Your school account password was changed',
+    `Dear ${props.userName},`,
+    `The password for your ${branding.schoolName} Scholario account was just changed through a verified recovery link. All active sessions for this account were signed out.`,
+    'If this was you, no further action is needed — sign in with your new password. If this was NOT you, contact your school administrator immediately; every recovery and sign-in attempt is audited.',
+    textFooter(branding.schoolName),
+  )
+
   return {
-    subject: 'Your school account password was changed',
+    // DELIVERABILITY: brand-anchored subject (see renderSchoolPasswordReset).
+    subject: 'Scholario | Your school account password was changed',
     html: brandedWrapper(branding, body),
+    text,
   }
 }
 
@@ -519,9 +638,26 @@ function renderPrincipalInvite(
     .filter(Boolean)
     .join('\n')
 
+  const text = textBlock(
+    'Your principal account is ready',
+    `Dear ${props.principalName},`,
+    `A Scholario workspace has been created for ${props.schoolName}, and you are its founding principal. Sign in at:`,
+    props.loginUrl,
+    props.tempPassword ? `Your one-time sign-in password is: ${props.tempPassword}` : '',
+    props.tempPassword
+      ? 'This password is a one-time bootstrap credential — you will be asked to choose your own password the first time you sign in (this is enforced and cannot be skipped).'
+      : 'Your one-time sign-in password will be shared with you separately by the platform team. You will be asked to choose your own password the first time you sign in.',
+    props.pendingActivation
+      ? 'Your school is still being activated by the platform — if sign-in does not work yet, try again shortly.'
+      : '',
+    'If you were not expecting this email, you can safely ignore it — no account is accessible without the one-time password.',
+    textFooter(branding.schoolName),
+  )
+
   return {
     subject: `Your Scholario principal account — ${branding.schoolName}`,
     html: brandedWrapper(branding, body),
+    text,
   }
 }
 

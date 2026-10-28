@@ -159,10 +159,22 @@ export interface EmailBranding {
   logoUrl?: string
 }
 
-/** One fully-rendered email ready for a transport. */
+/**
+ * One fully-rendered email ready for a transport.
+ *
+ * DELIVERABILITY (multipart/alternative): `text` is the plain-text
+ * alternative for the SAME message — composed by each renderer from
+ * the same validated props as the HTML (never converted from the HTML,
+ * so no escaping artifacts). Transports that support alternatives
+ * (nodemailer with text+html → multipart/alternative; Resend `text`
+ * field) send BOTH parts; text-only clients lose no essential
+ * information. Required (not optional) so the compiler forces every
+ * new template to ship both representations.
+ */
 export interface RenderedEmail {
   subject: string
   html: string
+  text: string
 }
 
 /**

@@ -313,6 +313,12 @@ describe('email infrastructure — resend transport (stubbed fetch)', () => {
     expect(body.from).toBe('Scholario <onboarding@resend.dev>') // EMAIL_FROM unset → default
     expect(String(body.subject)).toContain('admission enquiry')
     expect(String(body.html)).toContain('Aarav Sharma')
+    // Multipart: the plain-text alternative rides the SAME payload (Resend
+    // composes the MIME; both parts carry the same facts by renderer
+    // construction) and contains no markup.
+    expect(typeof body.text).toBe('string')
+    expect(String(body.text)).toContain('Aarav Sharma')
+    expect(String(body.text)).not.toContain('<')
 
     const row = await db.emailDelivery.findUnique({ where: { dedupeKey: key } })
     expect(row?.status).toBe('QUEUED')
