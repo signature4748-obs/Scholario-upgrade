@@ -18,6 +18,20 @@ export const runtime = 'nodejs'
  * session can never satisfy it either (third, disjoint token space).
  *
  * Read-only by construction: this route family exposes GETs only.
+ *
+ * 2026-10-28 redesign — the payload is organized for TROUBLESHOOTING,
+ * not a school overview duplicate:
+ *   · context      — identity, stated issue, window (existing fields)
+ *   · diagnostics  · fees: failed-payment evidence (count + recent
+ *                    failed rows with record references) for "fee
+ *                    ledger discrepancy" investigations; collected
+ *                    totals for parity context
+ *                  · signIns: the tenant's live sessions + most recent
+ *                    sign-ins with device/IP for "can't sign in /
+ *                    session issues" investigations
+ *   · activity     — the tenant's own journal (last 20) — the evidence
+ *                    source for "failed operations / missing records"
+ *   · counts       — record totals (missing-records checks)
  */
 export async function GET() {
   return api(async () => {
@@ -46,33 +60,53 @@ export async function GET() {
     }
 
     const { support, school } = auth
-    const [counts, finance, recentActivity, activeSessions, announcements] = await Promise.all([
-      db.school.findUnique({
-        where: { id: school.id },
-        select: {
-          _count: { select: { users: true, students: true, teachers: true, classes: true, subjects: true, exams: true } },
-        },
-      }),
-      db.payment.aggregate({
-        where: { schoolId: school.id, status: 'SUCCESS' },
-        _sum: { amount: true },
-        _count: true,
-      }),
-      db.activityLog.findMany({
-        where: { schoolId: school.id },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      }),
-      db.session.count({
-        where: { user: { schoolId: school.id }, expiresAt: { gt: new Date() } },
-      }),
-      db.platformAnnouncement.findMany({
-        where: { OR: [{ audience: 'ALL' }, { audience: 'SCHOOLS' }], expiresAt: { gt: new Date() } },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-      }),
-    ])
+    const [counts, finance, failedPayments, recentSignIns, recentActivity, activeSessions] =
+      await Promise.all([
+        db.school.findUnique({
+          where: { id: school.id },
+          select: {
+            _count: { select: { users: true, students: true, teachers: true, classes: true, subjects: true, exams: true } },
+          },
+        }),
+        db.payment.aggregate({
+          where: { schoolId: school.id, status: 'SUCCESS' },
+          _sum: { amount: true },
+          _count: true,
+        }),
+        db.payment.findMany({
+          where: { schoolId: school.id, status: { not: 'SUCCESS' } },
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: {
+            id: true,
+            amount: true,
+            method: true,
+            status: true,
+            transactionId: true,
+            note: true,
+            feeId: true,
+            createdAt: true,
+          },
+        }),
+        db.session.findMany({
+          where: { user: { schoolId: school.id } },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          include: {
+            user: { select: { id: true, name: true, role: true } },
+          },
+        }),
+        db.activityLog.findMany({
+          where: { schoolId: school.id },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        }),
+        db.session.count({
+          where: { user: { schoolId: school.id }, expiresAt: { gt: new Date() } },
+        }),
+      ])
 
+    const now = Date.now()
     return {
       supportSession: {
         id: support.id,
@@ -90,22 +124,40 @@ export async function GET() {
         status: school.status,
       },
       counts: counts?._count ?? {},
-      finance: {
-        successfulPayments: finance._count,
-        collectedTotal: num(finance._sum.amount),
+      diagnostics: {
+        fees: {
+          successfulPayments: finance._count,
+          collectedTotal: num(finance._sum.amount),
+          failedRecent: failedPayments.map((p) => ({
+            id: p.id,
+            amount: num(p.amount),
+            method: p.method,
+            status: p.status,
+            transactionId: p.transactionId,
+            note: p.note,
+            feeId: p.feeId,
+            at: p.createdAt.toISOString(),
+          })),
+        },
+        signIns: {
+          activeCount: activeSessions,
+          recent: recentSignIns.map((s) => ({
+            id: s.id,
+            userName: s.user.name,
+            userRole: s.user.role,
+            createdAt: s.createdAt.toISOString(),
+            expiresAt: s.expiresAt.toISOString(),
+            live: s.expiresAt.getTime() > now,
+            userAgent: s.userAgent,
+            ipAddress: s.ipAddress,
+          })),
+        },
       },
       recentActivity: recentActivity.map((a) => ({
         id: a.id,
         action: a.action,
         detail: a.detail,
         at: a.createdAt.toISOString(),
-      })),
-      activeSchoolSessions: activeSessions,
-      announcements: announcements.map((a) => ({
-        id: a.id,
-        title: a.title,
-        level: a.level,
-        createdAt: a.createdAt.toISOString(),
       })),
     }
   })

@@ -26,18 +26,22 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { auditMetaEntries } from '@/lib/platform/audit-format'
 
 interface AuditEvent {
   id: string
   at: string
   action: string
-  admin: { id: string; name: string } | null
+  admin: { id: string; name: string; email: string | null } | null
   targetType: string | null
   targetId: string | null
   schoolId: string | null
   reason: string | null
-  metadata: string | null
+  /** Parsed metadata object (corrupt blobs → null) — rendered with
+   * labeled fields via the shared audit-format vocabulary. */
+  metadata: Record<string, unknown> | null
   ip: string | null
+  requestId: string | null
 }
 
 interface AuditPage {
@@ -97,14 +101,26 @@ function ActionBadge({ action }: { action: string }) {
   )
 }
 
-/** Pretty-print the metadata JSON blob (corrupt blob → raw string). */
-function formatMetadata(raw: string): string {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return JSON.stringify(parsed, null, 2)
-  } catch {
-    return raw
+/** Labeled metadata fields (shared vocabulary — no raw JSON dumps,
+ *  no numeric-index chips). */
+function MetadataFields({ metadata }: { metadata: Record<string, unknown> | null }) {
+  const entries = auditMetaEntries(metadata)
+  if (entries.length === 0) {
+    return <p className="p-3 text-[11px] text-slate-400">(no parsable metadata)</p>
   }
+  return (
+    <dl className="flex flex-wrap gap-1.5 p-3">
+      {entries.map((m) => (
+        <span
+          key={m.key}
+          className="rounded border border-slate-200 bg-white px-1.5 py-px text-[11px] text-slate-600"
+          title={`${m.label}: ${m.value}`}
+        >
+          <span className="font-semibold text-slate-500">{m.label}:</span> {m.value}
+        </span>
+      ))}
+    </dl>
+  )
 }
 
 function when(iso: string): string {
@@ -375,9 +391,12 @@ export function AuditModule() {
                       {open && ev.metadata && (
                         <TableRow className="border-slate-200 hover:bg-transparent">
                           <TableCell colSpan={6} className="bg-slate-50">
-                            <pre className="max-h-64 overflow-auto custom-scrollbar rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700 font-mono">
-                              {formatMetadata(ev.metadata)}
-                            </pre>
+                            <MetadataFields metadata={ev.metadata} />
+                            {ev.requestId && (
+                              <p className="px-3 pb-2 font-mono text-[10px] text-slate-400" title={ev.requestId}>
+                                request id: {ev.requestId}
+                              </p>
+                            )}
                           </TableCell>
                         </TableRow>
                       )}
@@ -455,9 +474,14 @@ export function AuditModule() {
                     </Button>
                   )}
                   {open && ev.metadata && (
-                    <pre className="max-h-56 overflow-auto custom-scrollbar rounded-lg border border-slate-200 bg-slate-50 p-3 text-[10px] leading-relaxed text-slate-700 font-mono">
-                      {formatMetadata(ev.metadata)}
-                    </pre>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50">
+                      <MetadataFields metadata={ev.metadata} />
+                      {ev.requestId && (
+                        <p className="px-3 pb-2 font-mono text-[10px] text-slate-400" title={ev.requestId}>
+                          request id: {ev.requestId}
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               )

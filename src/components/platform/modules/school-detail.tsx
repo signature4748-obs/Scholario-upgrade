@@ -70,8 +70,11 @@ import { SchoolSubscriptionTab } from './school-subscription'
 import { SchoolIdentityRequestsTab } from './school-identity-requests'
 import { SchoolPaymentGatewayTab } from './school-payment-gateway'
 import { SchoolUsersTab } from './school-users'
-import { SchoolSupportTab } from './school-support'
-import { SchoolAuditTab } from './school-audit'
+// 2026-10-28 Support & audit redesign — the two stacked modules
+// (school-support + school-audit) were replaced by ONE task-focused
+// surface: compact header + support sessions + live school-user
+// sessions + the authoritative audit history.
+import { SupportAuditTab } from './support-audit'
 import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
 import { saveSupportToken } from '@/lib/platform-session-token'
 import { Button } from '@/components/ui/button'
@@ -2750,28 +2753,22 @@ export function SchoolDetailModule() {
         )}
 
         {/* ── §7 Support & audit group (support.access / audit.read —
-            §9) — the oversight surfaces merged as titled sub-sections
-            ── */}
+            §9) — 2026-10-28 redesign: ONE task-focused surface (compact
+            header, support sessions, live school-user sessions, the
+            authoritative audit history) instead of two stacked lists.
+            Deep-link anchors preserved: #section-support /
+            #section-audit (legacy ?tab=support|audit) ── */}
         {(canSupport || canAudit) && (
           <TabsContent value="support" className="space-y-8 sm:space-y-10">
-            {canSupport && (
-              <GroupSection
-                id={SUBSECTION_IDS.support}
-                title="Support sessions"
-                description="Time-boxed, audited read-only oversight sessions into this tenant."
-              >
-                <SchoolSupportTab schoolId={id ?? ''} />
-              </GroupSection>
-            )}
-            {canAudit && (
-              <GroupSection
-                id={SUBSECTION_IDS.audit}
-                title="Audit history"
-                description="The platform audit trail for this school — every action survives."
-              >
-                <SchoolAuditTab schoolId={id ?? ''} />
-              </GroupSection>
-            )}
+            <SupportAuditTab
+              schoolId={id ?? ''}
+              schoolName={school.name}
+              schoolStatus={school.status}
+              canSupport={canSupport}
+              canAudit={canAudit}
+              activeSupportSessions={data.activeSupportSessions}
+              onOpenSupport={() => setAccessOpen(true)}
+            />
           </TabsContent>
         )}
 
