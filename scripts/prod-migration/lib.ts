@@ -968,6 +968,10 @@ export function assertAdditiveOnly(migration: RepoMigration): void {
     /^ALTER\s+TABLE\s+"?[\w$]+"?\s+ADD\s+(COLUMN|CONSTRAINT)\b/i,
     /^CREATE\s+(UNIQUE\s+)?INDEX\s+/i,
     /^CREATE\s+TABLE\s+/i,
+    // Atomic reference sequences (receipt numbers) — pure additive DDL;
+    // the subscription-system migration (20261013183000) created three
+    // the same way. IF NOT EXISTS keeps re-runs idempotent.
+    /^CREATE\s+SEQUENCE\s+IF\s+NOT\s+EXISTS\s+/i,
   ]
   for (const s of statements) {
     if (allowed.some((re) => re.test(s))) continue
