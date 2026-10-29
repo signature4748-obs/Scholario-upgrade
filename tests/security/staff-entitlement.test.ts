@@ -41,7 +41,7 @@ import { db } from '../helpers/db'
 import { liveFetch } from '../helpers/live-http'
 import { hashSessionToken } from '@/lib/auth'
 import { evaluateStaffEntitlement } from '@/lib/entitlement/staff'
-import { normalizeCode, addMonths } from '@/lib/subscription/codes'
+import { addMonths } from '@/lib/subscription/codes'
 
 const BASE = process.env.LIVE_BASE ?? 'http://127.0.0.1:3000'
 const T = 45_000
