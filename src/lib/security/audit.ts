@@ -140,6 +140,10 @@ export const AUDIT_ACTIONS = [
   'STUDENT_SUBSCRIPTION_CODE_CLAIMED',
   'STUDENT_SUBSCRIPTION_ORDER_CREATED',
   'STUDENT_SUBSCRIPTION_ORDER_SETTLED',
+  // STAFF ENTITLEMENTS (2026-10-30) — school-plane staff code claim +
+  // self-status surface (all school-scoped; the platform-plane actions
+  // live in the platform audit vocabulary).
+  'STAFF_SUBSCRIPTION_CODE_CLAIMED',
 ] as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

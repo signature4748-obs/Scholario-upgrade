@@ -181,3 +181,81 @@ Confirmed defects found by the independent review and fixed on the branch:
   persistence, renewal stacking, extend-only adjust, Razorpay-webhook
   settlement incl. amount mismatch + replay, plan-PATCH allowOnline merge,
   billingModel atomicity).
+
+---
+
+## 8. STAFF ENTITLEMENTS + BATCH CODES + RECONCILE (2026-10-30)
+
+The three remaining axes of the entitlement model, implemented additively
+on top of everything above (migration `20261030120000_staff_entitlements_batch_codes`
+— additive only: two new tables, one default-'TENANT' policy column, one
+code column + sequence; no existing column is dropped or retyped).
+
+### 8.1 The third scope — STAFF_ENTITLEMENT
+
+- `SubscriptionPlan.scope` gains `STAFF` (per-seat ANNUAL, priced via the
+  per-seat price — the `pricePerStudent` column doubling as the seat
+  price, mirroring the STUDENT contract).
+- `StaffEntitlement` — the StudentEntitlement analogue for canonical
+  TEACHER accounts (one-live-per-user partial unique index
+  `StaffEntitlement_one_live_per_user`, same lifecycle: renewal anchored
+  at `max(now, validityEnd)`, SUSPENSION FREEZE banking, extend-only
+  adjust, frozen-clock reactivation). `StaffSubscriptionPayment` is the
+  immutable per-seat ledger (receipts `SCH-SSP-<year>-<seq>` via
+  `staff_payment_receipt_seq`).
+- `ActivationCode.scope` gains `STAFF_ENTITLEMENT`; pre-assignment rides
+  the new `assignedUserId` column. A staff code is claimable ONLY by a
+  server-verified canonical TEACHER of the owning tenant
+  (`POST /api/subscription/staff/claim` — the session role is the
+  authority, never a submitted field). A student code never activates a
+  teacher, a staff code never activates a student, and a principal's
+  administrative access is NEVER a paid seat (principals are not gated
+  by staff coverage at all).
+- Enforcement: `SchoolSubscription.staffCoverage` = `TENANT` (default —
+  every existing tenant keeps today's behavior) | `PER_SEAT` (TEACHER
+  sessions need a live StaffEntitlement on business routes — enforced in
+  `withUser` next to the per-student gate; the same exempt surface stays
+  reachable). Set per-tenant via the terms route (audited).
+- OPEN student codes: STUDENT_ENTITLEMENT codes may now be issued
+  without a pre-assigned student and securely claimed by any eligible
+  student of the owning tenant (assignment policy: OPEN | ASSIGNED).
+- Operator surfaces: `GET/POST/PATCH /api/platform/users/[id]/subscription`
+  (staff Model-C assignment + lifecycle, teacher-only target),
+  `GET /api/platform/schools/[id]/staff` (roster with live posture),
+  teacher self-view `GET /api/subscription/staff`.
+
+### 8.2 Batch code generation
+
+`POST /api/platform/subscriptions/codes/batch` (billing.manage + step-up):
+1–200 codes per batch, bound to tenant + plan + scope + validity policy;
+redemption deadline (`claimWindowDays`) independent from the entitlement
+expiry; assignment policy OPEN or ASSIGNED (server-verified members);
+backing = a VERIFIED payment recorded in the SAME transaction (per-seat
+deferred rows for ASSIGNED batches; one tenant-level deferred row for
+OPEN batches — amount = unit × quantity) or an explicitly authorized
+COMPLIMENTARY grant (separate `billing.complimentary` permission).
+Generating codes is never proof of payment by itself. Plaintexts are
+returned ONCE in the response (one-time display); the registry GET never
+returns them.
+
+### 8.3 Keyed code verifier (at-rest hardening)
+
+Codes issued from 2026-10-30 store HMAC-SHA256(normalized code, pepper)
+where the pepper is `CODE_VERIFIER_SECRET` (or a sha256 derivation of
+`FILE_SIGNING_SECRET` when unset — stable across instances). Claim/lookup
+tries the keyed verifier first and falls back to the legacy sha256, so
+codes issued before the change keep redeeming with no migration or
+reissue. With neither env configured the design honestly stays on the
+legacy sha256 (dev/CI default) rather than peppering with an ephemeral
+process key.
+
+### 8.4 Reconciliation sweep
+
+`POST /api/cron/subscription-reconcile` (vercel.json daily 03:20 UTC;
+OPS_CRON_SECRET bearer or platform `ops.read`): idempotent conditional
+updates that reconcile STORED SNAPSHOTS with the live evaluation —
+expired-window codes ISSUED→EXPIRED, lapsed live entitlement rows
+(student + staff) → EXPIRED, stale PENDING orders past TTL+grace →
+EXPIRED. Enforcement never depends on it (expiry is computed live at
+evaluation time); observability rides the JobRun trail (one row per
+hour bucket).

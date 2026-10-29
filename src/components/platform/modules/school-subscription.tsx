@@ -21,11 +21,12 @@
 //                    subscriptions), payment recording, and the
 //                    advanced drawer (display label + manual
 //                    override).
-//   Codes          — one-time activation codes: filters,
-//                    revoke/reissue, honest scope statement
-//                    (school + student; staff NOT supported).
-//   Students       — per-student entitlements: search, covered-
-//                    by-school vs per-student, assign/history.
+//   Codes          — one-time activation codes: filters (school /
+//                    student / staff scopes), batch generation,
+//                    revoke/reissue, one-time plaintext display.
+//   Students       — per-student entitlements AND per-seat staff
+//                    entitlements (segmented): search, covered-by-
+//                    school vs per-student / per-seat, assign/history.
 //   Ledger         — the immutable payment ledger (what the
 //                    school pays SCHOLARIO) + recent audited
 //                    changes.
@@ -84,9 +85,14 @@ import {
   OneTimeCodeBlock,
   AssignEntitlementDialog,
   StudentHistoryDialog,
+  AssignStaffEntitlementDialog,
+  StaffHistoryDialog,
+  codeScopeLabel,
+  PlanPicker,
   type ActivationCodeRow,
   type PlanRow,
   type RegistryRow,
+  type StaffRow,
   type StudentRow,
 } from './subscription-shared'
 import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
@@ -151,6 +157,10 @@ interface SubscriptionResponse {
     renewalRequired: boolean
     message: string | null
   }
+  /** STAFF ENTITLEMENTS (2026-10-30) — the staff-licensing policy + the
+   *  per-seat posture summary (null while TENANT / schema-pending). */
+  staffCoverage?: string
+  staffSeats?: { entitled: number; teachers: number } | null
   payments: PaymentRow[]
 }
 
@@ -160,6 +170,7 @@ interface TermsResult {
   terms: {
     planCode: string | null
     billingModel: string
+    staffCoverage?: string
     interval: string | null
     priceSnapshot: number | null
     currencySnapshot: string | null
@@ -349,6 +360,7 @@ function TermsDialog({
     currency: 'INR',
     licensedStudents: '',
     periodStart: '',
+    staffCoverage: 'TENANT',
     reason: '',
   })
   const [busy, setBusy] = useState(false)
@@ -373,6 +385,7 @@ function TermsDialog({
         currency: reg?.currencySnapshot ?? 'INR',
         licensedStudents: reg?.licensedStudents != null ? String(reg.licensedStudents) : '',
         periodStart: reg?.periodStart ? reg.periodStart.slice(0, 10) : '',
+        staffCoverage: 'TENANT',
         reason: '',
       })
       setError(null)
@@ -436,6 +449,7 @@ function TermsDialog({
         currency: form.currency,
         ...(isStudentBased ? { licensedStudents: licensedNum } : { licensedStudents: null }),
         ...(form.periodStart ? { periodStart: form.periodStart } : {}),
+        staffCoverage: form.staffCoverage,
       }
       const res = await gate(() =>
         platformApi<TermsResult>(`/api/platform/schools/${schoolId}/subscription/terms`, {
@@ -641,6 +655,23 @@ function TermsDialog({
               </div>
             </div>
           )}
+
+          {/* Staff licensing policy (STAFF ENTITLEMENTS, 2026-10-30) */}
+          <div>
+            <Label className="text-xs" htmlFor="terms-staff-coverage">
+              Staff coverage{' '}
+              <HelpHint text="TENANT (default): teachers are covered by the school's subscription exactly as today — nothing changes. PER_SEAT: each teacher needs their own staff entitlement; teachers without one are locked out of business modules until a seat is assigned or a staff code is claimed. Switching to PER_SEAT grants nothing by itself — assign seats first and tell the staff." />
+            </Label>
+            <Select value={form.staffCoverage} onValueChange={(v) => setForm((f) => ({ ...f, staffCoverage: v }))}>
+              <SelectTrigger id="terms-staff-coverage" className="bg-white" aria-label="Staff coverage policy">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-white">
+                <SelectItem value="TENANT">Tenant — teachers covered by the school plan</SelectItem>
+                <SelectItem value="PER_SEAT">Per-seat — each teacher needs an entitlement</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {!isStudentBased && (
             <div className="grid grid-cols-2 gap-3">
@@ -1527,6 +1558,29 @@ export function SummaryHeader({
           }
         />
         <Term label="Payments recorded" value={<span className="tabular-nums">{data.payments.length}</span>} />
+        <Term
+          label="Staff coverage"
+          value={
+            data.staffCoverage === 'PER_SEAT' ? (
+              <span className="text-slate-900">
+                per-seat
+                {data.staffSeats && (
+                  <span className="text-[11px] text-slate-500">
+                    {' '}
+                    · {data.staffSeats.entitled}/{data.staffSeats.teachers} entitled
+                  </span>
+                )}
+              </span>
+            ) : (
+              'covered by school plan'
+            )
+          }
+          help={
+            data.staffCoverage === 'PER_SEAT'
+              ? 'Each teacher needs their own staff entitlement (Codes tab issues staff codes; Students tab → Staff manages seats).'
+              : undefined
+          }
+        />
       </dl>
     </section>
   )
@@ -2033,10 +2087,11 @@ function RevokeReissueDialog({
   )
 }
 
-function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow[]; total: number; onChanged: () => void; gate: GateFn }) {
+function CodesCard({ codes, total, onChanged, gate, schoolId, onBatchGenerated }: { codes: ActivationCodeRow[]; total: number; onChanged: () => void; gate: GateFn; schoolId: string; onBatchGenerated?: () => void }) {
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
   const [scopeFilter, setScopeFilter] = useState<string>('ALL')
   const [act, setAct] = useState<{ code: ActivationCodeRow; action: 'revoke' | 'reissue' } | null>(null)
+  const [batchOpen, setBatchOpen] = useState(false)
 
   const filtered = codes.filter(
     (c) =>
@@ -2049,10 +2104,21 @@ function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow
       {/* One line + tooltip — the full contract lives in the help icon,
           not in a permanent paragraph block. */}
       <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
-        One-time codes unlock the school subscription or one student&apos;s access — plaintext shown once at
-        issuance, then only a hash is stored.
-        <HelpHint text="School codes are issued while recording a payment (“activate by activation code”); student codes while assigning a student entitlement (Students tab). Codes expire if not redeemed within their claim window; revoke/reissue is audited. Copy the plaintext and deliver it to the principal or student out-of-band — it cannot be viewed again. Scopes: school subscription + student only. Codes for teachers/staff are NOT supported — the entitlement model has no staff-scope code, and student codes do not work for staff." />
+        One-time codes unlock the school subscription, one student&apos;s access or one teacher&apos;s seat — plaintext
+        shown once at issuance, then only a keyed verifier is stored.
+        <HelpHint text="School codes are issued while recording a payment (“activate by activation code”); student and staff codes while assigning an entitlement (Students tab) or through batch generation. Codes expire if not redeemed within their claim window; revoke/reissue is audited. Copy the plaintext and deliver it to the recipient out-of-band — it cannot be viewed again. Scopes: school subscription + student entitlement + staff (teacher) seat. A code can only ever be redeemed by its own scope and tenant." />
       </p>
+
+      <div className="mb-3 flex justify-end">
+        <Button
+          size="sm"
+          onClick={() => setBatchOpen(true)}
+          className="h-8 bg-teal-600 hover:bg-teal-700 text-white"
+        >
+          <KeyRound className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+          Generate batch…
+        </Button>
+      </div>
 
       <div className="overflow-x-auto custom-scrollbar rounded-lg border border-slate-200">
         <table className="w-full min-w-[760px] text-xs">
@@ -2075,8 +2141,11 @@ function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow
                   <p className="text-[10px] text-slate-400">issued {dateStr(c.issuedAt)}</p>
                 </td>
                 <td className="px-3 py-2.5 text-slate-600">
-                  {c.scope === 'SCHOOL_SUBSCRIPTION' ? 'School subscription' : 'One student\u2019s access'}
+                  {codeScopeLabel(c.scope)}
                   {c.student && <p className="text-[10px] text-slate-400">{c.student.user?.name ?? c.student.user?.email}</p>}
+                  {c.scope === 'STAFF_ENTITLEMENT' && c.assignedUser && (
+                    <p className="text-[10px] text-slate-400">{c.assignedUser.name ?? c.assignedUser.email}</p>
+                  )}
                 </td>
                 <td className="px-3 py-2.5 text-slate-600">
                   {c.planCode ?? '—'}
@@ -2160,6 +2229,7 @@ function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow
               <SelectItem value="ALL">Everything</SelectItem>
               <SelectItem value="SCHOOL_SUBSCRIPTION">School subscription</SelectItem>
               <SelectItem value="STUDENT_ENTITLEMENT">Student access</SelectItem>
+              <SelectItem value="STAFF_ENTITLEMENT">Teacher seats</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -2174,7 +2244,327 @@ function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow
           onDone={onChanged}
         />
       )}
+
+      {batchOpen && (
+        <BatchCodesDialog
+          schoolId={schoolId}
+          gate={gate}
+          onClose={() => setBatchOpen(false)}
+          onDone={() => {
+            onBatchGenerated?.()
+            onChanged()
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+// ── Batch code generation (STAFF ENTITLEMENTS + BATCH CODES, 2026-10-30) ──
+
+interface BatchItem {
+  codeId: string
+  publicRef: string
+  code: string
+  assignedId: string | null
+  expiresAt: string
+}
+
+/**
+ * Generate a configurable batch of student/staff activation codes:
+ * plan (product), scope, quantity, validity dates, redemption deadline,
+ * assignment policy (open claim vs pre-assigned members), backing
+ * (verified payment vs permission-gated complimentary) and the audited
+ * reason. The result shows requested vs generated and the plaintext
+ * codes ONCE (OneTimeCodeBlock contract — never shown again by any view).
+ */
+function BatchCodesDialog({ schoolId, gate, onClose, onDone }: { schoolId: string; gate: GateFn; onClose: () => void; onDone: () => void }) {
+  const [scope, setScope] = useState<'STUDENT_ENTITLEMENT' | 'STAFF_ENTITLEMENT'>('STUDENT_ENTITLEMENT')
+  const [form, setForm] = useState({
+    planCode: '', quantity: '10', claimWindowDays: '30', validityMonths: '12',
+    validityStart: '', validityEnd: '', assignment: 'OPEN', backing: 'PAYMENT',
+    amountPerCode: '', currency: 'INR', notes: '',
+  })
+  const [assignedIds, setAssignedIds] = useState<string[]>([])
+  const [memberQ, setMemberQ] = useState('')
+  const [memberOptions, setMemberOptions] = useState<Array<{ id: string; label: string }>>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<{ requested: number; generated: number; message: string; items: BatchItem[]; batchPayment: { receiptNo: string } | null } | null>(null)
+
+  // Member search for the ASSIGNED policy (students or teachers by scope).
+  useEffect(() => {
+    if (form.assignment !== 'ASSIGNED') return
+    const t = setTimeout(() => {
+      const path = scope === 'STUDENT_ENTITLEMENT'
+        ? `/api/platform/schools/${schoolId}/students?q=${encodeURIComponent(memberQ)}&pageSize=50`
+        : `/api/platform/schools/${schoolId}/staff?q=${encodeURIComponent(memberQ)}&pageSize=50`
+      platformApi<{ students?: StudentRow[]; staff?: StaffRow[] }>(path)
+        .then((d) => {
+          setMemberOptions(
+            d.students?.map((s) => ({ id: s.studentId, label: `${s.name} (${s.class ?? s.email})` }))
+              ?? d.staff?.map((s) => ({ id: s.id, label: `${s.name ?? ''} (${s.email})` }))
+              ?? [],
+          )
+        })
+        .catch(() => setMemberOptions([]))
+    }, 250)
+    return () => clearTimeout(t)
+  }, [form.assignment, scope, schoolId, memberQ])
+
+  const quantity = Number(form.quantity.replace(/[^0-9]/g, '') || '0')
+  const canSubmit =
+    form.planCode !== '' &&
+    quantity >= 1 && quantity <= 200 &&
+    form.notes.trim().length >= 10 &&
+    (form.assignment === 'OPEN' || assignedIds.length === quantity)
+
+  const submit = async () => {
+    if (!canSubmit) {
+      setError(
+        form.planCode === ''
+          ? 'Select a plan first.'
+          : form.notes.trim().length < 10
+            ? 'Add an audited reason (at least 10 characters).'
+            : form.assignment === 'ASSIGNED'
+              ? `Select exactly ${quantity} member${quantity === 1 ? '' : 's'} — one per code.`
+              : 'Set a quantity between 1 and 200.',
+      )
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const d = await gate(() =>
+        platformApi<{ requested: number; generated: number; message: string; items: BatchItem[]; batchPayment: { receiptNo: string } | null }>(
+          '/api/platform/subscriptions/codes/batch',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              schoolId,
+              scope,
+              planCode: form.planCode,
+              quantity,
+              claimWindowDays: Number(form.claimWindowDays || 30),
+              validityMonths: Number(form.validityMonths || 12),
+              validityStart: form.validityStart ? new Date(form.validityStart).toISOString() : undefined,
+              validityEnd: form.validityEnd ? new Date(form.validityEnd).toISOString() : undefined,
+              assignment: form.assignment,
+              assignedIds: form.assignment === 'ASSIGNED' ? assignedIds : undefined,
+              backing: form.backing,
+              amountPerCode: form.amountPerCode !== '' ? Number(form.amountPerCode) : undefined,
+              currency: form.currency,
+              notes: form.notes.trim(),
+            }),
+          },
+        ),
+      )
+      if (!d) return // cancelled at the step-up prompt
+      setResult(d)
+      onDone()
+    } catch (e) {
+      setError(errText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copyAll = () => {
+    if (!result) return
+    const text = result.items.map((i) => `${i.publicRef}: ${i.code}`).join('\n')
+    void navigator.clipboard.writeText(text).catch(() => {})
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !result) onClose() }}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto bg-white border-slate-200 text-slate-900 sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 font-display">
+            <KeyRound className="h-4 w-4 text-teal-600" aria-hidden="true" />
+            Generate activation codes (batch)
+          </DialogTitle>
+          <DialogDescription>
+            Every code binds to this school, the chosen plan and the validity policy. Plaintext codes are shown ONCE
+            below — at rest only a keyed verifier is stored.
+          </DialogDescription>
+        </DialogHeader>
+        {result ? (
+          <div className="space-y-3">
+            <p className="text-sm">
+              <span className="font-semibold">{result.generated} of {result.requested}</span> codes generated
+              {result.batchPayment?.receiptNo && <> — batch payment receipt <span className="font-mono text-xs">{result.batchPayment.receiptNo}</span></>}.
+            </p>
+            <div className="max-h-72 space-y-2 overflow-y-auto custom-scrollbar pr-1">
+              {result.items.map((i) => (
+                <OneTimeCodeBlock
+                  key={i.codeId}
+                  code={{ publicRef: i.publicRef, code: i.code, expiresAt: i.expiresAt }}
+                  hint="Shown once — copy and deliver out-of-band."
+                />
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <Button variant="outline" size="sm" onClick={copyAll}>Copy all</Button>
+              <DialogFooter className="gap-2">
+                <Button onClick={() => { onClose() }}>Done</Button>
+              </DialogFooter>
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {error && (
+              <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Who redeems</Label>
+                <Select value={scope} onValueChange={(v) => { setScope(v as 'STUDENT_ENTITLEMENT' | 'STAFF_ENTITLEMENT'); setAssignedIds([]) }}>
+                  <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-white">
+                    <SelectItem value="STUDENT_ENTITLEMENT">Students (one code per student seat)</SelectItem>
+                    <SelectItem value="STAFF_ENTITLEMENT">Teachers / staff (one code per seat)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Plan (product)</Label>
+                <PlanPicker
+                  scope={scope === 'STUDENT_ENTITLEMENT' ? 'STUDENT' : 'STAFF'}
+                  value={form.planCode}
+                  onChange={(v) => setForm((f) => ({ ...f, planCode: v }))}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label className="text-xs">Quantity (1–200)</Label>
+                <Input
+                  inputMode="numeric"
+                  value={form.quantity}
+                  onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value.replace(/[^0-9]/g, '') }))}
+                  className="bg-white"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Redeem within (days)</Label>
+                <Input
+                  inputMode="numeric"
+                  value={form.claimWindowDays}
+                  onChange={(e) => setForm((f) => ({ ...f, claimWindowDays: e.target.value.replace(/[^0-9]/g, '') }))}
+                  className="bg-white"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Validity (months)</Label>
+                <Input
+                  inputMode="numeric"
+                  value={form.validityMonths}
+                  onChange={(e) => setForm((f) => ({ ...f, validityMonths: e.target.value.replace(/[^0-9]/g, '') }))}
+                  className="bg-white"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Access starts (optional)</Label>
+                <Input type="date" value={form.validityStart} onChange={(e) => setForm((f) => ({ ...f, validityStart: e.target.value }))} className="bg-white" />
+              </div>
+              <div>
+                <Label className="text-xs">Access expires (optional — overrides months)</Label>
+                <Input type="date" value={form.validityEnd} onChange={(e) => setForm((f) => ({ ...f, validityEnd: e.target.value }))} className="bg-white" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Assignment</Label>
+                <Select value={form.assignment} onValueChange={(v) => setForm((f) => ({ ...f, assignment: v }))}>
+                  <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-white">
+                    <SelectItem value="OPEN">Open — any eligible member can claim</SelectItem>
+                    <SelectItem value="ASSIGNED">Pre-assigned — one specific member per code</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Backed by</Label>
+                <Select value={form.backing} onValueChange={(v) => setForm((f) => ({ ...f, backing: v }))}>
+                  <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-white">
+                    <SelectItem value="PAYMENT">Verified payment (recorded now)</SelectItem>
+                    <SelectItem value="COMPLIMENTARY">Complimentary grant (permission-gated)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {form.backing === 'PAYMENT' && (
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <Label className="text-xs">Amount per code</Label>
+                  <Input inputMode="decimal" value={form.amountPerCode} onChange={(e) => setForm((f) => ({ ...f, amountPerCode: e.target.value.replace(/[^0-9.]/g, '') }))} placeholder="plan price" className="bg-white" />
+                </div>
+                <div>
+                  <Label className="text-xs">Currency</Label>
+                  <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
+                    <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
+                    <SelectContent className="bg-white">{CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+            {form.assignment === 'ASSIGNED' && (
+              <div>
+                <Label className="text-xs">
+                  Members ({assignedIds.length}/{quantity || '?'} selected) — one per code, in order
+                </Label>
+                <Input
+                  type="search"
+                  value={memberQ}
+                  onChange={(e) => setMemberQ(e.target.value)}
+                  placeholder={scope === 'STUDENT_ENTITLEMENT' ? 'Search students…' : 'Search teachers…'}
+                  className="mt-1 bg-white"
+                />
+                <div className="mt-1 max-h-32 overflow-y-auto custom-scrollbar rounded-lg border border-slate-200">
+                  {memberOptions.map((m) => {
+                    const selected = assignedIds.includes(m.id)
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-slate-50 ${selected ? 'bg-teal-50 text-teal-800' : ''}`}
+                        onClick={() =>
+                          setAssignedIds((ids) =>
+                            selected ? ids.filter((x) => x !== m.id) : ids.length < (quantity || 0) ? [...ids, m.id] : ids,
+                          )
+                        }
+                      >
+                        <span className="truncate">{m.label}</span>
+                        {selected && <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+                      </button>
+                    )
+                  })}
+                  {memberOptions.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-slate-400">No matches — search by name or email.</p>
+                  )}
+                </div>
+              </div>
+            )}
+            <div>
+              <Label className="text-xs">Audited reason (required)</Label>
+              <Textarea rows={2} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Why this batch is being issued (recorded in the audit trail)" className="bg-white" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>Cancel</Button>
+              <Button onClick={() => void submit()} disabled={busy || !canSubmit} className="bg-teal-600 hover:bg-teal-700 text-white">
+                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+                Generate {quantity || ''} code{quantity === 1 ? '' : 's'}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -2209,8 +2599,8 @@ function StudentsCard({
           <HelpHint
             text={
               covered
-                ? 'Nothing to assign while billing is a fixed school fee. Student entitlements become assignable if the billing model changes to per-student (Plan & billing).'
-                : 'Assigning records the agreed payment, then activates the student directly or issues a one-time code. History, suspension and revocation follow the entitlement model. Staff/teachers are not part of this table — staff entitlements are not supported.'
+                ? 'Nothing to assign while billing is a fixed school fee. Student entitlements become assignable if the billing model changes to per-student (Plan & billing). Use the Staff segment for teacher seats (independent of the billing model).'
+                : 'Assigning records the agreed payment, then activates the student directly or issues a one-time code. History, suspension and revocation follow the entitlement model. Teacher seats live in the Staff segment of this tab.'
             }
           />
         </p>
@@ -2322,6 +2712,233 @@ function StudentsCard({
         />
       )}
       {detailFor && <StudentHistoryDialog student={detailFor} onClose={() => setDetailFor(null)} />}
+    </div>
+  )
+}
+
+// ── Students/Staff segment switch (sub-tab 4) ───────────────────────────
+
+/** Compact segmented switch preserving the five-tab contract: Students
+ *  and Staff share the fourth tab; each segment renders its own table. */
+function StudentsStaffSwitch({
+  schoolId,
+  staffCoverage,
+  students,
+  billingModel,
+  loading,
+  onSearch,
+  onChanged,
+}: {
+  schoolId: string
+  staffCoverage: string
+  students: StudentRow[]
+  billingModel: string
+  loading: boolean
+  onSearch: (q: string) => void
+  onChanged: () => void
+}) {
+  const [segment, setSegment] = useState<'students' | 'staff'>('students')
+  return (
+    <div>
+      <div className="mb-3 inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1" role="tablist" aria-label="Students or staff">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={segment === 'students'}
+          onClick={() => setSegment('students')}
+          className={`rounded-md px-3 py-1.5 text-xs font-medium ${segment === 'students' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}
+        >
+          Students
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={segment === 'staff'}
+          onClick={() => setSegment('staff')}
+          className={`rounded-md px-3 py-1.5 text-xs font-medium ${segment === 'staff' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}
+        >
+          Staff
+        </button>
+      </div>
+      {segment === 'students' ? (
+        <StudentsCard
+          students={students}
+          billingModel={billingModel}
+          loading={loading}
+          onSearch={onSearch}
+          onChanged={onChanged}
+        />
+      ) : (
+        <StaffSegment schoolId={schoolId} staffCoverage={staffCoverage} onChanged={onChanged} />
+      )}
+    </div>
+  )
+}
+
+// ── Staff · per-seat teacher entitlements (STAFF ENTITLEMENTS, 2026-10-30) ─
+
+/**
+ * The Staff segment of the Students sub-tab: the teacher roster with each
+ * teacher's effective posture (computed LIVE server-side), assign/history
+ * actions. Duplication is structurally impossible: a teacher holds at
+ * most ONE live entitlement (partial unique index) and every write path
+ * re-verifies the TEACHER role + tenant server-side.
+ */
+function StaffSegment({ schoolId, staffCoverage, onChanged }: { schoolId: string; staffCoverage: string; onChanged: () => void }) {
+  const [q, setQ] = useState('')
+  const [rows, setRows] = useState<StaffRow[] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [assignFor, setAssignFor] = useState<StaffRow | null>(null)
+  const [detailFor, setDetailFor] = useState<StaffRow | null>(null)
+
+  const load = useCallback(
+    async (query = '') => {
+      setLoading(true)
+      setError(null)
+      try {
+        const d = await platformApi<{ staff: StaffRow[] }>(
+          `/api/platform/schools/${schoolId}/staff?q=${encodeURIComponent(query)}&pageSize=100`,
+        )
+        setRows(d.staff)
+      } catch (e) {
+        // ERROR ≠ EMPTY — keep the reason visible with a retry.
+        setError(errText(e))
+      } finally {
+        setLoading(false)
+      }
+    },
+    [schoolId],
+  )
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const perSeat = staffCoverage === 'PER_SEAT'
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+          {perSeat
+            ? 'Per-seat staff licensing — each teacher needs their own entitlement (server-enforced on teacher modules).'
+            : 'Tenant coverage — teachers are covered by the school\u2019s subscription; no per-seat requirement.'}
+          <HelpHint text="Staff entitlements apply to canonical TEACHER accounts only — a principal's administrative access is never a paid seat, and a student code never activates a teacher. Assign records the payment (direct activation or a one-time staff code); history shows the immutable financial rows. Under PER_SEAT, a teacher without a live entitlement is locked out of business modules until a seat is assigned or a staff code is claimed." />
+        </p>
+        <div className="relative w-full sm:w-64">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <Input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void load(q) }}
+            placeholder="Search name / email…"
+            aria-label="Search staff"
+            className="bg-white h-9 pl-9"
+          />
+        </div>
+      </div>
+      <div className="overflow-x-auto custom-scrollbar rounded-lg border border-slate-200">
+        <table className="w-full min-w-[640px] text-xs">
+          <thead>
+            <tr className="border-b border-slate-200 text-left text-[10px] uppercase tracking-wider text-slate-400">
+              <th className="px-4 py-2 font-semibold">Teacher</th>
+              <th className="px-3 py-2 font-semibold">Access</th>
+              <th className="px-3 py-2 font-semibold">Valid until</th>
+              <th className="px-3 py-2 font-semibold">Source</th>
+              <th className="px-3 py-2 text-right font-semibold">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin" aria-label="Loading staff" />
+                </td>
+              </tr>
+            ) : error ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-8 text-center">
+                  <p className="text-red-600" role="alert">{error}</p>
+                  <Button size="sm" variant="outline" className="mt-2" onClick={() => void load(q)}>
+                    <RefreshCw className="mr-1 h-3.5 w-3.5" aria-hidden="true" />Retry
+                  </Button>
+                </td>
+              </tr>
+            ) : (
+              <>
+                {(rows ?? []).map((t) => (
+                  <tr key={t.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
+                    <td className="px-4 py-2.5">
+                      <p className="font-medium text-slate-900">{t.name ?? '—'}</p>
+                      <p className="text-[10px] text-slate-400">{t.email}</p>
+                      {t.accountLocked && (
+                        <Badge variant="outline" className="mt-0.5 normal-case border-orange-200 bg-orange-50 text-[9px] text-orange-700">
+                          account locked
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {!perSeat ? (
+                        <Badge variant="outline" className="normal-case border-teal-200 bg-teal-50 text-teal-700">
+                          covered by school
+                        </Badge>
+                      ) : (
+                        <SharedStateBadge state={t.state} />
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-600 tabular-nums">
+                      {perSeat ? dateStr(t.validityEnd) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-500">{perSeat ? t.source ?? '—' : '—'}</td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
+                          onClick={() => setDetailFor(t)}
+                        >
+                          History
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-8 bg-teal-600 hover:bg-teal-700 text-white"
+                          onClick={() => setAssignFor(t)}
+                        >
+                          <KeyRound className="mr-1 h-3 w-3" aria-hidden="true" />
+                          {perSeat ? 'Assign' : 'Grant'}
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {(rows ?? []).length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
+                      No teachers match.
+                    </td>
+                  </tr>
+                )}
+              </>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {assignFor && (
+        <AssignStaffEntitlementDialog
+          staff={assignFor}
+          onClose={() => setAssignFor(null)}
+          onDone={() => {
+            setAssignFor(null)
+            void load(q)
+            onChanged()
+          }}
+        />
+      )}
+      {detailFor && <StaffHistoryDialog staff={detailFor} onClose={() => setDetailFor(null)} />}
     </div>
   )
 }
@@ -2787,14 +3404,22 @@ export function SchoolSubscriptionTab({
         {/* ── Codes — activation-code management ── */}
         <TabsContent value="codes" className="mt-3">
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <CodesCard codes={codes} total={codesTotal} gate={gate} onChanged={() => void load()} />
+            <CodesCard
+              codes={codes}
+              total={codesTotal}
+              gate={gate}
+              schoolId={schoolId}
+              onChanged={() => void load()}
+            />
           </section>
         </TabsContent>
 
-        {/* ── Students — per-student entitlements ── */}
+        {/* ── Students — per-student entitlements + staff seats ── */}
         <TabsContent value="students" className="mt-3">
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <StudentsCard
+            <StudentsStaffSwitch
+              schoolId={schoolId}
+              staffCoverage={data.staffCoverage ?? 'TENANT'}
               students={students}
               billingModel={billingModel}
               loading={studentsLoading}

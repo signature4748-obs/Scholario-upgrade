@@ -9,8 +9,18 @@
  *   · Code = 100 bits of crypto randomness, Crockford-base32, grouped.
  *     Plaintext exists ONCE at issuance (returned to the operator, shown
  *     exactly once, never stored, never logged, never emailed).
- *   · At rest: sha256(code) only. publicRef (SCH-ACT-… ) is the
- *     support-safe identifier for lookup / revoke / reissue.
+ *   · At rest: a keyed verifier — HMAC-SHA256 with a server-side pepper
+ *     (CODE_VERIFIER_SECRET, derived from FILE_SIGNING_SECRET when unset)
+ *     for codes issued after 2026-10-30; the legacy sha256 remains valid
+ *     for codes issued before it (dual-lookup transition, no reissue).
+ *     publicRef (SCH-ACT-… ) is the support-safe identifier for lookup /
+ *     revoke / reissue.
+ *   · Scopes: SCHOOL_SUBSCRIPTION (one claim = the TENANT entitlement,
+ *     never per-member grants) | STUDENT_ENTITLEMENT | STAFF_ENTITLEMENT
+ *     (one teacher seat — claimable only by a server-verified canonical
+ *     TEACHER of the tenant, optional pre-assignment).
+ *   · Batch issuance: issueActivationCodeBatch — one transaction, per-code
+ *     payment linkage, quantity-capped, plaintexts returned once.
  *   · Claim: authenticated claimant, server-resolved student/school scope,
  *     one atomic transaction with a CONDITIONAL UPDATE on the code row
  *     (status ISSUED → CLAIMED) — concurrent claims are impossible; the
@@ -24,10 +34,11 @@
  *   · School-wide codes activate the TENANT subscription once — they
  *     never mint per-member grants.
  */
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { db } from '@/lib/db'
 import type { Prisma } from '@prisma/client'
 import { activateEntitlementInTx } from './student'
+import { activateStaffEntitlementInTx } from './staff'
 
 /** Prisma interactive-transaction client (the tx parameter type). */
 type Tx = Prisma.TransactionClient
@@ -53,6 +64,57 @@ export function normalizeCode(input: string): string {
 
 export function hashCode(normalized: string): string {
   return createHash('sha256').update(normalized).digest('hex')
+}
+
+// ── Keyed verifier (2026-10-30 hardening) ──────────────────────────────────
+//
+// The at-rest verifier for NEWLY ISSUED codes is HMAC-SHA256 over the
+// normalized code with a server-side pepper (CODE_VERIFIER_SECRET, or a
+// sha256 derivation of FILE_SIGNING_SECRET when unset — stable across
+// instances, never stored beside the hashes). The plaintext itself is
+// still 100 bits of crypto randomness, so the previous unkeyed sha256
+// design was not brute-forceable (the hash exists to keep a DB leak from
+// disclosing usable codes AND to make lookups indexable); the keyed
+// design additionally makes an offline precomputation/rainbow attack
+// impossible even for LOWER-entropy codes and keeps verification
+// capability server-only.
+//
+// TRANSITION: codes issued before this change verify against their sha256
+// (existing codes keep redeeming — no migration, no reissue). Lookups
+// try the keyed verifier FIRST and fall back to the legacy sha256, so a
+// claim is at most two indexed point-lookups. Comparison of candidate
+// hashes uses timingSafeEqual; the DB unique index remains the actual
+// lookup mechanism (equality on a hash of a 100-bit secret).
+
+function verifierPepper(): string {
+  const explicit = (process.env.CODE_VERIFIER_SECRET ?? '').trim()
+  if (explicit.length >= 16) return explicit
+  const fileSecret = (process.env.FILE_SIGNING_SECRET ?? '').trim()
+  if (fileSecret.length >= 16) {
+    return createHash('sha256').update(`scholario:activation-code-verifier:${fileSecret}`).digest('hex')
+  }
+  // No configured pepper (dev/CI default): the keyed design is OFF and
+  // issuance/lookup use the legacy sha256 — identical behavior to the
+  // pre-2026-10-30 design, honestly degraded rather than silently
+  // peppered with an ephemeral per-process key (which would orphan every
+  // previously issued code on restart).
+  return ''
+}
+
+/** The at-rest verifier for a NEWLY ISSUED code under the current env. */
+export function codeVerifier(normalized: string): string {
+  const pepper = verifierPepper()
+  if (!pepper) return hashCode(normalized)
+  return createHmac('sha256', pepper).update(normalized).digest('hex')
+}
+
+/** Candidate verifier hashes for a submitted code, keyed-first. */
+function candidateVerifiers(normalized: string): string[] {
+  const pepper = verifierPepper()
+  const legacy = hashCode(normalized)
+  if (!pepper) return [legacy]
+  const keyed = createHmac('sha256', pepper).update(normalized).digest('hex')
+  return keyed === legacy ? [keyed] : [keyed, legacy]
 }
 
 // ── Reference numbers (same year-scoped sequence pattern as receipts) ──────
@@ -112,12 +174,15 @@ export function resolveValidity(opts: {
 
 // ── Issuance ────────────────────────────────────────────────────────────────
 
-export type CodeScope = 'SCHOOL_SUBSCRIPTION' | 'STUDENT_ENTITLEMENT'
+export type CodeScope = 'SCHOOL_SUBSCRIPTION' | 'STUDENT_ENTITLEMENT' | 'STAFF_ENTITLEMENT'
 
 export interface IssueCodeInput {
   scope: CodeScope
   schoolId: string
   studentId?: string | null
+  /** Pre-assigned staff claimant (STAFF_ENTITLEMENT scope) — the claim
+   *  path verifies the authenticated identity against this assignment. */
+  assignedUserId?: string | null
   planId?: string | null
   planCode?: string | null
   interval?: string | null
@@ -145,16 +210,21 @@ export interface IssuedCode {
 
 export async function issueActivationCode(input: IssueCodeInput): Promise<IssuedCode> {
   const client = input.tx ?? db
-  if (input.scope === 'STUDENT_ENTITLEMENT' && !input.studentId) {
+  if (input.scope === 'STAFF_ENTITLEMENT' && input.studentId) {
     throw new AppError('VALIDATION_FAILED', {
-      publicMessage: 'Student-scoped codes require a student.',
-      internalDetail: 'issueActivationCode: student scope without studentId',
+      publicMessage: 'Staff-scoped codes do not take a student.',
+      internalDetail: 'issueActivationCode: staff scope with studentId',
     })
   }
+  // STUDENT_ENTITLEMENT codes may be student-specific (pre-assigned —
+  // the claim verifies the identity against the assignment) or OPEN
+  // (no studentId — securely claimed by ANY eligible student of the
+  // owning tenant at redemption; the claim path binds the tenant and
+  // the authenticated student identity).
   const claimWindow = Math.min(365, Math.max(1, Math.round(input.claimWindowDays)))
   const expiresAt = new Date(Date.now() + claimWindow * 24 * 60 * 60 * 1000)
   const code = generateCode()
-  const codeHash = hashCode(normalizeCode(code))
+  const codeHash = codeVerifier(normalizeCode(code))
   let seq = await nextActivationSeq(input.tx)
 
   // publicRef uniqueness: count-based sequence with the unique index as the
@@ -168,6 +238,7 @@ export async function issueActivationCode(input: IssueCodeInput): Promise<Issued
           scope: input.scope,
           schoolId: input.schoolId,
           studentId: input.studentId ?? null,
+          assignedUserId: input.assignedUserId ?? null,
           planId: input.planId ?? null,
           planCode: input.planCode ?? null,
           interval: input.interval ?? null,
@@ -306,18 +377,29 @@ export async function claimStudentActivationCode(
     // Malformed input — indistinguishable from not-found by design.
     throw new CodeClaimError('NOT_FOUND', STUDENT_CLAIM_MESSAGE)
   }
-  const hash = hashCode(normalized)
+  const candidates = candidateVerifiers(normalized)
   const now = new Date()
 
   const outcome = await db.$transaction(async (tx) => {
-    const code = await tx.activationCode.findUnique({ where: { codeHash: hash } })
-    if (!code) return { rejected: true as const, codeId: '', reason: 'NOT_FOUND' as ClaimRejection }
+    let found: Prisma.ActivationCodeGetPayload<Record<string, never>> | null = null
+    for (const hash of candidates) {
+      const match = await tx.activationCode.findUnique({ where: { codeHash: hash } })
+      if (match) {
+        found = match
+        break
+      }
+    }
+    if (!found) return { rejected: true as const, codeId: '', reason: 'NOT_FOUND' as ClaimRejection }
+    const code = found
 
     const reject = (reason: ClaimRejection) => ({ rejected: true as const, codeId: code.id, reason })
 
     if (code.scope !== 'STUDENT_ENTITLEMENT') return reject('SCOPE_MISMATCH')
     if (code.schoolId !== ctx.schoolId) return reject('SCHOOL_MISMATCH')
-    if (!code.studentId || code.studentId !== ctx.studentId) return reject('STUDENT_MISMATCH')
+    // Assignment binding: a pre-assigned code verifies the claimant
+    // against the assignment; an OPEN code (no studentId) is claimable
+    // by ANY eligible student of the already-verified tenant.
+    if (code.studentId && code.studentId !== ctx.studentId) return reject('STUDENT_MISMATCH')
     if (code.status === 'CLAIMED') return reject('ALREADY_CLAIMED')
     if (code.status === 'REVOKED') return reject('REVOKED')
     if (code.status === 'REPLACED') return reject('REPLACED')
@@ -424,12 +506,20 @@ export async function redeemSchoolActivationCode(
   if (normalized.length < 15) {
     throw new CodeClaimError('NOT_FOUND', REDEEM_MESSAGE)
   }
-  const hash = hashCode(normalized)
+  const candidates = candidateVerifiers(normalized)
   const now = new Date()
 
   const outcome = await db.$transaction(async (tx) => {
-    const code = await tx.activationCode.findUnique({ where: { codeHash: hash } })
-    if (!code) return { rejected: true as const, codeId: '', reason: 'NOT_FOUND' as ClaimRejection }
+    let found: Prisma.ActivationCodeGetPayload<Record<string, never>> | null = null
+    for (const hash of candidates) {
+      const match = await tx.activationCode.findUnique({ where: { codeHash: hash } })
+      if (match) {
+        found = match
+        break
+      }
+    }
+    if (!found) return { rejected: true as const, codeId: '', reason: 'NOT_FOUND' as ClaimRejection }
+    const code = found
 
     const reject = (reason: ClaimRejection) => ({ rejected: true as const, codeId: code.id, reason })
 
@@ -567,4 +657,234 @@ export async function reissueActivationCode(opts: {
     })
     return { ...issued, revokedStatus: replacedStatus }
   }, { timeout: 15_000 })
+}
+
+// ── Staff claim (STAFF ENTITLEMENTS, 2026-10-30) ────────────────────────────
+
+export interface StaffClaimContext {
+  /** The authenticated claimant (session-resolved; never client input). */
+  userId: string
+  schoolId: string
+  /** Server-verified canonical role of the authenticated user. A staff
+   *  code can only EVER be claimed by a TEACHER — a student session or a
+   *  principal session claiming a staff code is a SCOPE_MISMATCH by
+   *  identity, not by submitted field. */
+  role: string
+  ip?: string | null
+}
+
+export interface StaffClaimResult {
+  entitlementId: string
+  validityStart: Date
+  validityEnd: Date
+  /** ACTIVE | PENDING | SUSPENDED (banked onto a suspended entitlement). */
+  status: 'ACTIVE' | 'PENDING' | 'SUSPENDED'
+  planCode: string | null
+  publicRef: string
+}
+
+/** The generic, user-safe message for every staff-claim rejection. */
+const STAFF_CLAIM_MESSAGE =
+  'This activation code is not valid for your account. Check the code with your school office, or ask them to reissue it.'
+
+/**
+ * Claim a staff-scoped activation code — ONE transaction with the SAME
+ * discipline as the student claim:
+ *   lookup by verifier → scope/tenant/identity/assignment checks →
+ *   conditional UPDATE (ISSUED→CLAIMED, race-safe) → staff entitlement
+ *   activation (renewal anchored at max(now, validityEnd); suspended
+ *   rows BANK the claim) → claim event.
+ *
+ * Identity checks run BEFORE any state transition: the claimant's role
+ * is the SERVER-verified canonical role from the session (never a
+ * submitted field), the tenant is the session tenant, and a pre-assigned
+ * code verifies claimant === assignedUser. The partial unique index
+ * StaffEntitlement_one_live_per_user is the DB-level backstop.
+ */
+export async function claimStaffActivationCode(
+  codeInput: string,
+  ctx: StaffClaimContext,
+): Promise<StaffClaimResult> {
+  const normalized = normalizeCode(String(codeInput ?? ''))
+  if (normalized.length < 15) {
+    throw new CodeClaimError('NOT_FOUND', STAFF_CLAIM_MESSAGE)
+  }
+  const candidates = candidateVerifiers(normalized)
+  const now = new Date()
+
+  const outcome = await db.$transaction(async (tx) => {
+    let found: Prisma.ActivationCodeGetPayload<Record<string, never>> | null = null
+    for (const hash of candidates) {
+      const match = await tx.activationCode.findUnique({ where: { codeHash: hash } })
+      if (match) {
+        found = match
+        break
+      }
+    }
+    if (!found) return { rejected: true as const, codeId: '', reason: 'NOT_FOUND' as ClaimRejection }
+    const code = found
+
+    const reject = (reason: ClaimRejection) => ({ rejected: true as const, codeId: code.id, reason })
+
+    if (code.scope !== 'STAFF_ENTITLEMENT') return reject('SCOPE_MISMATCH')
+    if (code.schoolId !== ctx.schoolId) return reject('SCHOOL_MISMATCH')
+    if (ctx.role !== 'TEACHER') return reject('SCOPE_MISMATCH')
+    if (code.assignedUserId && code.assignedUserId !== ctx.userId) return reject('STUDENT_MISMATCH')
+    if (code.status === 'CLAIMED') return reject('ALREADY_CLAIMED')
+    if (code.status === 'REVOKED') return reject('REVOKED')
+    if (code.status === 'REPLACED') return reject('REPLACED')
+    if (code.status === 'EXPIRED' || code.expiresAt.getTime() <= now.getTime()) return reject('EXPIRED')
+
+    const claimed = await tx.activationCode.updateMany({
+      where: { id: code.id, status: 'ISSUED' },
+      data: { status: 'CLAIMED', claimedAt: now, claimedByUserId: ctx.userId },
+    })
+    if (claimed.count !== 1) {
+      return reject('RACE_LOST')
+    }
+
+    const activated = await activateStaffEntitlementInTx(tx, {
+      schoolId: ctx.schoolId,
+      userId: ctx.userId,
+      planId: code.planId,
+      planCode: code.planCode,
+      source: 'OFFLINE_CODE',
+      activationCodeId: code.id,
+      validityMonths: code.validityMonths,
+      validityStartOverride: code.validityStartOverride,
+      validityEndOverride: code.validityEndOverride,
+    })
+
+    await tx.activationCode.update({
+      where: { id: code.id },
+      data: { staffEntitlementId: activated.entitlementId },
+    })
+    await tx.activationCodeEvent.create({
+      data: {
+        codeId: code.id,
+        type: 'CLAIM_SUCCESS',
+        userId: ctx.userId,
+        ip: ctx.ip ?? null,
+        detail: JSON.stringify({ entitlementId: activated.entitlementId, validityEnd: activated.validityEnd.toISOString(), staff: true }),
+      },
+    })
+
+    return {
+      rejected: false as const,
+      result: {
+        entitlementId: activated.entitlementId,
+        validityStart: activated.validityStart,
+        validityEnd: activated.validityEnd,
+        status: activated.statusAfter,
+        planCode: code.planCode,
+        publicRef: code.publicRef,
+      } as StaffClaimResult,
+    }
+  }, { timeout: 15_000 })
+
+  if (outcome.rejected) {
+    if (outcome.codeId) {
+      await persistRejectionEvent({ ...outcome, userId: ctx.userId, ip: ctx.ip })
+    }
+    throw new CodeClaimError(outcome.reason, STAFF_CLAIM_MESSAGE)
+  }
+  return outcome.result
+}
+
+// ── Batch issuance (BATCH CODES, 2026-10-30) ───────────────────────────────
+
+export const BATCH_CODE_LIMITS = { min: 1, max: 200 } as const
+
+export interface BatchIssueCodeInput {
+  scope: Extract<CodeScope, 'STUDENT_ENTITLEMENT' | 'STAFF_ENTITLEMENT'>
+  schoolId: string
+  planId?: string | null
+  planCode?: string | null
+  interval?: string | null
+  validityMonths: number
+  validityStartOverride?: Date | null
+  validityEndOverride?: Date | null
+  claimWindowDays: number
+  issuedById: string
+  quantity: number
+  /** Per-code pre-assignment: student ids (STUDENT scope, same order as
+   *  issuance) or staff User ids (STAFF scope). Length must equal the
+   *  quantity when provided. */
+  assignedIds?: string[]
+  /** Per-code issuance authorization linkage — the VERIFIED payment row
+   *  id each code delivers ("studentPayment:<id>" / "staffPayment:<id>"),
+   *  one per seat when the batch is payment-backed (the route creates the
+   *  per-code deferred payment rows in the SAME transaction).
+   *  Length must equal the quantity when provided; omitted entries stay
+   *  unlinked (the complimentary path documents its authorization in the
+   *  audit trail instead). */
+  paymentRefs?: (string | null)[]
+  /** Caller-provided transaction: the whole batch commits or rolls back
+   *  together (a failed payment row removes every code with it). */
+  tx: Tx
+}
+
+export interface BatchIssuedItem extends IssuedCode {
+  assignedId: string | null
+}
+
+export interface BatchIssueResult {
+  requested: number
+  generated: number
+  items: BatchIssuedItem[]
+}
+
+/**
+ * Generate a configurable batch of student/staff activation codes inside
+ * the CALLER's transaction. Every code in the batch is bound to the same
+ * tenant, product/plan, scope and validity policy; per-code pre-assignment
+ * is supported (assignedIds[i]). Plaintext codes exist exactly once —
+ * they are returned to the operator for the ONE-TIME display and never
+ * stored, logged or emailed.
+ *
+ * Capacity guard: the sequence draw happens once per code (the atomic DB
+ * sequence is race-free across concurrent batches).
+ */
+export async function issueActivationCodeBatch(input: BatchIssueCodeInput): Promise<BatchIssueResult> {
+  const quantity = Math.round(input.quantity)
+  if (!Number.isInteger(quantity) || quantity < BATCH_CODE_LIMITS.min || quantity > BATCH_CODE_LIMITS.max) {
+    throw new AppError('VALIDATION_FAILED', {
+      publicMessage: `Batch quantity must be between ${BATCH_CODE_LIMITS.min} and ${BATCH_CODE_LIMITS.max}.`,
+      internalDetail: `issueActivationCodeBatch: quantity ${input.quantity} outside bounds`,
+    })
+  }
+  if (input.assignedIds && input.assignedIds.length !== quantity) {
+    throw new AppError('VALIDATION_FAILED', {
+      publicMessage: 'The assignment list must have exactly one entry per requested code.',
+      internalDetail: `issueActivationCodeBatch: assignedIds ${input.assignedIds.length} != quantity ${quantity}`,
+    })
+  }
+  if (input.paymentRefs && input.paymentRefs.length !== quantity) {
+    throw new AppError('VALIDATION_FAILED', {
+      publicMessage: 'The payment linkage list must have exactly one entry per requested code.',
+      internalDetail: `issueActivationCodeBatch: paymentRefs ${input.paymentRefs.length} != quantity ${quantity}`,
+    })
+  }
+  const items: BatchIssuedItem[] = []
+  for (let i = 0; i < quantity; i++) {
+    const assignedId = input.assignedIds?.[i] ?? null
+    const issued = await issueActivationCode({
+      scope: input.scope,
+      schoolId: input.schoolId,
+      studentId: input.scope === 'STUDENT_ENTITLEMENT' ? (assignedId ?? undefined) : undefined,
+      assignedUserId: input.scope === 'STAFF_ENTITLEMENT' ? assignedId : null,
+      planId: input.planId,
+      planCode: input.planCode,
+      interval: input.interval,
+      validityMonths: input.validityMonths,
+      validityStartOverride: input.validityStartOverride,
+      validityEndOverride: input.validityEndOverride,
+      claimWindowDays: input.claimWindowDays,
+      issuedById: input.issuedById,
+      paymentRef: input.paymentRefs?.[i] ?? null,
+      tx: input.tx,
+    })
+    items.push({ ...issued, assignedId })
+  }
+  return { requested: quantity, generated: items.length, items }
 }

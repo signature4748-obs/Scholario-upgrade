@@ -45,7 +45,7 @@ export function studentReceiptNumber(seq: number): string {
   return `SCH-SSR-${new Date().getFullYear()}-${String(seq).padStart(5, '0')}`
 }
 
-async function nextStudentReceiptSeq(tx?: typeof db): Promise<number> {
+async function nextStudentReceiptSeq(tx?: Prisma.TransactionClient): Promise<number> {
   // Atomic DB sequence — race-free inside settlement transactions.
   const rows = await (tx ?? db).$queryRaw<Array<{ seq: number }>>`SELECT nextval('student_payment_receipt_seq')::int AS seq`
   return Number(rows[0]?.seq ?? 1)
@@ -76,6 +76,11 @@ export interface RecordStudentPaymentInput {
   orderId?: string | null
   /** Skip entitlement creation (the offline CODE path activates later). */
   deferEntitlement?: boolean
+  /** Caller-provided transaction client — when set, the payment (and
+   *  activation) are written INSIDE the caller's transaction so a later
+   *  failure rolls the financial row back with everything else (used by
+   *  the batch issuance route; the default runs its own transaction). */
+  tx?: Prisma.TransactionClient
 }
 
 export interface RecordStudentPaymentResult {
@@ -111,7 +116,7 @@ export async function recordStudentPayment(
     throw new AppError('VALIDATION_FAILED', { publicMessage: 'Unsupported currency' })
   }
 
-  const student = await db.student.findUnique({
+  const student = await (input.tx ?? db).student.findUnique({
     where: { id: input.studentId },
     select: { id: true, schoolId: true, userId: true },
   })
@@ -122,9 +127,9 @@ export async function recordStudentPayment(
     })
   }
 
-  const seq = await nextStudentReceiptSeq()
+  const seq = await nextStudentReceiptSeq(input.tx)
   const receiptNo = studentReceiptNumber(seq)
-  return db.$transaction(async (tx) => {
+  const run = async (tx: Prisma.TransactionClient) => {
         const payment = await tx.studentSubscriptionPayment.create({
           data: {
             schoolId: input.schoolId,
@@ -176,7 +181,11 @@ export async function recordStudentPayment(
           },
         })
       return { paymentId: payment.id, receiptNo, ...activated }
-  }, { timeout: 15_000 })
+  }
+  if (input.tx) {
+    return run(input.tx)
+  }
+  return db.$transaction(run, { timeout: 15_000 })
 }
 
 // ── Entitlement activation core (shared by every activation cause) ─────────

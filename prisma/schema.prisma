@@ -173,6 +173,8 @@ model School {
   subscriptionOrders    SubscriptionOrder[]
   studentEntitlements   StudentEntitlement[]
   studentSubPayments    StudentSubscriptionPayment[]
+  staffEntitlements     StaffEntitlement[]
+  staffSubPayments      StaffSubscriptionPayment[]
   activationCodes       ActivationCode[]
   websiteNotices        WebsiteNotice[]
   websiteAdmission      WebsiteAdmission?
@@ -319,6 +321,11 @@ model User {
   initiatedSubscriptionOrders SubscriptionOrder[]       @relation("OrderInitiator")
   claimedActivationCodes      ActivationCode[]          @relation("CodeClaimer")
   activationCodeEvents        ActivationCodeEvent[]
+  // STAFF ENTITLEMENTS (2026-10-30) — per-seat staff (TEACHER) entitlements
+  // and activation codes pre-assigned to this staff member before issuance.
+  staffEntitlements           StaffEntitlement[]
+  staffSubscriptionPayments   StaffSubscriptionPayment[]
+  assignedActivationCodes     ActivationCode[]          @relation("CodeAssignedUser")
 
   // PHASE 3 — directory/bulk-message queries filter (school, role, status).
   @@index([schoolId, role, status])
@@ -2847,6 +2854,9 @@ model PlatformAdmin {
   recordedStudentPayments     StudentSubscriptionPayment[] @relation("StudentPaymentRecorder")
   revokedStudentEntitlements  StudentEntitlement[]      @relation("EntitlementRevoker")
   reissuedActivationCodes     ActivationCode[]          @relation("CodeReissuer")
+  // STAFF ENTITLEMENTS (2026-10-30) — staff-side operator actions.
+  recordedStaffPayments       StaffSubscriptionPayment[] @relation("StaffPaymentRecorder")
+  revokedStaffEntitlements    StaffEntitlement[]         @relation("StaffEntitlementRevoker")
 
   @@index([status])
 }
@@ -3194,6 +3204,16 @@ model SchoolSubscription {
   /// entitlement) | MIXED (school plan covers staff-run modules; students
   /// still need entitlements). Set ONLY via the platform control plane.
   billingModel     String   @default("SCHOOL_WIDE")
+  /// STAFF LICENSING POLICY (2026-10-30, additive):
+  /// TENANT (default — every existing tenant keeps today's behavior: the
+  /// active tenant subscription covers teachers/staff exactly as it
+  /// always has) | PER_SEAT (each TEACHER account needs its own live
+  /// StaffEntitlement — enforced server-side in withUser for TEACHER
+  /// sessions on business routes). PRINCIPAL accounts are NEVER gated by
+  /// this (administrative privileges are not a paid staff entitlement);
+  /// STUDENT accounts are governed by billingModel, not staffCoverage.
+  /// Set ONLY via the platform control plane (terms route).
+  staffCoverage    String   @default("TENANT")
   /// Plan-of-record at purchase (snapshot fields keep history when the
   /// plan is later archived). NOTE: `plan` (string) is the legacy plan name;
   /// `planDef` is the plan-registry row (null for legacy rows).
@@ -3511,6 +3531,7 @@ model SubscriptionPlan {
   schoolSubscriptions SchoolSubscription[]
   orders              SubscriptionOrder[]
   studentEntitlements StudentEntitlement[]
+  staffEntitlements   StaffEntitlement[]
   activationCodes     ActivationCode[]
 
   @@index([scope, status])
@@ -3682,6 +3703,106 @@ model StudentSubscriptionPayment {
   @@index([studentId, paymentDate])
 }
 
+/// STAFF ENTITLEMENT (2026-10-30) — the per-seat analogue of
+/// StudentEntitlement for TEACHER accounts under PER_SEAT staff coverage.
+/// Exactly ONE live row per user (hand-written partial unique index
+/// `StaffEntitlement_one_live_per_user` — the DB-level double-activation
+/// guard, same discipline as the student side). PRINCIPAL accounts never
+/// hold these: administrative privileges are not a paid entitlement, and
+/// a staff code can only ever be claimed by a server-verified canonical
+/// TEACHER identity (never by a student, never by a principal).
+model StaffEntitlement {
+  id       String @id @default(cuid())
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// The staff member (User row). Server-verified canonical TEACHER role
+  /// at every write path; 1:1 with the authenticating identity.
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  planId   String?
+  plan     SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  planCode String?
+
+  /// PENDING | ACTIVE | EXPIRED | REVOKED | SUSPENDED (stored snapshot;
+  /// the live state is computed from the explicit validity window at
+  /// evaluation time — access never depends on a scheduled job).
+  status        String   @default("ACTIVE")
+  validityStart DateTime
+  validityEnd   DateTime
+  /// ONLINE | OFFLINE_CODE | MANUAL | COMPLIMENTARY.
+  source        String
+
+  paymentId        String? @unique
+  payment          StaffSubscriptionPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  activationCodeId String? @unique
+  activationCode   ActivationCode?  @relation(fields: [activationCodeId], references: [id], onDelete: SetNull)
+  activatedAt      DateTime?
+
+  revokedAt     DateTime?
+  revokedById   String?
+  revokedBy     PlatformAdmin? @relation("StaffEntitlementRevoker", fields: [revokedById], references: [id], onDelete: SetNull)
+  revokeReason  String?
+  suspendedAt   DateTime?
+  suspendReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId, status])
+  @@index([userId, validityEnd])
+  @@index([status, validityEnd])
+}
+
+/// STAFF SUBSCRIPTION PAYMENT (2026-10-30) — the immutable per-seat
+/// ledger row for staff entitlements (mirrors StudentSubscriptionPayment;
+/// A-domain money: the school pays SCHOLARIO for staff seats). Only a
+/// VERIFIED row (or an explicit complimentary grant) ever activates a
+/// StaffEntitlement. Receipt prefix SCH-SSP-<year>-<seq> via the
+/// staff_payment_receipt_seq DB sequence.
+model StaffSubscriptionPayment {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  entitlementId String?
+  entitlement   StaffEntitlement?
+
+  planId   String?
+  planCode String?
+  interval String?
+
+  amount   Decimal  @db.Decimal(12, 2)
+  currency String   @default("INR")
+  /// ONLINE_PAYMENT | CASH | BANK_TRANSFER | CHEQUE | OTHER | COMPLIMENTARY.
+  mode     String
+  paymentDate DateTime
+
+  validityMonths Int @default(12)
+
+  reference String?
+  notes     String?
+
+  recordedById String?
+  recordedBy   PlatformAdmin? @relation("StaffPaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  verification String   @default("VERIFIED")
+  verifiedAt   DateTime @default(now())
+
+  statusAfter      String?
+  validityEndAfter DateTime?
+
+  /// Human-readable receipt number (SCH-SSP-<year>-<seq>).
+  receiptNo String? @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, paymentDate])
+  @@index([userId, paymentDate])
+}
+
 /// Activation code — the offline delivery handshake. The CODE is a
 /// 100-bit random Crockford-base32 string shown exactly once at issuance
 /// (never stored in plaintext, never emailed by the platform, never
@@ -3727,9 +3848,18 @@ model ActivationCode {
   claimedAt        DateTime?
   claimedByUserId  String?
   claimedBy        User?    @relation("CodeClaimer", fields: [claimedByUserId], references: [id], onDelete: SetNull)
+  /// Pre-assigned claimant (2026-10-30): for staff codes issued directly
+  /// to a specific TEACHER (the student analogue is studentId). The claim
+  /// path verifies the authenticated identity against this assignment —
+  /// a mismatched claimant is rejected with the generic error.
+  assignedUserId   String?
+  assignedUser     User?    @relation("CodeAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
   /// Resulting student entitlement (student-scope codes).
   entitlementId String?
   entitlement   StudentEntitlement?
+  /// Resulting staff entitlement (staff-scope codes).
+  staffEntitlementId String?
+  staffEntitlement   StaffEntitlement?
 
   /// Issuance authorization linkage: the VERIFIED payment row id this
   /// code delivers (platformPayment:… / studentPayment:…).
