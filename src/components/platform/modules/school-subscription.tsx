@@ -2,58 +2,62 @@
 
 // ============================================================
 // SchoolSubscriptionTab — school workspace · Subscription tab
-// (REDESIGNED 2026-10-29 — the guided 4-step subscription flow)
+// (2026-10-29 PM — compact five-sub-tab layout on top of the
+// capabilities the guided redesign built)
 // ------------------------------------------------------------
-// REPLACES the old five-nested-tabs layout (Snapshot / Plan &
-// billing / Codes / Students / Ledger — concepts scattered with no
-// end-to-end workflow) with ONE guided page a non-technical
-// platform owner can follow top to bottom:
+// LAYOUT — five sub-tabs (the compact operator surface), each
+// showing only its own content; the selection persists in the
+// URL (`?tab=subscription&sub=…` — the school page's existing
+// query-param convention, additive and parent-safe):
 //
-//   Summary      — the school's current subscription at a glance
-//                  (state, plan, price, validity, renewal) + the
-//                  primary action.
-//   Step 1       — Plan & pricing: what the school is on and what
-//                  it pays; editable AFTER school creation (terms
-//                  API — plan, billing model, price, licensed
-//                  students, period). Advanced controls (legacy
-//                  plan marker, manual entitlement override) live
-//                  in a collapsed drawer, explained.
-//   Step 2       — Record payment / activate / renew: a guided,
-//                  reviewed payment form that activates directly
-//                  or issues a one-time activation code.
-//   Step 3       — Access & activation codes: how codes work,
-//                  the school's codes (status/expiry/redemption),
-//                  and per-student entitlement assignment. Staff
-//                  codes are honestly marked unsupported.
-//   Step 4       — History & status: the immutable payment ledger
-//                  (what this school paid SCHOLARIO) and the
-//                  recent subscription audit trail.
-//
-// PLAIN-LANGUAGE CONTRACT (mission terminology):
-//   · Plan        — the product tier the school is on (Standard,
-//                   Pro…). A label, not a price.
-//   · Billing model — how the price is computed: fixed school fee
-//                   (SCHOOL_WIDE) or per student (PER_STUDENT) or
-//                   mixed (MIXED).
-//   · Price       — what THIS school is actually charged (an
-//                   agreed override of the catalogue price where
-//                   negotiated).
-//   · Entitlement — the access those payments unlock for the
-//                   school (and, per-student, for a student).
-//
-// PLATFORM SUBSCRIPTION ≠ SCHOOL FEE COLLECTION: the banner keeps
-// the boundary visible (the school's own fee gateway lives in the
-// "Fee gateway" tab — different money, different credentials).
+//   Snapshot       — the current subscription as a compact info
+//                    grid (plan, model, price, licensed count,
+//                    ACCESS state and PAID-THROUGH as two
+//                    distinct facts, renewal, payments) + the
+//                    three primary actions.
+//   Plan & billing — the commercial terms table, the spelled-
+//                    out per-student calculation, the catalogue
+//                    entry point (Manage plans → /platform/
+//                    subscriptions), payment recording, and the
+//                    advanced drawer (display label + manual
+//                    override).
+//   Codes          — one-time activation codes: filters,
+//                    revoke/reissue, honest scope statement
+//                    (school + student; staff NOT supported).
+//   Students       — per-student entitlements: search, covered-
+//                    by-school vs per-student, assign/history.
+//   Ledger         — the immutable payment ledger (what the
+//                    school pays SCHOLARIO) + recent audited
+//                    changes.
 //
 // All mutations reuse the authoritative endpoints (no second
-// subscription system): the same APIs /platform/subscriptions and
-// /platform/schools/[id]/subscription* use. Billing mutations are
+// subscription system): /platform/subscriptions and
+// /platform/schools/[id]/subscription* — billing mutations are
 // step-up-gated (gate() convention — dormant while platform TOTP
 // is stood down) and audited server-side with the operator's
 // reason.
+//
+// PRESERVED CAPABILITIES (do not regress): post-creation terms
+// editing (PATCH …/terms), negotiated per-school pricing with
+// per-student math enforcement, payment review + duplicate
+// guard, one-time code display, student entitlement assignment,
+// immutable ledger, audit trail.
+//
+// HONEST BILLING CONTRACT (unchanged): terms are not payments —
+// status / periodEnd only move when a VERIFIED payment is
+// recorded or a code is redeemed. The evaluator is fail-open
+// for legacy tenants (no paid period can still be ACTIVE), so
+// the Snapshot renders ACCESS and PAID-THROUGH as separate
+// fields — an active badge never implies a paid period.
+//
+// PLATFORM SUBSCRIPTION ≠ SCHOOL FEE COLLECTION: one compact
+// footer line keeps the boundary visible (the school's own fee
+// gateway lives in the "Fee gateway" tab — different money,
+// different credentials).
 // ============================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   AlertTriangle,
   BadgeCheck,
@@ -61,11 +65,13 @@ import {
   CircleDollarSign,
   Info,
   KeyRound,
+  ListOrdered,
   Loader2,
   Package,
   RefreshCw,
   Search,
   ShieldAlert,
+  Users,
   Wallet,
 } from 'lucide-react'
 import { platformApi, type PlatformApiError } from '../platform-client'
@@ -107,6 +113,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // ── Types (API contracts) ────────────────────────────────────────────────
 
@@ -185,6 +192,9 @@ const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'] as const
 const PAYMENT_MODES = ['ONLINE_PAYMENT', 'CASH', 'BANK_TRANSFER', 'CHEQUE', 'OTHER'] as const
 const OVERRIDE_STATES = ['ACTIVE', 'GRACE', 'RESTRICTED', 'SUSPENDED'] as const
 const CODE_STATUS_FILTERS = ['ALL', 'ISSUED', 'CLAIMED', 'EXPIRED', 'REVOKED', 'REPLACED'] as const
+/** The five subscription sub-tabs (module-level constant — stable ref
+ *  for the URL-persistence effect; the order IS the tab order). */
+const SUB_TABS = ['snapshot', 'plan', 'codes', 'students', 'ledger']
 
 // ── Plain-language maps (the anti-jargon layer) ──────────────────────────
 
@@ -289,67 +299,13 @@ function HelpHint({ text }: { text: string }) {
   )
 }
 
-/** The numbered section shell — one guided page, no nested tabs. */
-function StepSection({
-  step,
-  id,
-  title,
-  intro,
-  actions,
-  children,
-}: {
-  step: number | null
-  id: string
-  title: string
-  intro: string
-  actions?: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <section id={id} aria-labelledby={`${id}-heading`} className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3.5 sm:px-5">
-        <div className="flex min-w-0 items-start gap-3">
-          {step != null && (
-            <span
-              aria-hidden="true"
-              className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-600 text-xs font-bold text-white"
-            >
-              {step}
-            </span>
-          )}
-          <div className="min-w-0">
-            <h3 id={`${id}-heading`} className="font-display text-sm font-bold text-slate-900">
-              {title}
-            </h3>
-            <p className="mt-0.5 max-w-2xl text-[11px] leading-snug text-slate-500">{intro}</p>
-          </div>
-        </div>
-        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
-      </div>
-      <div className="space-y-4 p-4 sm:px-5">{children}</div>
-    </section>
-  )
-}
+// (The guided page's numbered step-section shell and the large boundary
+// banner are retired: the five sub-tabs carry the structure, and the
+// platform-vs-fee-gateway boundary lives in ONE compact footer line in
+// the main component below. Secondary explanations moved into HelpHint
+// tooltips so no tab opens with a wall of text.)
 
-/** The platform-vs-fee-collection boundary banner (mission §5D). */
-function BoundaryBanner() {
-  return (
-    <div
-      className="flex items-start gap-2.5 rounded-xl border border-teal-200 bg-teal-50/60 px-4 py-3 text-xs text-teal-900"
-      role="note"
-    >
-      <Info className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" aria-hidden="true" />
-      <p>
-        <span className="font-semibold">Platform subscription</span> — what this school pays SCHOLARIO to use the
-        platform. This is separate from the <span className="font-semibold">school fee gateway</span> (what the school
-        collects from its own students/parents — configured in the Fee gateway tab). Records, credentials and revenue
-        of the two never mix.
-      </p>
-    </div>
-  )
-}
-
-// ── Step 1 · Plan & pricing editor ───────────────────────────────────────
+// ── Plan & billing · terms editor (sub-tab 2 body) ──────────────────────
 
 /**
  * TermsDialog — set or renegotiate this school's commercial terms at any
@@ -490,7 +446,7 @@ function TermsDialog({
       if (!res) return // cancelled at the step-up prompt
       toast.success('Plan & pricing saved', {
         description:
-          'The agreed terms are on record. No payment was recorded — activate or renew from Step 2 when the school pays.',
+          'The agreed terms are on record. No payment was recorded — record the payment when the school pays to activate or renew.',
       })
       onSaved()
       onOpenChange(false)
@@ -1396,105 +1352,182 @@ function RecordPaymentDialog({
   )
 }
 
-// ── Summary header — the current subscription at a glance ────────────────
+// ── Snapshot — the compact at-a-glance grid (sub-tab 1 body) ─────────────
 
 /**
- * The prominent top card: state in plain language, the plan and price,
- * validity and renewal posture — plus the page's primary action (record
- * a payment). This is the answer to "where do I see what's going on".
+ * SummaryHeader — the Snapshot sub-tab body: one status line, one info
+ * grid (plan, model, price, licensed count, ACCESS, PAID-THROUGH,
+ * renewal, payments) and the three primary actions.
+ *
+ * HONEST STATE RENDERING: the evaluator is fail-open for legacy tenants
+ * (a school with NO paid period can still evaluate ACTIVE), so access
+ * and payment are two separate fields — the active badge never implies
+ * a paid period, and the legacy case says so in one short line.
+ *
  * Exported for the schema-pending render regression test.
  */
 export function SummaryHeader({
   data,
   registryRow,
   onRecordPayment,
+  onEditTerms,
+  onSelectCodes,
 }: {
   data: SubscriptionResponse
   registryRow: RegistryRow | null
   onRecordPayment: () => void
+  /** Optional tab-wired actions (tests render the header without them). */
+  onEditTerms?: () => void
+  onSelectCodes?: () => void
 }) {
   const ent = data.entitlement
   const sub = data.subscription
-  const model = registryRow?.billingModel ?? 'SCHOOL_WIDE'
+  const model = registryRow?.billingModel ?? null
   const currency = registryRow?.currencySnapshot ?? 'INR'
   const unitPrice = registryRow?.priceSnapshot ?? null
   const licensed = registryRow?.licensedStudents ?? null
+  const isPerStudent = model === 'PER_STUDENT'
+
+  // Legacy fail-open case: access is ACTIVE while no paid period and no
+  // override exists — say so in one line instead of implying a payment.
+  const legacyActiveNoPeriod = ent.state === 'ACTIVE' && !sub?.periodEnd && !sub?.overrideStatus
 
   const renewalLine = (() => {
-    if (ent.state === 'ACTIVE') {
-      return sub?.periodEnd ? `Renews by ${fmtDate(sub.periodEnd)}` : 'No expiry set — active until changed'
-    }
-    if (ent.renewalRequired) return 'Renewal required now'
-    return null
+    if (ent.renewalRequired) return 'Renewal required'
+    if (sub?.periodEnd) return `Renews by ${fmtDate(sub.periodEnd)}`
+    return data.payments.length > 0 ? 'Renewal payment not recorded' : 'No payment recorded yet'
   })()
 
   return (
     <section
-      aria-label="Current subscription summary"
-      className="rounded-xl border border-slate-200 bg-gradient-to-br from-teal-50/70 via-white to-white p-4 shadow-sm sm:p-5"
+      aria-label="Subscription snapshot"
+      className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
     >
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 space-y-2">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <EntitlementStateBadge state={ent.state} />
-            {registryRow?.planDef?.name && (
-              <Badge variant="outline" className="normal-case border-slate-200 bg-white text-slate-700">
-                {registryRow.planDef.name}
-              </Badge>
-            )}
-            {sub?.overrideStatus && (
-              <Badge variant="outline" className="normal-case border-orange-200 bg-orange-50 text-orange-700">
-                manual override: {STATE_PLAIN[sub.overrideStatus] ?? sub.overrideStatus}
-              </Badge>
-            )}
-          </div>
-          {/* One-line commercial reality: model + price + math. */}
-          <p className="text-sm text-slate-700">
-            {modelLabel(registryRow?.billingModel)}
-            {unitPrice != null && (
-              <>
-                {' — '}
-                {model === 'PER_STUDENT' ? (
-                  <>
-                    {money(unitPrice, currency)} per student / year
-                    {licensed != null && (
-                      <span className="text-slate-500">
-                        {' '}
-                        × {licensed.toLocaleString('en-IN')} licensed ={' '}
-                        <span className="font-semibold text-slate-900">
-                          {money(unitPrice * licensed, currency)}
-                        </span>{' '}
-                        / year
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <span className="font-semibold text-slate-900">{money(unitPrice, currency)}</span>
-                    {(registryRow?.interval ?? '') === 'MONTHLY' ? ' / month' : (registryRow?.interval ?? '') === 'ANNUAL' ? ' / year' : ''}
-                  </>
-                )}
-              </>
-            )}
-            {unitPrice == null && (
-              <span className="text-slate-500"> — no price agreed yet (set it in Step 1)</span>
-            )}
-          </p>
-          <p className="text-xs text-slate-500">
-            {sub?.periodEnd
-              ? `Valid until ${fmtDate(sub.periodEnd)}${renewalLine ? ' · ' + renewalLine : ''}`
-              : 'No paid period recorded yet — activate by recording the first payment (Step 2).'}
-            {ent.message && <span className="block pt-1 text-slate-600">{ent.message}</span>}
-          </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+          <EntitlementStateBadge state={ent.state} />
+          {registryRow?.planDef?.name && (
+            <Badge variant="outline" className="normal-case border-slate-200 bg-white text-slate-700">
+              {registryRow.planDef.name}
+            </Badge>
+          )}
+          {sub?.overrideStatus && (
+            <Badge variant="outline" className="normal-case border-orange-200 bg-orange-50 text-orange-700">
+              manual override: {STATE_PLAIN[sub.overrideStatus] ?? sub.overrideStatus}
+            </Badge>
+          )}
+          {legacyActiveNoPeriod && (
+            <span className="text-[11px] text-slate-500">
+              access active — no paid period on record yet
+              <HelpHint text="This school evaluates Active (legacy provisioning, not a recorded payment). Record the first verified payment to start the paid period; or set an audited manual override if access should be restricted meanwhile." />
+            </span>
+          )}
         </div>
-        <Button
-          onClick={onRecordPayment}
-          className="h-10 shrink-0 bg-teal-600 px-4 text-sm font-semibold hover:bg-teal-700 text-white focus-ring"
-        >
-          <Wallet className="mr-1.5 h-4 w-4" aria-hidden="true" />
-          {data.payments.length === 0 ? 'Record payment & activate' : 'Record payment / renew'}
-        </Button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            onClick={onRecordPayment}
+            className="h-9 bg-teal-600 px-3.5 text-sm font-semibold hover:bg-teal-700 text-white focus-ring"
+          >
+            <Wallet className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            {data.payments.length === 0 ? 'Record payment & activate' : 'Record payment / renew'}
+          </Button>
+          {onEditTerms && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onEditTerms}
+              className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
+            >
+              <Package className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+              Edit plan &amp; pricing
+            </Button>
+          )}
+          {onSelectCodes && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onSelectCodes}
+              className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
+            >
+              <KeyRound className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+              Activation codes
+            </Button>
+          )}
+        </div>
       </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
+        <Term
+          label="Plan"
+          value={
+            registryRow?.planDef ? (
+              <>
+                {registryRow.planDef.name}{' '}
+                <span className="font-mono text-[11px] text-slate-500">{registryRow.planCode}</span>
+              </>
+            ) : registryRow?.planCode ? (
+              <span className="font-mono text-[13px]">{registryRow.planCode}</span>
+            ) : (
+              <span className="text-slate-500">not linked</span>
+            )
+          }
+        />
+        <Term label="Billing model" value={modelLabel(model)} />
+        <Term
+          label="Agreed price"
+          value={
+            unitPrice != null ? (
+              isPerStudent && licensed != null ? (
+                <>
+                  <span className="font-semibold text-slate-900">
+                    {money(unitPrice * licensed, currency)}
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    {' '}
+                    / year ({money(unitPrice, currency)} × {licensed.toLocaleString('en-IN')})
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold text-slate-900">{money(unitPrice, currency)}</span>
+                  {(registryRow?.interval ?? '') === 'MONTHLY'
+                    ? ' / month'
+                    : (registryRow?.interval ?? '') === 'ANNUAL'
+                      ? ' / year'
+                      : ''}
+                </>
+              )
+            ) : (
+              <span className="text-slate-500">no price agreed yet</span>
+            )
+          }
+        />
+        {isPerStudent && (
+          <Term
+            label="Licensed students"
+            value={licensed != null ? licensed.toLocaleString('en-IN') : '—'}
+          />
+        )}
+        <Term
+          label="Paid through"
+          value={
+            sub?.periodEnd ? (
+              fmtDate(sub.periodEnd)
+            ) : (
+              <span className="text-slate-500">No paid period</span>
+            )
+          }
+        />
+        <Term
+          label="Renewal"
+          value={
+            <span className={ent.renewalRequired ? 'font-medium text-amber-700' : 'text-slate-900'}>
+              {renewalLine}
+            </span>
+          }
+        />
+        <Term label="Payments recorded" value={<span className="tabular-nums">{data.payments.length}</span>} />
+      </dl>
     </section>
   )
 }
@@ -1752,13 +1785,13 @@ function AdvancedControls({
   )
 }
 
-// ── Step 1 · the plan & pricing panel (exported for tests) ───────────────
+// ── Plan & billing · the terms panel (exported for tests) ────────────────
 
 /**
- * PlanPricingPanel — the Step 1 body: the terms table (plan / model /
- * price / licensed students / period / start / validity / renewal), the
- * spelled-out per-student calculation (or the fixed-fee explanation), the
- * empty state with a direct next action, and the advanced drawer.
+ * PlanPricingPanel — the Plan & billing body: the terms table (plan /
+ * model / price / licensed students / period / start / validity /
+ * renewal), the spelled-out per-student calculation, the empty state
+ * with a direct next action, and the advanced drawer.
  *
  * Exported for the schema-pending render regression test — the pending
  * wire shape (billingModel / planCode / priceSnapshot all NULL) must
@@ -1861,12 +1894,11 @@ export function PlanPricingPanel({
         </div>
       )}
 
-      {/* Fixed-fee explanation when not per-student. */}
+      {/* Fixed-fee one-liner when not per-student (full explanation in
+          the model tooltip — no repeated paragraphs). */}
       {!isPerStudent && registry?.priceSnapshot != null && (
-        <p className="text-[11px] leading-relaxed text-slate-500">
-          Fixed school fee: one price for the whole school regardless of size — every eligible member is covered by
-          this subscription. (Per-student billing is a separate model; switch it above if the school should be
-          billed per licensed student.)
+        <p className="text-[11px] text-slate-500">
+          Fixed school fee — every eligible member of the school is covered by this subscription.
         </p>
       )}
 
@@ -1894,7 +1926,7 @@ export function PlanPricingPanel({
   )
 }
 
-// ── Step 3 · codes ───────────────────────────────────────────────────────
+// ── Codes · activation codes (sub-tab 3) ────────────────────────────────
 
 function RevokeReissueDialog({
   code,
@@ -2014,27 +2046,13 @@ function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow
 
   return (
     <div>
-      {/* How codes work — the plain-language contract. */}
-      <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-slate-600">
-        <p>
-          <span className="font-semibold text-slate-800">How codes work:</span> a one-time activation code unlocks a
-          subscription or a student&apos;s access when redeemed in the school portal. The code is shown{' '}
-          <span className="font-semibold">only once</span> at issuance — only its hash is stored afterwards, so copy
-          it and deliver it to the principal (or student) out-of-band. Codes expire if not redeemed within their claim
-          window and can be revoked or reissued here.
-        </p>
-        <p className="mt-1">
-          <span className="font-semibold text-slate-800">Where codes come from:</span> school-subscription codes are
-          issued while recording a payment (Step 2 — &ldquo;activate by activation code&rdquo;); student codes while
-          assigning a student entitlement below. There is deliberately no &ldquo;free-standing&rdquo; school code — a
-          code always delivers something that was paid for or explicitly granted.
-        </p>
-        <p className="mt-1">
-          <span className="font-semibold text-slate-800">Who can hold one:</span> school subscriptions and students.
-          Codes for teachers/staff are <span className="font-semibold">not supported</span> — the entitlement model has
-          no staff-scope code, and student codes do not work for staff.
-        </p>
-      </div>
+      {/* One line + tooltip — the full contract lives in the help icon,
+          not in a permanent paragraph block. */}
+      <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+        One-time codes unlock the school subscription or one student&apos;s access — plaintext shown once at
+        issuance, then only a hash is stored.
+        <HelpHint text="School codes are issued while recording a payment (“activate by activation code”); student codes while assigning a student entitlement (Students tab). Codes expire if not redeemed within their claim window; revoke/reissue is audited. Copy the plaintext and deliver it to the principal or student out-of-band — it cannot be viewed again. Scopes: school subscription + student only. Codes for teachers/staff are NOT supported — the entitlement model has no staff-scope code, and student codes do not work for staff." />
+      </p>
 
       <div className="overflow-x-auto custom-scrollbar rounded-lg border border-slate-200">
         <table className="w-full min-w-[760px] text-xs">
@@ -2107,8 +2125,8 @@ function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
-                  No activation codes yet — issue one with a payment (Step 2) or when assigning a student entitlement
-                  below.
+                  No activation codes yet — record a payment with “activate by activation code”, or assign a
+                  student entitlement (Students tab).
                 </td>
               </tr>
             )}
@@ -2160,7 +2178,7 @@ function CodesCard({ codes, total, onChanged, gate }: { codes: ActivationCodeRow
   )
 }
 
-// ── Step 3 · student entitlements ────────────────────────────────────────
+// ── Students · per-student entitlements (sub-tab 4) ─────────────────────
 
 function StudentsCard({
   students,
@@ -2184,10 +2202,17 @@ function StudentsCard({
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="max-w-xl text-[11px] leading-relaxed text-slate-500">
+        <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
           {covered
-            ? 'Billing is a fixed school fee — every student is covered by the school\u2019s subscription automatically. Nothing to assign here unless the billing model changes to per-student.'
-            : 'Billing is per student — each student needs their own access: assign it (records the payment, then activates directly or issues the student a one-time code).'}
+            ? 'Fixed school fee — students are covered by the school\u2019s subscription.'
+            : 'Per-student billing — assign access to each student (records the payment; activates directly or issues a one-time code).'}
+          <HelpHint
+            text={
+              covered
+                ? 'Nothing to assign while billing is a fixed school fee. Student entitlements become assignable if the billing model changes to per-student (Plan & billing).'
+                : 'Assigning records the agreed payment, then activates the student directly or issues a one-time code. History, suspension and revocation follow the entitlement model. Staff/teachers are not part of this table — staff entitlements are not supported.'
+            }
+          />
         </p>
         <div className="relative w-full sm:w-64">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
@@ -2227,7 +2252,9 @@ function StudentsCard({
                   <tr key={s.studentId} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
                     <td className="px-4 py-2.5">
                       <p className="font-medium text-slate-900">{s.name}</p>
-                      <p className="text-[10px] text-slate-400">{s.email}</p>
+                      <p className="text-[10px] text-slate-400">
+                        {s.admissionNo ? `Adm. ${s.admissionNo} · ` : ''}{s.email}
+                      </p>
                       {s.accountLocked && (
                         <Badge variant="outline" className="mt-0.5 normal-case border-orange-200 bg-orange-50 text-[9px] text-orange-700">
                           account locked
@@ -2299,7 +2326,7 @@ function StudentsCard({
   )
 }
 
-// ── Step 4 · ledger + recent changes ─────────────────────────────────────
+// ── Ledger · payments + recent changes (sub-tab 5) ──────────────────────
 
 /** The subscription GET serves at most this many ledger rows per load
  *  (server-side `take: 100`). When a full page comes back we cannot
@@ -2307,13 +2334,12 @@ function StudentsCard({
  *  instead of silently looking complete. */
 const LEDGER_PAGE_SIZE = 100
 
-function LedgerCard({ payments }: { payments: PaymentRow[] }) {
+function LedgerCard({ payments, onRecord }: { payments: PaymentRow[]; onRecord?: () => void }) {
   return (
     <div>
-      <p className="mb-3 text-[11px] leading-relaxed text-slate-500">
-        Every payment this school has made to <span className="font-semibold text-slate-700">SCHOLARIO</span> for
-        platform access — an immutable financial record; receipts are never rewritten. (The school&apos;s own fee
-        collection from its students lives in the Fee gateway tab.)
+      <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+        Payments this school made to SCHOLARIO for platform access — immutable, never rewritten.
+        <HelpHint text="The school's own fee collection from its students is a separate system — it lives in the Fee gateway tab. Platform subscription receipts and school fee collections never mix. Corrections follow audited reversal/adjustment flows, never direct edits of old receipts." />
       </p>
       <div className="overflow-x-auto custom-scrollbar rounded-lg border border-slate-200">
         <table className="w-full min-w-[760px] text-xs">
@@ -2355,8 +2381,18 @@ function LedgerCard({ payments }: { payments: PaymentRow[] }) {
             ))}
             {payments.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
-                  No payments recorded yet — the first verified payment activates the subscription (Step 2).
+                <td colSpan={6} className="px-4 py-10 text-center">
+                  <p className="text-slate-400">No payments recorded yet — the first verified payment activates the subscription.</p>
+                  {onRecord && (
+                    <Button
+                      size="sm"
+                      onClick={onRecord}
+                      className="mt-3 h-8 bg-teal-600 hover:bg-teal-700 text-white"
+                    >
+                      <Wallet className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                      Record first payment
+                    </Button>
+                  )}
                 </td>
               </tr>
             )}
@@ -2486,6 +2522,43 @@ export function SchoolSubscriptionTab({
   const [termsOpen, setTermsOpen] = useState(false)
   const [paymentOpen, setPaymentOpen] = useState(false)
 
+  // ── Sub-tab selection, persisted in the URL (?tab=subscription&sub=…).
+  // The school page's own query-param convention, additive and parent-
+  // safe: the parent only reads/writes `tab` and copies unknown params
+  // through its rewrites, so `sub` survives every parent navigation.
+  // Back/forward follows external changes; our own writes are recognized
+  // through lastWrittenSub so the echo never loops.
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const lastWrittenSub = useRef<string | null>(null)
+  const [subTab, setSubTab] = useState<string>(() => {
+    const raw = searchParams.get('sub')
+    return raw && SUB_TABS.includes(raw) ? raw : 'snapshot'
+  })
+  useEffect(() => {
+    const raw = searchParams.get('sub')
+    if (raw && raw === lastWrittenSub.current) return
+    setSubTab(raw && SUB_TABS.includes(raw) ? raw : 'snapshot')
+  }, [searchParams])
+  const selectSubTab = useCallback(
+    (v: string) => {
+      setSubTab(v)
+      lastWrittenSub.current = v
+      const next = new URLSearchParams(searchParams.toString())
+      if (v === 'snapshot') next.delete('sub')
+      else next.set('sub', v)
+      router.replace(`?${next.toString()}`, { scroll: false })
+    },
+    [router, searchParams],
+  )
+
+  // The plan catalogue (Standard, Pro, …) is managed in the Subscriptions
+  // console section — a plan defines the offering; this page sets each
+  // school's commercial price. One clear entry point, no duplicate editor.
+  const managePlans = useCallback(() => {
+    router.push('/platform/subscriptions')
+  }, [router])
+
   // The plan catalogue — ONE fetch feeding the terms dialog, the payment
   // dialog and the summary (the old layout re-fetched per sub-tab).
   // HONEST PLANS LOAD — a failed fetch never masquerades as "no plans
@@ -2606,160 +2679,158 @@ export function SchoolSubscriptionTab({
   }
 
   const registry = registryRow
-  const currency = registry?.currencySnapshot ?? 'INR'
-  const isPerStudent = (registry?.billingModel ?? 'SCHOOL_WIDE') === 'PER_STUDENT'
 
   return (
-    <div className="space-y-5">
-      {/* The guided page heading — one line, plain language. */}
-      <div>
-        <h2 className="font-display text-base font-bold text-slate-900">Subscription</h2>
-        <p className="mt-0.5 text-xs text-slate-500">
-          What {data.school.name} pays SCHOLARIO, on what terms, and the access those payments unlock — set pricing
-          (1), record payments (2), manage codes &amp; access (3), review history (4).
-        </p>
-      </div>
-
-      {/* The current subscription at a glance + the primary action. */}
-      <SummaryHeader data={data} registryRow={registry} onRecordPayment={() => setPaymentOpen(true)} />
-
-      <BoundaryBanner />
-
+    <div className="space-y-4">
       {/* Schema-pending honesty — the same wire flag the Subscriptions
           page consumes: the registry row exists, but its plan/billing
           fields are unavailable on this database until the owner-gated
-          migration is applied (compact banner inside the tab). */}
+          migration is applied (compact banner above the tabs). */}
       {schemaPending && <SubscriptionPendingBanner compact />}
 
-      {/* ── Step 1 — Plan & pricing ── */}
-      <StepSection
-        step={1}
-        id="section-plan-pricing"
-        title="Plan & pricing"
-        intro="The commercial terms this school is billed under — set them now or renegotiate later; an agreed price alone never activates anything."
-        actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setTermsOpen(true)}
-            className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100 focus-ring"
+      <Tabs value={subTab} onValueChange={selectSubTab}>
+        <TabsList className="h-auto w-full flex-wrap justify-start gap-1 border border-slate-200 bg-slate-100 p-1">
+          <TabsTrigger
+            value="snapshot"
+            className="text-xs text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900"
           >
-            <Package className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
-            Edit plan &amp; pricing
-          </Button>
-        }
-      >
-        <PlanPricingPanel
-          schoolId={schoolId}
-          data={data}
-          registryRow={registry}
-          legacyPlan={legacyPlan}
-          onEditTerms={() => setTermsOpen(true)}
-          gate={gate}
-          onReload={() => void load()}
-        />
-      </StepSection>
-
-      {/* ── Step 2 — Record payment / activate / renew ── */}
-      <StepSection
-        step={2}
-        id="section-record-payment"
-        title="Record payment · activate or renew"
-        intro="Only a verified payment recorded here activates or renews the subscription — a plan selection or label never does. Review before saving; payments are immutable."
-        actions={
-          <Button
-            onClick={() => setPaymentOpen(true)}
-            className="h-9 bg-teal-600 hover:bg-teal-700 text-white focus-ring"
+            Snapshot
+          </TabsTrigger>
+          <TabsTrigger
+            value="plan"
+            className="text-xs text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900"
           >
-            <Wallet className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
-            Record payment…
-          </Button>
-        }
-      >
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Payments on record</p>
-            <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">{data.payments.length}</p>
-            <p className="text-[11px] text-slate-500">receipts in the immutable ledger (Step 4)</p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Current state</p>
-            <p className="mt-1 text-lg font-semibold text-slate-900">{STATE_PLAIN[data.entitlement.state] ?? data.entitlement.state}</p>
-            <p className="text-[11px] text-slate-500">
-              {data.subscription?.periodEnd ? `valid until ${fmtDate(data.subscription.periodEnd)}` : 'no paid period yet'}
-            </p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Next payment should be</p>
-            <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
-              {registry?.priceSnapshot != null
-                ? isPerStudent && registry?.licensedStudents != null
-                  ? money(registry.priceSnapshot * registry.licensedStudents, currency)
-                  : money(registry.priceSnapshot, currency)
-                : '—'}
-            </p>
-            <p className="text-[11px] text-slate-500">
-              {registry?.priceSnapshot != null
-                ? isPerStudent && registry?.licensedStudents != null
-                  ? `${money(registry.priceSnapshot, currency)} × ${registry.licensedStudents.toLocaleString('en-IN')} licensed students`
-                  : 'the agreed price for one billing period'
-                : 'set the price in Step 1 first'}
-            </p>
-          </div>
-        </div>
-      </StepSection>
+            Plan &amp; billing
+          </TabsTrigger>
+          <TabsTrigger
+            value="codes"
+            className="text-xs text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900"
+          >
+            <KeyRound className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+            Codes
+          </TabsTrigger>
+          <TabsTrigger
+            value="students"
+            className="text-xs text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900"
+          >
+            <Users className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+            Students
+          </TabsTrigger>
+          <TabsTrigger
+            value="ledger"
+            className="text-xs text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900"
+          >
+            <ListOrdered className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+            Ledger
+          </TabsTrigger>
+        </TabsList>
 
-      {/* ── Step 3 — Access & activation codes ── */}
-      <StepSection
-        step={3}
-        id="section-access-codes"
-        title="Access & activation codes"
-        intro="One-time codes unlock subscriptions or a student's access when redeemed in the school portal — issued with a payment (school) or an entitlement assignment (student)."
-      >
-        <CodesCard codes={codes} total={codesTotal} gate={gate} onChanged={() => void load()} />
-        <div className="border-t border-slate-100 pt-4">
-          <h4 className="font-display text-sm font-bold text-slate-900">Student entitlements</h4>
-          <p className="mt-0.5 mb-3 text-[11px] text-slate-500">
-            Per-student access under per-student billing — each student&apos;s own subscription to the student modules.
-          </p>
-          <StudentsCard
-            students={students}
-            billingModel={billingModel}
-            loading={studentsLoading}
-            onSearch={(q) => void loadStudents(q)}
-            onChanged={() => void load()}
+        {/* ── Snapshot — the at-a-glance grid + the three primary actions ── */}
+        <TabsContent value="snapshot" className="mt-3">
+          <SummaryHeader
+            data={data}
+            registryRow={registry}
+            onRecordPayment={() => setPaymentOpen(true)}
+            onEditTerms={() => setTermsOpen(true)}
+            onSelectCodes={() => selectSubTab('codes')}
           />
-        </div>
-      </StepSection>
+        </TabsContent>
 
-      {/* ── Step 4 — History & status ── */}
-      <StepSection
-        step={4}
-        id="section-history-status"
-        title="History & status"
-        intro="The immutable payment ledger — what this school paid SCHOLARIO — and the audit trail of who changed what."
-      >
-        <LedgerCard payments={data.payments} />
-        <div className="border-t border-slate-100 pt-4">
-          <h4 className="font-display text-sm font-bold text-slate-900">Recent changes</h4>
-          <p className="mt-0.5 mb-3 text-[11px] text-slate-500">
-            Who changed this school&apos;s plan, pricing, payments or overrides — from the platform audit trail.
-          </p>
-          <RecentChangesCard schoolId={schoolId} />
-        </div>
-      </StepSection>
+        {/* ── Plan & billing — commercial terms, payment recording, catalogue ── */}
+        <TabsContent value="plan" className="mt-3">
+          <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 sm:px-5">
+              <h3 className="font-display text-sm font-bold text-slate-900">Commercial terms</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTermsOpen(true)}
+                  className="h-8 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                >
+                  <Package className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                  Edit plan &amp; pricing
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => setPaymentOpen(true)}
+                  className="h-8 bg-teal-600 hover:bg-teal-700 text-white"
+                >
+                  <Wallet className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                  Record payment…
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={managePlans}
+                  className="h-8 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  title="The plan catalogue (offering, standard prices) is managed in the Subscriptions console section — this page sets each school's negotiated terms."
+                >
+                  Manage plans
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-4 p-4 sm:px-5">
+              <PlanPricingPanel
+                schoolId={schoolId}
+                data={data}
+                registryRow={registry}
+                legacyPlan={legacyPlan}
+                onEditTerms={() => setTermsOpen(true)}
+                gate={gate}
+                onReload={() => void load()}
+              />
+            </div>
+          </section>
+        </TabsContent>
+
+        {/* ── Codes — activation-code management ── */}
+        <TabsContent value="codes" className="mt-3">
+          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <CodesCard codes={codes} total={codesTotal} gate={gate} onChanged={() => void load()} />
+          </section>
+        </TabsContent>
+
+        {/* ── Students — per-student entitlements ── */}
+        <TabsContent value="students" className="mt-3">
+          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <StudentsCard
+              students={students}
+              billingModel={billingModel}
+              loading={studentsLoading}
+              onSearch={(q) => void loadStudents(q)}
+              onChanged={() => void load()}
+            />
+          </section>
+        </TabsContent>
+
+        {/* ── Ledger — financial records + recent audited changes ── */}
+        <TabsContent value="ledger" className="mt-3 space-y-4">
+          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <LedgerCard payments={data.payments} onRecord={() => setPaymentOpen(true)} />
+          </section>
+          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <h3 className="font-display text-sm font-bold text-slate-900">Recent changes</h3>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Who changed plan, pricing, payments or overrides — from the platform audit trail.
+            </p>
+            <div className="mt-3">
+              <RecentChangesCard schoolId={schoolId} />
+            </div>
+          </section>
+        </TabsContent>
+      </Tabs>
 
       {onNavigateTab && (
         <p className="text-[11px] text-slate-400">
-          Collecting fees from the school&apos;s own students? That is the{' '}
+          School fee gateway — payments collected from students and parents; separate money, separate credentials.{' '}
           <button
             type="button"
             className="font-medium text-teal-700 underline underline-offset-2 hover:text-teal-800"
             onClick={() => onNavigateTab('gateway')}
           >
-            Fee gateway
-          </button>{' '}
-          tab — a separate payment rail with separate credentials.
+            Open
+          </button>
         </p>
       )}
 

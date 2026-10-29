@@ -2738,7 +2738,7 @@ export function SchoolDetailModule() {
             <GroupSection
               id={SUBSECTION_IDS.subscription}
               title="Subscription"
-              description="What this school pays SCHOLARIO — a guided page: plan & pricing (1), record payment / activate or renew (2), access & activation codes (3), history & status (4)."
+              description="What this school pays SCHOLARIO — snapshot, plan & pricing, activation codes, students, ledger."
             >
               <SchoolSubscriptionTab schoolId={id} onNavigateTab={navigateToTab} />
             </GroupSection>
