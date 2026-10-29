@@ -55,6 +55,29 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     })
     if (!school) return { ok: false, error: 'School not found' }
 
+    // STAFF ENTITLEMENTS (2026-10-30) — the staff-licensing policy and the
+    // per-seat posture summary for the Snapshot line. staffCoverage is a
+    // pending-migration column: read through the schema-pending-safe path
+    // (legacy databases report TENANT, the safe default).
+    let staffCoverage = 'TENANT'
+    let staffSeats: { entitled: number; teachers: number } | null = null
+    try {
+      const sub = await db.schoolSubscription.findUnique({
+        where: { schoolId: id },
+        select: { staffCoverage: true },
+      })
+      staffCoverage = sub?.staffCoverage ?? 'TENANT'
+      if (staffCoverage === 'PER_SEAT') {
+        const [entitled, teachers] = await Promise.all([
+          db.staffEntitlement.count({ where: { schoolId: id, status: { in: ['PENDING', 'ACTIVE'] } } }),
+          db.user.count({ where: { schoolId: id, role: 'TEACHER' } }),
+        ])
+        staffSeats = { entitled, teachers }
+      }
+    } catch {
+      // Pre-migration database — honest default (TENANT), no fabricated seats.
+    }
+
     const entitlement = evaluateTenantEntitlement({
       schoolStatus: school.status,
       accountSubscriptionStatus: 'ACTIVE',
@@ -88,6 +111,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         renewalRequired: entitlement.renewalRequired,
         message: entitlement.message,
       },
+      staffCoverage,
+      staffSeats,
       payments: school.platformPayments.map((p) => ({
         id: p.id,
         receiptNo: p.receiptNo,

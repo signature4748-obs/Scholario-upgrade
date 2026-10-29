@@ -303,6 +303,20 @@ jobs:
           curl -sf -o /dev/null http://localhost:3000/login
           curl -sf -o /dev/null http://localhost:3000/s/hawkings-prithvipur/login
           curl -sf http://localhost:3000/health/ready
+          # Warm the HEAVY platform API route graphs too (2026-10-30):
+          # the provisioning route (POST /api/platform/schools — wizard +
+          # phase-8c suites) and the identity/avatar surfaces pay a cold
+          # webpack-compile that can exceed the global live-fetch
+          # preload's 10s per-attempt budget on a loaded runner — and an
+          # ambiguous POST is never retried (fail-closed by design), so
+          # the FIRST unauthenticated 401 probe below compiles the module
+          # outside every test budget. 401-once-compiled = warm; no side
+          # effects (auth runs before any handler logic).
+          curl -s -o /dev/null -X POST -H 'content-type: application/json' -d '{}' http://localhost:3000/api/platform/schools
+          curl -s -o /dev/null http://localhost:3000/api/platform/schools/precheck?slug=ci-warmup
+          curl -s -o /dev/null -X DELETE http://localhost:3000/api/profile/avatar
+          curl -s -o /dev/null -X DELETE http://localhost:3000/api/teachers/upload/ci-warmup
+          curl -sf http://localhost:3000/health/ready
 
       # 12. Gates 5-8 — unit + integration + API + regression + security.
       #     Live-HTTP suites default to http://localhost:3000 (the server

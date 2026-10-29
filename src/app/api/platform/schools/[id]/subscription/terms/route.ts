@@ -30,6 +30,14 @@ const termsSchema = strictBody({
   licensedStudents: z.number().int().min(1).max(100_000).nullable().optional(),
   /** Subscription start date (YYYY-MM-DD, within ±1 year of today). */
   periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** STAFF ENTITLEMENTS (2026-10-30) — the tenant's staff licensing
+   *  policy: TENANT (default — the tenant subscription covers teachers
+   *  exactly as today) | PER_SEAT (each TEACHER account needs its own
+   *  live staff entitlement, enforced server-side). Switching to
+   *  PER_SEAT does NOT grant or remove anything by itself: teachers
+   *  without seats lock on their next business request until seats are
+   *  assigned/codes claimed — communicate the policy change first. */
+  staffCoverage: z.enum(['TENANT', 'PER_SEAT']).optional(),
   /** Audited reason — required (this is commercial-terms surgery). */
   reason: z.string().min(4).max(400),
 })
@@ -116,6 +124,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const finalPeriodStart = body.periodStart
         ? new Date(`${body.periodStart}T00:00:00Z`)
         : current?.periodStart ?? null
+      const finalStaffCoverage = body.staffCoverage ?? 'TENANT'
 
       // ── Cross-field commercial rules (mirrors the add-school wizard's
       // server-side contract — one rule set, both entry points). ──
@@ -153,6 +162,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       // enforced state are untouched — setting terms is not a payment). ──
       const data: {
         billingModel: string
+        staffCoverage?: string
         planId?: string | null
         planCode?: string | null
         interval?: string | null
@@ -161,6 +171,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         licensedStudents?: number | null
         periodStart?: Date
       } = { billingModel: finalModel }
+      if (body.staffCoverage !== undefined) data.staffCoverage = finalStaffCoverage
       if (plan) {
         data.planId = plan.id
         data.planCode = plan.code
@@ -190,6 +201,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const before = {
         planCode: current?.planCode ?? null,
         billingModel: current?.billingModel ?? 'SCHOOL_WIDE',
+        staffCoverage: (current as { staffCoverage?: string } | null)?.staffCoverage ?? 'TENANT',
         interval: current?.interval ?? null,
         priceSnapshot: current?.priceSnapshot == null ? null : Number(current.priceSnapshot),
         currencySnapshot: current?.currencySnapshot ?? null,
@@ -199,6 +211,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const after = {
         planCode: updated.planCode,
         billingModel: updated.billingModel,
+        staffCoverage: updated.staffCoverage,
         interval: updated.interval,
         priceSnapshot: updated.priceSnapshot == null ? null : Number(updated.priceSnapshot),
         currencySnapshot: updated.currencySnapshot,

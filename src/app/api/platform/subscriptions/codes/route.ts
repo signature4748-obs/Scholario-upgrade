@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
 
     const where: Record<string, unknown> = {}
     if (['ISSUED', 'CLAIMED', 'EXPIRED', 'REVOKED', 'REPLACED'].includes(status)) where.status = status
-    if (['SCHOOL_SUBSCRIPTION', 'STUDENT_ENTITLEMENT'].includes(scope)) where.scope = scope
+    if (['SCHOOL_SUBSCRIPTION', 'STUDENT_ENTITLEMENT', 'STAFF_ENTITLEMENT'].includes(scope)) where.scope = scope
     if (schoolId) where.schoolId = schoolId
     if (studentId) where.studentId = studentId
     if (q) {
@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
           include: {
             school: { select: { id: true, name: true, slug: true } },
             student: { select: { id: true, admissionNo: true, user: { select: { name: true } } } },
+            assignedUser: { select: { id: true, name: true, email: true } },
             events: { orderBy: { createdAt: 'desc' }, take: 5 },
             replacedByCode: { select: { publicRef: true } },
           },
@@ -86,6 +87,7 @@ export async function GET(req: NextRequest) {
         status: c.status,
         school: c.school,
         student: c.student,
+        assignedUser: c.assignedUser,
         planCode: c.planCode,
         interval: c.interval,
         validityMonths: c.validityMonths,

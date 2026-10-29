@@ -336,6 +336,10 @@ export type AuthUser = {
        *  (SCHOOL_WIDE default | PER_STUDENT | MIXED); the per-student gate
        *  input. Server-loaded like every other field here. */
       billingModel?: string | null
+      /** STAFF ENTITLEMENTS (2026-10-30) — the tenant's staff licensing
+       *  policy (TENANT default | PER_SEAT); the per-seat staff gate
+       *  input for TEACHER sessions. Server-loaded; never client input. */
+      staffCoverage?: string | null
     } | null
   } | null
 }
@@ -416,6 +420,9 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
                 billingModel:
                   (u.school.subscription as { billingModel?: string | null }).billingModel ??
                   'SCHOOL_WIDE',
+                staffCoverage:
+                  (u.school.subscription as { staffCoverage?: string | null }).staffCoverage ??
+                  'TENANT',
               }
             : null,
         }

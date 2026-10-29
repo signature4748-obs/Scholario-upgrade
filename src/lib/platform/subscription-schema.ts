@@ -28,7 +28,7 @@
  * below re-checks on a short TTL).
  */
 
-// Tables created ONLY by the pending migration. P2021 meta carries them
+// Tables created ONLY by the pending migrations. P2021 meta carries them
 // schema-qualified (e.g. "public.ActivationCode").
 const PENDING_MIGRATION_TABLES = new Set([
   'SubscriptionPlan',
@@ -37,6 +37,9 @@ const PENDING_MIGRATION_TABLES = new Set([
   'StudentSubscriptionPayment',
   'ActivationCode',
   'ActivationCodeEvent',
+  // STAFF ENTITLEMENTS + BATCH CODES (2026-10-30).
+  'StaffEntitlement',
+  'StaffSubscriptionPayment',
 ])
 
 // Columns created ONLY by the pending migration, per table. P2022 meta
@@ -53,6 +56,8 @@ const PENDING_MIGRATION_COLUMNS = new Set([
   'SchoolSubscription.planCode',
   'SchoolSubscription.planId',
   'SchoolSubscription.priceSnapshot',
+  // STAFF ENTITLEMENTS (2026-10-30) — the staff-licensing policy column.
+  'SchoolSubscription.staffCoverage',
   // PlatformSetting.subscriptionConfig is added by the SAME pending
   // migration (the commercial-model config storage).
   'PlatformSetting.subscriptionConfig',
@@ -67,6 +72,7 @@ const PENDING_BARE_COLUMNS_BY_MODEL: Record<string, Set<string>> = {
     'planCode',
     'planId',
     'priceSnapshot',
+    'staffCoverage',
   ]),
   PlatformSetting: new Set(['subscriptionConfig']),
 }
@@ -110,10 +116,14 @@ export function isSubscriptionSchemaPendingError(e: unknown): boolean {
     return false
   }
   // Raw-query failures (P2010) whose underlying Postgres error points at a
-  // pending-migration object — the receipt sequence is created by the same
-  // migration (payment application paths fail on it before any typed check).
+  // pending-migration object — the receipt sequences are created by the
+  // same migrations (payment application paths fail on them before any
+  // typed check).
   if (err.code === 'P2010' && typeof err.message === 'string') {
-    return err.message.includes('platform_payment_receipt_seq')
+    return (
+      err.message.includes('platform_payment_receipt_seq') ||
+      err.message.includes('staff_payment_receipt_seq')
+    )
   }
   return false
 }
@@ -169,10 +179,12 @@ export const SUBSCRIPTION_LEGACY_SELECT = {
   notes: true,
 } as const
 
-/** Legacy fields + billingModel (the one new column session code reads). */
+/** Legacy fields + billingModel (the per-student gate input) +
+ *  staffCoverage (the per-seat staff gate input, 2026-10-30). */
 export const SUBSCRIPTION_SESSION_SELECT = {
   ...SUBSCRIPTION_LEGACY_SELECT,
   billingModel: true,
+  staffCoverage: true,
 } as const
 
 /** Legacy fields + the directory chip columns. */

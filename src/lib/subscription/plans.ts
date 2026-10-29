@@ -2,14 +2,15 @@
  * subscription/plans — plan registry validation + lookup helpers.
  *
  * Plans are the platform owner's configured product (Model A school
- * monthly/annual, Model B student annual). CRUD lives in the
- * billing.manage-gated platform routes; THIS module is the validation +
- * purchase-time resolution layer both planes share.
+ * monthly/annual, Model B student annual, STAFF per-seat annual for
+ * teacher/staff licensing). CRUD lives in the billing.manage-gated
+ * platform routes; THIS module is the validation + purchase-time
+ * resolution layer both planes share.
  */
 import { db } from '@/lib/db'
 import { AppError } from '@/lib/security/errors'
 
-export const PLAN_SCOPES = ['SCHOOL', 'STUDENT'] as const
+export const PLAN_SCOPES = ['SCHOOL', 'STUDENT', 'STAFF'] as const
 export const PLAN_INTERVALS = ['MONTHLY', 'ANNUAL'] as const
 export const PLAN_STATUSES = ['ACTIVE', 'ARCHIVED'] as const
 export type PlanScope = (typeof PLAN_SCOPES)[number]
@@ -75,6 +76,9 @@ export function validatePlanInput(input: PlanValidationInput): ValidatedPlan {
   if (input.scope === 'STUDENT' && input.interval !== 'ANNUAL') {
     problems.push('Student plans are annual by contract.')
   }
+  if (input.scope === 'STAFF' && input.interval !== 'ANNUAL') {
+    problems.push('Staff plans are annual by contract (per-seat, like student plans).')
+  }
   if (!CURRENCIES.has(input.currency)) {
     problems.push('Unsupported currency.')
   }
@@ -91,12 +95,21 @@ export function validatePlanInput(input: PlanValidationInput): ValidatedPlan {
   }
   const priceMonthly = money(input.priceMonthly, 'Monthly price', input.scope === 'SCHOOL' && input.interval === 'MONTHLY')
   const priceAnnual = money(input.priceAnnual, 'Annual price', input.scope === 'SCHOOL' && input.interval === 'ANNUAL')
-  const pricePerStudent = money(input.pricePerStudent, 'Per-student annual price', input.scope === 'STUDENT')
+  // pricePerStudent doubles as the PER-SEAT price for STAFF plans (the
+  // seat the school licenses for one teacher/staff member per year).
+  const pricePerStudent = money(
+    input.pricePerStudent,
+    input.scope === 'STAFF' ? 'Per-seat annual price' : 'Per-student annual price',
+    input.scope === 'STUDENT' || input.scope === 'STAFF',
+  )
   if (input.scope === 'SCHOOL' && priceMonthly === null && priceAnnual === null) {
     problems.push('School plans need at least one price (monthly or annual).')
   }
   if (input.scope === 'STUDENT' && pricePerStudent === null) {
     problems.push('Student plans need a per-student annual price.')
+  }
+  if (input.scope === 'STAFF' && pricePerStudent === null) {
+    problems.push('Staff plans need a per-seat annual price.')
   }
 
   if (!Number.isInteger(input.graceDays) || input.graceDays < 0 || input.graceDays > 90) {
@@ -150,8 +163,9 @@ export async function resolvePlanForPurchase(opts: {
     })
   }
   if (plan.scope !== opts.expectedScope) {
+    const scopeLabel = opts.expectedScope === 'STUDENT' ? 'student' : opts.expectedScope === 'STAFF' ? 'staff' : 'school'
     throw new AppError('VALIDATION_FAILED', {
-      publicMessage: `This plan is not available for ${opts.expectedScope === 'STUDENT' ? 'student' : 'school'} subscriptions.`,
+      publicMessage: `This plan is not available for ${scopeLabel} subscriptions.`,
       internalDetail: `resolvePlanForPurchase: scope ${plan.scope} != ${opts.expectedScope}`,
     })
   }
@@ -170,7 +184,8 @@ export async function resolvePlanForPurchase(opts: {
   return plan
 }
 
-/** The price a purchase pays for a plan (by scope/interval). */
+/** The price a purchase pays for a plan (by scope/interval). STAFF plans
+ *  use the per-seat annual price (pricePerStudent column) like STUDENT. */
 export function planPrice(plan: {
   scope: string
   interval: string
@@ -178,10 +193,10 @@ export function planPrice(plan: {
   priceAnnual: unknown
   pricePerStudent: unknown
 }): { amount: number; interval: string } {
-  if (plan.scope === 'STUDENT') {
+  if (plan.scope === 'STUDENT' || plan.scope === 'STAFF') {
     const amount = Number(plan.pricePerStudent ?? 0)
     if (!(amount > 0)) {
-      throw new AppError('INVALID_INPUT', { publicMessage: 'This plan has no price configured.', internalDetail: 'planPrice: student plan without price' })
+      throw new AppError('INVALID_INPUT', { publicMessage: 'This plan has no price configured.', internalDetail: 'planPrice: per-seat/student plan without price' })
     }
     return { amount, interval: 'ANNUAL' }
   }

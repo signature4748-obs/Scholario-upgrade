@@ -167,8 +167,20 @@ export function createLiveFetch(
   originalFetch: typeof fetch,
   opts: LiveFetchPreloadOpts = {},
 ): typeof fetch {
-  const deadlineMs = Math.max(1, opts.deadlineMs ?? 20_000)
-  const perAttemptMs = Math.max(1, opts.perAttemptMs ?? 10_000)
+  // DEFAULT BUDGETS (2026-10-30 raise — the recurring §STEP-1 / PHASE-8C /
+  // PHASE-3 provision-replay gate): the FIRST request to a heavy route
+  // pays the dev server's lazy webpack-compile, which under the full
+  // combined battery (137 files, one process, 2-core runner) now exceeds
+  // the previous 10s per-attempt budget — and an ambiguous POST is NEVER
+  // retried (the fail-closed double-write guard below), so a compile that
+  // outlives the per-attempt budget deterministically failed the first
+  // write to each heavy route. 25s per attempt absorbs a ~20s cold
+  // compile inside ONE attempt (no cut, no ambiguity, nothing retried);
+  // the retry-POST fail-closed property is UNCHANGED. Dead-server worst
+  // case surfaces within the 60s deadline (was 20s) — slower, honest,
+  // and bounded. Suites can still pass explicit smaller budgets.
+  const deadlineMs = Math.max(1, opts.deadlineMs ?? 60_000)
+  const perAttemptMs = Math.max(1, opts.perAttemptMs ?? 25_000)
   const maxAttempts = Math.max(1, opts.maxAttempts ?? 40)
   const origins = opts.origins ?? eligibleOrigins()
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))

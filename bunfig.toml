@@ -14,7 +14,8 @@
 #     rethrows immediately, fail-closed against double-writes;
 #   · HTTP responses of ANY status are returned exactly once; product
 #     errors stay fully visible; no assertion anywhere is affected;
-#   · 20s deadline / 8s per-attempt / capped backoff; the FINAL error is
+#   · 60s deadline / 25s per-attempt (2026-10-30 cold-compile absorption;
+#     was 20s/10s) / capped backoff; the FINAL error is
 #     rethrown unchanged, so a genuinely dead server still fails honestly;
 #   · deliberate dead-port probes and external hosts pass through
 #     UNWRAPPED; suites that mock global.fetch replace it wholesale;

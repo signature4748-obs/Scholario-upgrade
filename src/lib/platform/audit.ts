@@ -53,6 +53,7 @@ export interface PlatformAuditInput {
     | 'AUTH'
     // SUBSCRIPTION & ENTITLEMENT SYSTEM — new target kinds:
     | 'STUDENT' // per-student entitlement/payment events
+    | 'STAFF' // per-seat staff entitlement/payment events (2026-10-30)
     | 'SUBSCRIPTION_PLAN' // plan registry lifecycle
     | 'ACTIVATION_CODE' // code issue/revoke/reissue
     | null

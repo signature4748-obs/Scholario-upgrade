@@ -10,6 +10,7 @@ import { sanitizeRequestId } from './observability/http'
 import { entitlementForUser } from './entitlement/server'
 import { isEntitlementExemptRoute } from './entitlement/entitlement'
 import { evaluateStudentEntitlement } from './entitlement/student'
+import { evaluateStaffEntitlement, requiresStaffEntitlement } from './entitlement/staff'
 import { isCanonicalSchoolRole } from './security/permissions'
 
 export type Ctx = { user: AuthUser }
@@ -270,6 +271,62 @@ export async function withUser(
             throw new AppError('SUBSCRIPTION_REQUIRED', {
               publicMessage: decision.message ?? undefined,
               internalDetail: `withUser: student entitlement ${decision.state} (route ${route ?? 'unknown'})`,
+            })
+          }
+        }
+      }
+
+      // ── STAFF ENTITLEMENTS (2026-10-30) — per-seat staff gate ────────
+      // (PER_SEAT staff coverage). Composes ON TOP of the tenant state:
+      // a teacher on a TENANT-coverage school is covered and NEVER locked
+      // by a missing individual subscription; a teacher under PER_SEAT
+      // needs a live StaffEntitlement evaluated from its explicit validity
+      // window. PRINCIPAL sessions are DELIBERATELY NEVER evaluated here —
+      // administrative privileges are not a paid staff entitlement (a
+      // principal can administer the school without holding a seat), and
+      // STUDENT sessions are governed by billingModel above, never by
+      // staffCoverage. The same exempt non-business surface (auth/session,
+      // profile, subscription status + staff code claim, support, logout)
+      // stays reachable so a locked teacher can always activate.
+      // Fail-closed: unknown coverage values map to TENANT (the safe
+      // legacy default) — per-seat enforcement only engages when the
+      // platform explicitly set the policy.
+      if (
+        user.role === 'TEACHER' &&
+        entitlement.businessAllowed &&
+        requiresStaffEntitlement(user.school?.subscription?.staffCoverage)
+      ) {
+        const staffBypass = routeExempt
+        if (!staffBypass) {
+          const live = await db.staffEntitlement.findFirst({
+            where: {
+              userId: user.id,
+              schoolId: user.schoolId,
+              // LIVE rows only — the same SUSPENDED-shadow rule as the
+              // student gate (a suspended-only teacher is not subscribed;
+              // suspend = operator-withdrawn access).
+              status: { in: ['PENDING', 'ACTIVE'] },
+            },
+            orderBy: { validityEnd: 'desc' },
+            select: { status: true, validityStart: true, validityEnd: true, source: true },
+          })
+          const decision = evaluateStaffEntitlement({
+            accountSubscriptionStatus: user.subscriptionStatus,
+            tenant: entitlement,
+            staffCoverage: user.school?.subscription?.staffCoverage,
+            entitlement: live
+              ? {
+                  status: live.status,
+                  validityStart: live.validityStart,
+                  validityEnd: live.validityEnd,
+                  source: live.source,
+                }
+              : null,
+          })
+          if (!decision.businessAllowed) {
+            throw new AppError('SUBSCRIPTION_REQUIRED', {
+              publicMessage: decision.message ?? undefined,
+              internalDetail: `withUser: staff entitlement ${decision.state} (route ${route ?? 'unknown'})`,
             })
           }
         }
