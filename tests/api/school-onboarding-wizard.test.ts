@@ -54,6 +54,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { randomBytes, createHash } from 'crypto'
 import { db } from '../helpers/db'
+import { liveFetch } from '../helpers/live-http'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
 const T = 45_000
@@ -79,10 +80,16 @@ async function steppedUpRoot(): Promise<string> {
 }
 
 async function platform(token: string, path: string, init: RequestInit = {}) {
-  return fetch(`${BASE}${path}`, {
+  // liveFetch (the repo-standard transport-resilient fetch) — this suite
+  // used a raw fetch, which hard-fails when a cold 2-core CI runner takes
+  // >10s to lazy-compile the heavy provision route graph (observed as the
+  // recurring §STEP-1 TimeoutError on run #169 and the 2026-10-29 runs).
+  // Assertions are untouched — only the transport gets the documented
+  // retry + per-attempt budget every other live suite already uses.
+  return liveFetch(`${BASE}${path}`, {
     ...init,
     headers: { 'content-type': 'application/json', 'x-platform-token': token, ...(init.headers ?? {}) },
-  })
+  }, { deadlineMs: 90_000, perAttemptMs: 30_000 })
 }
 
 /** Unwrap the canonical { ok, data } platform envelope. */
@@ -286,7 +293,7 @@ describe('wizard §STEP 1 — board, optional code, prefix, slug', () => {
   test(
     'precheck: boundary — anonymous is refused (platform-only surface)',
     async () => {
-      const res = await fetch(`${BASE}/api/platform/schools/precheck?slug=whatever-slug`)
+      const res = await liveFetch(`${BASE}/api/platform/schools/precheck?slug=whatever-slug`, {}, { deadlineMs: 40_000 })
       expect(res.status).toBe(401)
     },
     T,
