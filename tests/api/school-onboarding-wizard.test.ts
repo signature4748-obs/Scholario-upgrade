@@ -81,15 +81,20 @@ async function steppedUpRoot(): Promise<string> {
 
 async function platform(token: string, path: string, init: RequestInit = {}) {
   // liveFetch (the repo-standard transport-resilient fetch) — this suite
-  // used a raw fetch, which hard-fails when a cold 2-core CI runner takes
+  // used a raw fetch, which hard-fails when a cold loaded runner takes
   // >10s to lazy-compile the heavy provision route graph (observed as the
   // recurring §STEP-1 TimeoutError on run #169 and the 2026-10-29 runs).
   // Assertions are untouched — only the transport gets the documented
-  // retry + per-attempt budget every other live suite already uses.
+  // retry + per-attempt budget every other live suite already uses. The
+  // OUTER per-attempt budget stays at the 10s default so every cut is
+  // retried within this 90s deadline (the preload's 25s inner budget
+  // absorbs the compile inside an attempt; the outer signal, combined
+  // via AbortSignal.any, must never outlive it or the cut would look
+  // deterministic and never retry).
   return liveFetch(`${BASE}${path}`, {
     ...init,
     headers: { 'content-type': 'application/json', 'x-platform-token': token, ...(init.headers ?? {}) },
-  }, { deadlineMs: 90_000, perAttemptMs: 30_000 })
+  }, { deadlineMs: 90_000 })
 }
 
 /** Unwrap the canonical { ok, data } platform envelope. */
