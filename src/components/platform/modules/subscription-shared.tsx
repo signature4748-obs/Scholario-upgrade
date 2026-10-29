@@ -76,6 +76,11 @@ export interface PlanRow {
   allowOnline: boolean; allowOffline: boolean
   availableForNew: boolean; availableForRenewal: boolean
   status: string; sortOrder: number
+  /** Parsed JSON maps served by GET /api/platform/subscriptions/plans.
+   *  Optional for backward compatibility with older wire shapes —
+   *  consumers treat absence as "not described in the catalogue". */
+  modules?: Record<string, unknown>
+  limits?: Record<string, unknown>
 }
 
 export interface RegistryRow {

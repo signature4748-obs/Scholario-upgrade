@@ -2737,8 +2737,8 @@ export function SchoolDetailModule() {
             {subscriptionPending && <SubscriptionPendingBanner compact />}
             <GroupSection
               id={SUBSECTION_IDS.subscription}
-              title="Subscription & entitlements"
-              description="Snapshot, plan & billing, activation codes, student entitlements and the payment ledger."
+              title="Subscription"
+              description="What this school pays SCHOLARIO — a guided page: plan & pricing (1), record payment / activate or renew (2), access & activation codes (3), history & status (4)."
             >
               <SchoolSubscriptionTab schoolId={id} onNavigateTab={navigateToTab} />
             </GroupSection>

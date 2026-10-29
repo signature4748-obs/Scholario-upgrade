@@ -40,6 +40,14 @@ const recordSchema = strictBody({
   issueActivationCode: z.boolean().default(false),
   claimWindowDays: z.number().int().min(1).max(365).optional(),
   billingModel: z.enum(BILLING_MODELS).optional(),
+  /**
+   * DUPLICATE GUARD OVERRIDE (2026-10-29 UX redesign): the plan-driven
+   * path refuses an identical payment recorded < 10 minutes ago (same
+   * amount / currency / mode / date) unless the operator explicitly
+   * re-confirms from the review step. Legacy free-form payments and
+   * webhooks are unaffected.
+   */
+  confirmDuplicate: z.boolean().default(false),
 })
 
 /**
@@ -72,7 +80,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         select: {
           id: true,
           name: true,
-          subscription: { select: { ...SUBSCRIPTION_SESSION_SELECT } },
+          subscription: {
+            select: {
+              ...SUBSCRIPTION_SESSION_SELECT,
+              // Negotiated-pricing inputs (pending-migration columns —
+              // a pre-migration database fails through the classifier
+              // exactly as before; these reads only EXTEND the select).
+              planId: true,
+              planCode: true,
+              priceSnapshot: true,
+              licensedStudents: true,
+            },
+          },
         },
       })
       if (!school) {
@@ -161,11 +180,78 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         requireOffline: body.mode !== 'ONLINE_PAYMENT',
       })
       const price = planPrice(plan)
-      if (Math.abs(price.amount - body.amount) > 0.01) {
+
+      // ── NEGOTIATED PER-SCHOOL PRICING (2026-10-29 UX redesign). ──
+      // When commercial terms were configured for THIS plan (Plan &
+      // Pricing on the school's subscription — priceSnapshot tied to the
+      // same plan linkage), the negotiated UNIT price is the authority;
+      // otherwise the plan's catalogue price applies (the pre-existing
+      // contract — existing tests and flows are byte-identical here).
+      // Under PER_STUDENT billing the charge is the unit price × the
+      // licensed student quantity (priceSnapshot stores the UNIT price —
+      // the commercial total is computed, never stored twice).
+      const sub = school.subscription as {
+        billingModel?: string
+        planId?: string | null
+        priceSnapshot?: { toString(): string } | null
+        licensedStudents?: number | null
+      } | null
+      const negotiated =
+        sub && sub.planId === plan.id && sub.priceSnapshot != null && Number(sub.priceSnapshot) > 0
+          ? Number(sub.priceSnapshot)
+          : null
+      const unitPrice = negotiated ?? price.amount
+      const effectiveModel = modelChange ?? sub?.billingModel ?? 'SCHOOL_WIDE'
+      const licensed = sub?.licensedStudents ?? null
+      const perStudentTotal =
+        effectiveModel === 'PER_STUDENT' && licensed != null && negotiated != null
+          ? unitPrice * licensed
+          : null
+      const expectedAmount = perStudentTotal ?? unitPrice
+
+      if (Math.abs(expectedAmount - body.amount) > 0.01) {
         throw new AppError('VALIDATION_FAILED', {
-          publicMessage: `Recorded amount (${body.amount}) does not match the plan price (${price.amount} ${plan.currency}). Record the actual paid amount equal to the plan price, or use the legacy path without a plan.`,
-          internalDetail: `plan price mismatch: plan ${plan.code} ${price.amount} vs ${body.amount}`,
+          publicMessage: perStudentTotal != null
+            ? `Recorded amount (${body.amount}) does not match this school's agreed price: ${unitPrice} ${plan.currency} per student × ${licensed} licensed students = ${expectedAmount} ${plan.currency}. Record the actual paid amount, or update Plan & pricing first.`
+            : negotiated != null
+              ? `Recorded amount (${body.amount}) does not match this school's agreed price (${expectedAmount} ${plan.currency} for ${price.interval.toLowerCase()} ${plan.code}). Record the actual paid amount, or update Plan & pricing first.`
+              : `Recorded amount (${body.amount}) does not match the plan price (${expectedAmount} ${plan.currency}). Record the actual paid amount equal to the plan price, or use the legacy path without a plan.`,
+          internalDetail: `plan price mismatch: plan ${plan.code} expected ${expectedAmount} vs ${body.amount}`,
         })
+      }
+
+      // ── DUPLICATE GUARD (accidental double-submit). ──
+      // A VERIFIED payment with the same amount, currency, mode and
+      // calendar day recorded within the last 10 minutes is refused with
+      // the earlier receipt number unless the operator re-confirms from
+      // the review step. Day granularity (not exact timestamp) catches
+      // both UI re-submits (date inputs are day-precision) and API
+      // retries with slightly different clock values. Webhook lanes have
+      // their own idempotency; the legacy free-form path is unchanged
+      // (documented compatibility).
+      if (!body.confirmDuplicate) {
+        const dayStart = new Date(paymentDate)
+        dayStart.setUTCHours(0, 0, 0, 0)
+        const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+        const duplicate = await db.platformPayment.findFirst({
+          where: {
+            schoolId: school.id,
+            verification: 'VERIFIED',
+            amount: body.amount,
+            currency: body.currency,
+            mode: body.mode,
+            paymentDate: { gte: dayStart, lt: dayEnd },
+            createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { receiptNo: true, createdAt: true },
+        })
+        if (duplicate) {
+          throw new AppError('CONFLICT', {
+            publicMessage: `A payment with the same amount, date and method was recorded less than 10 minutes ago (receipt ${duplicate.receiptNo ?? '—'}). If this is genuinely a separate payment, submit it again and confirm on the duplicate notice.`,
+            internalDetail: `duplicate payment guard: recent receipt ${duplicate.receiptNo ?? '—'}`,
+          })
+        }
       }
 
       if (!body.issueActivationCode) {
@@ -176,7 +262,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             planId: plan.id,
             planCode: plan.code,
             interval: price.interval,
-            priceSnapshot: price.amount,
+            priceSnapshot: unitPrice,
             currency: plan.currency,
             amount: body.amount,
             mode: body.mode as PaymentMode,
@@ -231,7 +317,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           planId: plan.id,
           planCode: plan.code,
           interval: price.interval,
-          priceSnapshot: price.amount,
+          // Negotiated unit price when terms are configured for this plan
+          // (see the expected-amount computation above) — the snapshot
+          // must never clobber the school's agreed price with the
+          // catalogue price.
+          priceSnapshot: unitPrice,
           currency: plan.currency,
           amount: body.amount,
           mode: body.mode as PaymentMode,
