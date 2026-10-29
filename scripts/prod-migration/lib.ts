@@ -747,6 +747,46 @@ export const SUBSCRIPTION_SYSTEM_CONSTRAINTS: readonly string[] = [
   'ActivationCodeEvent_studentId_fkey',
 ]
 
+// STAFF ENTITLEMENTS + BATCH CODES (2026-10-30): the migration is fully
+// ADDITIVE (2 new tables, additive columns on SchoolSubscription and
+// ActivationCode, unique/partial-unique/composite indexes, FK constraints,
+// 1 sequence — no drops, no data statements). Registered objects gate the
+// production pipeline the same way the subscription-system set does; the
+// load-bearing invariant is the hand-written PARTIAL unique index
+// StaffEntitlement_one_live_per_user (one PENDING|ACTIVE entitlement per
+// staff member — the DB-level double-activation backstop).
+export const STAFF_ENTITLEMENT_TABLES: readonly string[] = [
+  'StaffEntitlement',
+  'StaffSubscriptionPayment',
+]
+
+export const STAFF_ENTITLEMENT_INDEXES: readonly string[] = [
+  'StaffEntitlement_paymentId_key',
+  'StaffEntitlement_activationCodeId_key',
+  'StaffEntitlement_one_live_per_user',
+  'StaffSubscriptionPayment_receiptNo_key',
+  'StaffEntitlement_schoolId_status_idx',
+  'StaffEntitlement_userId_validityEnd_idx',
+  'StaffEntitlement_status_validityEnd_idx',
+  'StaffSubscriptionPayment_schoolId_paymentDate_idx',
+  'StaffSubscriptionPayment_userId_paymentDate_idx',
+]
+
+export const STAFF_ENTITLEMENT_CONSTRAINTS: readonly string[] = [
+  'StaffEntitlement_schoolId_fkey',
+  'StaffEntitlement_userId_fkey',
+  'StaffEntitlement_planId_fkey',
+  'StaffEntitlement_paymentId_fkey',
+  'StaffEntitlement_activationCodeId_fkey',
+  'StaffEntitlement_revokedById_fkey',
+  'StaffSubscriptionPayment_schoolId_fkey',
+  'StaffSubscriptionPayment_userId_fkey',
+  'StaffSubscriptionPayment_recordedById_fkey',
+  'ActivationCode_assignedUserId_fkey',
+]
+
+export const STAFF_ENTITLEMENT_MIGRATION = '20261030120000_staff_entitlements_batch_codes'
+
 /**
  * Object expectations per migration: while the migration is PENDING the
  * objects must NOT exist (protects against schema drift / half-applied
@@ -820,6 +860,15 @@ export const MIGRATION_EXPECTATIONS: Record<string, MigrationExpectation> = {
         'planId',
         'priceSnapshot',
       ],
+    },
+  },
+  [STAFF_ENTITLEMENT_MIGRATION]: {
+    tables: STAFF_ENTITLEMENT_TABLES,
+    indexes: STAFF_ENTITLEMENT_INDEXES,
+    constraints: STAFF_ENTITLEMENT_CONSTRAINTS,
+    tableColumns: {
+      SchoolSubscription: ['staffCoverage'],
+      ActivationCode: ['assignedUserId', 'staffEntitlementId'],
     },
   },
 }
@@ -898,7 +947,10 @@ export async function evaluateExpectations(gate: HistoryGate): Promise<Expectati
 /** Migrations that must be pure additive DDL — no data statement ever runs.
  *  Guards the account-safety rule: existing PlatformAdmin rows (including
  *  password hashes) are never altered during deployment. */
-export const ADDITIVE_ONLY_MIGRATIONS: ReadonlySet<string> = new Set([ACCOUNT_RECOVERY_MIGRATION])
+export const ADDITIVE_ONLY_MIGRATIONS: ReadonlySet<string> = new Set([
+  ACCOUNT_RECOVERY_MIGRATION,
+  STAFF_ENTITLEMENT_MIGRATION,
+])
 
 /** Assert a registered ADDITIVE-ONLY migration contains only allowed
  *  statement shapes (comments stripped first). Throws with the offending
