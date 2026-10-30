@@ -55,10 +55,14 @@ const SCRUB_KEYS = [
 const savedEnv: Record<string, string | undefined> = {}
 let schoolId = ''
 /** PAYMENTS & GATEWAYS REDESIGN — the platform gateway DB lane is part of
- *  the zero-credential contract: if another suite has planted an ACTIVE
- *  PlatformGatewayConfig row (shared CI/local DB), this suite must
- *  neutralise it for the run and restore it afterwards. */
-let savedGateway: { id: string; status: string } | null = null
+ *  the zero-credential contract. Other suites (the gateway acceptance
+ *  suite) legitimately arm the singleton DURING their run, so a one-off
+ *  disable at beforeAll races. The hermetic mechanism: RENAME the row
+ *  away from the well-known id for the window (resolution looks the id
+ *  up — a renamed row is invisible), and restore it afterwards, removing
+ *  any row a concurrent suite re-planted under the canonical id. */
+let parkedGateway: { id: string; status: string } | null = null
+const PARKED_ID_PREFIX = 'singleton__parked_failclosed_'
 
 beforeAll(async () => {
   for (const k of SCRUB_KEYS) {
@@ -66,9 +70,12 @@ beforeAll(async () => {
     delete process.env[k]
   }
   const gw = await db.platformGatewayConfig.findUnique({ where: { id: 'singleton' } }).catch(() => null)
-  if (gw && gw.status === 'ACTIVE') {
-    savedGateway = { id: gw.id, status: gw.status }
-    await db.platformGatewayConfig.update({ where: { id: gw.id }, data: { status: 'DISABLED' } })
+  if (gw) {
+    parkedGateway = { id: gw.id, status: gw.status }
+    await db.platformGatewayConfig.update({
+      where: { id: gw.id },
+      data: { id: `${PARKED_ID_PREFIX}${Date.now()}`, status: gw.status },
+    })
   }
   const school = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
   if (!school) throw new Error('fixture school missing (run seed:demo)')
@@ -78,11 +85,12 @@ beforeAll(async () => {
 afterAll(async () => {
   // Row hygiene: only rows this suite planted (RUN marker).
   await db.subscriptionOrder.deleteMany({ where: { orderNo: { contains: RUN } } }).catch(() => {})
-  // Gateway-lane hygiene: restore whatever the shared DB had.
-  if (savedGateway) {
-    await db.platformGatewayConfig
-      .update({ where: { id: savedGateway.id }, data: { status: savedGateway.status } })
-      .catch(() => {})
+  // Gateway-lane hygiene: drop whatever a concurrent suite re-planted
+  // under the canonical id during the window, then restore the parked row.
+  await db.platformGatewayConfig.deleteMany({ where: { id: 'singleton' } }).catch(() => {})
+  const parked = await db.platformGatewayConfig.findFirst({ where: { id: { startsWith: PARKED_ID_PREFIX } } })
+  if (parked) {
+    await db.platformGatewayConfig.update({ where: { id: parked.id }, data: { id: 'singleton' } }).catch(() => {})
   }
   // Env hygiene: the scrub is this suite's fixture, not a global change.
   for (const [k, v] of Object.entries(savedEnv)) {
@@ -91,8 +99,22 @@ afterAll(async () => {
   }
 })
 
+/** Re-park immediately before each assertion: a concurrent suite may
+ *  legitimately re-arm the canonical singleton mid-window; this shrinks
+ *  the race to microseconds around the provider resolution itself. */
+async function ensureGatewayParked(): Promise<void> {
+  const gw = await db.platformGatewayConfig.findUnique({ where: { id: 'singleton' } }).catch(() => null)
+  if (gw) {
+    if (!parkedGateway) parkedGateway = { id: gw.id, status: gw.status }
+    await db.platformGatewayConfig
+      .update({ where: { id: gw.id }, data: { id: `${PARKED_ID_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 6)}` } })
+      .catch(() => {})
+  }
+}
+
 describe('SUBSCRIPTION · provider fail-closed (no credentials)', () => {
   test('order creation refuses honestly — no provider order, no local row, no fake success', async () => {
+    await ensureGatewayParked()
     let err: unknown
     try {
       await createSubscriptionOrder({
@@ -121,6 +143,7 @@ describe('SUBSCRIPTION · provider fail-closed (no credentials)', () => {
   })
 
   test('verify-and-settle refuses for a real PENDING order (no forged confirmation can settle)', async () => {
+    await ensureGatewayParked()
     // The ONLY way an order row exists with no provider configured: planted
     // directly (in reality: recorded by reconciliation/operator flows).
     const order = await db.subscriptionOrder.create({
@@ -169,6 +192,7 @@ describe('SUBSCRIPTION · provider fail-closed (no credentials)', () => {
   })
 
   test('the sandbox helper stays unavailable without an explicit PAYMENTS_SANDBOX flag', async () => {
+    await ensureGatewayParked()
     let err: unknown
     try {
       await sandboxConfirmOrder(`SCH-ORD-FAILCLOSED-${RUN}`)
