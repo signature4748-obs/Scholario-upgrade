@@ -30,8 +30,9 @@
 //     header (principal pattern: identity + role chip + sign-out);
 //     the sidebar foot is a QUIET identity block;
 //   · a quiet in-scroller footer.
-// Preserved from the control-plane IA: the flat ten-item navigation
-// (fixed order, no groups), permission-filtered entries (hiding is
+// Preserved from the control-plane IA: grouped navigation (Revenue /
+// Oversight labels since the 2026-10-30 redesign), permission-filtered
+// entries (hiding is
 // UX; the server authorizes every route), the localStorage-persisted
 // desktop collapse, the step-up pill (dormant while platform MFA is
 // stood down), and the mobile drawer (full labels, Escape + focus
@@ -56,6 +57,10 @@ import {
   Menu,
   X,
   Wallet,
+  Package,
+  CreditCard,
+  KeyRound,
+  BookOpenText,
   ServerCrash,
   RefreshCw,
   ChevronLeft,
@@ -84,18 +89,51 @@ interface NavItem {
   permission?: string
 }
 
-/** FLAT IA — the ten primary destinations, fixed order, no groups. */
-const NAV: NavItem[] = [
-  { href: '/platform', label: 'Overview', icon: LayoutDashboard },
-  { href: '/platform/schools', label: 'Schools', icon: Building2, permission: 'schools.read' },
-  { href: '/platform/subscriptions', label: 'Subscriptions', icon: Wallet, permission: 'billing.manage' },
-  { href: '/platform/admins', label: 'Users & Access', icon: Users, permission: 'admins.manage' },
-  { href: '/platform/support', label: 'Support', icon: LifeBuoy, permission: 'support.access' },
-  { href: '/platform/announcements', label: 'Announcements', icon: Megaphone, permission: 'announcements.manage' },
-  { href: '/platform/audit', label: 'Audit Log', icon: ScrollText, permission: 'audit.read' },
-  { href: '/platform/settings', label: 'Settings', icon: Settings2, permission: 'settings.manage' },
-  { href: '/platform/sessions', label: 'My Sessions', icon: MonitorSmartphone },
-  { href: '/platform/operations', label: 'Operations', icon: Activity, permission: 'ops.read' },
+/** GROUPED IA (PAYMENTS & GATEWAYS REDESIGN) — the subscription cluster is
+ *  first-class: Subscriptions (control centre) · Plans & Pricing ·
+ *  Payments & Gateways · Access Codes, and Reports & Audit joins the
+ *  oversight group. Groups are LABELLED sections in the sidebar
+ *  (labels hidden while collapsed — the icons stay the full links). */
+const NAV_GROUPS: Array<{ label: string | null; items: NavItem[] }> = [
+  {
+    label: null,
+    items: [
+      { href: '/platform', label: 'Overview', icon: LayoutDashboard },
+      { href: '/platform/schools', label: 'Schools', icon: Building2, permission: 'schools.read' },
+    ],
+  },
+  {
+    label: 'Revenue',
+    items: [
+      { href: '/platform/subscriptions', label: 'Subscriptions', icon: Wallet, permission: 'billing.manage' },
+      { href: '/platform/plans', label: 'Plans & Pricing', icon: Package, permission: 'billing.manage' },
+      { href: '/platform/payments', label: 'Payments & Gateways', icon: CreditCard, permission: 'billing.manage' },
+      { href: '/platform/codes', label: 'Access Codes', icon: KeyRound, permission: 'billing.manage' },
+    ],
+  },
+  {
+    label: null,
+    items: [
+      { href: '/platform/admins', label: 'Users & Access', icon: Users, permission: 'admins.manage' },
+      { href: '/platform/support', label: 'Support', icon: LifeBuoy, permission: 'support.access' },
+      { href: '/platform/announcements', label: 'Announcements', icon: Megaphone, permission: 'announcements.manage' },
+    ],
+  },
+  {
+    label: 'Oversight',
+    items: [
+      { href: '/platform/reports', label: 'Reports & Audit', icon: ScrollText, permission: 'billing.manage' },
+      { href: '/platform/audit', label: 'Audit Log', icon: BookOpenText, permission: 'audit.read' },
+    ],
+  },
+  {
+    label: null,
+    items: [
+      { href: '/platform/settings', label: 'Settings', icon: Settings2, permission: 'settings.manage' },
+      { href: '/platform/sessions', label: 'My Sessions', icon: MonitorSmartphone },
+      { href: '/platform/operations', label: 'Operations', icon: Activity, permission: 'ops.read' },
+    ],
+  },
 ]
 
 /** localStorage key for the desktop collapsed-sidebar preference. */
@@ -463,7 +501,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     return <ConsoleUnavailable onRetry={() => void refresh()} onSignOut={() => void logout()} />
   }
 
-  const nav = NAV.filter((item) => !item.permission || can(item.permission))
+  // (Grouped navigation is computed inside renderNavLinks from NAV_GROUPS.)
 
   /** Sidebar header — the principal pattern: slate-900 "S" tile +
    *  SCHOLARIO wordmark + a quiet "Control Plane" line. `collapsed`
@@ -514,18 +552,36 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     </button>
   )
 
-  /** Navigation links — one flat list, principal row pattern. */
-  const renderNavLinks = (compact: boolean) => (
-    <nav aria-label="Platform navigation" className="flex-1 px-2.5 py-2.5 overflow-y-auto no-scrollbar">
-      <ul className="space-y-0.5">
-        {nav.map((item) => (
-          <li key={item.href} className={compact ? 'flex justify-center' : undefined}>
-            <SidebarLink item={item} pathname={pathname} collapsed={compact} />
-          </li>
+  /** Navigation links — labelled groups, principal row pattern. The
+   *  Audit Log item is hidden for billing managers who cannot read the
+   *  audit (the Reports & Audit page's audit tab still respects the
+   *  audit.read gate server-side); the /platform/audit route itself
+   *  stays alive for deep links. */
+  const renderNavLinks = (compact: boolean) => {
+    const visibleGroups = NAV_GROUPS.map((g) => ({
+      label: g.label,
+      items: g.items.filter((item) => !item.permission || can(item.permission)),
+    })).filter((g) => g.items.length > 0)
+    return (
+      <nav aria-label="Platform navigation" className="flex-1 px-2.5 py-2.5 overflow-y-auto no-scrollbar">
+        {visibleGroups.map((group, gi) => (
+          <div key={group.label ?? `g${gi}`} className={gi > 0 ? 'mt-3' : undefined}>
+            {group.label && !compact && (
+              <p className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">{group.label}</p>
+            )}
+            {group.label && compact && <div className="mx-auto mb-2 mt-1 h-px w-8 bg-slate-200" aria-hidden="true" />}
+            <ul className="space-y-0.5">
+              {group.items.map((item) => (
+                <li key={item.href} className={compact ? 'flex justify-center' : undefined}>
+                  <SidebarLink item={item} pathname={pathname} collapsed={compact} />
+                </li>
+              ))}
+            </ul>
+          </div>
         ))}
-      </ul>
-    </nav>
-  )
+      </nav>
+    )
+  }
 
   /** The QUIET identity block at the sidebar foot (principal pattern):
    *  avatar initials + name + role. The account ACTIONS (sign-out)

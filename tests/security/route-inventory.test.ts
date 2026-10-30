@@ -118,16 +118,26 @@ function routeExists(target: string): boolean {
 describe('ROUTE INVENTORY · sidebar + navigation sources', () => {
   const shellSrc = readFileSync(join(ROOT, 'src/components/platform/console-shell.tsx'), 'utf8')
 
-  test('the console NAV is the canonical ten destinations (fixed order), each resolving to an existing App Router page', () => {
+  test('the console NAV is the canonical grouped destinations (fixed order), each resolving to an existing App Router page', () => {
+    // PAYMENTS & GATEWAYS REDESIGN (2026-10-30): the subscription cluster
+    // became first-class nav — Subscriptions · Plans & Pricing ·
+    // Payments & Gateways · Access Codes under a labelled Revenue group,
+    // plus Reports & Audit in Oversight. The flat ten-item NAV became the
+    // grouped NAV_GROUPS structure; the canonical ORDER is still asserted
+    // here so accidental reshuffles fail loudly.
     const navEntries = [...shellSrc.matchAll(/\{ href: '([^']+)', label: '([^']+)', icon: \w+(?:, permission: '([^']+)')? \}/g)]
-    expect(navEntries.length).toBe(10)
+    expect(navEntries.length).toBe(14)
     const expected = [
       ['/platform', 'Overview'],
       ['/platform/schools', 'Schools'],
       ['/platform/subscriptions', 'Subscriptions'],
+      ['/platform/plans', 'Plans & Pricing'],
+      ['/platform/payments', 'Payments & Gateways'],
+      ['/platform/codes', 'Access Codes'],
       ['/platform/admins', 'Users & Access'],
       ['/platform/support', 'Support'],
       ['/platform/announcements', 'Announcements'],
+      ['/platform/reports', 'Reports & Audit'],
       ['/platform/audit', 'Audit Log'],
       ['/platform/settings', 'Settings'],
       ['/platform/sessions', 'My Sessions'],

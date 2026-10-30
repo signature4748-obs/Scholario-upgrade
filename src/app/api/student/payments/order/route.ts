@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { withUser, schoolScoped } from '@/lib/api'
 import { AppError } from '@/lib/security/errors'
-import { getTenantPaymentProvider } from '@/lib/payments/tenant-gateway'
+import { resolveSchoolFeeProvider } from '@/lib/payments/platform-gateway'
 import { normalizeMethod } from '@/lib/payments/methods'
 import { RATE_LIMITS, enforceRateLimit } from '@/lib/security/rate-limit'
 import { outstandingForOrder } from '@/lib/fee-workflow'
@@ -96,8 +96,17 @@ export async function POST(req: NextRequest) {
         })
       }
 
-      // ── Resolve the payment provider (§3B: tenant-scoped) ────────
-      const provider = await getTenantPaymentProvider(schoolId)
+      // ── Resolve the payment provider (§3B: tenant-scoped, explicit chain).
+      // A school override that is ACTIVE but undecryptable FAILS CLOSED —
+      // the platform's own account is never charged for school fees.
+      const resolution = await resolveSchoolFeeProvider(schoolId)
+      if (resolution.source === 'none' && resolution.error === 'SCHOOL_GATEWAY_UNDECRYPTABLE') {
+        throw new AppError('CONFLICT', {
+          publicMessage: 'Online payment is temporarily unavailable — the school payment gateway needs reconfiguration. Please contact the school office.',
+          internalDetail: `student/payments/order: school gateway ACTIVE but secret undecryptable (tenant ${schoolId})`,
+        })
+      }
+      const provider = resolution.provider
       if (!provider) throw new Error('ONLINE_PAYMENTS_UNAVAILABLE')
 
       // ── Create the gateway order ──────────────────────────────────

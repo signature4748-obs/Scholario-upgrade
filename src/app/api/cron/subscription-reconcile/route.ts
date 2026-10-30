@@ -91,12 +91,27 @@ async function handle(req: Request): Promise<Response> {
   }
 
   // AUTH BEFORE WORK (same ordering rationale as ops-sync).
+  // PAYMENTS & GATEWAYS REDESIGN: the secret path now records the SAME
+  // JobRun observability the session path always had — every execution
+  // leaves a run trail (idempotent sweeps make the double bookkeeping
+  // harmless; a missing trail was the bug).
   const secret = (process.env.OPS_CRON_SECRET ?? '').trim()
   if (secret) {
     const auth = req.headers.get('authorization') ?? ''
     if (auth === `Bearer ${secret}`) {
-      const summary = await runReconcile()
-      return json(summary)
+      const { runJob } = await import('@/lib/observability/jobs')
+      const bucket = new Date().toISOString().slice(0, 13) // YYYY-MM-DDTHH
+      const outcome = await runJob({
+        name: 'subscription-reconcile',
+        idempotencyKey: bucket,
+        trigger: 'scheduled',
+        fn: () => runReconcile(),
+      })
+      return json(
+        outcome.status === 'success' || outcome.status === 'skipped'
+          ? (outcome.result ?? { status: outcome.status })
+          : { status: 'failed', error: outcome.error },
+      )
     }
   }
 

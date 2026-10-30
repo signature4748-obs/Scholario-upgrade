@@ -35,14 +35,21 @@ const BASE = process.env.E2E_BASE_URL ?? 'http://localhost:3000'
 const T = 90_000 // generous: first-hit dev compilation
 const ROOT_EMAIL = 'admin@scholario.cloud'
 
-/** The ten canonical sidebar destinations (order = sidebar order). */
+/** The canonical sidebar destinations (order = sidebar order).
+ *  PAYMENTS & GATEWAYS REDESIGN (2026-10-30): the subscription cluster is
+ *  first-class nav — Plans & Pricing / Payments & Gateways / Access Codes
+ *  added, plus the Reports & Audit oversight section. */
 const SIDEBAR_ROUTES = [
   '/platform',
   '/platform/schools',
   '/platform/subscriptions',
+  '/platform/plans',
+  '/platform/payments',
+  '/platform/codes',
   '/platform/admins',
   '/platform/support',
   '/platform/announcements',
+  '/platform/reports',
   '/platform/audit',
   '/platform/settings',
   '/platform/sessions',

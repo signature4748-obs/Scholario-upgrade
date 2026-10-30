@@ -2745,7 +2745,7 @@ export function SchoolDetailModule() {
             <GroupSection
               id={SUBSECTION_IDS.gateway}
               title="Fee gateway"
-              description="The school's own student-fee payment rail — separate credentials from the subscription system."
+              description="The school's own student-fee rail — status and inherited vs override. Configuration lives in Payments & Gateways."
             >
               <SchoolPaymentGatewayTab schoolId={id} />
             </GroupSection>

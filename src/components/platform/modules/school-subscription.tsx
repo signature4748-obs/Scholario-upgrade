@@ -17,8 +17,7 @@
 //                    three primary actions.
 //   Plan & billing — the commercial terms table, the spelled-
 //                    out per-student calculation, the catalogue
-//                    entry point (Manage plans → /platform/
-//                    subscriptions), payment recording, and the
+//                    entry point (Manage plans → /platform/plans), payment recording, and the
 //                    advanced drawer (display label + manual
 //                    override).
 //   Codes          — one-time activation codes: filters (school /
@@ -88,13 +87,14 @@ import {
   AssignStaffEntitlementDialog,
   StaffHistoryDialog,
   codeScopeLabel,
-  PlanPicker,
   type ActivationCodeRow,
   type PlanRow,
   type RegistryRow,
   type StaffRow,
   type StudentRow,
 } from './subscription-shared'
+import { BatchCodesDialog, type GateFn } from './subscription-batch-codes'
+import { RevokeReissueDialog } from './subscription-code-actions'
 import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -196,8 +196,6 @@ interface AuditEventRow {
   admin: { name: string; email: string | null } | null
   reason: string | null
 }
-
-type GateFn = <T>(action: () => Promise<T>) => Promise<T | undefined>
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'] as const
 const PAYMENT_MODES = ['ONLINE_PAYMENT', 'CASH', 'BANK_TRANSFER', 'CHEQUE', 'OTHER'] as const
@@ -1448,9 +1446,9 @@ export function SummaryHeader({
             </Badge>
           )}
           {legacyActiveNoPeriod && (
-            <span className="text-[11px] text-slate-500">
-              access active — no paid period on record yet
-              <HelpHint text="This school evaluates Active (legacy provisioning, not a recorded payment). Record the first verified payment to start the paid period; or set an audited manual override if access should be restricted meanwhile." />
+            <span className="text-[11px] font-medium text-amber-700">
+              Access allowed — no verified payment recorded.
+              <HelpHint text="This school evaluates Active (legacy provisioning, not a recorded payment) — this is NOT an active paid subscription. Record the first verified payment to start the paid period; or set an audited manual override if access should be restricted meanwhile." />
             </span>
           )}
         </div>
@@ -1982,110 +1980,8 @@ export function PlanPricingPanel({
 
 // ── Codes · activation codes (sub-tab 3) ────────────────────────────────
 
-function RevokeReissueDialog({
-  code,
-  action,
-  onClose,
-  onDone,
-  gate,
-}: {
-  code: ActivationCodeRow
-  action: 'revoke' | 'reissue'
-  onClose: () => void
-  onDone: () => void
-  gate: GateFn
-}) {
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [issued, setIssued] = useState<{ publicRef: string; code: string; expiresAt: string; message: string } | null>(null)
-
-  const submit = async () => {
-    if (reason.trim().length < 4) {
-      toast.error('A reason of at least 4 characters is required (audited).')
-      return
-    }
-    setBusy(true)
-    try {
-      const res = await gate(() =>
-        platformApi<{ ok: true; publicRef: string; message: string; code?: string; expiresAt?: string }>(
-          `/api/platform/subscriptions/codes/${code.id}`,
-          { method: 'PATCH', body: JSON.stringify({ action, reason: reason.trim() }) },
-        ),
-      )
-      if (!res) return
-      if (action === 'reissue' && res.code && res.expiresAt) {
-        setIssued({ publicRef: res.publicRef, code: res.code, expiresAt: res.expiresAt, message: res.message })
-        onDone()
-      } else {
-        toast.success(res.message)
-        onDone()
-        onClose()
-      }
-    } catch (e) {
-      toast.error(`${action} failed`, { description: errText(e) })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o && !issued) onClose() }}>
-      <DialogContent className="bg-white border-slate-200 text-slate-900 sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="font-display">
-            {action === 'revoke' ? 'Revoke activation code' : 'Reissue activation code'}
-          </DialogTitle>
-          <DialogDescription>
-            {action === 'revoke'
-              ? `${code.publicRef} becomes permanently unusable. Financial records are unchanged.`
-              : `${code.publicRef} becomes REPLACED and a fresh code is issued inheriting the same plan/validity. The plaintext is shown exactly once.`}
-          </DialogDescription>
-        </DialogHeader>
-        {issued ? (
-          <div className="space-y-3">
-            <p className="text-sm">{issued.message}</p>
-            <OneTimeCodeBlock code={issued} />
-            <DialogFooter>
-              <Button onClick={onClose} className="bg-teal-600 hover:bg-teal-700 text-white">
-                Done
-              </Button>
-            </DialogFooter>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs" htmlFor="code-action-reason">
-                Reason (audited)
-              </Label>
-              <Textarea
-                id="code-action-reason"
-                rows={3}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder={action === 'revoke' ? 'Why is this code being revoked?' : 'Why is this code being reissued?'}
-                className="bg-white"
-              />
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={onClose} className="border-slate-300">
-                Cancel
-              </Button>
-              <Button
-                onClick={() => void submit()}
-                disabled={busy}
-                variant={action === 'revoke' ? 'destructive' : 'default'}
-                className={action === 'reissue' ? 'bg-teal-600 hover:bg-teal-700 text-white' : undefined}
-              >
-                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-                {action === 'revoke' ? 'Revoke code' : 'Reissue code'}
-              </Button>
-            </DialogFooter>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
+// RevokeReissueDialog was EXTRACTED to subscription-code-actions.tsx
+// (shared with the global Access Codes section).
 
 function CodesCard({ codes, total, onChanged, gate, schoolId, onBatchGenerated }: { codes: ActivationCodeRow[]; total: number; onChanged: () => void; gate: GateFn; schoolId: string; onBatchGenerated?: () => void }) {
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
@@ -2260,313 +2156,9 @@ function CodesCard({ codes, total, onChanged, gate, schoolId, onBatchGenerated }
   )
 }
 
-// ── Batch code generation (STAFF ENTITLEMENTS + BATCH CODES, 2026-10-30) ──
-
-interface BatchItem {
-  codeId: string
-  publicRef: string
-  code: string
-  assignedId: string | null
-  expiresAt: string
-}
-
-/**
- * Generate a configurable batch of student/staff activation codes:
- * plan (product), scope, quantity, validity dates, redemption deadline,
- * assignment policy (open claim vs pre-assigned members), backing
- * (verified payment vs permission-gated complimentary) and the audited
- * reason. The result shows requested vs generated and the plaintext
- * codes ONCE (OneTimeCodeBlock contract — never shown again by any view).
- */
-function BatchCodesDialog({ schoolId, gate, onClose, onDone }: { schoolId: string; gate: GateFn; onClose: () => void; onDone: () => void }) {
-  const [scope, setScope] = useState<'STUDENT_ENTITLEMENT' | 'STAFF_ENTITLEMENT'>('STUDENT_ENTITLEMENT')
-  const [form, setForm] = useState({
-    planCode: '', quantity: '10', claimWindowDays: '30', validityMonths: '12',
-    validityStart: '', validityEnd: '', assignment: 'OPEN', backing: 'PAYMENT',
-    amountPerCode: '', currency: 'INR', notes: '',
-  })
-  const [assignedIds, setAssignedIds] = useState<string[]>([])
-  const [memberQ, setMemberQ] = useState('')
-  const [memberOptions, setMemberOptions] = useState<Array<{ id: string; label: string }>>([])
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<{ requested: number; generated: number; message: string; items: BatchItem[]; batchPayment: { receiptNo: string } | null } | null>(null)
-
-  // Member search for the ASSIGNED policy (students or teachers by scope).
-  useEffect(() => {
-    if (form.assignment !== 'ASSIGNED') return
-    const t = setTimeout(() => {
-      const path = scope === 'STUDENT_ENTITLEMENT'
-        ? `/api/platform/schools/${schoolId}/students?q=${encodeURIComponent(memberQ)}&pageSize=50`
-        : `/api/platform/schools/${schoolId}/staff?q=${encodeURIComponent(memberQ)}&pageSize=50`
-      platformApi<{ students?: StudentRow[]; staff?: StaffRow[] }>(path)
-        .then((d) => {
-          setMemberOptions(
-            d.students?.map((s) => ({ id: s.studentId, label: `${s.name} (${s.class ?? s.email})` }))
-              ?? d.staff?.map((s) => ({ id: s.id, label: `${s.name ?? ''} (${s.email})` }))
-              ?? [],
-          )
-        })
-        .catch(() => setMemberOptions([]))
-    }, 250)
-    return () => clearTimeout(t)
-  }, [form.assignment, scope, schoolId, memberQ])
-
-  const quantity = Number(form.quantity.replace(/[^0-9]/g, '') || '0')
-  const canSubmit =
-    form.planCode !== '' &&
-    quantity >= 1 && quantity <= 200 &&
-    form.notes.trim().length >= 10 &&
-    (form.assignment === 'OPEN' || assignedIds.length === quantity)
-
-  const submit = async () => {
-    if (!canSubmit) {
-      setError(
-        form.planCode === ''
-          ? 'Select a plan first.'
-          : form.notes.trim().length < 10
-            ? 'Add an audited reason (at least 10 characters).'
-            : form.assignment === 'ASSIGNED'
-              ? `Select exactly ${quantity} member${quantity === 1 ? '' : 's'} — one per code.`
-              : 'Set a quantity between 1 and 200.',
-      )
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      const d = await gate(() =>
-        platformApi<{ requested: number; generated: number; message: string; items: BatchItem[]; batchPayment: { receiptNo: string } | null }>(
-          '/api/platform/subscriptions/codes/batch',
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              schoolId,
-              scope,
-              planCode: form.planCode,
-              quantity,
-              claimWindowDays: Number(form.claimWindowDays || 30),
-              validityMonths: Number(form.validityMonths || 12),
-              validityStart: form.validityStart ? new Date(form.validityStart).toISOString() : undefined,
-              validityEnd: form.validityEnd ? new Date(form.validityEnd).toISOString() : undefined,
-              assignment: form.assignment,
-              assignedIds: form.assignment === 'ASSIGNED' ? assignedIds : undefined,
-              backing: form.backing,
-              amountPerCode: form.amountPerCode !== '' ? Number(form.amountPerCode) : undefined,
-              currency: form.currency,
-              notes: form.notes.trim(),
-            }),
-          },
-        ),
-      )
-      if (!d) return // cancelled at the step-up prompt
-      setResult(d)
-      onDone()
-    } catch (e) {
-      setError(errText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const copyAll = () => {
-    if (!result) return
-    const text = result.items.map((i) => `${i.publicRef}: ${i.code}`).join('\n')
-    void navigator.clipboard.writeText(text).catch(() => {})
-  }
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o && !result) onClose() }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto bg-white border-slate-200 text-slate-900 sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 font-display">
-            <KeyRound className="h-4 w-4 text-teal-600" aria-hidden="true" />
-            Generate activation codes (batch)
-          </DialogTitle>
-          <DialogDescription>
-            Every code binds to this school, the chosen plan and the validity policy. Plaintext codes are shown ONCE
-            below — at rest only a keyed verifier is stored.
-          </DialogDescription>
-        </DialogHeader>
-        {result ? (
-          <div className="space-y-3">
-            <p className="text-sm">
-              <span className="font-semibold">{result.generated} of {result.requested}</span> codes generated
-              {result.batchPayment?.receiptNo && <> — batch payment receipt <span className="font-mono text-xs">{result.batchPayment.receiptNo}</span></>}.
-            </p>
-            <div className="max-h-72 space-y-2 overflow-y-auto custom-scrollbar pr-1">
-              {result.items.map((i) => (
-                <OneTimeCodeBlock
-                  key={i.codeId}
-                  code={{ publicRef: i.publicRef, code: i.code, expiresAt: i.expiresAt }}
-                  hint="Shown once — copy and deliver out-of-band."
-                />
-              ))}
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <Button variant="outline" size="sm" onClick={copyAll}>Copy all</Button>
-              <DialogFooter className="gap-2">
-                <Button onClick={() => { onClose() }}>Done</Button>
-              </DialogFooter>
-            </div>
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            {error && (
-              <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                {error}
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Who redeems</Label>
-                <Select value={scope} onValueChange={(v) => { setScope(v as 'STUDENT_ENTITLEMENT' | 'STAFF_ENTITLEMENT'); setAssignedIds([]) }}>
-                  <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
-                  <SelectContent className="bg-white">
-                    <SelectItem value="STUDENT_ENTITLEMENT">Students (one code per student seat)</SelectItem>
-                    <SelectItem value="STAFF_ENTITLEMENT">Teachers / staff (one code per seat)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs">Plan (product)</Label>
-                <PlanPicker
-                  scope={scope === 'STUDENT_ENTITLEMENT' ? 'STUDENT' : 'STAFF'}
-                  value={form.planCode}
-                  onChange={(v) => setForm((f) => ({ ...f, planCode: v }))}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs">Quantity (1–200)</Label>
-                <Input
-                  inputMode="numeric"
-                  value={form.quantity}
-                  onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value.replace(/[^0-9]/g, '') }))}
-                  className="bg-white"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Redeem within (days)</Label>
-                <Input
-                  inputMode="numeric"
-                  value={form.claimWindowDays}
-                  onChange={(e) => setForm((f) => ({ ...f, claimWindowDays: e.target.value.replace(/[^0-9]/g, '') }))}
-                  className="bg-white"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Validity (months)</Label>
-                <Input
-                  inputMode="numeric"
-                  value={form.validityMonths}
-                  onChange={(e) => setForm((f) => ({ ...f, validityMonths: e.target.value.replace(/[^0-9]/g, '') }))}
-                  className="bg-white"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Access starts (optional)</Label>
-                <Input type="date" value={form.validityStart} onChange={(e) => setForm((f) => ({ ...f, validityStart: e.target.value }))} className="bg-white" />
-              </div>
-              <div>
-                <Label className="text-xs">Access expires (optional — overrides months)</Label>
-                <Input type="date" value={form.validityEnd} onChange={(e) => setForm((f) => ({ ...f, validityEnd: e.target.value }))} className="bg-white" />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Assignment</Label>
-                <Select value={form.assignment} onValueChange={(v) => setForm((f) => ({ ...f, assignment: v }))}>
-                  <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
-                  <SelectContent className="bg-white">
-                    <SelectItem value="OPEN">Open — any eligible member can claim</SelectItem>
-                    <SelectItem value="ASSIGNED">Pre-assigned — one specific member per code</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs">Backed by</Label>
-                <Select value={form.backing} onValueChange={(v) => setForm((f) => ({ ...f, backing: v }))}>
-                  <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
-                  <SelectContent className="bg-white">
-                    <SelectItem value="PAYMENT">Verified payment (recorded now)</SelectItem>
-                    <SelectItem value="COMPLIMENTARY">Complimentary grant (permission-gated)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            {form.backing === 'PAYMENT' && (
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <Label className="text-xs">Amount per code</Label>
-                  <Input inputMode="decimal" value={form.amountPerCode} onChange={(e) => setForm((f) => ({ ...f, amountPerCode: e.target.value.replace(/[^0-9.]/g, '') }))} placeholder="plan price" className="bg-white" />
-                </div>
-                <div>
-                  <Label className="text-xs">Currency</Label>
-                  <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
-                    <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-white">{CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-              </div>
-            )}
-            {form.assignment === 'ASSIGNED' && (
-              <div>
-                <Label className="text-xs">
-                  Members ({assignedIds.length}/{quantity || '?'} selected) — one per code, in order
-                </Label>
-                <Input
-                  type="search"
-                  value={memberQ}
-                  onChange={(e) => setMemberQ(e.target.value)}
-                  placeholder={scope === 'STUDENT_ENTITLEMENT' ? 'Search students…' : 'Search teachers…'}
-                  className="mt-1 bg-white"
-                />
-                <div className="mt-1 max-h-32 overflow-y-auto custom-scrollbar rounded-lg border border-slate-200">
-                  {memberOptions.map((m) => {
-                    const selected = assignedIds.includes(m.id)
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-slate-50 ${selected ? 'bg-teal-50 text-teal-800' : ''}`}
-                        onClick={() =>
-                          setAssignedIds((ids) =>
-                            selected ? ids.filter((x) => x !== m.id) : ids.length < (quantity || 0) ? [...ids, m.id] : ids,
-                          )
-                        }
-                      >
-                        <span className="truncate">{m.label}</span>
-                        {selected && <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
-                      </button>
-                    )
-                  })}
-                  {memberOptions.length === 0 && (
-                    <p className="px-3 py-2 text-xs text-slate-400">No matches — search by name or email.</p>
-                  )}
-                </div>
-              </div>
-            )}
-            <div>
-              <Label className="text-xs">Audited reason (required)</Label>
-              <Textarea rows={2} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Why this batch is being issued (recorded in the audit trail)" className="bg-white" />
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={onClose}>Cancel</Button>
-              <Button onClick={() => void submit()} disabled={busy || !canSubmit} className="bg-teal-600 hover:bg-teal-700 text-white">
-                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-                Generate {quantity || ''} code{quantity === 1 ? '' : 's'}
-              </Button>
-            </DialogFooter>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
+// Batch code generation was EXTRACTED to subscription-batch-codes.tsx
+// (shared with the global Access Codes section — one flow, one audit
+// trail, one one-time-display contract).
 
 // ── Students · per-student entitlements (sub-tab 4) ─────────────────────
 
@@ -3169,11 +2761,13 @@ export function SchoolSubscriptionTab({
     [router, searchParams],
   )
 
-  // The plan catalogue (Standard, Pro, …) is managed in the Subscriptions
-  // console section — a plan defines the offering; this page sets each
-  // school's commercial price. One clear entry point, no duplicate editor.
+  // The plan catalogue (Standard, Pro, …) is managed in the Plans &
+  // Pricing console section — a plan defines the offering; this page sets
+  // each school's commercial price. One clear entry point, no duplicate
+  // editor. (PAYMENTS & GATEWAYS REDESIGN: the catalogue moved from the
+  // old subscriptions module's internal view to /platform/plans.)
   const managePlans = useCallback(() => {
-    router.push('/platform/subscriptions')
+    router.push('/platform/plans')
   }, [router])
 
   // The plan catalogue — ONE fetch feeding the terms dialog, the payment
@@ -3381,7 +2975,7 @@ export function SchoolSubscriptionTab({
                   size="sm"
                   onClick={managePlans}
                   className="h-8 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                  title="The plan catalogue (offering, standard prices) is managed in the Subscriptions console section — this page sets each school's negotiated terms."
+                  title="The plan catalogue (offering, standard prices) is managed in the Plans & Pricing console section — this page sets each school's negotiated terms."
                 >
                   Manage plans
                 </Button>

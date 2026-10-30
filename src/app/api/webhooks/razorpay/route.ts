@@ -759,15 +759,12 @@ async function handleWebhook(req: NextRequest): Promise<NextResponse> {
   })
 }
 
-// GET — let operators sanity-check that the endpoint is alive + configured.
+// No GET. PAYMENTS & GATEWAYS REDESIGN: the previous unauthenticated GET
+// disclosed the deployment's configuration posture (secret presence,
+// in-memory event volume) to anonymous callers — an unnecessary probe
+// surface. Readiness is surfaced in the authenticated Payments & Gateways
+// console section instead. This endpoint speaks Razorpay's POST-only
+// webhook contract.
 export async function GET() {
-  const configured = !!process.env.RAZORPAY_WEBHOOK_SECRET
-  return NextResponse.json({
-    endpoint: '/api/webhooks/razorpay',
-    secret_configured: configured,
-    seen_events: seenEventIds.size,
-    note: configured
-      ? 'Ready to receive Razorpay webhooks. POST with a valid X-Razorpay-Signature.'
-      : 'Set RAZORPAY_WEBHOOK_SECRET env var to enable verification.',
-  })
+  return NextResponse.json({ error: 'Method not allowed' }, { status: 405 })
 }

@@ -24,7 +24,7 @@
  */
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { db } from '@/lib/db'
-import { getPaymentProvider, RazorpayProvider, type PaymentProvider } from './provider'
+import { type PaymentProvider } from './provider'
 
 /* ─────────── AES-256-GCM secret storage ─────────── */
 
@@ -88,7 +88,7 @@ export interface TenantGatewayView {
 }
 
 /** Browser-safe view of a school's gateway (never secrets). */
-export async function tenantGatewayView(schoolId: string): Promise<TenantGatewayView | null> {
+export async function tenantGatewayView(schoolId: string): Promise<(TenantGatewayView & { lastVerifiedAt: string | null; webhookSecretConfigured: boolean }) | null> {
   const row = await db.schoolPaymentGateway.findUnique({ where: { schoolId } })
   if (!row) return null
   const mode =
@@ -103,28 +103,38 @@ export async function tenantGatewayView(schoolId: string): Promise<TenantGateway
     publicKeyId: row.publicKeyId,
     mode,
     status: row.status,
+    lastVerifiedAt: row.lastVerifiedAt?.toISOString() ?? null,
+    webhookSecretConfigured: Boolean(row.webhookSecretCipher),
   }
 }
 
 /**
- * Resolve the payment provider for a school's fee checkout. Tenant row
- * (ACTIVE, decryptable secret) wins; otherwise the deployment-level
- * provider; otherwise null. The returned provider carries the tenant's
- * OWN keys — orders and verifications run against the school's account.
+ * Resolve the payment provider for a school's fee checkout.
+ *
+ * DEPRECATED entry point kept for back-compat — new call sites should use
+ * {@link resolveSchoolFeeProvider} (platform-gateway.ts), which makes the
+ * resolution chain EXPLICIT and fails CLOSED when an ACTIVE tenant
+ * override is undecryptable instead of silently charging the platform's
+ * own account. This wrapper now logs loudly when that degradation would
+ * have happened and behaves identically to the fail-closed resolver
+ * (undecryptable → null), so the legacy call path can never misattribute
+ * money either.
  */
 export async function getTenantPaymentProvider(schoolId: string): Promise<PaymentProvider | null> {
-  const row = await db.schoolPaymentGateway.findUnique({ where: { schoolId } })
-  if (row && row.status === 'ACTIVE' && row.provider === 'razorpay' && row.publicKeyId) {
-    const secret = row.secretKeyCipher && row.secretKeyNonce
-      ? decryptSecret(row.secretKeyCipher, row.secretKeyNonce)
-      : null
-    if (secret) {
-      return new RazorpayProvider(row.publicKeyId, secret)
-    }
-    // Misconfigured tenant row (undecryptable secret) — fall through to
-    // the deployment provider, never fail open to a broken checkout.
+  const { resolveSchoolFeeProvider } = await import('./platform-gateway')
+  const resolution = await resolveSchoolFeeProvider(schoolId)
+  if (resolution.source === 'school') return resolution.provider
+  if (resolution.source === 'platform') return resolution.provider
+  if (resolution.error === 'SCHOOL_GATEWAY_UNDECRYPTABLE') {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        msg: 'tenant gateway undecryptable — fee checkout fails closed (platform account NOT used for school fees)',
+        schoolId,
+      }),
+    )
   }
-  return getPaymentProvider()
+  return null
 }
 
 /**

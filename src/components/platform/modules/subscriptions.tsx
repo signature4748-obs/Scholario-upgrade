@@ -1,45 +1,43 @@
 'use client'
 
 // ============================================================
-// SubscriptionsModule — /platform/subscriptions (§8 simplification)
+// SubscriptionsModule — /platform/subscriptions (control centre)
 // ------------------------------------------------------------
-// THE ROUTINE EXPERIENCE IS A SCHOOL SUBSCRIPTION OVERVIEW:
-// a summary row, a searchable/filterable table of every tenant's
-// subscription, and a per-school detail drawer (billing model,
-// plan, status, validity, override, payment history).
+// PAYMENTS & GATEWAYS REDESIGN — the single authoritative overview of
+// all school subscriptions. The four STATUS PLANES are separated
+// server-side (registry route) and rendered verbatim:
 //
-// The advanced workflows live behind progressive disclosure — NOT
-// top-level tabs:
-//   · "Student entitlements" — a secondary area (school FIRST, then
-//     student search + assign/history dialogs via subscription-shared).
-//   · "Manage plans" — the plan registry + creation form + the
-//     commercial-model config switches.
+//   A. Account access  — allowed / blocked (sign-in level).
+//   B. Payment state   — UNPAID / PENDING / PAID (money plane).
+//   C. Subscription    — active-paid / legacy-open-access / grace /
+//                        expired / suspended / override / not-activated.
+//   D. Entitlements    — per-student/staff rows live in the
+//                        "Student entitlements" view (?view=students).
 //
-// HONESTY CONTRACTS (schema-pending migration):
-//   · The registry/plans/school-picker responses may carry
-//     `subscriptionSchemaPending: true` — ONE shared banner near the
-//     top (pending-banner.tsx) explains what is unavailable; nulls
-//     render "—"; mutations fail with SUBSCRIPTION_SYSTEM_PENDING and
-//     the publicMessage is surfaced inline.
-//   · ERROR ≠ EMPTY: every load tracks a real error state and renders
-//     a retryable error panel. Empty states appear ONLY after a
-//     successful zero-row response. Skeletons never survive a failure.
-//   · All actions stay billing.manage-gated server-side; this UI only
-//     sends fields, never trusting client-side gating.
+// A legacy fail-open tenant is labelled "Access allowed — no verified
+// payment recorded." and is NEVER counted as an active subscription.
+//
+// Plan management moved to /platform/plans; renewal & reconciliation
+// reporting moved to /platform/reports. Clicking a school opens ITS
+// subscription detail (Schools → [school] → Subscription).
+//
+// HONESTY CONTRACTS (unchanged): schema-pending renders the shared
+// banner; ERROR ≠ EMPTY (retryable error panels); registry-wide KPIs
+// come from the API summary, never page-scoped rows.
 // ============================================================
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
-  AlertTriangle, ArrowLeft, Building2, CalendarClock, CalendarX, Check,
-  CreditCard, Eye, KeyRound, Loader2, Package, RefreshCw, Search,
-  Settings2, ShieldAlert, SlidersHorizontal, Users,
+  AlertTriangle, CalendarClock, CalendarX, Check,
+  KeyRound, Loader2, RefreshCw, Search,
+  ShieldAlert, ShieldCheck, SlidersHorizontal, Users,
 } from 'lucide-react'
-import { platformApi, type PlatformApiError } from '../platform-client'
+import { platformApi } from '../platform-client'
 import {
   AssignEntitlementDialog, StudentHistoryDialog,
-  StateBadge, dateStr, errMessage, money,
-  type StudentRow, type PlanRow,
+  StateBadge, dateStr, errMessage,
+  type StudentRow,
 } from './subscription-shared'
 import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
 import { Button } from '@/components/ui/button'
@@ -47,37 +45,17 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Textarea } from '@/components/ui/textarea'
-import { Switch } from '@/components/ui/switch'
-import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
-  AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import {
-  Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle,
-} from '@/components/ui/drawer'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { toast } from 'sonner'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
 // ── types ──────────────────────────────────────────────────────────────
 
-interface SubsConfig {
-  models: { school: { enabled: boolean }; student: { enabled: boolean }; manual: { enabled: boolean } }
-  defaultBillingModel: string
-  student: { defaultClaimWindowDays: number; defaultValidityMonths: number }
-  school: { defaultGraceDays: number }
-}
 interface SchoolOption { id: string; name: string; slug: string }
 
-/** Honest registry row shape — pending-migration columns are NULL
- *  (billingModel/planCode/interval/priceSnapshot/currencySnapshot/
- *  paymentCount), never fabricated. */
+/** Honest registry row shape — the status planes are computed
+ *  server-side; pending-migration columns are NULL, never fabricated. */
 interface SubscriptionRow {
   subscriptionId: string
   school: { id: string; name: string; slug: string; code: string; status: string; isDemo: boolean }
@@ -94,61 +72,32 @@ interface SubscriptionRow {
   overrideStatus: string | null
   notes: string | null
   paymentCount: number | null
+  licensedStudents?: number | null
+  pendingPayments: number
+  paymentState: 'UNPAID' | 'PENDING' | 'PAID'
+  accessState: 'allowed' | 'blocked'
+  subscriptionState: string
+  openAccess: boolean
+  daysToExpiry: number | null
+  nextAction: string
   entitlement: { state: string; businessAllowed: boolean; renewalRequired: boolean }
 }
 
-/** GET /api/platform/subscriptions/registry — summary nulls mean the
- *  subsystem is not provisioned on this database (never "zero").
- *  tenantStates + subscriptionsExpired + the fixed-30-day expiring count
- *  are REGISTRY-WIDE computed-live tallies (legacy columns only —
- *  available under schema-pending too); the KPI cards must never present
- *  page- or filter-scoped rows as global counts. schools.total is the
- *  FILTERED cohort (search + status + renewal window) and page/pageSize
- *  drive the pager — the counter's denominator and the pager describe the
- *  same filtered report. */
 interface RegistryData {
   subscriptionSchemaPending?: boolean
   schools: { rows: SubscriptionRow[]; total: number; page: number; pageSize: number }
   summary: {
     tenantStates?: Record<string, number>
     subscriptionsExpired?: number
+    activePaidSubscriptions?: number
+    unpaidOpenAccess?: number
+    pendingVerification?: number
     studentEntitlements: Record<string, number> | null
     orders: Record<string, number> | null
     rejectedClaims: number | null
     subscriptionsExpiringWithin30Days: number
   }
-}
-
-/** GET /api/platform/schools/[id]/subscription — the payment ledger
- *  (works under schema-pending: legacy columns + PlatformPayment). */
-interface SchoolSubscriptionDetail {
-  school: { id: string; name: string; slug: string; status: string }
-  subscription: {
-    status: string
-    plan: string
-    periodStart: string | null
-    periodEnd: string | null
-    graceDays: number
-    overrideStatus: string | null
-    notes: string | null
-  } | null
-  entitlement: { state: string; businessAllowed: boolean; renewalRequired: boolean; message: string | null }
-  payments: Array<{
-    id: string
-    receiptNo: string | null
-    amount: number
-    currency: string
-    mode: string
-    paymentDate: string
-    periodMonths: number
-    reference: string | null
-    notes: string | null
-    verification: string
-    recordedBy: { name: string; email: string } | null
-    statusAfter: string | null
-    periodEndAfter: string | null
-    createdAt: string
-  }>
+  planOptions?: Array<{ code: string; name: string }>
 }
 
 const TENANT_STATUS_FILTERS = [
@@ -160,49 +109,100 @@ const TENANT_STATUS_FILTERS = [
 ] as const
 
 const NEEDS_REVIEW_STATES = ['GRACE', 'RESTRICTED', 'SUSPENDED']
-const DAY_MS = 24 * 60 * 60 * 1000
-/** en-IN grouping — the repo's number format (matches the schools
- *  directory's pager and counters). */
 const num = new Intl.NumberFormat('en-IN')
 
-/** SSR-safe media query (resolved before any overlay can be opened). */
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(false)
-  useEffect(() => {
-    const m = window.matchMedia(query)
-    const onChange = () => setMatches(m.matches)
-    onChange()
-    m.addEventListener('change', onChange)
-    return () => m.removeEventListener('change', onChange)
-  }, [query])
-  return matches
+/** Plain-language labels for the server-computed subscription states. */
+const SUB_STATE_PLAIN: Record<string, string> = {
+  'active-paid': 'Active — paid',
+  'legacy-open-access': 'Access allowed — no verified payment recorded.',
+  'grace-period': 'Grace period',
+  'expired': 'Expired',
+  'suspended': 'Suspended',
+  'not-activated': 'Not activated',
+  'override-active': 'Override — active',
+  'override-grace': 'Override — grace',
+  'override-restricted': 'Override — restricted',
+  'override-suspended': 'Override — suspended',
+}
+
+const SUB_STATE_STYLES: Record<string, string> = {
+  'active-paid': 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  'legacy-open-access': 'border-amber-300 bg-amber-50 text-amber-800',
+  'grace-period': 'border-amber-200 bg-amber-50 text-amber-700',
+  'expired': 'border-orange-200 bg-orange-50 text-orange-700',
+  'suspended': 'border-red-200 bg-red-50 text-red-600',
+  'not-activated': 'border-slate-200 bg-slate-100 text-slate-600',
+  'override-active': 'border-sky-200 bg-sky-50 text-sky-700',
+  'override-grace': 'border-amber-200 bg-amber-50 text-amber-700',
+  'override-restricted': 'border-orange-200 bg-orange-50 text-orange-700',
+  'override-suspended': 'border-red-200 bg-red-50 text-red-600',
+}
+
+const PAYMENT_STATE_STYLES: Record<string, string> = {
+  PAID: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  PENDING: 'border-amber-200 bg-amber-50 text-amber-700',
+  UNPAID: 'border-slate-200 bg-slate-100 text-slate-600',
+}
+
+function SubStateBadge({ state }: { state: string }) {
+  return (
+    <Badge variant="outline" className={`whitespace-normal text-left text-[11px] leading-tight ${SUB_STATE_STYLES[state] ?? 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+      {SUB_STATE_PLAIN[state] ?? state}
+    </Badge>
+  )
+}
+
+function PaymentStateBadge({ state }: { state: string }) {
+  const label = state === 'PAID' ? 'Paid' : state === 'PENDING' ? 'Pending verification' : 'Unpaid'
+  return (
+    <Badge variant="outline" className={`text-[11px] ${PAYMENT_STATE_STYLES[state] ?? ''}`}>{label}</Badge>
+  )
 }
 
 // ── module ─────────────────────────────────────────────────────────────
 
 export function SubscriptionsModule() {
   const router = useRouter()
-  const [view, setView] = useState<'overview' | 'renewals' | 'students' | 'plans'>('overview')
+  const searchParams = useSearchParams()
+  /** URL-addressable views (?view=students) — deep links land exactly
+   *  where the operator expects (pre-redesign the views were state-only). */
+  const view = searchParams.get('view') === 'students' ? 'students' : 'overview'
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [registry, setRegistry] = useState<RegistryData | null>(null)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  /** Registry page — the API slices AFTER filtering, so the pager always
-   *  describes the filtered cohort. Filter changes reset it to 1. */
+  const [paymentFilter, setPaymentFilter] = useState('')
+  const [billingFilter, setBillingFilter] = useState('')
+  const [planFilter, setPlanFilter] = useState('')
+  const [expiryFilter, setExpiryFilter] = useState('')
   const [page, setPage] = useState(1)
-  /** Page-level schema-pending signal lifted from any secondary surface. */
   const [secondaryPending, setSecondaryPending] = useState(false)
 
   const signalPending = useCallback(() => setSecondaryPending(true), [])
 
-  const load = useCallback(async (q: string, status: string, pageNo: number) => {
+  const buildQs = useCallback(
+    (q: string, pageNo: number) => {
+      const p = new URLSearchParams()
+      if (q) p.set('q', q)
+      if (statusFilter) p.set('status', statusFilter)
+      if (paymentFilter) p.set('paymentState', paymentFilter)
+      if (billingFilter) p.set('billingModel', billingFilter)
+      if (planFilter) p.set('plan', planFilter)
+      if (expiryFilter) p.set('expiringDays', expiryFilter)
+      p.set('page', String(pageNo))
+      p.set('pageSize', '50')
+      return p.toString()
+    },
+    [statusFilter, paymentFilter, billingFilter, planFilter, expiryFilter],
+  )
+
+  const load = useCallback(async (q: string, pageNo: number) => {
     setLoading(true)
     setError(null)
     try {
-      const reg = await platformApi<RegistryData>(
-        `/api/platform/subscriptions/registry?q=${encodeURIComponent(q)}${status ? `&status=${status}` : ''}&page=${pageNo}&pageSize=50`,
-      )
+      const reg = await platformApi<RegistryData>(`/api/platform/subscriptions/registry?${buildQs(q, pageNo)}`)
       setRegistry(reg)
     } catch (e) {
       // ERROR ≠ EMPTY — a failed request must never look like "no rows".
@@ -210,150 +210,142 @@ export function SubscriptionsModule() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [buildQs])
 
-  useEffect(() => { void load('', '', 1) }, [load])
+  useEffect(() => { void load('', 1) }, [load])
 
-  /** Search/filter application — the parent owns the query + status +
-   *  page state so the overview is always a single source of truth.
-   *  Filters changing means the cohort changes — back to page 1. */
-  const handleSearch = useCallback((q: string, status: string) => {
-    setStatusFilter(status)
+  /** Any filter change resets the pager — the cohort changed. */
+  const applyFilters = (patch: Partial<{ status: string; payment: string; billing: string; plan: string; expiry: string }>) => {
+    if (patch.status !== undefined) setStatusFilter(patch.status)
+    if (patch.payment !== undefined) setPaymentFilter(patch.payment)
+    if (patch.billing !== undefined) setBillingFilter(patch.billing)
+    if (patch.plan !== undefined) setPlanFilter(patch.plan)
+    if (patch.expiry !== undefined) setExpiryFilter(patch.expiry)
     setPage(1)
-    void load(q, status, 1)
-  }, [load])
+    // load() reads the filter state via buildQs; state updates land before
+    // the effect-less call? No — call load AFTER setState batches resolve.
+    setTimeout(() => void load(query, 1), 0)
+  }
 
-  /** Pager navigation — keeps the active filters, moves within the
-   *  filtered cohort (mirrors the schools directory's pager). */
-  const handlePageChange = useCallback((next: number) => {
+  const handlePageChange = (next: number) => {
     setPage(next)
-    void load(query, statusFilter, next)
-  }, [load, query, statusFilter])
+    void load(query, next)
+  }
+
+  const openSchool = (id: string) => router.push(`/platform/schools/${id}?tab=subscription`)
 
   const schemaPending = (registry != null && isSubscriptionSchemaPending(registry)) || secondaryPending
+  const activeFilterCount = [statusFilter, paymentFilter, billingFilter, planFilter, expiryFilter].filter(Boolean).length
 
   return (
     <div className="space-y-5">
-      {/* Page header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Subscriptions</h1>
-          <p className="mt-1 text-sm text-slate-500">View and manage school subscription status.</p>
+          <p className="mt-1 text-sm text-slate-500">
+            The control centre for every school&apos;s subscription — payment, access and subscription state kept separate.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {view === 'overview' ? (
-            <>
-              <Button
-                variant="outline" size="sm" onClick={() => setView('renewals')}
-                className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                aria-label="Open the renewal report: subscriptions expiring within 30 days"
-              >
-                <CalendarClock className="h-4 w-4" aria-hidden="true" />Renewal report
-              </Button>
-              <Button
-                variant="outline" size="sm" onClick={() => setView('students')}
-                className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              >
-                <Users className="h-4 w-4" aria-hidden="true" />Student entitlements
-              </Button>
-              <Button
-                variant="outline" size="sm" onClick={() => setView('plans')}
-                className="h-9 border-teal-600 text-teal-700 hover:bg-teal-50"
-                aria-label="Manage plans and commercial models"
-              >
-                <Package className="h-4 w-4" aria-hidden="true" />Manage plans
-              </Button>
-            </>
-          ) : (
             <Button
-              variant="outline" size="sm" onClick={() => setView('overview')}
+              variant="outline" size="sm" onClick={() => router.push('/platform/subscriptions?view=students')}
               className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             >
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />Back to overview
+              <Users className="h-4 w-4" aria-hidden="true" />Student entitlements
+            </Button>
+          ) : (
+            <Button
+              variant="outline" size="sm" onClick={() => router.push('/platform/subscriptions')}
+              className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+            >
+              ← Back to control centre
             </Button>
           )}
         </div>
       </div>
 
-      {/* The ONE shared honest banner — rendered once near the top. */}
       {schemaPending && <SubscriptionPendingBanner />}
 
-      {view === 'renewals' ? (
-        <RenewalReportSection onOpenSchool={(id) => router.push(`/platform/schools/${id}`)} />
-      ) : view === 'students' ? (
+      {view === 'students' ? (
         <StudentEntitlementsSection
           onSchemaPending={signalPending}
-          onAssigned={() => void load(query, statusFilter, page)}
+          onAssigned={() => void load(query, page)}
         />
-      ) : view === 'plans' ? (
-        <PlansSection onSchemaPending={signalPending} />
       ) : (
-        <OverviewSection
+        <ControlCentreSection
           loading={loading}
           error={error}
           registry={registry}
           query={query}
+          onQueryChange={setQuery}
+          onSearch={() => { setPage(1); void load(query, 1) }}
           statusFilter={statusFilter}
+          paymentFilter={paymentFilter}
+          billingFilter={billingFilter}
+          planFilter={planFilter}
+          expiryFilter={expiryFilter}
+          activeFilterCount={activeFilterCount}
+          onFiltersChange={applyFilters}
           page={page}
           onPageChange={handlePageChange}
-          onQueryChange={setQuery}
-          onSearch={handleSearch}
-          onRetry={() => void load(query, statusFilter, page)}
+          onRetry={() => void load(query, page)}
+          onOpenSchool={openSchool}
         />
       )}
     </div>
   )
 }
 
-// ── overview (the routine experience) ──────────────────────────────────
+// ── control centre (overview) ──────────────────────────────────────────
 
-function OverviewSection({
-  loading, error, registry, query, statusFilter, page, onPageChange, onQueryChange, onSearch, onRetry,
+function ControlCentreSection({
+  loading, error, registry, query, onQueryChange, onSearch,
+  statusFilter, paymentFilter, billingFilter, planFilter, expiryFilter,
+  activeFilterCount, onFiltersChange, page, onPageChange, onRetry, onOpenSchool,
 }: {
   loading: boolean
   error: string | null
   registry: RegistryData | null
   query: string
+  onQueryChange: (q: string) => void
+  onSearch: () => void
   statusFilter: string
+  paymentFilter: string
+  billingFilter: string
+  planFilter: string
+  expiryFilter: string
+  activeFilterCount: number
+  onFiltersChange: (patch: Partial<{ status: string; payment: string; billing: string; plan: string; expiry: string }>) => void
   page: number
   onPageChange: (next: number) => void
-  onQueryChange: (q: string) => void
-  onSearch: (q: string, status: string) => void
   onRetry: () => void
+  onOpenSchool: (id: string) => void
 }) {
   const [filterOpen, setFilterOpen] = useState(false)
-  const [detailRow, setDetailRow] = useState<SubscriptionRow | null>(null)
-
   const rows = registry?.schools.rows ?? []
   const pageSize = registry?.schools.pageSize ?? 50
   const total = registry?.schools.total ?? 0
   const totalPages = registry ? Math.max(1, Math.ceil(total / pageSize)) : 1
-  const now = Date.now()
-  // REGISTRY-WIDE KPIs — served by the API's summary (computed live over
-  // ALL SchoolSubscription rows, legacy columns only). The page-scoped row
-  // list is bounded by pageSize; presenting its counts as global KPIs
-  // under-reported on paginated registries — never do that again.
-  const tenantStates = registry?.summary.tenantStates
-  const active = tenantStates ? (tenantStates.ACTIVE ?? 0) : rows.filter((r) => r.entitlement.state === 'ACTIVE').length
-  const expiringSoon = registry?.summary.subscriptionsExpiringWithin30Days ?? 0
-  const expired = tenantStates ? (registry?.summary.subscriptionsExpired ?? 0) : rows.filter((r) => r.periodEnd != null && new Date(r.periodEnd).getTime() < now).length
-  const needsReview = tenantStates
-    ? NEEDS_REVIEW_STATES.reduce((sum, s) => sum + (tenantStates[s] ?? 0), 0)
-    : rows.filter((r) => NEEDS_REVIEW_STATES.includes(r.entitlement.state)).length
+  const summary = registry?.summary
 
-  const applyStatus = (value: string) => {
-    const next = statusFilter === value ? '' : value
-    setFilterOpen(false)
-    onSearch(query, next)
-  }
+  // REGISTRY-WIDE KPIs from the API summary (computed live over ALL rows).
+  const activePaid = summary?.activePaidSubscriptions ?? 0
+  const openAccess = summary?.unpaidOpenAccess ?? 0
+  const pendingVerification = summary?.pendingVerification ?? 0
+  const expiringSoon = summary?.subscriptionsExpiringWithin30Days ?? 0
+  const expired = summary?.subscriptionsExpired ?? 0
+  const suspended = summary?.tenantStates?.SUSPENDED ?? 0
+  const needsAction = summary
+    ? NEEDS_REVIEW_STATES.reduce((sum, s) => sum + (summary.tenantStates?.[s] ?? 0), 0)
+    : 0
 
   return (
     <div className="space-y-4">
-      {/* Compact summary row — only when real data loaded (never on
-          failure, never fabricated zeros). */}
-      {loading ? (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => (
+      {/* KPI row — the status planes, labelled explicitly */}
+      {loading && !registry ? (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
             <div key={i} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <Skeleton className="h-3 w-20 bg-slate-200" />
               <Skeleton className="mt-3 h-7 w-12 bg-slate-200" />
@@ -361,15 +353,27 @@ function OverviewSection({
           ))}
         </div>
       ) : registry && !error ? (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <SummaryStat icon={<Building2 className="h-4 w-4" />} label="Active subscriptions" value={active} />
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+          <SummaryStat
+            icon={<ShieldCheck className="h-4 w-4" />} label="Active — paid" value={activePaid}
+            tone="text-emerald-700"
+          />
+          <SummaryStat
+            icon={<ShieldAlert className="h-4 w-4" />} label="Unpaid — access allowed" value={openAccess}
+            tone="text-amber-700" title="Legacy open access: the school can sign in but no verified payment is recorded."
+          />
+          <SummaryStat icon={<Loader2 className="h-4 w-4" />} label="Payments pending verification" value={pendingVerification} />
           <SummaryStat icon={<CalendarClock className="h-4 w-4" />} label="Expiring soon (30d)" value={expiringSoon} />
-          <SummaryStat icon={<CalendarX className="h-4 w-4" />} label="Expired" value={expired} />
-          <SummaryStat icon={<ShieldAlert className="h-4 w-4" />} label="Schools needing review" value={needsReview} />
+          <SummaryStat icon={<CalendarX className="h-4 w-4" />} label="Expired" value={expired} tone="text-orange-700" />
+          <SummaryStat icon={<AlertTriangle className="h-4 w-4" />} label="Suspended" value={suspended} tone="text-red-600" />
         </div>
       ) : null}
+      {registry && !error && needsAction > 0 && (
+        <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm">
+          <span className="font-semibold text-slate-800">{needsAction}</span> school{needsAction === 1 ? '' : 's'} need administrative action (grace / expired / suspended). Use the filters or the Reports &amp; Audit worklist.
+        </p>
+      )}
 
-      {/* Load error — the durable surface (retry), never an empty state. */}
       {error && (
         <div
           role="alert"
@@ -379,18 +383,15 @@ function OverviewSection({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             <span>Could not load subscriptions: {error}</span>
           </p>
-          <Button
-            variant="outline" size="sm" onClick={onRetry}
-            className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-          >
+          <Button variant="outline" size="sm" onClick={onRetry} className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100">
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Retry
           </Button>
         </div>
       )}
 
-      {/* Search + the ONE compact filter control */}
+      {/* Search + filters */}
       {!error && (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
             <Input
@@ -400,25 +401,61 @@ function OverviewSection({
               className="h-10 border-slate-300 bg-white pl-9"
               value={query}
               onChange={(e) => onQueryChange(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') onSearch(query, statusFilter) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') onSearch() }}
             />
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:w-auto">
+            <Select value={billingFilter || 'all'} onValueChange={(v) => onFiltersChange({ billing: v === 'all' ? '' : v })}>
+              <SelectTrigger className="h-10 border-slate-300 bg-white" aria-label="Filter by billing model"><SelectValue placeholder="Billing model" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All billing models</SelectItem>
+                <SelectItem value="SCHOOL_WIDE">School-wide</SelectItem>
+                <SelectItem value="PER_STUDENT">Per student</SelectItem>
+                <SelectItem value="MIXED">Mixed</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={paymentFilter || 'all'} onValueChange={(v) => onFiltersChange({ payment: v === 'all' ? '' : v })}>
+              <SelectTrigger className="h-10 border-slate-300 bg-white" aria-label="Filter by payment status"><SelectValue placeholder="Payment" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All payment states</SelectItem>
+                <SelectItem value="PAID">Paid</SelectItem>
+                <SelectItem value="PENDING">Pending verification</SelectItem>
+                <SelectItem value="UNPAID">Unpaid</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={planFilter || 'all'} onValueChange={(v) => onFiltersChange({ plan: v === 'all' ? '' : v })}>
+              <SelectTrigger className="h-10 border-slate-300 bg-white" aria-label="Filter by plan"><SelectValue placeholder="Plan" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All plans</SelectItem>
+                {(registry?.planOptions ?? []).map((p) => <SelectItem key={p.code} value={p.code}>{p.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={expiryFilter || 'all'} onValueChange={(v) => onFiltersChange({ expiry: v === 'all' ? '' : v })}>
+              <SelectTrigger className="h-10 border-slate-300 bg-white" aria-label="Filter by expiry window"><SelectValue placeholder="Expiry" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Any expiry</SelectItem>
+                <SelectItem value="7">Expiring in 7 days</SelectItem>
+                <SelectItem value="30">Expiring in 30 days</SelectItem>
+                <SelectItem value="90">Expiring in 90 days</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <Popover open={filterOpen} onOpenChange={setFilterOpen}>
             <PopoverTrigger asChild>
               <Button
                 variant="outline" size="sm"
-                aria-label="Filter subscriptions by status"
+                aria-label="Filter subscriptions by computed status"
                 aria-expanded={filterOpen}
-                className="h-10 w-full border-slate-300 bg-white text-slate-700 hover:bg-slate-100 sm:w-auto"
+                className="h-10 border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
               >
-                <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />Filter
-                {statusFilter && (
-                  <Badge variant="outline" className="ml-1 border-teal-200 bg-teal-50 text-[10px] text-teal-700">1</Badge>
+                <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />Status
+                {activeFilterCount > 0 && (
+                  <Badge variant="outline" className="ml-1 border-teal-200 bg-teal-50 text-[10px] text-teal-700">{activeFilterCount}</Badge>
                 )}
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-56 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscription status</p>
               <div className="mt-1.5 space-y-0.5">
                 {TENANT_STATUS_FILTERS.map((s) => (
                   <button
@@ -426,7 +463,7 @@ function OverviewSection({
                     type="button"
                     role="menuitemradio"
                     aria-checked={statusFilter === s.value}
-                    onClick={() => applyStatus(s.value)}
+                    onClick={() => onFiltersChange({ status: statusFilter === s.value ? '' : s.value })}
                     className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100"
                   >
                     {s.label}
@@ -438,10 +475,10 @@ function OverviewSection({
                 <Button
                   variant="ghost" size="sm"
                   className="w-full text-xs text-slate-600"
-                  disabled={!statusFilter}
-                  onClick={() => { setFilterOpen(false); onSearch(query, '') }}
+                  disabled={activeFilterCount === 0}
+                  onClick={() => onFiltersChange({ status: '', payment: '', billing: '', plan: '', expiry: '' })}
                 >
-                  Clear all
+                  Clear all filters
                 </Button>
               </div>
             </PopoverContent>
@@ -450,7 +487,7 @@ function OverviewSection({
       )}
 
       {/* Registry table (desktop) / cards (mobile) */}
-      {loading ? (
+      {loading && !registry ? (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="space-y-3 p-4">
             {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-12 w-full bg-slate-200" />)}
@@ -460,224 +497,6 @@ function OverviewSection({
         <>
           <p className="text-xs text-slate-500" aria-live="polite">
             Showing {rows.length} of {total} school subscriptions
-            {statusFilter ? ` · status: ${TENANT_STATUS_FILTERS.find((s) => s.value === statusFilter)?.label ?? statusFilter}` : ''}
-          </p>
-
-          {/* Mobile card list (no horizontal scroll at phone widths) */}
-          <div className="space-y-2 md:hidden">
-            {rows.map((r) => (
-              <div key={r.subscriptionId} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <p className="truncate text-sm font-semibold text-slate-900">{r.school.name}</p>
-                      {r.school.isDemo && <Badge variant="outline" className="text-[10px]">demo</Badge>}
-                    </div>
-                    <p className="truncate text-xs text-slate-500">{r.school.slug}</p>
-                  </div>
-                  <StateBadge state={r.entitlement.state} />
-                </div>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
-                  <span>Plan: {r.planDef ? r.planDef.name : r.plan}</span>
-                  <span>Valid until: {r.periodEnd ? dateStr(r.periodEnd) : 'No expiry'}</span>
-                  <span>Payments: {r.paymentCount == null ? '—' : r.paymentCount}</span>
-                </div>
-                <Button
-                  variant="outline" size="sm"
-                  onClick={() => setDetailRow(r)}
-                  className="mt-2 w-full border-slate-300 text-slate-700"
-                  aria-label={`View subscription details for ${r.school.name}`}
-                >
-                  <Eye className="h-3.5 w-3.5" aria-hidden="true" />View
-                </Button>
-              </div>
-            ))}
-            {rows.length === 0 && <EmptyState title="No subscriptions match." hint="Try a different search or clear the filters." />}
-          </div>
-
-          {/* Desktop table */}
-          <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
-            <table className="w-full min-w-[680px] text-sm">
-              <caption className="sr-only">School subscriptions with current plan, status, validity and payment count</caption>
-              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th scope="col" className="px-3 py-2.5">School</th>
-                  <th scope="col" className="px-3 py-2.5">Current plan</th>
-                  <th scope="col" className="px-3 py-2.5">Status</th>
-                  <th scope="col" className="px-3 py-2.5">Valid until</th>
-                  <th scope="col" className="px-3 py-2.5">Payments</th>
-                  <th scope="col" className="px-3 py-2.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.subscriptionId} className="border-t border-slate-100 hover:bg-slate-50/60">
-                    <td className="px-3 py-2.5 font-medium text-slate-900">
-                      {r.school.name}
-                      {r.school.isDemo && <Badge variant="outline" className="ml-2 text-[10px]">demo</Badge>}
-                      <div className="text-xs font-normal text-slate-500">{r.school.slug}</div>
-                    </td>
-                    <td className="px-3 py-2.5 text-slate-700">
-                      {r.planDef ? r.planDef.name : r.plan}
-                      {r.interval && <div className="text-xs text-slate-500">{r.interval.toLowerCase()}</div>}
-                    </td>
-                    <td className="px-3 py-2.5"><StateBadge state={r.entitlement.state} /></td>
-                    <td className="px-3 py-2.5 text-slate-700">{r.periodEnd ? dateStr(r.periodEnd) : 'No expiry'}</td>
-                    <td className="px-3 py-2.5 tabular-nums text-slate-700">{r.paymentCount == null ? '—' : r.paymentCount}</td>
-                    <td className="px-3 py-2.5 text-right">
-                      <Button
-                        variant="outline" size="sm"
-                        onClick={() => setDetailRow(r)}
-                        className="border-slate-300 text-slate-700"
-                        aria-label={`View subscription details for ${r.school.name}`}
-                      >
-                        <Eye className="h-3.5 w-3.5" aria-hidden="true" />View
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-                {rows.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-3 py-10 text-center text-slate-500">
-                      <EmptyState title="No subscriptions match." hint="Try a different search or clear the filters." />
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pager — mirrors the schools directory's pager (Prev/Next +
-              "Page X of Y" + the cohort size). Rendered only when the
-              filtered cohort has rows: with zero matches the empty state
-              above is the honest surface, not navigation to nothing. */}
-          {total > 0 && (
-            <nav
-              aria-label="Subscription registry pages"
-              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
-            >
-              <p className="text-xs tabular-nums text-slate-500">
-                Page {page} of {totalPages}
-                {registry ? ` · ${num.format(total)} subscription${total === 1 ? '' : 's'}` : ''}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page <= 1 || loading}
-                  onClick={() => onPageChange(Math.max(1, page - 1))}
-                  className="h-9 min-w-[76px] border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
-                >
-                  ← Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page >= totalPages || loading}
-                  onClick={() => onPageChange(page + 1)}
-                  className="h-9 min-w-[76px] border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
-                >
-                  Next →
-                </Button>
-              </div>
-            </nav>
-          )}
-        </>
-      )}
-
-      {/* Per-school detail overlay — Drawer on mobile, Dialog on desktop */}
-      {detailRow && <SchoolDetailOverlay row={detailRow} onClose={() => setDetailRow(null)} />}
-    </div>
-  )
-}
-
-// ── renewal report (the expiring-within-30-days drill-down) ─────────────
-
-/** Subscriptions expiring within the next 30 days — the operator's
- *  renewal worklist. Server-filtered (?expiringDays=30 — the same lane
- *  the schools directory exposes), sorted soonest-first, every row links
- *  into its school workspace where the audited renewal actions live
- *  (record payment / override). The cohort size comes from the
- *  registry-wide summary — the list is the drill-down, not the count. */
-function RenewalReportSection({
-  onOpenSchool, onSchemaPending,
-}: {
-  onOpenSchool: (id: string) => void
-  onSchemaPending?: () => void
-}) {
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [data, setData] = useState<RegistryData | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const reg = await platformApi<RegistryData>(
-        '/api/platform/subscriptions/registry?expiringDays=30&pageSize=100',
-      )
-      if (isSubscriptionSchemaPending(reg)) onSchemaPending?.()
-      setData(reg)
-    } catch (e) {
-      // ERROR ≠ EMPTY — a failed report must never look like "nothing expires".
-      setError(errMessage(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [onSchemaPending])
-
-  useEffect(() => { void load() }, [load])
-
-  const rows = [...(data?.schools.rows ?? [])].sort((a, b) => {
-    const ea = a.periodEnd ? new Date(a.periodEnd).getTime() : Number.POSITIVE_INFINITY
-    const eb = b.periodEnd ? new Date(b.periodEnd).getTime() : Number.POSITIVE_INFINITY
-    return ea - eb
-  })
-  const total = data?.summary.subscriptionsExpiringWithin30Days ?? 0
-  const nowMs = Date.now()
-
-  const daysLeft = (iso: string): number =>
-    Math.max(0, Math.ceil((new Date(iso).getTime() - nowMs) / DAY_MS))
-
-  const UrgencyBadge = ({ iso }: { iso: string }) => {
-    const d = daysLeft(iso)
-    const cls =
-      d <= 7
-        ? 'border-red-200 bg-red-50 text-red-700'
-        : d <= 14
-          ? 'border-amber-200 bg-amber-50 text-amber-700'
-          : 'border-slate-200 bg-slate-50 text-slate-600'
-    return (
-      <Badge variant="outline" className={`text-[10px] ${cls}`}>
-        {d === 0 ? 'expires today' : `${d}d left`}
-      </Badge>
-    )
-  }
-
-  return (
-    <div className="space-y-4">
-      {loading ? (
-        <div className="space-y-2">
-          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full bg-slate-200" />)}
-        </div>
-      ) : error ? (
-        <div
-          role="alert"
-          className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <p className="flex items-start gap-2.5 text-sm text-red-600">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Could not load the renewal report: {error}</span>
-          </p>
-          <Button variant="outline" size="sm" onClick={() => void load()} className="h-9 border-slate-300 bg-white text-slate-700 hover:bg-slate-100">
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Retry
-          </Button>
-        </div>
-      ) : (
-        <>
-          <p className="text-xs text-slate-500" aria-live="polite">
-            {total} school subscription{total === 1 ? '' : 's'} expire{total === 1 ? 's' : ''} within the next 30 days
-            {rows.length < total ? ` · showing the ${rows.length} soonest` : ''}
           </p>
 
           {/* Mobile card list */}
@@ -692,93 +511,145 @@ function RenewalReportSection({
                     </div>
                     <p className="truncate text-xs text-slate-500">{r.school.slug}</p>
                   </div>
-                  <StateBadge state={r.entitlement.state} />
+                  {r.accessState === 'blocked' ? (
+                    <Badge variant="outline" className="border-slate-300 bg-slate-100 text-[10px] text-slate-600">Access blocked</Badge>
+                  ) : (
+                    <SubStateBadge state={r.subscriptionState} />
+                  )}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
-                  <span>Plan: {r.planDef ? r.planDef.name : r.plan}</span>
-                  <span>Valid until: {r.periodEnd ? dateStr(r.periodEnd) : 'No expiry'}</span>
-                  {r.periodEnd && <UrgencyBadge iso={r.periodEnd} />}
+                  <span>{r.billingModel ? r.billingModel.replace(/_/g, ' ').toLowerCase() : 'billing —'}</span>
+                  <span>Plan: {r.planDef ? r.planDef.name : r.planCode ?? r.plan}</span>
+                  <span>Payment: {r.paymentState.toLowerCase()}</span>
+                  <span>Valid until: {r.periodEnd ? dateStr(r.periodEnd) : '—'}</span>
+                  {r.licensedStudents != null && <span>Licensed: {r.licensedStudents}</span>}
                 </div>
+                {r.nextAction !== 'None' && (
+                  <p className="mt-1.5 text-xs font-medium text-slate-700">Next: {r.nextAction}</p>
+                )}
                 <Button
-                  variant="outline" size="sm"
-                  onClick={() => onOpenSchool(r.school.id)}
+                  variant="outline" size="sm" onClick={() => onOpenSchool(r.school.id)}
                   className="mt-2 w-full border-slate-300 text-slate-700"
-                  aria-label={`Open ${r.school.name} workspace to renew`}
+                  aria-label={`Open subscription details for ${r.school.name}`}
                 >
-                  <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />Open school
+                  Open subscription
                 </Button>
               </div>
             ))}
-            {rows.length === 0 && (
-              <EmptyState title="Nothing expires in the next 30 days." hint="The registry-wide KPI on the overview reflects this report." />
-            )}
+            {rows.length === 0 && <EmptyState title="No subscriptions match." hint="Try a different search or clear the filters." />}
           </div>
 
           {/* Desktop table */}
           <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
-            <table className="w-full min-w-[680px] text-sm">
-              <caption className="sr-only">School subscriptions expiring within 30 days, soonest first, with renewal access into each workspace</caption>
+            <table className="w-full min-w-[1080px] text-sm">
+              <caption className="sr-only">School subscriptions with billing model, plan, payment status, access status, validity, licensed quantity, payments and next action</caption>
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th scope="col" className="px-3 py-2.5">School</th>
-                  <th scope="col" className="px-3 py-2.5">Current plan</th>
-                  <th scope="col" className="px-3 py-2.5">Status</th>
+                  <th scope="col" className="px-3 py-2.5">Billing model</th>
+                  <th scope="col" className="px-3 py-2.5">Plan</th>
+                  <th scope="col" className="px-3 py-2.5">Payment</th>
+                  <th scope="col" className="px-3 py-2.5">Access / subscription</th>
                   <th scope="col" className="px-3 py-2.5">Valid until</th>
-                  <th scope="col" className="px-3 py-2.5">Urgency</th>
-                  <th scope="col" className="px-3 py-2.5 text-right">Actions</th>
+                  <th scope="col" className="px-3 py-2.5">Licensed</th>
+                  <th scope="col" className="px-3 py-2.5">Payments</th>
+                  <th scope="col" className="px-3 py-2.5">Next action</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.subscriptionId} className="border-t border-slate-100 hover:bg-slate-50/60">
+                  <tr
+                    key={r.subscriptionId}
+                    className="cursor-pointer border-t border-slate-100 hover:bg-slate-50/60"
+                    onClick={() => onOpenSchool(r.school.id)}
+                  >
                     <td className="px-3 py-2.5 font-medium text-slate-900">
                       {r.school.name}
                       {r.school.isDemo && <Badge variant="outline" className="ml-2 text-[10px]">demo</Badge>}
                       <div className="text-xs font-normal text-slate-500">{r.school.slug}</div>
                     </td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600">
+                      {r.billingModel ? r.billingModel.replace(/_/g, ' ').toLowerCase() : '—'}
+                    </td>
                     <td className="px-3 py-2.5 text-slate-700">
-                      {r.planDef ? r.planDef.name : r.plan}
+                      {r.planDef ? r.planDef.name : r.planCode ?? r.plan}
                       {r.interval && <div className="text-xs text-slate-500">{r.interval.toLowerCase()}</div>}
                     </td>
-                    <td className="px-3 py-2.5"><StateBadge state={r.entitlement.state} /></td>
-                    <td className="px-3 py-2.5 text-slate-700">{r.periodEnd ? dateStr(r.periodEnd) : 'No expiry'}</td>
-                    <td className="px-3 py-2.5">{r.periodEnd ? <UrgencyBadge iso={r.periodEnd} /> : '—'}</td>
-                    <td className="px-3 py-2.5 text-right">
-                      <Button
-                        variant="outline" size="sm"
-                        onClick={() => onOpenSchool(r.school.id)}
-                        className="border-slate-300 text-slate-700"
-                        aria-label={`Open ${r.school.name} workspace to renew`}
-                      >
-                        <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />Open school
-                      </Button>
+                    <td className="px-3 py-2.5">
+                      <PaymentStateBadge state={r.paymentState} />
                     </td>
+                    <td className="px-3 py-2.5">
+                      {r.accessState === 'blocked' ? (
+                        <Badge variant="outline" className="border-slate-300 bg-slate-100 text-[11px] text-slate-600">Access blocked</Badge>
+                      ) : (
+                        <SubStateBadge state={r.subscriptionState} />
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-700">
+                      {r.periodEnd ? dateStr(r.periodEnd) : '—'}
+                      {r.openAccess && <div className="text-[11px] font-medium text-amber-700">No paid period on record</div>}
+                    </td>
+                    <td className="px-3 py-2.5 tabular-nums text-slate-700">{r.licensedStudents ?? '—'}</td>
+                    <td className="px-3 py-2.5 tabular-nums text-slate-700">
+                      {r.paymentCount == null ? '—' : r.paymentCount}
+                      {r.pendingPayments > 0 && <div className="text-[11px] text-amber-700">{r.pendingPayments} pending</div>}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600">{r.nextAction}</td>
                   </tr>
                 ))}
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-10 text-center text-slate-500">
-                      <EmptyState title="Nothing expires in the next 30 days." hint="The registry-wide KPI on the overview reflects this report." />
+                    <td colSpan={9} className="px-3 py-10 text-center text-slate-500">
+                      <EmptyState title="No subscriptions match." hint="Try a different search or clear the filters." />
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
+
+          {/* Pager */}
+          {total > 0 && (
+            <nav
+              aria-label="Subscription registry pages"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
+            >
+              <p className="text-xs tabular-nums text-slate-500">
+                Page {page} of {totalPages}
+                {registry ? ` · ${num.format(total)} subscription${total === 1 ? '' : 's'}` : ''}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline" size="sm" disabled={page <= 1 || loading}
+                  onClick={() => onPageChange(Math.max(1, page - 1))}
+                  className="h-9 min-w-[76px] border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  ← Previous
+                </Button>
+                <Button
+                  variant="outline" size="sm" disabled={page >= totalPages || loading}
+                  onClick={() => onPageChange(page + 1)}
+                  className="h-9 min-w-[76px] border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
+                >
+                  Next →
+                </Button>
+              </div>
+            </nav>
+          )}
         </>
       )}
     </div>
   )
 }
 
-function SummaryStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+function SummaryStat({ icon, label, value, tone, title }: { icon: React.ReactNode; label: string; value: number; tone?: string; title?: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4" title={title}>
       <div className="flex items-center gap-1.5 text-slate-500">
         {icon}
-        <span className="text-xs">{label}</span>
+        <span className="text-xs leading-tight">{label}</span>
       </div>
-      <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">{value}</div>
+      <div className={`mt-1 text-xl font-bold tabular-nums ${tone ?? 'text-slate-900'}`}>{value}</div>
     </div>
   )
 }
@@ -792,153 +663,6 @@ function EmptyState({ title, hint }: { title: string; hint?: string }) {
   )
 }
 
-// ── per-school detail overlay ──────────────────────────────────────────
-
-function SchoolDetailOverlay({ row, onClose }: { row: SubscriptionRow; onClose: () => void }) {
-  const isDesktop = useMediaQuery('(min-width: 768px)')
-  const [detail, setDetail] = useState<SchoolSubscriptionDetail | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      setDetail(await platformApi<SchoolSubscriptionDetail>(`/api/platform/schools/${row.school.id}/subscription`))
-    } catch (e) {
-      setError(errMessage(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [row.school.id])
-
-  useEffect(() => { void load() }, [load])
-
-  const sections = (
-    <SchoolDetailSections row={row} detail={detail} loading={loading} error={error} onRetry={() => void load()} />
-  )
-
-  if (isDesktop) {
-    return (
-      <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{row.school.name}</DialogTitle>
-            <DialogDescription>
-              Subscription details · {row.school.slug} · code {row.school.code}
-            </DialogDescription>
-          </DialogHeader>
-          {sections}
-        </DialogContent>
-      </Dialog>
-    )
-  }
-  return (
-    <Drawer open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DrawerContent className="max-h-[85vh]">
-        <DrawerHeader className="text-left">
-          <DrawerTitle>{row.school.name}</DrawerTitle>
-          <DrawerDescription>Subscription details · {row.school.slug} · code {row.school.code}</DrawerDescription>
-        </DrawerHeader>
-        <div className="overflow-y-auto px-4 pb-4">{sections}</div>
-      </DrawerContent>
-    </Drawer>
-  )
-}
-
-function SchoolDetailSections({
-  row, detail, loading, error, onRetry,
-}: {
-  row: SubscriptionRow
-  detail: SchoolSubscriptionDetail | null
-  loading: boolean
-  error: string | null
-  onRetry: () => void
-}) {
-  return (
-    <div className="space-y-4">
-      {/* Subscription snapshot (operator-facing labels, plain English) */}
-      <section aria-labelledby="sub-detail-snapshot">
-        <h3 id="sub-detail-snapshot" className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscription</h3>
-        <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-2.5 rounded-xl border border-slate-200 bg-white p-4 text-sm sm:grid-cols-2">
-          <DetailField label="Status">
-            <StateBadge state={row.entitlement.state} />
-            <span className="ml-2 text-xs text-slate-500">
-              {row.entitlement.businessAllowed ? 'business modules unlocked' : 'business modules locked'}
-              {row.entitlement.renewalRequired ? ' · renewal required' : ''}
-            </span>
-          </DetailField>
-          <DetailField label="Current plan">
-            {row.planDef ? row.planDef.name : row.plan}
-            {row.planCode && <div className="font-mono text-xs text-slate-500">{row.planCode}</div>}
-          </DetailField>
-          <DetailField label="Billing model">
-            {row.billingModel ? row.billingModel.replace(/_/g, ' ').toLowerCase() : '—'}
-          </DetailField>
-          <DetailField label="Grace period">{row.graceDays} days after expiry</DetailField>
-          <DetailField label="Started">{dateStr(row.periodStart)}</DetailField>
-          <DetailField label="Valid until">{row.periodEnd ? dateStr(row.periodEnd) : 'No expiry'}</DetailField>
-          <DetailField label="Manual override">
-            {row.overrideStatus ? row.overrideStatus.toLowerCase() : 'None — computed state applies'}
-          </DetailField>
-          <DetailField label="Notes">
-            <span className="whitespace-pre-wrap break-words text-slate-700">{row.notes ?? '—'}</span>
-          </DetailField>
-        </dl>
-      </section>
-
-      {/* Payment history — the per-school payment ledger fetch */}
-      <section aria-labelledby="sub-detail-payments">
-        <div className="flex items-center justify-between">
-          <h3 id="sub-detail-payments" className="text-xs font-semibold uppercase tracking-wide text-slate-500">Payment history</h3>
-          {detail && <span className="text-xs text-slate-500 tabular-nums">{detail.payments.length} recorded</span>}
-        </div>
-        <div className="mt-2">
-          {loading ? (
-            <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
-              {[0, 1, 2].map((i) => <Skeleton key={i} className="h-12 w-full bg-slate-200" />)}
-            </div>
-          ) : error ? (
-            <div role="alert" className="flex flex-col gap-2 rounded-xl border border-red-200 bg-red-50 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-red-600">Could not load payment history: {error}</p>
-              <Button variant="outline" size="sm" onClick={onRetry} className="border-slate-300 bg-white text-slate-700">
-                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Retry
-              </Button>
-            </div>
-          ) : detail && detail.payments.length > 0 ? (
-            <ul className="max-h-64 space-y-2 overflow-y-auto pr-1">
-              {detail.payments.map((p) => (
-                <li key={p.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-2.5 text-sm">
-                  <div className="min-w-0">
-                    <div className="font-mono text-xs text-slate-700">{p.receiptNo ?? '—'}</div>
-                    <div className="mt-0.5 text-xs text-slate-500">
-                      {dateStr(p.paymentDate)} · {p.mode.replace(/_/g, ' ').toLowerCase()}
-                      {p.periodMonths ? ` · ${p.periodMonths} mo` : ''}
-                      {p.recordedBy ? ` · by ${p.recordedBy.name}` : ''}
-                    </div>
-                  </div>
-                  <div className="shrink-0 font-semibold tabular-nums text-slate-900">{money(p.amount, p.currency)}</div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState title="No payments recorded yet." hint="Payments appear here once the school's subscription is renewed through the platform." />
-          )}
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function DetailField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-xs font-medium text-slate-500">{label}</dt>
-      <dd className="mt-0.5 text-slate-900">{children}</dd>
-    </div>
-  )
-}
-
 // ── student entitlements (secondary area — school FIRST) ───────────────
 
 function StudentEntitlementsSection({
@@ -947,12 +671,10 @@ function StudentEntitlementsSection({
   onSchemaPending: () => void
   onAssigned: () => void
 }) {
-  // School picker state — retryable error, never a toast-only failure.
   const [schools, setSchools] = useState<SchoolOption[]>([])
   const [schoolsLoading, setSchoolsLoading] = useState(true)
   const [schoolsError, setSchoolsError] = useState<string | null>(null)
   const [schoolId, setSchoolId] = useState('')
-  // Student registry state for the selected school.
   const [students, setStudents] = useState<StudentRow[]>([])
   const [studentsLoading, setStudentsLoading] = useState(false)
   const [studentsError, setStudentsError] = useState<string | null>(null)
@@ -1013,7 +735,7 @@ function StudentEntitlementsSection({
         </p>
       </div>
 
-      {/* School picker — the FIRST required step (retryable error state) */}
+      {/* School picker */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         {schoolsLoading ? (
           <div className="space-y-2">
@@ -1045,7 +767,7 @@ function StudentEntitlementsSection({
         )}
       </div>
 
-      {/* Student workspace — only after a school is selected */}
+      {/* Student workspace */}
       {schoolId && !schoolsError && (
         <div className="space-y-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -1084,7 +806,6 @@ function StudentEntitlementsSection({
             </div>
           ) : (
             <>
-              {/* Mobile card list */}
               <div className="space-y-2 md:hidden">
                 {students.map((s) => (
                   <div key={s.studentId} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -1116,7 +837,6 @@ function StudentEntitlementsSection({
                 {students.length === 0 && <EmptyState title="No students match." hint="Try a different search." />}
               </div>
 
-              {/* Desktop table */}
               <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
                 <table className="w-full min-w-[760px] text-sm">
                   <caption className="sr-only">Students of the selected school with entitlement state and actions</caption>
@@ -1170,7 +890,6 @@ function StudentEntitlementsSection({
         </div>
       )}
 
-      {/* Preserved workflows: assign + history dialogs (subscription-shared) */}
       {assignFor && (
         <AssignEntitlementDialog
           student={assignFor}
@@ -1182,634 +901,5 @@ function StudentEntitlementsSection({
         <StudentHistoryDialog student={detailFor} onClose={() => setDetailFor(null)} />
       )}
     </div>
-  )
-}
-
-// ── plans & commercial models (secondary area) ─────────────────────────
-
-function PlansSection({ onSchemaPending }: { onSchemaPending: () => void }) {
-  const [plans, setPlans] = useState<PlanRow[]>([])
-  const [config, setConfig] = useState<SubsConfig | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [pending, setPending] = useState(false)
-  const [creating, setCreating] = useState(false)
-  /** The ACTIVE plan being edited (null = dialog closed). */
-  const [editing, setEditing] = useState<PlanRow | null>(null)
-  const [saving, setSaving] = useState(false)
-  /** The plan pending archive confirmation (null = AlertDialog closed). */
-  const [archiveFor, setArchiveFor] = useState<PlanRow | null>(null)
-  const [archiving, setArchiving] = useState(false)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const d = await platformApi<{ subscriptionSchemaPending?: boolean; plans: PlanRow[]; config: SubsConfig }>(
-        '/api/platform/subscriptions/plans',
-      )
-      setPlans(d.plans)
-      setConfig(d.config)
-      setPending(isSubscriptionSchemaPending(d))
-      if (isSubscriptionSchemaPending(d)) onSchemaPending()
-    } catch (e) {
-      setError(errMessage(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [onSchemaPending])
-
-  useEffect(() => { void load() }, [load])
-
-  const saveConfig = async (patch: Record<string, unknown>) => {
-    setSaving(true)
-    try {
-      await platformApi('/api/platform/subscriptions/config', { method: 'PATCH', body: JSON.stringify(patch) })
-      toast.success('Configuration saved')
-      void load()
-    } catch (e) {
-      toast.error('Config save failed', { description: errMessage(e) })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const archive = async (id: string) => {
-    setArchiving(true)
-    try {
-      await platformApi(`/api/platform/subscriptions/plans/${id}`, { method: 'DELETE' })
-      toast.success('Plan archived')
-      setArchiveFor(null)
-      void load()
-    } catch (e) {
-      // Keep the confirmation open — the operator sees the failure and
-      // can retry or cancel; closing would imply the archive happened.
-      toast.error('Archive failed', { description: errMessage(e) })
-    } finally {
-      setArchiving(false)
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-          <Package className="h-4 w-4 text-teal-600" aria-hidden="true" />Plans &amp; commercial models
-        </h2>
-        <p className="mt-0.5 text-xs text-slate-500">
-          The plan registry schools purchase from, plus which subscription models are offered.
-        </p>
-      </div>
-
-      {/* Commercial-model config — always served (pre-migration settings) */}
-      {config && (
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" aria-labelledby="plans-config-heading">
-          <h3 id="plans-config-heading" className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-            <Settings2 className="h-4 w-4" aria-hidden="true" />Commercial models
-          </h3>
-          <p className="mt-0.5 text-xs text-slate-500">Which subscription models are offered. New schools default to the selected billing model.</p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            {(['school', 'student', 'manual'] as const).map((k) => (
-              <div key={k} className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
-                <div>
-                  <div className="text-sm font-medium text-slate-900 capitalize">{k === 'school' ? 'Per-school (A)' : k === 'student' ? 'Per-student (B)' : 'Manual (C)'}</div>
-                  <div className="text-xs text-slate-500">{k === 'school' ? 'monthly / annual' : k === 'student' ? 'annual per student' : 'operator-assigned'}</div>
-                </div>
-                <Switch
-                  checked={config.models[k].enabled}
-                  disabled={saving}
-                  onCheckedChange={(v) => void saveConfig({ models: { ...config.models, [k]: { enabled: v } } })}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
-              <div className="text-sm text-slate-700">Default billing model</div>
-              <Select value={config.defaultBillingModel} onValueChange={(v) => void saveConfig({ defaultBillingModel: v })}>
-                <SelectTrigger className="h-9 w-[170px] border-slate-300 bg-white" aria-label="Default billing model"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {['SCHOOL_WIDE', 'PER_STUDENT', 'MIXED'].map((m) => <SelectItem key={m} value={m}>{m.replace(/_/g, ' ')}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
-              <div className="text-sm text-slate-700">Student claim window</div>
-              <Input className="h-9 w-20 border-slate-300 bg-white" type="number" min="1" max="365" defaultValue={config.student.defaultClaimWindowDays}
-                onBlur={(e) => { const v = Number(e.target.value); if (v !== config.student.defaultClaimWindowDays) void saveConfig({ student: { ...config.student, defaultClaimWindowDays: v } }) }}
-                aria-label="Student claim window in days" />
-            </div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
-              <div className="text-sm text-slate-700">Student validity (months)</div>
-              <Input className="h-9 w-20 border-slate-300 bg-white" type="number" min="1" max="36" defaultValue={config.student.defaultValidityMonths}
-                onBlur={(e) => { const v = Number(e.target.value); if (v !== config.student.defaultValidityMonths) void saveConfig({ student: { ...config.student, defaultValidityMonths: v } }) }}
-                aria-label="Student entitlement validity in months" />
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Plan registry */}
-      <section className="space-y-2" aria-labelledby="plans-registry-heading">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 id="plans-registry-heading" className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-            <Package className="h-4 w-4" aria-hidden="true" />Plan registry
-          </h3>
-          {/* Consistent with the entitlements dialog's disabled Assign
-              buttons: while the plan registry table itself is pending,
-              a submit would only fail with the typed 503 — surface that
-              up front instead of letting the operator fill the form
-              first. */}
-          <Button
-            size="sm"
-            onClick={() => setCreating(true)}
-            disabled={pending}
-            title={pending ? 'The plan registry is created by the pending subscription-system migration — new plans become available once it is applied.' : undefined}
-            className="bg-teal-600 font-semibold text-white hover:bg-teal-700"
-          >
-            <CreditCard className="h-4 w-4" aria-hidden="true" />New plan
-          </Button>
-        </div>
-
-        {loading ? (
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="space-y-3 p-4">
-              {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full bg-slate-200" />)}
-            </div>
-          </div>
-        ) : error ? (
-          <div role="alert" className="flex flex-col gap-2 rounded-xl border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-red-600">Could not load the plan registry: {error}</p>
-            <Button variant="outline" size="sm" onClick={() => void load()} className="border-slate-300 bg-white text-slate-700">
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Retry
-            </Button>
-          </div>
-        ) : plans.length === 0 ? (
-          // Honest distinction: pending migration ≠ "none configured".
-          pending ? (
-            <EmptyState
-              title="Plan registry is not provisioned on this database yet."
-              hint="Plans are stored in a table created by the pending subscription-system migration. Commercial-model configuration above remains fully available."
-            />
-          ) : (
-            <EmptyState title="No plans configured yet." hint="Create the first plan schools can purchase." />
-          )
-        ) : (
-          <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
-            <table className="w-full min-w-[820px] text-sm">
-              <caption className="sr-only">The plan registry with scope, price, policies and availability</caption>
-              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th scope="col" className="px-3 py-2.5">Plan</th>
-                  <th scope="col" className="px-3 py-2.5">Scope</th>
-                  <th scope="col" className="px-3 py-2.5">Price</th>
-                  <th scope="col" className="px-3 py-2.5">Policies</th>
-                  <th scope="col" className="px-3 py-2.5">Availability</th>
-                  <th scope="col" className="px-3 py-2.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {plans.map((p) => (
-                  <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50/60">
-                    <td className="px-3 py-2.5 font-medium text-slate-900">
-                      {p.name}
-                      <div className="font-mono text-xs text-slate-500">{p.code}</div>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <Badge variant="outline">{p.scope}</Badge>
-                      <div className="text-xs text-slate-500">{p.interval.toLowerCase()}</div>
-                    </td>
-                    <td className="px-3 py-2.5 text-slate-700">
-                      {p.scope === 'STUDENT' ? money(p.pricePerStudent, p.currency) : p.interval === 'MONTHLY' ? `${money(p.priceMonthly, p.currency)}/mo` : `${money(p.priceAnnual, p.currency)}/yr`}
-                    </td>
-                    <td className="px-3 py-2.5 text-xs text-slate-600">
-                      {p.allowOnline ? 'online' : '—'} · {p.allowOffline ? 'offline' : '—'} · grace {p.graceDays}d
-                    </td>
-                    <td className="px-3 py-2.5 text-xs text-slate-600">
-                      <Badge variant="outline" className={p.status === 'ACTIVE' ? 'border-emerald-300 text-emerald-700' : ''}>{p.status}</Badge>
-                      {p.availableForNew ? ' new' : ''}{p.availableForRenewal ? ' renewal' : ''}
-                    </td>
-                    <td className="px-3 py-2.5 text-right">
-                      {p.status === 'ACTIVE' ? (
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            size="sm" variant="outline" className="border-slate-300 text-slate-700"
-                            onClick={() => setEditing(p)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            size="sm" variant="outline" className="border-slate-300 text-slate-700"
-                            onClick={() => setArchiveFor(p)}
-                            aria-label={`Archive plan ${p.code}`}
-                          >
-                            Archive
-                          </Button>
-                        </div>
-                      ) : (
-                        // Archived rows carry no action — archive is
-                        // irreversible (no unarchive route, PATCH refuses
-                        // archived plans). The status column already says
-                        // ARCHIVED; a dead "Archive" button would be a lie.
-                        <span className="text-xs text-slate-400" title="Archive is irreversible — create a successor plan instead">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Mobile plan cards (registry table is wide) */}
-        {!loading && !error && plans.length > 0 && (
-          <div className="space-y-2 md:hidden">
-            {plans.map((p) => (
-              <div key={p.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
-                    <p className="font-mono text-xs text-slate-500">{p.code}</p>
-                  </div>
-                  <Badge variant="outline" className={p.status === 'ACTIVE' ? 'border-emerald-300 text-emerald-700' : ''}>{p.status}</Badge>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
-                  <span>{p.scope === 'STUDENT' ? money(p.pricePerStudent, p.currency) : p.interval === 'MONTHLY' ? `${money(p.priceMonthly, p.currency)}/mo` : `${money(p.priceAnnual, p.currency)}/yr`}</span>
-                  <span>{p.scope.toLowerCase()} · {p.interval.toLowerCase()}</span>
-                  <span>grace {p.graceDays}d</span>
-                </div>
-                <div className="mt-1.5 text-xs text-slate-500">
-                  {p.availableForNew ? 'new' : '—'} · {p.availableForRenewal ? 'renewal' : '—'} · {p.allowOnline ? 'online' : '—'} · {p.allowOffline ? 'offline' : '—'}
-                </div>
-                {p.status === 'ACTIVE' ? (
-                  <div className="mt-2 flex gap-2">
-                    <Button
-                      size="sm" variant="outline" className="flex-1 border-slate-300 text-slate-700"
-                      onClick={() => setEditing(p)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm" variant="outline" className="flex-1 border-slate-300 text-slate-700"
-                      onClick={() => setArchiveFor(p)}
-                      aria-label={`Archive plan ${p.code}`}
-                    >
-                      Archive
-                    </Button>
-                  </div>
-                ) : (
-                  <p className="mt-2 text-xs text-slate-400">Archived — irreversible; create a successor plan to replace it.</p>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {creating && <PlanCreateDialog onClose={() => setCreating(false)} onCreated={() => { setCreating(false); void load() }} />}
-      {editing && (
-        <PlanEditDialog
-          plan={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); void load() }}
-        />
-      )}
-
-      {/* Archive confirmation — themed AlertDialog (replaces the old
-          native window.confirm), mirroring school-payment-gateway's
-          destructive-action pattern. */}
-      <AlertDialog open={archiveFor !== null} onOpenChange={(o) => { if (!o && !archiving) setArchiveFor(null) }}>
-        <AlertDialogContent className="border-slate-200 bg-white text-slate-900 sm:max-w-md">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 font-display text-red-700">
-              <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-              Archive plan {archiveFor?.code}?
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-slate-500">
-              Historical purchases keep their snapshots. Archived plans cannot be edited or purchased — archive is
-              irreversible; create a successor plan to replace it.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setArchiveFor(null)}
-              disabled={archiving}
-              className="h-11 border-slate-300 bg-transparent text-slate-700 hover:bg-slate-100 focus-ring"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => { if (archiveFor) void archive(archiveFor.id) }}
-              disabled={archiving}
-              className="h-11 bg-red-600 font-semibold text-white hover:bg-red-500 focus-ring"
-            >
-              {archiving && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-label="Archiving plan" />}
-              {archiving ? 'Archiving…' : 'Archive plan'}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  )
-}
-
-function PlanCreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [saving, setSaving] = useState(false)
-  /** Inline submit error — the durable surface (SUBSCRIPTION_SYSTEM_PENDING
-   *  publicMessage is shown here, not only as a transient toast). */
-  const [submitError, setSubmitError] = useState<string | null>(null)
-  const [submitPending, setSubmitPending] = useState(false)
-  const [form, setForm] = useState({
-    code: '', name: '', description: '', scope: 'STUDENT', interval: 'ANNUAL',
-    price: '', currency: 'INR', graceDays: '14', allowOnline: true, allowOffline: true,
-    availableForNew: true, availableForRenewal: true, sortOrder: '0',
-  })
-
-  const submit = async () => {
-    setSaving(true)
-    setSubmitError(null)
-    setSubmitPending(false)
-    try {
-      await platformApi('/api/platform/subscriptions/plans', {
-        method: 'POST',
-        body: JSON.stringify({
-          code: form.code.toUpperCase().trim(),
-          name: form.name.trim(),
-          description: form.description.trim() || undefined,
-          scope: form.scope,
-          interval: form.interval,
-          ...(form.scope === 'STUDENT'
-            ? { pricePerStudent: Number(form.price || 0) }
-            : form.interval === 'MONTHLY'
-              ? { priceMonthly: Number(form.price || 0) }
-              : { priceAnnual: Number(form.price || 0) }),
-          currency: form.currency,
-          graceDays: Number(form.graceDays || 14),
-          allowOnline: form.allowOnline,
-          allowOffline: form.allowOffline,
-          availableForNew: form.availableForNew,
-          availableForRenewal: form.availableForRenewal,
-          sortOrder: Number(form.sortOrder || 0),
-        }),
-      })
-      toast.success(`Plan ${form.code.toUpperCase()} created`)
-      onCreated()
-    } catch (e) {
-      // errMessage(e) returns the publicMessage from the error envelope;
-      // the pending-migration failure (SUBSCRIPTION_SYSTEM_PENDING, 503)
-      // gets the amber "unavailable" treatment instead of a red error.
-      const code = (e as PlatformApiError)?.code
-      setSubmitPending(code === 'SUBSCRIPTION_SYSTEM_PENDING')
-      setSubmitError(errMessage(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>New plan</DialogTitle>
-          <DialogDescription>Prices are the platform&apos;s product prices — schools see them at renewal; students see student-scope plans.</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          {submitError && (
-            <div role="alert" className={`rounded-lg border p-3 text-sm ${submitPending ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
-              {submitPending ? 'Plan creation is unavailable on this database: ' : 'Plan creation failed: '}
-              {submitError}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs" htmlFor="plan-code">Code</Label><Input id="plan-code" className="border-slate-300 bg-white" value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} placeholder="STUDENT-ANNUAL" /></div>
-            <div><Label className="text-xs" htmlFor="plan-name">Name</Label><Input id="plan-name" className="border-slate-300 bg-white" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Student Annual" /></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs" htmlFor="plan-scope">Scope</Label>
-              <Select value={form.scope} onValueChange={(v) => setForm((f) => ({ ...f, scope: v, interval: v === 'STUDENT' ? 'ANNUAL' : f.interval }))}>
-                <SelectTrigger id="plan-scope" className="border-slate-300 bg-white"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="SCHOOL">SCHOOL (Model A)</SelectItem><SelectItem value="STUDENT">STUDENT (Model B/C)</SelectItem></SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs" htmlFor="plan-interval">Interval</Label>
-              <Select value={form.interval} onValueChange={(v) => setForm((f) => ({ ...f, interval: v }))} disabled={form.scope === 'STUDENT'}>
-                <SelectTrigger id="plan-interval" className="border-slate-300 bg-white"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="MONTHLY">MONTHLY</SelectItem><SelectItem value="ANNUAL">ANNUAL</SelectItem></SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div><Label className="text-xs" htmlFor="plan-price">{form.scope === 'STUDENT' ? 'Per-student price' : form.interval === 'MONTHLY' ? 'Monthly price' : 'Annual price'}</Label><Input id="plan-price" className="border-slate-300 bg-white" type="number" min="0" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} /></div>
-            <div>
-              <Label className="text-xs" htmlFor="plan-currency">Currency</Label>
-              <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
-                <SelectTrigger id="plan-currency" className="border-slate-300 bg-white"><SelectValue /></SelectTrigger>
-                <SelectContent>{['INR', 'USD', 'EUR', 'GBP', 'AED'].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div><Label className="text-xs" htmlFor="plan-grace">Grace days</Label><Input id="plan-grace" className="border-slate-300 bg-white" type="number" min="0" max="90" value={form.graceDays} onChange={(e) => setForm((f) => ({ ...f, graceDays: e.target.value }))} /></div>
-          </div>
-          <div><Label className="text-xs" htmlFor="plan-description">Description</Label><Textarea id="plan-description" className="border-slate-300 bg-white" rows={2} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow online payment</span><Switch aria-label="Allow online payment" checked={form.allowOnline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOnline: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow offline payment</span><Switch aria-label="Allow offline payment" checked={form.allowOffline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOffline: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for new</span><Switch aria-label="Available for new" checked={form.availableForNew} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForNew: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for renewal</span><Switch aria-label="Available for renewal" checked={form.availableForRenewal} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForRenewal: v }))} /></div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={onClose} className="border-slate-300 bg-white text-slate-700">Cancel</Button>
-            <Button onClick={() => void submit()} disabled={saving} className="bg-teal-600 font-semibold text-white hover:bg-teal-700">
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />}Create plan
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/**
- * Edit an ACTIVE plan — PATCH /api/platform/subscriptions/plans/[id].
- * Mirrors PlanCreateDialog's field layout, styles and error surface so
- * the two dialogs read as one control. `code` and `scope` are immutable
- * server-side (purchase snapshots reference the code; scope is the
- * commercial model) and render as read-only text, not inputs. The price
- * field follows the plan's FIXED scope exactly like the create dialog:
- * STUDENT plans carry the per-student price, SCHOOL plans the price for
- * the selected interval — the plan's other SCHOOL price is resolved from
- * the row and re-sent so the server merge never drops it. ARCHIVED plans
- * are refused server-side with 409 CONFLICT — surfaced honestly here.
- */
-function PlanEditDialog({ plan, onClose, onSaved }: { plan: PlanRow; onClose: () => void; onSaved: () => void }) {
-  const [saving, setSaving] = useState(false)
-  /** Inline submit error — the durable surface (mirrors PlanCreateDialog). */
-  const [submitError, setSubmitError] = useState<string | null>(null)
-  const [submitPending, setSubmitPending] = useState(false)
-  const [form, setForm] = useState(() => ({
-    name: plan.name,
-    description: plan.description ?? '',
-    interval: plan.interval,
-    price: plan.scope === 'STUDENT'
-      ? (plan.pricePerStudent?.toString() ?? '')
-      : plan.interval === 'MONTHLY'
-        ? (plan.priceMonthly?.toString() ?? '')
-        : (plan.priceAnnual?.toString() ?? ''),
-    currency: plan.currency,
-    graceDays: String(plan.graceDays),
-    allowOnline: plan.allowOnline,
-    allowOffline: plan.allowOffline,
-    availableForNew: plan.availableForNew,
-    availableForRenewal: plan.availableForRenewal,
-  }))
-
-  /**
-   * Client-side validation mirroring the server's validatePlanInput for
-   * the merged plan (name 2–80, description ≤400, grace 0–90, price
-   * positive). The scope-applicable price is always required server-side
-   * (STUDENT → per-student, SCHOOL → the interval price), so a cleared
-   * price is rejected up front with the server's own wording instead of
-   * a guaranteed 422 round-trip.
-   */
-  const validate = (): string | null => {
-    if (form.name.trim().length < 2 || form.name.trim().length > 80) return 'Name must be 2–80 characters.'
-    if (form.description.length > 400) return 'Description must be 400 characters or fewer.'
-    const grace = Number(form.graceDays)
-    if (form.graceDays.trim() === '' || !Number.isInteger(grace) || grace < 0 || grace > 90) return 'Grace days must be 0–90.'
-    if (form.price.trim() === '') {
-      if (plan.scope === 'STUDENT') return 'Student plans need a per-student annual price.'
-      return form.interval === 'MONTHLY' ? 'Monthly price is required for this plan.' : 'Annual price is required for this plan.'
-    }
-    const price = Number(form.price)
-    if (!(price > 0) || price > 100_000_000) return 'Price must be greater than zero and under 100,000,000.'
-    return null
-  }
-
-  const submit = async () => {
-    const problem = validate()
-    if (problem) {
-      setSubmitPending(false)
-      setSubmitError(problem)
-      return
-    }
-    setSaving(true)
-    setSubmitError(null)
-    setSubmitPending(false)
-    try {
-      // Always send resolved values for every editable field — an
-      // explicit payload cannot drift from what this dialog shows (the
-      // server would merge undefined → keep existing, but "always send"
-      // is safer than remembering which fields were touched).
-      const price = form.price.trim() === '' ? null : Number(form.price)
-      await platformApi(`/api/platform/subscriptions/plans/${plan.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          name: form.name.trim(),
-          description: form.description.trim() || null,
-          interval: form.interval,
-          ...(plan.scope === 'STUDENT'
-            ? { pricePerStudent: price }
-            : {
-                priceMonthly: form.interval === 'MONTHLY' ? price : plan.priceMonthly,
-                priceAnnual: form.interval === 'ANNUAL' ? price : plan.priceAnnual,
-              }),
-          currency: form.currency,
-          graceDays: Number(form.graceDays),
-          allowOnline: form.allowOnline,
-          allowOffline: form.allowOffline,
-          availableForNew: form.availableForNew,
-          availableForRenewal: form.availableForRenewal,
-        }),
-      })
-      toast.success(`Plan ${plan.code} updated`)
-      onSaved()
-    } catch (e) {
-      // Same treatment as PlanCreateDialog (durable inline surface for
-      // the publicMessage, incl. a 409's "archived plans cannot be
-      // edited") plus the section-standard transient toast.
-      const code = (e as PlatformApiError)?.code
-      setSubmitPending(code === 'SUBSCRIPTION_SYSTEM_PENDING')
-      setSubmitError(errMessage(e))
-      toast.error('Plan update failed', { description: errMessage(e) })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Edit plan — {plan.code}</DialogTitle>
-          <DialogDescription>Code and scope are fixed — purchase snapshots reference them. Everything else updates in place.</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          {submitError && (
-            <div role="alert" className={`rounded-lg border p-3 text-sm ${submitPending ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
-              {submitPending ? 'Plan editing is unavailable on this database: ' : 'Plan update failed: '}
-              {submitError}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs" htmlFor="plan-edit-code">Code</Label>
-              <div
-                id="plan-edit-code"
-                title="Immutable — purchase snapshots reference the plan code"
-                className="flex h-9 items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50 px-3 font-mono text-sm text-slate-700"
-              >
-                {plan.code}
-              </div>
-            </div>
-            <div><Label className="text-xs" htmlFor="plan-edit-name">Name</Label><Input id="plan-edit-name" className="border-slate-300 bg-white" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Student Annual" /></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs" htmlFor="plan-edit-scope">Scope</Label>
-              <div
-                id="plan-edit-scope"
-                title="Immutable — the commercial model is fixed at creation"
-                className="flex h-9 items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700"
-              >
-                {plan.scope === 'SCHOOL' ? 'SCHOOL (Model A)' : 'STUDENT (Model B/C)'}
-              </div>
-            </div>
-            <div>
-              <Label className="text-xs" htmlFor="plan-edit-interval">Interval</Label>
-              <Select value={form.interval} onValueChange={(v) => setForm((f) => ({ ...f, interval: v }))} disabled={plan.scope === 'STUDENT'}>
-                <SelectTrigger id="plan-edit-interval" className="border-slate-300 bg-white"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="MONTHLY">MONTHLY</SelectItem><SelectItem value="ANNUAL">ANNUAL</SelectItem></SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div><Label className="text-xs" htmlFor="plan-edit-price">{plan.scope === 'STUDENT' ? 'Per-student price' : form.interval === 'MONTHLY' ? 'Monthly price' : 'Annual price'}</Label><Input id="plan-edit-price" className="border-slate-300 bg-white" type="number" min="0" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} /></div>
-            <div>
-              <Label className="text-xs" htmlFor="plan-edit-currency">Currency</Label>
-              <Select value={form.currency} onValueChange={(v) => setForm((f) => ({ ...f, currency: v }))}>
-                <SelectTrigger id="plan-edit-currency" className="border-slate-300 bg-white"><SelectValue /></SelectTrigger>
-                <SelectContent>{['INR', 'USD', 'EUR', 'GBP', 'AED'].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div><Label className="text-xs" htmlFor="plan-edit-grace">Grace days</Label><Input id="plan-edit-grace" className="border-slate-300 bg-white" type="number" min="0" max="90" value={form.graceDays} onChange={(e) => setForm((f) => ({ ...f, graceDays: e.target.value }))} /></div>
-          </div>
-          <div><Label className="text-xs" htmlFor="plan-edit-description">Description</Label><Textarea id="plan-edit-description" className="border-slate-300 bg-white" rows={2} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow online payment</span><Switch aria-label="Allow online payment" checked={form.allowOnline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOnline: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow offline payment</span><Switch aria-label="Allow offline payment" checked={form.allowOffline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOffline: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for new</span><Switch aria-label="Available for new" checked={form.availableForNew} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForNew: v }))} /></div>
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Available for renewal</span><Switch aria-label="Available for renewal" checked={form.availableForRenewal} onCheckedChange={(v) => setForm((f) => ({ ...f, availableForRenewal: v }))} /></div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={onClose} className="border-slate-300 bg-white text-slate-700">Cancel</Button>
-            <Button onClick={() => void submit()} disabled={saving} className="bg-teal-600 font-semibold text-white hover:bg-teal-700">
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />}Save changes
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }

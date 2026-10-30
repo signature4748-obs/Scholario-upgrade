@@ -64,6 +64,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
       const secretEnc = encryptSecret(body.keySecret)
       const webhookEnc = body.webhookSecret ? encryptSecret(body.webhookSecret) : null
+      // Verification = the deployment can actually read back what it
+      // stores (decrypt round-trip). A stored secret that could never be
+      // decrypted is a misconfiguration, not a success — lastVerifiedAt
+      // stays null and the UI shows "not verified yet".
+      const { decryptSecret } = await import('@/lib/payments/tenant-gateway')
+      const verified = decryptSecret(secretEnc.cipher, secretEnc.nonce) === body.keySecret
 
       await db.schoolPaymentGateway.upsert({
         where: { schoolId: id },
@@ -77,6 +83,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           webhookSecretNonce: webhookEnc?.nonce ?? null,
           status: body.status,
           configuredById: ctx.admin.id,
+          lastVerifiedAt: verified ? new Date() : null,
           notes: body.notes ?? null,
         },
         update: {
@@ -88,6 +95,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           webhookSecretNonce: webhookEnc?.nonce ?? null,
           status: body.status,
           configuredById: ctx.admin.id,
+          lastVerifiedAt: verified ? new Date() : null,
           notes: body.notes ?? undefined,
         },
       })
@@ -106,6 +114,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           status: body.status,
           keySecretLength: body.keySecret.length,
           webhookSecretConfigured: Boolean(body.webhookSecret),
+          verifiedRoundTrip: verified,
         },
       })
 

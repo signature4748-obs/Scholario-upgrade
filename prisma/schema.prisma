@@ -2857,6 +2857,9 @@ model PlatformAdmin {
   // STAFF ENTITLEMENTS (2026-10-30) — staff-side operator actions.
   recordedStaffPayments       StaffSubscriptionPayment[] @relation("StaffPaymentRecorder")
   revokedStaffEntitlements    StaffEntitlement[]         @relation("StaffEntitlementRevoker")
+  // PAYMENTS & GATEWAYS REDESIGN (2026-10-30) — platform-level gateway
+  // configuration changes (the platform's own provider account).
+  configuredPlatformGateways  PlatformGatewayConfig[] @relation("PlatformGatewayConfigurator")
 
   @@index([status])
 }
@@ -3449,9 +3452,49 @@ model SchoolPaymentGateway {
   status       String @default("PENDING")
   /// PlatformAdmin that last configured the gateway.
   configuredById String?
+  /// Last successful server-side decrypt round-trip (configuration
+  /// verification) — surfaced read-only in the Payments & Gateways UI.
+  lastVerifiedAt DateTime?
   notes        String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+}
+
+/// PLATFORM-LEVEL payment gateway configuration (2026-10-30) — the
+/// deployment's OWN provider account. Collected money: SCHOLARIO
+/// SUBSCRIPTION payments (never school-collected student fees — those
+/// live on SchoolPaymentGateway / FeeTransaction, disjoint tables and
+/// credentials). Resolution order for every online rail:
+///   fee lane          school ACTIVE override → THIS config (ACTIVE) → env
+///   subscription lane THIS config (ACTIVE) → env provider → null
+/// Singleton row (id fixed at 'singleton' by convention in code). Secrets
+/// are AES-256-GCM encrypted (same scheme as SchoolPaymentGateway) and
+/// NEVER returned by any API — write-only fields, audited by length only.
+model PlatformGatewayConfig {
+  id          String   @id @default(cuid())
+  /// 'razorpay' (provider abstraction — future providers plug in here).
+  provider    String   @default("razorpay")
+  /// PUBLIC key id (browser-safe, used by checkout).
+  publicKeyId String?
+  /// AES-256-GCM: base64 ciphertext + nonce of the SECRET key.
+  secretKeyCipher     String?
+  secretKeyNonce      String?
+  webhookSecretCipher String?
+  webhookSecretNonce  String?
+  /// ACTIVE | PENDING | DISABLED
+  status         String    @default("PENDING")
+  /// PlatformAdmin that last configured the gateway.
+  configuredById String?
+  /// Last successful server-side decrypt round-trip (configuration
+  /// verification) — surfaced read-only in the Payments & Gateways UI.
+  lastVerifiedAt DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  configuredBy PlatformAdmin? @relation("PlatformGatewayConfigurator", fields: [configuredById], references: [id], onDelete: SetNull)
+
+  @@index([status])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

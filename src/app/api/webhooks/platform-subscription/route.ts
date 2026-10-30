@@ -57,19 +57,30 @@ const SIGNATURE_HEADER = 'x-scholario-signature'
 const ACTIVATING_EVENT = 'subscription.payment.captured'
 const STUDENT_ACTIVATING_EVENT = 'student_subscription.payment.captured'
 
-function verifySignature(rawBody: string, signature: string | null): boolean {
-  const secret = process.env.PLATFORM_PAYMENT_WEBHOOK_SECRET
-  if (!secret) {
+function verifySignatureWithSecrets(rawBody: string, signature: string | null, secrets: string[]): boolean {
+  if (secrets.length === 0) {
     // Fail-closed: no configured secret ⇒ no online activation path.
     // Offline platform-admin recording remains fully functional.
     return false
   }
   if (!signature) return false
-  const expected = createHmac('sha256', secret).update(rawBody).digest('hex')
-  const a = Buffer.from(expected, 'utf8')
-  const b = Buffer.from(signature, 'utf8')
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
+  const sig = Buffer.from(signature, 'utf8')
+  return secrets.some((secret) => {
+    const expected = createHmac('sha256', secret).update(rawBody).digest('hex')
+    const a = Buffer.from(expected, 'utf8')
+    if (a.length !== sig.length) return false
+    return timingSafeEqual(a, sig)
+  })
+}
+
+/**
+ * PAYMENTS & GATEWAYS REDESIGN — accepted webhook secrets: the env secret
+ * (back-compat) plus the DB-configured platform gateway webhook secret.
+ * Empty list ⇒ fail closed (offline recording keeps working).
+ */
+async function platformWebhookSecrets(): Promise<string[]> {
+  const { platformWebhookSecretCandidates } = await import('@/lib/payments/platform-gateway')
+  return platformWebhookSecretCandidates()
 }
 
 interface WebhookBody {
@@ -94,7 +105,8 @@ export async function POST(req: NextRequest) {
   // Gateway retries legitimately — a loose per-IP budget.
   await enforceRateLimitStrict('rl:platform-wh:' + ip, RATE_LIMITS.webhook)
 
-  if (!verifySignature(raw, req.headers.get(SIGNATURE_HEADER))) {
+  const secrets = await platformWebhookSecrets()
+  if (!verifySignatureWithSecrets(raw, req.headers.get(SIGNATURE_HEADER), secrets)) {
     return NextResponse.json(
       { ok: false, error: 'Invalid webhook signature.' },
       { status: 401 },

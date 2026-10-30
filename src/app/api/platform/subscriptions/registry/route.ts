@@ -13,10 +13,17 @@ export const runtime = 'nodejs'
  * post-migration databases, so the renewal KPIs stay honest under
  * schema-pending. The row inputs are exactly the entitlement evaluator's
  * contract; every state is computed LIVE (never a stored snapshot).
+ *
+ * PAYMENTS & GATEWAYS REDESIGN — also tallies the PAYMENT plane: rows
+ * whose access is legacy fail-open (ACTIVE, no paid period, no override)
+ * are counted separately so the control centre can say
+ * "active paid" vs "unpaid — access allowed" honestly.
  */
 async function computeTenantStateTallies(): Promise<{
   tenantStates: Record<string, number>
   subscriptionsExpired: number
+  activePaid: number
+  openAccessUnpaid: number
 }> {
   const rows = await db.schoolSubscription.findMany({
     select: {
@@ -36,6 +43,8 @@ async function computeTenantStateTallies(): Promise<{
   }
   const now = Date.now()
   let subscriptionsExpired = 0
+  let activePaid = 0
+  let openAccessUnpaid = 0
   for (const row of rows) {
     const state = evaluateTenantEntitlement({
       schoolStatus: row.school.status,
@@ -50,8 +59,15 @@ async function computeTenantStateTallies(): Promise<{
     }).state
     tenantStates[state] = (tenantStates[state] ?? 0) + 1
     if (row.periodEnd != null && new Date(row.periodEnd).getTime() < now) subscriptionsExpired += 1
+    // PAYMENT plane: a paid period must EXIST for "active paid". Legacy
+    // fail-open access (ACTIVE, no periodEnd, no override) is counted as
+    // openAccessUnpaid — never as an active subscription.
+    if (state === 'ACTIVE') {
+      if (row.periodEnd != null) activePaid += 1
+      else if (!row.overrideStatus) openAccessUnpaid += 1
+    }
   }
-  return { tenantStates, subscriptionsExpired }
+  return { tenantStates, subscriptionsExpired, activePaid, openAccessUnpaid }
 }
 
 /**
@@ -63,6 +79,8 @@ async function computeTenantStateTallies(): Promise<{
  *   ?q=<text>            school name/slug/code search
  *   ?billingModel=       SCHOOL_WIDE | PER_STUDENT | MIXED
  *   ?status=             computed state filter (ACTIVE/GRACE/RESTRICTED/…)
+ *   ?paymentState=       UNPAID | PENDING | PAID (payment-plane filter)
+ *   ?plan=               catalogue plan code (snapshot planCode or plan link)
  *   ?expiringDays=30     periodEnd within N days (renewal report window)
  *   ?page=&pageSize=     pagination (default 25, max 100)
  *
@@ -91,6 +109,8 @@ export async function GET(req: NextRequest) {
     const q = url.searchParams.get('q')?.trim() ?? ''
     const billingModel = url.searchParams.get('billingModel') ?? ''
     const statusFilter = url.searchParams.get('status') ?? ''
+    const paymentStateFilter = url.searchParams.get('paymentState') ?? ''
+    const planFilter = url.searchParams.get('plan')?.trim() ?? ''
     const expiringDays = Number(url.searchParams.get('expiringDays') ?? '0') || 0
     const page = Math.max(1, Number(url.searchParams.get('page') ?? '1') || 1)
     const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get('pageSize') ?? '25') || 25))
@@ -146,13 +166,29 @@ export async function GET(req: NextRequest) {
     let orderStats: Array<{ status: string; _count: { _all: number } }>
     let claimDiagnostics: Array<{ type: string; _count: { _all: number } }>
     let expiringSoon: number
+    // PAYMENT plane — per-school pending-verification counts: online
+    // orders awaiting settlement + deferred (code-gated) activations.
+    // (Populated from groupBy rows after the query block below.)
+    // PLAN filter options — distinct catalogue plan codes on live rows.
+    let planOptionRows: Array<{ planDef: { code: string; name: string } | null }> = []
+    let pendingOrderRows: Array<{ schoolId: string; _count: { _all: number } }> = []
+    let deferredRows: Array<{ schoolId: string; _count: { _all: number } }> = []
     // Registry-wide renewal KPIs — queried SEPARATELY from the pending-
     // sensitive block: the tally consumes only legacy columns, so it must
     // survive a schema-pending failure of the other aggregates untouched.
-    const { tenantStates, subscriptionsExpired } = await computeTenantStateTallies()
+    const { tenantStates, subscriptionsExpired, activePaid, openAccessUnpaid } =
+      await computeTenantStateTallies()
     try {
-      ;[subscriptions, studentCounts, orderStats, claimDiagnostics, expiringSoon] =
-        await Promise.all([
+      ;[
+        subscriptions,
+        studentCounts,
+        orderStats,
+        claimDiagnostics,
+        expiringSoon,
+        pendingOrderRows,
+        deferredRows,
+        planOptionRows,
+      ] = await Promise.all([
           // FULL filtered row set — NO take/skip here. The computed-state
           // filter (a JS derivation) must run over EVERY matching row
           // BEFORE the pagination slice; slicing first made the filtered
@@ -188,6 +224,25 @@ export async function GET(req: NextRequest) {
           db.schoolSubscription.count({
             where: { periodEnd: { gte: now, lte: expiring30Before } },
           }),
+          // PAYMENT plane — PENDING orders grouped per school (the row
+          // pipeline reads this map to classify paymentState).
+          db.subscriptionOrder.groupBy({
+            by: ['schoolId'],
+            _count: { _all: true },
+            where: { status: 'PENDING' },
+          }),
+          // PAYMENT plane — deferred code-gated payments per school.
+          db.platformPayment.groupBy({
+            by: ['schoolId'],
+            _count: { _all: true },
+            where: { statusAfter: null },
+          }),
+          // PLAN filter options from live tenant snapshots.
+          db.schoolSubscription.findMany({
+            where: { planId: { not: null } },
+            select: { planId: true, planDef: { select: { code: true, name: true } } },
+            distinct: ['planId'],
+          }),
         ])
     } catch (e) {
       if (!isSubscriptionSchemaPendingError(e)) throw e
@@ -217,7 +272,16 @@ export async function GET(req: NextRequest) {
       studentCounts = []
       orderStats = []
       claimDiagnostics = []
+      pendingOrderRows = []
+      deferredRows = []
+      planOptionRows = []
     }
+
+    const pendingOrdersBySchool = new Map(pendingOrderRows.map((r) => [r.schoolId, r._count._all]))
+    const deferredBySchool = new Map(deferredRows.map((r) => [r.schoolId, r._count._all]))
+    const planOptions = planOptionRows
+      .filter((r): r is { planDef: { code: string; name: string } } => Boolean(r.planDef))
+      .map((r) => ({ code: r.planDef.code, name: r.planDef.name }))
 
     // Compose the tenant entitlement states + row-level filters over the
     // FULL filtered set. The status filter matches a COMPUTED state (JS
@@ -258,6 +322,60 @@ export async function GET(req: NextRequest) {
             overrideStatus: sub.overrideStatus,
           },
         })
+
+        // ── PAYMENTS & GATEWAYS REDESIGN — the four status planes, per
+        // row, computed server-side (the UI renders them verbatim):
+        //
+        // 1. ACCOUNT ACCESS — can the tenant sign in at all.
+        // 2. PAYMENT STATE — money: UNPAID / PENDING / PAID. "PENDING"
+        //    = verified money is awaited (online order open or a
+        //    code-gated deferred payment not yet redeemed). NEVER a
+        //    proxy for access.
+        // 3. SUBSCRIPTION STATE — the commercial contract. Legacy
+        //    fail-open tenants classify as `legacy-open-access` and the
+        //    UI labels them "Access allowed — no verified payment
+        //    recorded." — never as an active subscription.
+        // 4. (per-student/staff entitlement states live in their own
+        //    registries — this is the tenant control centre.)
+        const hasPaidPeriod = sub.periodEnd != null
+        const openAccess = entitlement.state === 'ACTIVE' && !hasPaidPeriod && !sub.overrideStatus
+        const pendingCount = (pendingOrdersBySchool.get(sub.schoolId) ?? 0) + (deferredBySchool.get(sub.schoolId) ?? 0)
+        const paymentState: 'UNPAID' | 'PENDING' | 'PAID' =
+          pendingCount > 0 ? 'PENDING' : (sub._count?.payments ?? 0) > 0 ? 'PAID' : 'UNPAID'
+        const accessState: 'allowed' | 'blocked' = entitlement.state === 'NOT_ACTIVATED' ? 'blocked' : 'allowed'
+        const subscriptionState = sub.overrideStatus
+          ? `override-${sub.overrideStatus.toLowerCase()}`
+          : entitlement.state === 'ACTIVE'
+            ? openAccess
+              ? 'legacy-open-access'
+              : 'active-paid'
+            : entitlement.state === 'GRACE'
+              ? 'grace-period'
+              : entitlement.state === 'RESTRICTED'
+                ? 'expired'
+                : entitlement.state === 'SUSPENDED'
+                  ? 'suspended'
+                  : 'not-activated'
+        const daysToExpiry = hasPaidPeriod
+          ? Math.ceil((new Date(sub.periodEnd as Date).getTime() - now.getTime()) / 86_400_000)
+          : null
+        const nextAction =
+          entitlement.state === 'SUSPENDED'
+            ? 'Resume the subscription or record a renewal payment'
+            : entitlement.state === 'RESTRICTED'
+              ? 'Record renewal payment'
+              : entitlement.state === 'GRACE'
+                ? 'Collect renewal payment before grace ends'
+                : pendingCount > 0
+                  ? 'Verify the pending payment'
+                  : openAccess
+                    ? 'Link a plan & record the first payment'
+                    : entitlement.state === 'NOT_ACTIVATED'
+                      ? 'Activate the school & its subscription'
+                      : daysToExpiry != null && daysToExpiry <= 30
+                        ? 'Prepare renewal'
+                        : 'None'
+
         return {
           subscriptionId: sub.id,
           school: sub.school,
@@ -277,6 +395,13 @@ export async function GET(req: NextRequest) {
           overrideStatus: sub.overrideStatus,
           notes: sub.notes,
           paymentCount: sub._count?.payments ?? null,
+          pendingPayments: pendingCount,
+          paymentState,
+          accessState,
+          subscriptionState,
+          openAccess,
+          daysToExpiry,
+          nextAction,
           entitlement: {
             state: entitlement.state,
             businessAllowed: entitlement.businessAllowed,
@@ -285,6 +410,12 @@ export async function GET(req: NextRequest) {
         }
       })
       .filter((r) => (statusFilter ? r.entitlement.state === statusFilter : true))
+      .filter((r) => (paymentStateFilter ? r.paymentState === paymentStateFilter : true))
+      .filter((r) =>
+        planFilter
+          ? r.planCode === planFilter || r.planDef?.code === planFilter
+          : true,
+      )
       .filter((r) =>
         expiringBefore
           ? r.periodEnd !== null && new Date(r.periodEnd) >= now && new Date(r.periodEnd) <= expiringBefore
@@ -315,6 +446,16 @@ export async function GET(req: NextRequest) {
         // renewal KPIs never depend on the pending migration.
         tenantStates,
         subscriptionsExpired,
+        // PAYMENTS & GATEWAYS REDESIGN — the payment plane, registry-wide:
+        // active PAID subscriptions vs legacy fail-open access, and the
+        // pending-verification pipeline (open online orders + deferred
+        // code-gated activations). "Active subscriptions" is now
+        // unambiguous: activePaid NEVER counts open-access rows.
+        activePaidSubscriptions: activePaid,
+        unpaidOpenAccess: openAccessUnpaid,
+        pendingVerification:
+          (orderStats?.find((o) => o.status === 'PENDING')?._count._all ?? 0) +
+          (deferredBySchool ? [...deferredBySchool.values()].reduce((s, n) => s + n, 0) : 0),
         ...(schemaPending
           ? {
               // null = "system not provisioned on this database yet" — the
@@ -330,6 +471,7 @@ export async function GET(req: NextRequest) {
             }),
         subscriptionsExpiringWithin30Days: expiringSoon,
       },
+      planOptions,
     }
   })
 }

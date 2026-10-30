@@ -26,7 +26,8 @@ import type { Prisma } from '@prisma/client'
 
 type Tx = Prisma.TransactionClient
 import { AppError } from '@/lib/security/errors'
-import { getPaymentProvider, type CheckoutConfirmation } from '@/lib/payments/provider'
+import { type CheckoutConfirmation } from '@/lib/payments/provider'
+import { resolveSubscriptionPaymentProvider } from '@/lib/payments/platform-gateway'
 import { activateEntitlementInTx } from './student'
 import { addMonths } from './codes'
 
@@ -93,7 +94,9 @@ export async function createSubscriptionOrder(input: CreateOrderInput): Promise<
       internalDetail: `createSubscriptionOrder: non-INR online order refused (${input.currency})`,
     })
   }
-  const provider = getPaymentProvider()
+  // PAYMENTS & GATEWAYS REDESIGN — the subscription lane resolves the
+  // PLATFORM gateway explicitly: DB config (ACTIVE) → env provider → null.
+  const provider = await resolveSubscriptionPaymentProvider()
   if (!provider) {
     // Fail-closed: no fake success, honest block until owner configures.
     throw new AppError('INVALID_INPUT', {
@@ -358,7 +361,9 @@ export async function verifyAndSettleOrder(opts: {
   if (order.initiatedByUserId && opts.initiatedByUserId && order.initiatedByUserId !== opts.initiatedByUserId) {
     throw new OrderSettlementError('FORBIDDEN', 'This order belongs to another account.', `verifyAndSettleOrder: initiator mismatch on ${opts.orderNo}`)
   }
-  const provider = getPaymentProvider()
+  // PAYMENTS & GATEWAYS REDESIGN — verify against the SAME resolved
+  // provider the order was created with (DB config → env).
+  const provider = await resolveSubscriptionPaymentProvider()
   if (!provider) {
     throw new OrderSettlementError('INVALID_INPUT', 'Payment verification is unavailable on this deployment.', 'verifyAndSettleOrder: no provider')
   }
@@ -379,7 +384,7 @@ export async function verifyAndSettleOrder(opts: {
  *  available when PAYMENTS_SANDBOX=1 (the SandboxProvider itself enforces
  *  this — never a production success path). */
 export async function sandboxConfirmOrder(orderNo: string): Promise<CheckoutConfirmation> {
-  const provider = getPaymentProvider()
+  const provider = await resolveSubscriptionPaymentProvider()
   if (!provider || !provider.confirmSandboxPayment) {
     throw new OrderSettlementError('INVALID_INPUT', 'The sandbox gateway is not enabled on this deployment.', 'sandboxConfirmOrder: no sandbox provider')
   }

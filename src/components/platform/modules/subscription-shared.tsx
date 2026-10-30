@@ -114,6 +114,18 @@ export interface RegistryRow {
    */
   licensedStudents?: number | null
   entitlement: { state: string; businessAllowed: boolean; renewalRequired: boolean }
+  /**
+   * PAYMENTS & GATEWAYS REDESIGN — the separated status planes, computed
+   * server-side per row (the control centre renders them verbatim).
+   * Optional: older cached payloads predate them.
+   */
+  paymentState?: 'UNPAID' | 'PENDING' | 'PAID'
+  accessState?: 'allowed' | 'blocked'
+  subscriptionState?: string
+  openAccess?: boolean
+  pendingPayments?: number
+  daysToExpiry?: number | null
+  nextAction?: string
 }
 
 export interface ActivationCodeRow {
@@ -137,7 +149,8 @@ export interface ActivationCodeRow {
   revokeReason: string | null
   replacedBy: { publicRef: string } | null
   paymentRef: string | null
-  events?: Array<{ type: string; at: string }>
+  /** Code events (wire shape from the codes registry: type + detail + createdAt). */
+  events?: Array<{ type: string; detail?: unknown; createdAt: string }>
 }
 
 // ── shared helpers ──────────────────────────────────────────────────────
