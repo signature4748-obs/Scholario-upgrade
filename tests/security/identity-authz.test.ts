@@ -38,10 +38,13 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { randomBytes } from 'crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { hashSessionToken, hashPassword, verifyPassword } from '@/lib/auth'
 import { TENANT_FIXTURE_PASSWORD } from '../helpers/credentials'
 import { db } from '../helpers/db'
 import { liveFetch, type LiveFetchOpts } from '../helpers/live-http'
+import { REPO_ROOT } from '../helpers/repo-root'
 
 const BASE = process.env.TENANT_TEST_BASE ?? 'http://localhost:3000'
 // 60s per-test ceiling (CI first-run fix, 2026-10-11): the first CI run
@@ -75,6 +78,7 @@ const fx = {
     studentA: { id: '', email: 'tenant.student.a@hawkings.test' } as FixtureUser,
     principalA: { id: '', email: 'tenant.principal.a@hawkings.test' } as FixtureUser,
     suspended: { id: '', email: localEmail('suspended') } as FixtureUser,
+    avatarholder: { id: '', email: localEmail('avatarholder') } as FixtureUser,
     peer: { id: '', email: localEmail('peer') } as FixtureUser,
     peerB: { id: '', email: 'gate-f.peer.b@greenvalley.test' } as FixtureUser,
     revoker: { id: '', email: localEmail('revoker') } as FixtureUser,
@@ -136,6 +140,61 @@ const PNG_MAGIC = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0,
 ])
 
+/**
+ * CI-flake diagnostics (2026-10-30, run #195 post-mortem): the dev server
+ * answers a rare DELIVERED 500 during its documented memory-pressure /
+ * restart window (the transport-instability family live-http.ts documents:
+ * run #195 delivered 500s here; run #197 hit ECONNRESET in the same area and
+ * the retry passed). liveFetch never retries an HTTP response — by contract —
+ * so the 500 reaches the suite, while the server-side `http_request` line
+ * (errorCode + internalDetail) lands in dev.log, which CI only tails on a
+ * FAILED step — a cancelled run discards it. When an unexpected status
+ * arrives, dump the error envelope (code + requestId) and the matching
+ * server-side evidence INTO the failure message so the next occurrence
+ * identifies its exact exception. Best-effort: never fails the test itself.
+ */
+function serverEvidence(requestId: string): string {
+  const parts: string[] = []
+  for (const file of ['dev.log', 'dev-supervisor.log']) {
+    try {
+      const path = resolve(REPO_ROOT, file)
+      if (!existsSync(path)) continue
+      const lines = readFileSync(path, 'utf8').split('\n').slice(-500)
+      const hits = lines.filter((l) => {
+        if (requestId !== '' && l.includes(requestId)) return true
+        if (/"level":"error"/.test(l) || /memory threshold/i.test(l)) return true
+        if (/dev-supervisor.*respawn/i.test(l)) return true
+        return /✗|compilation error|Module build failed/i.test(l)
+      })
+      if (hits.length > 0) parts.push(`--- ${file} (relevant tail) ---\n${hits.slice(-20).join('\n')}`)
+    } catch {
+      /* diagnostics must never fail the test */
+    }
+  }
+  return parts.length > 0 ? parts.join('\n') : '(no dev.log server evidence available in this environment)'
+}
+
+/**
+ * Assert an avatar DELETE returned 200 — or fail with the response envelope
+ * (code + requestId) plus the matching dev.log server lines. Used by the
+ * DELETE positives so a repeat of the run-#195-style window is
+ * self-diagnosing instead of a bare "Expected: 200, Received: 500".
+ */
+async function assertAvatarDeleteOk(res: Response, label: string): Promise<void> {
+  if (res.status === 200) return
+  const raw = await res.clone().text().catch(() => '<body unreadable>')
+  let requestId = ''
+  try {
+    requestId = (JSON.parse(raw) as { requestId?: string })?.requestId ?? ''
+  } catch {
+    /* non-JSON body (e.g. a Next-level error page) — still dumped below */
+  }
+  throw new Error(
+    `DELETE /api/profile/avatar (${label}): expected 200, got ${res.status}; body=${raw.slice(0, 300)}\n` +
+      serverEvidence(requestId),
+  )
+}
+
 /** api() envelope 401 (Error('UNAUTHORIZED') sentinel → AUTH_REQUIRED). */
 async function expectApi401(res: Response) {
   expect(res.status).toBe(401)
@@ -191,6 +250,7 @@ beforeAll(async () => {
   const allLocal = [
     ...FORGED_ROLES.map(forgedEmail),
     localEmail('suspended'),
+    localEmail('avatarholder'),
     localEmail('peer'),
     'gate-f.peer.b@greenvalley.test',
     localEmail('revoker'),
@@ -238,6 +298,23 @@ beforeAll(async () => {
       },
     })
     fx.users.peerB = { id: u.id, email: u.email }
+  }
+
+  // avatarholder — TEACHER persona carrying a SAFE server-minted avatar
+  // fileName (no storage bytes exist anywhere in this zero-credential
+  // environment): exercises the DELETE route's existing-avatar branch. The
+  // storage delete is best-effort BY CONTRACT (avatarDelete swallows every
+  // storage failure), so the columns-clear + 200 contract is fully
+  // assertable without Supabase credentials.
+  {
+    const u = await db.user.create({
+      data: {
+        email: localEmail('avatarholder'), name: 'Gate F Avatar Holder', role: 'TEACHER',
+        schoolId: fx.schoolA.id, status: 'ACTIVE',
+        avatar: `gatefav-${randomBytes(6).toString('hex')}.png`,
+      },
+    })
+    fx.users.avatarholder = { id: u.id, email: u.email }
   }
 
   // revoker / pw / pw2 — canonical TEACHER personas for the session- and
@@ -328,6 +405,7 @@ afterAll(async () => {
           in: [
             ...FORGED_ROLES.map(forgedEmail),
             localEmail('suspended'),
+            localEmail('avatarholder'),
             localEmail('peer'),
             'gate-f.peer.b@greenvalley.test',
             localEmail('revoker'),
@@ -419,11 +497,51 @@ describe('GATE F · DELETE /api/profile/avatar — authorization boundary', () =
   test('canonical roles remove their (unset) own photo → 200 (self-service preserved, no-op write)', async () => {
     for (const persona of [fx.users.teacherA, fx.users.principalA, fx.users.studentA]) {
       const res = await as(persona.email, '/api/profile/avatar', { method: 'DELETE' })
+      await assertAvatarDeleteOk(res, persona.email)
       expect(res.status).toBe(200)
       const body = (await res.json()) as { ok?: boolean; data?: { avatarUrl?: string | null } }
       expect(body.ok).toBe(true)
       expect(body.data?.avatarUrl).toBeNull()
     }
+  }, T)
+
+  test('existing avatar: planted safe fileName clears BOTH columns → 200 (best-effort storage delete, no credentials needed)', async () => {
+    const before = await db.user.findUnique({
+      where: { id: fx.users.avatarholder.id },
+      select: { avatar: true, avatarUrl: true },
+    })
+    expect(before?.avatar ?? null).not.toBeNull() // fixture precondition
+    const res = await as(fx.users.avatarholder.email, '/api/profile/avatar', { method: 'DELETE' })
+    await assertAvatarDeleteOk(res, fx.users.avatarholder.email)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; data?: { avatarUrl?: string | null } }
+    expect(body.ok).toBe(true)
+    expect(body.data?.avatarUrl).toBeNull()
+    const after = await db.user.findUnique({
+      where: { id: fx.users.avatarholder.id },
+      select: { avatar: true, avatarUrl: true },
+    })
+    expect(after?.avatar).toBeNull()
+    expect(after?.avatarUrl).toBeNull()
+  }, T)
+
+  test('cross-user isolation: no target parameter exists — the operation touches ONLY the session user\'s row', async () => {
+    const peerBefore = await db.user.findUnique({
+      where: { id: fx.users.peer.id },
+      select: { avatar: true, avatarUrl: true },
+    })
+    expect(peerBefore?.avatar ?? null).not.toBeNull() // peer still carries its planted avatar
+    const res = await as(fx.users.avatarholder.email, '/api/profile/avatar', { method: 'DELETE' })
+    await assertAvatarDeleteOk(res, fx.users.avatarholder.email)
+    expect(res.status).toBe(200)
+    const peerAfter = await db.user.findUnique({
+      where: { id: fx.users.peer.id },
+      select: { avatar: true, avatarUrl: true },
+    })
+    // The peer's avatar columns are byte-identical — the DELETE only ever
+    // wrote the CALLER's row (User.avatar/avatarUrl of the session user).
+    expect(peerAfter?.avatar).toBe(peerBefore?.avatar)
+    expect(peerAfter?.avatarUrl).toBe(peerBefore?.avatarUrl)
   }, T)
 })
 
