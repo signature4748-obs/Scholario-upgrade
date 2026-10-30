@@ -54,11 +54,21 @@ const SCRUB_KEYS = [
 
 const savedEnv: Record<string, string | undefined> = {}
 let schoolId = ''
+/** PAYMENTS & GATEWAYS REDESIGN — the platform gateway DB lane is part of
+ *  the zero-credential contract: if another suite has planted an ACTIVE
+ *  PlatformGatewayConfig row (shared CI/local DB), this suite must
+ *  neutralise it for the run and restore it afterwards. */
+let savedGateway: { id: string; status: string } | null = null
 
 beforeAll(async () => {
   for (const k of SCRUB_KEYS) {
     savedEnv[k] = process.env[k]
     delete process.env[k]
+  }
+  const gw = await db.platformGatewayConfig.findUnique({ where: { id: 'singleton' } }).catch(() => null)
+  if (gw && gw.status === 'ACTIVE') {
+    savedGateway = { id: gw.id, status: gw.status }
+    await db.platformGatewayConfig.update({ where: { id: gw.id }, data: { status: 'DISABLED' } })
   }
   const school = await db.school.findUnique({ where: { slug: 'hawkings-prithvipur' } })
   if (!school) throw new Error('fixture school missing (run seed:demo)')
@@ -68,6 +78,12 @@ beforeAll(async () => {
 afterAll(async () => {
   // Row hygiene: only rows this suite planted (RUN marker).
   await db.subscriptionOrder.deleteMany({ where: { orderNo: { contains: RUN } } }).catch(() => {})
+  // Gateway-lane hygiene: restore whatever the shared DB had.
+  if (savedGateway) {
+    await db.platformGatewayConfig
+      .update({ where: { id: savedGateway.id }, data: { status: savedGateway.status } })
+      .catch(() => {})
+  }
   // Env hygiene: the scrub is this suite's fixture, not a global change.
   for (const [k, v] of Object.entries(savedEnv)) {
     if (v === undefined) delete process.env[k]

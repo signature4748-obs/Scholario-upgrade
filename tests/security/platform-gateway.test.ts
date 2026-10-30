@@ -277,12 +277,19 @@ describe('PLATFORM GATEWAY · resolution order', () => {
     expect(candidates).toContain(`suite-whsec-${RUN}-0123456789`)
   })
 
-  test('after DELETE (disable) the subscription lane falls back to the env provider', async () => {
+  test('after DELETE (disable) the subscription lane no longer resolves the DB-configured account', async () => {
     const r = await asPlatform(rootToken, '/api/platform/payments/gateway', { method: 'DELETE' })
     expect(r.status).toBe(200)
+    const view = await body(await asPlatform(rootToken, '/api/platform/payments/gateway'))
+    const d = view?.data ?? view
+    expect(d?.gateway?.status).toBe('DISABLED')
     const provider = await resolveSubscriptionPaymentProvider()
-    // env in the suite = sandbox (PAYMENTS_SANDBOX=1) — the fallback rail.
-    expect(provider?.name).toBe('sandbox')
+    // The disabled DB row must never be used: whatever the env fallback
+    // resolves to (sandbox here, null without env), it is NOT the
+    // configured Razorpay key. (The env provider is process-cached — its
+    // identity depends on which suite froze the cache first; the CONTRACT
+    // is only that the disabled account is gone.)
+    expect(provider?.keyId).not.toBe(`rzp_test_${RUN}`)
   })
 })
 

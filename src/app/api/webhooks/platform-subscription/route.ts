@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { db } from '@/lib/db'
 import { enforceRateLimitStrict, RATE_LIMITS, clientIpFromHeaders } from '@/lib/security/rate-limit'
+import { platformWebhookSecretCandidates } from '@/lib/payments/platform-gateway'
 import { platformAuditEvent } from '@/lib/platform/audit'
 import { recordPlatformPayment } from '@/lib/platform/billing'
 import { applySchoolSubscriptionPeriodInTx } from '@/lib/platform/billing'
@@ -79,7 +80,9 @@ function verifySignatureWithSecrets(rawBody: string, signature: string | null, s
  * Empty list ⇒ fail closed (offline recording keeps working).
  */
 async function platformWebhookSecrets(): Promise<string[]> {
-  const { platformWebhookSecretCandidates } = await import('@/lib/payments/platform-gateway')
+  // Static import (module graph compiled with the route): the signature
+  // check runs on EVERY webhook delivery — no lazy-init cost on the
+  // hot path, and CI warm-up pays the compile once.
   return platformWebhookSecretCandidates()
 }
 

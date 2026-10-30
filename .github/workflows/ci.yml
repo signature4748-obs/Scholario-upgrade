@@ -119,6 +119,13 @@ jobs:
       PAYMENTS_SANDBOX_SECRET: "local-sandbox-secret"
       PLATFORM_PAYMENT_WEBHOOK_SECRET: "platform-webhook-test-secret"
       RESEND_WEBHOOK_SECRET: "whsec_cmVzZW5kLXdlYmhvb2stdGVzdC1zZWNyZXQtY2ktZml4dHVyZQ=="
+      # PAYMENTS & GATEWAYS REDESIGN — stable gateway-secret encryption key
+      # fixture: the dev server encrypts gateway secrets at REST and the
+      # security suites decrypt them cross-process; without a shared key
+      # both would derive different ephemeral keys and the round-trip
+      # verification contract could not be tested. Fake fixture value —
+      # never a real credential.
+      SCHOOL_GATEWAY_ENC_KEY: "ci-gateway-enc-key-fixture"
 
     steps:
       # 1. Shallow checkout — CI needs the working tree, not history.
@@ -316,6 +323,15 @@ jobs:
           curl -s -o /dev/null http://localhost:3000/api/platform/schools/precheck?slug=ci-warmup
           curl -s -o /dev/null -X DELETE http://localhost:3000/api/profile/avatar
           curl -s -o /dev/null -X DELETE http://localhost:3000/api/teachers/upload/ci-warmup
+          # PAYMENTS & GATEWAYS REDESIGN — the webhook receivers and the new
+          # gateway/report surfaces pay a cold compile that must land before
+          # the suites' per-attempt budgets. 401-once-compiled = warm; a
+          # signature-less POST is rejected before any handler logic.
+          curl -s -o /dev/null -X POST -H 'content-type: application/json' -d '{}' http://localhost:3000/api/webhooks/platform-subscription
+          curl -s -o /dev/null -X POST -H 'content-type: application/json' -d '{}' http://localhost:3000/api/webhooks/razorpay
+          curl -s -o /dev/null http://localhost:3000/api/platform/payments/gateway
+          curl -s -o /dev/null "http://localhost:3000/api/platform/payments/overview"
+          curl -s -o /dev/null "http://localhost:3000/api/platform/reports/operations"
           curl -sf http://localhost:3000/health/ready
 
       # 12. Gates 5-8 — unit + integration + API + regression + security.

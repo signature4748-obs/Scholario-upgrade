@@ -63,7 +63,6 @@ beforeAll(async () => {
       status: 'ACTIVE', passwordHash: 'suite-no-login', totpSecret: `SUITE-${RUN}`,
     },
   })
-  suiteAdminId = rootRow.id
   const token = randomBytes(32).toString('hex')
   await db.platformAdminSession.create({
     data: {
