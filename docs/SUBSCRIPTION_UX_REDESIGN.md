@@ -122,3 +122,25 @@ is "Link plan & record first payment".
 - Existing migrations, seeds, audit history and API contracts remain
   backward-compatible; the new registry fields are additive.
 - `/platform/audit` remains a working route for existing deep links.
+
+## 5. Role-coverage completion (same-day follow-up, f45952a)
+
+- Plans & Pricing: a STAFF plan declares its covered roles (selector in
+  the plan form; the plan card shows the set). School/student plans
+  cannot declare one.
+- School → Plan & Billing: the staff-coverage control shows WHO the
+  per-seat policy applies to (the linked plan's declaration) and now
+  seeds the CURRENT policy — a price edit can never silently revert
+  PER_SEAT to TENANT (the audit finding in §2 #13 below).
+- Access Codes: staff batches bind only to roles the plan covers; the
+  roster and the terms surface report the effective set.
+- Subscriptions control centre: the six KPI cards are click-to-filter —
+  "Active — paid", "Unpaid — access allowed", "Pending verification",
+  "Expiring soon", "Expired", "Suspended" each drill the registry into
+  that cohort (a KPI is a group, not just a number).
+
+| # | Audit finding (post-implementation pass) | Fix |
+|---|---|---|
+| 13 | Terms editor re-seeded `staffCoverage: 'TENANT'` on open — saving unrelated price terms silently reverted a PER_SEAT tenant's access policy | Registry carries the current policy; the editor seeds from it (see SUBSCRIPTION_ENTITLEMENT_SYSTEM.md §9) |
+| 14 | Staff role coverage was implicit (hard-coded TEACHER) rather than a declared plan policy | `coveredRoles` / `staffCoverageRoles` columns + resolution + enforcement derivation (migration 20261030140000) |
+| 15 | KPI cards were static numbers; grouping required manual filter selection | Click-to-filter on all six KPI cards |

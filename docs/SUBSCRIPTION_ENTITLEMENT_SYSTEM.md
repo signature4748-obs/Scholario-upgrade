@@ -259,3 +259,47 @@ expired-window codes ISSUED→EXPIRED, lapsed live entitlement rows
 EXPIRED. Enforcement never depends on it (expiry is computed live at
 evaluation time); observability rides the JobRun trail (one row per
 hour bucket).
+
+---
+
+## 9. STAFF ROLE COVERAGE — declarative plan policy (2026-10-30, later same day)
+
+PHASE 5C completion ("a plan MUST explicitly define which staff roles it
+covers"). Migration `20261030140000_staff_role_coverage` — additive: two
+nullable JSONB columns, nothing dropped or retyped.
+
+- `SubscriptionPlan.coveredRoles` — for STAFF-scope plans, the declared
+  covered roles. `null` → `["TEACHER"]` (the legacy default). Writes are
+  normalized server-side: values outside the seat-eligible canonical set
+  are dropped on write AND read — a bad write can never widen the
+  invariant. Non-STAFF plans refuse a declaration (they do not sell
+  staff seats).
+- `SchoolSubscription.staffCoverageRoles` — the tenant-level snapshot
+  the terms route writes (audited, before→after in the event metadata).
+  `null` clears the override (the plan's declaration applies again).
+- Resolution (`resolveStaffCoveredRoles`): tenant override → plan
+  declaration → `["TEACHER"]`. `normalizeStaffCoveredRoles` guarantees
+  the set is never empty (an empty policy is a misconfiguration, not a
+  decision) and never contains a non-seat-eligible role.
+- The seat-eligible set (`STAFF_SEAT_ELIGIBLE_ROLES`) is exactly the
+  canonical school-plane staff role: `TEACHER`. PRINCIPAL accounts are
+  deliberately NEVER seat-gated (administrative privileges are not a
+  paid entitlement — a principal can always administer the school);
+  STUDENT accounts are governed by billingModel. The constant is the
+  single forward-compatibility point if the canonical role set grows.
+- Enforcement derives from the resolved set everywhere: the withUser
+  per-seat gate, `POST /api/subscription/staff/claim` (route + lib),
+  batch ASSIGNED staff validation (refusal generates NOTHING — no
+  partial batches), `resolveStaffUser` (operator assignment), and the
+  staff roster (lists exactly the covered roles, reports the set).
+- HONEST-STATE FIX found by the redesign audit: the school's terms
+  editor seeded the staff-coverage policy hard-coded to TENANT and
+  always sent it — an unrelated price edit silently reverted a PER_SEAT
+  tenant's access policy. The registry now carries the current policy
+  (`staffCoverage` + `staffCoverageRoles`) and the editor seeds from it;
+  access-policy changes are explicit, audited operator decisions.
+- Regression coverage: `tests/security/staff-role-coverage.test.ts`
+  (17 tests) — normalization/precedence, write-path eligibility, the
+  claim gate (covered claims; PRINCIPAL is a SCOPE_MISMATCH), terms
+  normalization/clearing with audit diffs, plan declaration scope
+  rules, batch refusal atomicity, roster exposure.
