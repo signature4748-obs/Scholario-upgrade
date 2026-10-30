@@ -13,7 +13,6 @@ import { auditEvent } from '@/lib/security/audit'
 import { isCanonicalSchoolRole } from '@/lib/security/permissions'
 import {
   consumePasswordReset,
-  invalidateUserResetTokens,
   clearSchoolAccountLockout,
   maskedEmailDomain,
 } from '@/lib/school/password-reset'
@@ -118,6 +117,7 @@ export async function POST(req: NextRequest) {
     // session revocation + burn of every OTHER outstanding token. The
     // presented token itself was already consumed ATOMICALLY by
     // consumePasswordReset — a replay races updateMany and loses.
+    let revokedCount = 0
     try {
       await db.$transaction(async (tx) => {
         await tx.user.update({
@@ -130,6 +130,17 @@ export async function POST(req: NextRequest) {
             mustChangePassword: false,
             passwordChangedAt: new Date(),
           },
+        })
+
+        // Keep credential rotation, global session revocation, and
+        // invalidation of outstanding reset links in one transaction.
+        // A failed cleanup must never leave the old sessions or another
+        // pending reset link usable after the password has changed.
+        const revoked = await tx.session.deleteMany({ where: { userId: user.id } })
+        revokedCount = revoked.count
+        await tx.schoolPasswordReset.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: new Date() },
         })
       })
     } catch (txError) {
@@ -153,8 +164,6 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const revoked = await db.session.deleteMany({ where: { userId: user.id } })
-    await invalidateUserResetTokens(user.id)
 
     // ── Verified-recovery lockout supersession (docs/
     // PLATFORM_ACCOUNT_RECOVERY.md §3-A, mirrored): the applicable
@@ -181,7 +190,7 @@ export async function POST(req: NextRequest) {
       action: 'PASSWORD_RESET_COMPLETED',
       ip,
       requestId,
-      detail: `School password reset completed (reset ${consumed.resetId ?? 'n/a'}); ${revoked.count} session(s) revoked; notification ${notify.status}; domain ${maskedEmailDomain(user.email)}`,
+      detail: `School password reset completed (reset ${consumed.resetId ?? 'n/a'}); ${revokedCount} session(s) revoked; notification ${notify.status}; domain ${maskedEmailDomain(user.email)}`,
     }).catch(() => {})
 
     // ── SUPABASE AUTH PHASE 1 — staged-migration cutover parity (see

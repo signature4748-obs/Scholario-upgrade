@@ -46,18 +46,19 @@ export async function meterSchoolApiOperation(
 ): Promise<void> {
   try {
     const date = usageDateBucket()
-    // Two single-row upserts; both atomic. Promise.all is safe: the two
-    // writes are independent.
+    // The daily counter uses an atomic increment. For the distinct-user
+    // marker, INSERT ... ON CONFLICT DO NOTHING is safer than concurrent
+    // Prisma upserts: simultaneous first requests for the same
+    // (school,user,day) can otherwise race through the unique constraint.
     await Promise.all([
       db.schoolUsageDaily.upsert({
         where: { schoolId_date: { schoolId, date } },
         create: { schoolId, date, apiOperations: 1 },
         update: { apiOperations: { increment: 1 } },
       }),
-      db.schoolActiveUserDay.upsert({
-        where: { schoolId_userId_date: { schoolId, userId, date } },
-        create: { schoolId, userId, date, role: role ?? null },
-        update: {}, // row existing = the user already counted today
+      db.schoolActiveUserDay.createMany({
+        data: [{ schoolId, userId, date, role: role ?? null }],
+        skipDuplicates: true,
       }),
     ])
   } catch (e) {
