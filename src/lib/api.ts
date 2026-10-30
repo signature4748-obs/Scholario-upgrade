@@ -11,6 +11,7 @@ import { entitlementForUser } from './entitlement/server'
 import { isEntitlementExemptRoute } from './entitlement/entitlement'
 import { evaluateStudentEntitlement } from './entitlement/student'
 import { evaluateStaffEntitlement, requiresStaffEntitlement } from './entitlement/staff'
+import { STAFF_SEAT_ELIGIBLE_ROLES, DEFAULT_STAFF_COVERED_ROLES } from './subscription/staff'
 import { isCanonicalSchoolRole } from './security/permissions'
 
 export type Ctx = { user: AuthUser }
@@ -278,11 +279,15 @@ export async function withUser(
 
       // ── STAFF ENTITLEMENTS (2026-10-30) — per-seat staff gate ────────
       // (PER_SEAT staff coverage). Composes ON TOP of the tenant state:
-      // a teacher on a TENANT-coverage school is covered and NEVER locked
-      // by a missing individual subscription; a teacher under PER_SEAT
-      // needs a live StaffEntitlement evaluated from its explicit validity
-      // window. PRINCIPAL sessions are DELIBERATELY NEVER evaluated here —
-      // administrative privileges are not a paid staff entitlement (a
+      // a covered staff role on a TENANT-coverage school is covered and
+      // NEVER locked by a missing individual subscription; a covered role
+      // under PER_SEAT needs a live StaffEntitlement evaluated from its
+      // explicit validity window. STAFF ROLE COVERAGE (PHASE 5C): only
+      // roles in the tenant's EFFECTIVE covered set (session-resolved:
+      // tenant override → plan declaration → ["TEACHER"] default, never
+      // wider than the seat-eligible canonical set) are gate-eligible —
+      // PRINCIPAL sessions are DELIBERATELY NEVER evaluated here
+      // (administrative privileges are not a paid staff entitlement — a
       // principal can administer the school without holding a seat), and
       // STUDENT sessions are governed by billingModel above, never by
       // staffCoverage. The same exempt non-business surface (auth/session,
@@ -291,8 +296,10 @@ export async function withUser(
       // Fail-closed: unknown coverage values map to TENANT (the safe
       // legacy default) — per-seat enforcement only engages when the
       // platform explicitly set the policy.
+      const coveredRoles = user.school?.subscription?.staffCoverageRoles ?? DEFAULT_STAFF_COVERED_ROLES
       if (
-        user.role === 'TEACHER' &&
+        (STAFF_SEAT_ELIGIBLE_ROLES as readonly string[]).includes(user.role) &&
+        coveredRoles.includes(user.role) &&
         entitlement.businessAllowed &&
         requiresStaffEntitlement(user.school?.subscription?.staffCoverage)
       ) {

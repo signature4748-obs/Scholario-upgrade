@@ -5,6 +5,8 @@ import { platformAuditEvent } from '@/lib/platform/audit'
 import { parseJsonBody, strictBody } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { validatePlanInput, PLAN_SCOPES, PLAN_INTERVALS } from '@/lib/subscription/plans'
+import { normalizeStaffCoveredRoles } from '@/lib/subscription/staff'
+import { AppError } from '@/lib/security/errors'
 import { loadSubscriptionConfig } from '@/lib/subscription/config'
 import { isSubscriptionSchemaPendingError } from '@/lib/platform/subscription-schema'
 import { z } from 'zod'
@@ -58,6 +60,9 @@ export async function GET() {
         availableForRenewal: p.availableForRenewal,
         status: p.status,
         sortOrder: p.sortOrder,
+        // STAFF ROLE COVERAGE (PHASE 5C) — the plan's declared covered
+        // roles (STAFF-scope plans), normalized for display.
+        coveredRoles: p.coveredRoles == null ? null : normalizeStaffCoveredRoles(p.coveredRoles),
         createdAt: p.createdAt.toISOString(),
       })),
       config,
@@ -84,6 +89,11 @@ const planSchema = strictBody({
   availableForNew: z.boolean().default(true),
   availableForRenewal: z.boolean().default(true),
   sortOrder: z.number().int().min(-9999).max(9999).default(0),
+  /** STAFF-scope plans: the canonical roles the plan's seats cover.
+   *  Normalized server-side against the seat-eligible set; SCHOOL and
+   *  STUDENT plans may not declare a covered-role set (they do not sell
+   *  staff seats). */
+  coveredRoles: z.array(z.string().max(40)).max(10).optional(),
 })
 
 /**
@@ -111,6 +121,17 @@ export async function POST(req: NextRequest) {
         availableForRenewal: raw.availableForRenewal ?? true,
         sortOrder: raw.sortOrder ?? 0,
       }
+      // STAFF ROLE COVERAGE normalization + scope rule.
+      let coveredRolesValue: string[] | null = null
+      if (raw.coveredRoles !== undefined && raw.coveredRoles !== null && raw.coveredRoles.length > 0) {
+        if (raw.scope !== 'STAFF') {
+          throw new AppError('VALIDATION_FAILED', {
+            publicMessage: 'Only staff plans declare covered staff roles — school and student plans do not sell staff seats.',
+            internalDetail: 'plans create: coveredRoles on non-STAFF scope',
+          })
+        }
+        coveredRolesValue = normalizeStaffCoveredRoles(raw.coveredRoles)
+      }
       const plan = validatePlanInput(body)
 
       const created = await db.subscriptionPlan.create({
@@ -132,6 +153,10 @@ export async function POST(req: NextRequest) {
           availableForNew: plan.availableForNew,
           availableForRenewal: plan.availableForRenewal,
           sortOrder: plan.sortOrder,
+          // Omit when not declared — the column default is NULL (the
+          // legacy default applies at resolution time). JSON columns take
+          // Prisma.DbNull for an explicit SQL NULL, never a bare null.
+          ...(coveredRolesValue ? { coveredRoles: coveredRolesValue } : {}),
         },
       })
 
@@ -142,7 +167,7 @@ export async function POST(req: NextRequest) {
         targetId: created.id,
         ip: clientIpFromHeaders(req.headers),
         reason: `Plan ${created.code} created`,
-        metadata: { code: created.code, scope: created.scope, interval: created.interval },
+        metadata: { code: created.code, scope: created.scope, interval: created.interval, coveredRoles: coveredRolesValue },
       }).catch(() => {})
 
       return { ok: true, planId: created.id, code: created.code, message: `Plan ${created.code} created.` }

@@ -43,6 +43,60 @@ export const STAFF_PAYMENT_MODES = [
 
 export type StaffPaymentMode = (typeof STAFF_PAYMENT_MODES)[number]
 
+/* ── STAFF ROLE COVERAGE (PHASE 5C — declarative, auditable) ─────────────
+ * A staff plan MUST explicitly define which roles it covers; the tenant's
+ * terms may override the plan's declaration. Enforcement (the withUser
+ * per-seat gate, staff code claim, batch assignment, roster) derives the
+ * EFFECTIVE set from: tenant override → plan declaration → legacy default.
+ *
+ * The canonical school-plane role invariant (withUser) admits exactly
+ * PRINCIPAL | TEACHER | STUDENT sessions. PRINCIPAL is deliberately NEVER
+ * seat-gated (administrative privileges are not a paid entitlement — see
+ * the withUser comment) and STUDENT accounts are governed by billingModel,
+ * so today the seat-eligible set is exactly ["TEACHER"]. The constant is
+ * the single forward-compatibility point: if the canonical role set ever
+ * grows (e.g. dedicated ACCOUNTANT sessions), widening THIS list widens
+ * the policy surface everywhere consistently — never a stray string. */
+export const STAFF_SEAT_ELIGIBLE_ROLES: readonly string[] = ['TEACHER']
+
+/** The legacy default effective coverage — every existing tenant keeps
+ *  today's behavior (teachers are the covered staff role). */
+export const DEFAULT_STAFF_COVERED_ROLES: readonly string[] = ['TEACHER']
+
+/**
+ * Normalize a raw (JSON) role array into the safe effective set:
+ * non-string and not-seat-eligible values are dropped; an empty or
+ * fully-invalid array falls back to the DEFAULT (never an empty gate —
+ * an empty set would mean "no role can ever hold a seat", which is a
+ * misconfiguration, not a policy; clearing an override means null).
+ */
+export function normalizeStaffCoveredRoles(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [...DEFAULT_STAFF_COVERED_ROLES]
+  const kept = raw.filter(
+    (r): r is string => typeof r === 'string' && (STAFF_SEAT_ELIGIBLE_ROLES as readonly string[]).includes(r),
+  )
+  return kept.length > 0 ? [...new Set(kept)] : [...DEFAULT_STAFF_COVERED_ROLES]
+}
+
+/**
+ * The effective covered-role set for a tenant:
+ * tenant override (staffCoverageRoles) → plan declaration (coveredRoles)
+ * → legacy default. Every consumer (gate, claim, batch, roster) MUST
+ * resolve through this helper — no path reads the raw columns directly.
+ */
+export function resolveStaffCoveredRoles(input: {
+  tenantRoles?: unknown
+  planRoles?: unknown
+}): string[] {
+  if (input.tenantRoles !== undefined && input.tenantRoles !== null) {
+    return normalizeStaffCoveredRoles(input.tenantRoles)
+  }
+  if (input.planRoles !== undefined && input.planRoles !== null) {
+    return normalizeStaffCoveredRoles(input.planRoles)
+  }
+  return [...DEFAULT_STAFF_COVERED_ROLES]
+}
+
 const CURRENCIES = new Set(['INR', 'USD', 'EUR', 'GBP', 'AED'])
 
 export function staffReceiptNumber(seq: number): string {
@@ -59,10 +113,16 @@ async function nextStaffReceiptSeq(tx?: Tx): Promise<number> {
  * Server-side staff eligibility resolution — the ONLY way a target staff
  * member is resolved for a subscription write. Identity comes from the
  * server (route param → DB row), never from client-submitted role/school
- * fields. Canonical TEACHER role only: PRINCIPAL administrative accounts
- * are not paid staff seats; students are governed by billingModel.
+ * fields. The target's role must be in the tenant's EFFECTIVE covered
+ * role set (tenant override → plan declaration → ["TEACHER"] default);
+ * PRINCIPAL administrative accounts are never paid staff seats; students
+ * are governed by billingModel.
  */
-export async function resolveStaffUser(userId: string, schoolId: string) {
+export async function resolveStaffUser(
+  userId: string,
+  schoolId: string,
+  coveredRoles: readonly string[] = DEFAULT_STAFF_COVERED_ROLES,
+) {
   const user = await db.user.findUnique({
     where: { id: userId },
     select: { id: true, schoolId: true, role: true, status: true, name: true, email: true, subscriptionStatus: true },
@@ -73,10 +133,10 @@ export async function resolveStaffUser(userId: string, schoolId: string) {
       internalDetail: `resolveStaffUser: user ${userId} not in school ${schoolId}`,
     })
   }
-  if (user.role !== 'TEACHER') {
+  if (!coveredRoles.includes(user.role)) {
     throw new AppError('VALIDATION_FAILED', {
-      publicMessage: 'Staff entitlements apply to teacher accounts only.',
-      internalDetail: `resolveStaffUser: user ${userId} role ${user.role} is not TEACHER`,
+      publicMessage: 'Staff entitlements apply only to the roles this school\u2019s staff plan covers.',
+      internalDetail: `resolveStaffUser: user ${userId} role ${user.role} not in covered set [${coveredRoles.join(',')}]`,
     })
   }
   return user
@@ -105,6 +165,10 @@ export interface RecordStaffPaymentInput {
   source: 'MANUAL' | 'COMPLIMENTARY'
   /** Skip entitlement creation (the offline CODE path activates later). */
   deferEntitlement?: boolean
+  /** The tenant's EFFECTIVE covered role set (resolveStaffCoveredRoles) —
+   *  the target's role must be in it. Defaults to the legacy default
+   *  (["TEACHER"]) when the caller has not resolved the tenant policy. */
+  coveredRoles?: readonly string[]
   /** Caller-provided transaction client — when set, the payment (and
    *  activation) are written INSIDE the caller's transaction (used by the
    *  batch issuance route; the default runs its own transaction). */
@@ -141,7 +205,7 @@ export async function recordStaffPayment(input: RecordStaffPaymentInput): Promis
   if (!CURRENCIES.has(input.currency)) {
     throw new AppError('VALIDATION_FAILED', { publicMessage: 'Unsupported currency' })
   }
-  await resolveStaffUser(input.userId, input.schoolId)
+  await resolveStaffUser(input.userId, input.schoolId, input.coveredRoles)
 
   const seq = await nextStaffReceiptSeq(input.tx)
   const receiptNo = staffReceiptNumber(seq)

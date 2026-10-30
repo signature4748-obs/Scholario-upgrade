@@ -298,6 +298,8 @@ export async function GET(req: NextRequest) {
           school: { id: string; name: string; slug: string; code: string; status: string; isDemo: boolean }
           billingModel?: string
           licensedStudents?: number | null
+          staffCoverage?: string | null
+          staffCoverageRoles?: unknown
           plan: string
           planDef?: { code: string; name: string } | null
           planCode?: string | null
@@ -383,6 +385,12 @@ export async function GET(req: NextRequest) {
           // ADD-SCHOOL WIZARD — the licensed student count agreed for
           // PER_STUDENT tenants (null for school-wide/mixed).
           licensedStudents: sub.licensedStudents ?? null,
+          // STAFF LICENSING POLICY — carried so the terms editor seeds the
+          // CURRENT policy (never silently reverts PER_SEAT to TENANT)
+          // and shows the effective covered-role set.
+          staffCoverage: sub.staffCoverage ?? 'TENANT',
+          staffCoverageRoles:
+            sub.staffCoverageRoles === undefined ? null : sub.staffCoverageRoles,
           plan: sub.plan,
           planDef: sub.planDef ? { code: sub.planDef.code, name: sub.planDef.name } : null,
           planCode: sub.planCode ?? null,

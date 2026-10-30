@@ -3217,6 +3217,18 @@ model SchoolSubscription {
   /// STUDENT accounts are governed by billingModel, not staffCoverage.
   /// Set ONLY via the platform control plane (terms route).
   staffCoverage    String   @default("TENANT")
+  /// STAFF ROLE COVERAGE (2026-10-30, additive) — the tenant-level
+  /// override of WHICH staff roles the staff-licensing policy applies to
+  /// (a JSON array of canonical school roles, e.g. ["TEACHER"]).
+  /// null → the linked plan's coveredRoles → ["TEACHER"] (the legacy
+  /// default, so every existing tenant keeps today's behavior).
+  /// The canonical school-plane role invariant (withUser) allows only
+  /// PRINCIPAL | TEACHER | STUDENT sessions; PRINCIPAL is deliberately
+  /// NEVER seat-gated, so today the only legal value is ["TEACHER"] —
+  /// the column makes the policy DECLARATIVE and auditable and stays
+  /// forward-compatible if the canonical role set grows. Values outside
+  /// the seat-eligible set are dropped server-side on write AND read.
+  staffCoverageRoles Json?
   /// Plan-of-record at purchase (snapshot fields keep history when the
   /// plan is later archived). NOTE: `plan` (string) is the legacy plan name;
   /// `planDef` is the plan-registry row (null for legacy rows).
@@ -3531,10 +3543,20 @@ model SubscriptionPlan {
   name        String
   description String?
 
-  /// 'SCHOOL' (Model A) | 'STUDENT' (Model B/C target).
+  /// 'SCHOOL' (Model A) | 'STUDENT' (Model B/C target) | 'STAFF'
+  /// (per-seat staff plans, 2026-10-30).
   scope       String
   /// 'MONTHLY' | 'ANNUAL' (student plans are ANNUAL by contract).
   interval    String   @default("ANNUAL")
+  /// STAFF ROLE COVERAGE (2026-10-30, additive) — for STAFF-scope plans:
+  /// a JSON array of the canonical school roles this plan's seats cover
+  /// (e.g. ["TEACHER"]). A staff plan MUST declare the roles it covers;
+  /// enforcement (per-seat gate, code claim, batch assignment, roster)
+  /// derives the effective set from this declaration. null → ["TEACHER"]
+  /// (the legacy default). Values outside the seat-eligible set are
+  /// dropped server-side on write AND read — the invariant can never be
+  /// widened by a bad write.
+  coveredRoles Json?
 
   /// Model A — school plans: monthly price (MONTHLY interval plans).
   priceMonthly     Decimal? @db.Decimal(12, 2)

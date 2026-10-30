@@ -6,6 +6,8 @@ import { platformAuditEvent } from '@/lib/platform/audit'
 import { parseJsonBody, strictBody } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { validatePlanInput, PLAN_INTERVALS } from '@/lib/subscription/plans'
+import { normalizeStaffCoveredRoles } from '@/lib/subscription/staff'
+import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -31,6 +33,10 @@ const patchSchema = strictBody({
   availableForNew: z.boolean().optional(),
   availableForRenewal: z.boolean().optional(),
   sortOrder: z.number().int().min(-9999).max(9999).optional(),
+  /** STAFF-scope plans: the canonical roles the plan's seats cover.
+   *  Normalized server-side; null clears the declaration (back to the
+   *  legacy default at resolution time). */
+  coveredRoles: z.array(z.string().max(40)).max(10).nullable().optional(),
 })
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -47,6 +53,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
 
       const raw = await parseJsonBody(req, patchSchema)
+      // STAFF ROLE COVERAGE — normalized server-side; only STAFF-scope
+      // plans may declare a covered set (null clears).
+      let coveredRolesValue: string[] | null | undefined
+      if (raw.coveredRoles !== undefined) {
+        if (raw.coveredRoles !== null && raw.coveredRoles.length > 0 && plan.scope !== 'STAFF') {
+          throw new AppError('VALIDATION_FAILED', {
+            publicMessage: 'Only staff plans declare covered staff roles — school and student plans do not sell staff seats.',
+            internalDetail: 'plans patch: coveredRoles on non-STAFF scope',
+          })
+        }
+        coveredRolesValue =
+          raw.coveredRoles === null || raw.coveredRoles.length === 0
+            ? null
+            : normalizeStaffCoveredRoles(raw.coveredRoles)
+      }
       const merged = {
         code: plan.code,
         name: raw.name ?? plan.name,
@@ -88,6 +109,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           availableForNew: validated.availableForNew,
           availableForRenewal: validated.availableForRenewal,
           sortOrder: validated.sortOrder,
+          // JSON column: an explicit clear writes Prisma.DbNull (SQL NULL),
+          // a declaration writes the JSON array — never a bare null.
+          ...(coveredRolesValue === undefined
+            ? {}
+            : coveredRolesValue === null
+              ? { coveredRoles: Prisma.DbNull }
+              : { coveredRoles: coveredRolesValue }),
         },
       })
 
@@ -98,7 +126,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         targetId: updated.id,
         ip: clientIpFromHeaders(req.headers),
         reason: `Plan ${updated.code} updated`,
-        metadata: { code: updated.code, fields: Object.keys(raw) },
+        metadata: { code: updated.code, fields: Object.keys(raw), ...(coveredRolesValue !== undefined ? { coveredRoles: coveredRolesValue } : {}) },
       }).catch(() => {})
 
       return { ok: true, message: `Plan ${updated.code} updated.` }

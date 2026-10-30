@@ -357,15 +357,35 @@ function ControlCentreSection({
           <SummaryStat
             icon={<ShieldCheck className="h-4 w-4" />} label="Active — paid" value={activePaid}
             tone="text-emerald-700"
+            active={statusFilter === 'ACTIVE' && paymentFilter === 'PAID'}
+            onClick={() => onFiltersChange(statusFilter === 'ACTIVE' && paymentFilter === 'PAID' ? { status: '', payment: '' } : { status: 'ACTIVE', payment: 'PAID' })}
           />
           <SummaryStat
             icon={<ShieldAlert className="h-4 w-4" />} label="Unpaid — access allowed" value={openAccess}
             tone="text-amber-700" title="Legacy open access: the school can sign in but no verified payment is recorded."
+            active={statusFilter === 'ACTIVE' && paymentFilter === 'UNPAID'}
+            onClick={() => onFiltersChange(statusFilter === 'ACTIVE' && paymentFilter === 'UNPAID' ? { status: '', payment: '' } : { status: 'ACTIVE', payment: 'UNPAID' })}
           />
-          <SummaryStat icon={<Loader2 className="h-4 w-4" />} label="Payments pending verification" value={pendingVerification} />
-          <SummaryStat icon={<CalendarClock className="h-4 w-4" />} label="Expiring soon (30d)" value={expiringSoon} />
-          <SummaryStat icon={<CalendarX className="h-4 w-4" />} label="Expired" value={expired} tone="text-orange-700" />
-          <SummaryStat icon={<AlertTriangle className="h-4 w-4" />} label="Suspended" value={suspended} tone="text-red-600" />
+          <SummaryStat
+            icon={<Loader2 className="h-4 w-4" />} label="Payments pending verification" value={pendingVerification}
+            active={paymentFilter === 'PENDING'}
+            onClick={() => onFiltersChange(paymentFilter === 'PENDING' ? { payment: '' } : { payment: 'PENDING' })}
+          />
+          <SummaryStat
+            icon={<CalendarClock className="h-4 w-4" />} label="Expiring soon (30d)" value={expiringSoon}
+            active={expiryFilter === '30'}
+            onClick={() => onFiltersChange(expiryFilter === '30' ? { expiry: '' } : { expiry: '30' })}
+          />
+          <SummaryStat
+            icon={<CalendarX className="h-4 w-4" />} label="Expired" value={expired} tone="text-orange-700"
+            active={statusFilter === 'RESTRICTED'}
+            onClick={() => onFiltersChange(statusFilter === 'RESTRICTED' ? { status: '' } : { status: 'RESTRICTED' })}
+          />
+          <SummaryStat
+            icon={<AlertTriangle className="h-4 w-4" />} label="Suspended" value={suspended} tone="text-red-600"
+            active={statusFilter === 'SUSPENDED'}
+            onClick={() => onFiltersChange(statusFilter === 'SUSPENDED' ? { status: '' } : { status: 'SUSPENDED' })}
+          />
         </div>
       ) : null}
       {registry && !error && needsAction > 0 && (
@@ -642,7 +662,26 @@ function ControlCentreSection({
   )
 }
 
-function SummaryStat({ icon, label, value, tone, title }: { icon: React.ReactNode; label: string; value: number; tone?: string; title?: string }) {
+function SummaryStat({ icon, label, value, tone, title, onClick, active }: { icon: React.ReactNode; label: string; value: number; tone?: string; title?: string; onClick?: () => void; active?: boolean }) {
+  // Click-to-filter (PHASE 3): a KPI card IS a group — clicking it drills
+  // the registry into that cohort (rendered as a real button when wired).
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={Boolean(active)}
+        title={title ?? label}
+        className={`rounded-xl border bg-white p-3 text-left shadow-sm transition-colors sm:p-4 ${active ? 'border-teal-500 ring-1 ring-teal-500' : 'border-slate-200 hover:border-teal-300'}`}
+      >
+        <div className="flex items-center gap-1.5 text-slate-500">
+          {icon}
+          <span className="text-xs leading-tight">{label}</span>
+        </div>
+        <div className={`mt-1 text-xl font-bold tabular-nums ${tone ?? 'text-slate-900'}`}>{value}</div>
+      </button>
+    )
+  }
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4" title={title}>
       <div className="flex items-center gap-1.5 text-slate-500">

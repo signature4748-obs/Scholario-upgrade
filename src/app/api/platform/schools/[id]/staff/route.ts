@@ -4,6 +4,7 @@ import { AppError } from '@/lib/security/errors'
 import { withPlatform } from '@/lib/platform/authz'
 import { evaluateTenantEntitlement } from '@/lib/entitlement/entitlement'
 import { evaluateStaffEntitlement, type StaffEntitlementSnapshot } from '@/lib/entitlement/staff'
+import { resolveStaffCoveredRoles } from '@/lib/subscription/staff'
 import { SUBSCRIPTION_SESSION_SELECT } from '@/lib/platform/subscription-schema'
 
 export const runtime = 'nodejs'
@@ -33,9 +34,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
     }
     const sub = school.subscription as
-      | { status: string; plan: string; periodEnd: Date | null; graceDays: number; overrideStatus: string | null; billingModel?: string | null; staffCoverage?: string | null }
+      | { status: string; plan: string; periodEnd: Date | null; graceDays: number; overrideStatus: string | null; billingModel?: string | null; staffCoverage?: string | null; staffCoverageRoles?: unknown; planDef?: { coveredRoles?: unknown } | null }
       | null
     const staffCoverage = sub?.staffCoverage ?? 'TENANT'
+    // STAFF ROLE COVERAGE (PHASE 5C) — the roster lists exactly the roles
+    // the tenant's EFFECTIVE policy covers (tenant override → plan
+    // declaration → ["TEACHER"] legacy default).
+    const coveredRoles = resolveStaffCoveredRoles({
+      tenantRoles: sub?.staffCoverageRoles,
+      planRoles: sub?.planDef?.coveredRoles,
+    })
 
     const url = new URL(req.url)
     const q = (url.searchParams.get('q') ?? '').trim().slice(0, 80)
@@ -44,7 +52,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const teachers = await db.user.findMany({
       where: {
         schoolId: id,
-        role: 'TEACHER',
+        role: { in: coveredRoles },
         ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { email: { contains: q, mode: 'insensitive' } }] } : {}),
       },
       orderBy: [{ name: 'asc' }],
@@ -82,7 +90,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     })
 
     return {
-      school: { id: school.id, name: school.name, staffCoverage },
+      school: { id: school.id, name: school.name, staffCoverage, coveredRoles },
       staff: teachers.map((t) => {
         const live = t.staffEntitlements[0] ?? null
         const snapshot: StaffEntitlementSnapshot | null = live

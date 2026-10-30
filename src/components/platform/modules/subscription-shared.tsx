@@ -81,7 +81,15 @@ export interface PlanRow {
    *  consumers treat absence as "not described in the catalogue". */
   modules?: Record<string, unknown>
   limits?: Record<string, unknown>
+  /** STAFF-scope plans (PHASE 5C): the canonical roles the plan's seats
+   *  cover, normalized server-side. null/absent → the legacy default. */
+  coveredRoles?: string[] | null
 }
+
+/** Client mirror of the server's seat-eligible canonical set (the server
+ *  lib imports the DB client and cannot be pulled into client bundles).
+ *  The server normalizes every write — this only drives the UI selector. */
+export const STAFF_SEAT_ROLES: readonly string[] = ['TEACHER']
 
 export interface RegistryRow {
   subscriptionId: string
@@ -113,6 +121,12 @@ export interface RegistryRow {
    * schema-pending). Consumers MUST treat it as nullable.
    */
   licensedStudents?: number | null
+  /** STAFF LICENSING POLICY — the tenant's current policy (TENANT |
+   *  PER_SEAT) and its effective covered-role set (PHASE 5C, raw JSON —
+   *  null while schema-pending). The terms editor seeds from these so a
+   *  price edit can never silently revert the access policy. */
+  staffCoverage?: string
+  staffCoverageRoles?: unknown
   entitlement: { state: string; businessAllowed: boolean; renewalRequired: boolean }
   /**
    * PAYMENTS & GATEWAYS REDESIGN — the separated status planes, computed

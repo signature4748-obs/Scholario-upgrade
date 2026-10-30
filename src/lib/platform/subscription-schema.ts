@@ -58,6 +58,8 @@ const PENDING_MIGRATION_COLUMNS = new Set([
   'SchoolSubscription.priceSnapshot',
   // STAFF ENTITLEMENTS (2026-10-30) — the staff-licensing policy column.
   'SchoolSubscription.staffCoverage',
+  // STAFF ROLE COVERAGE (2026-10-30) — the declarative covered-role set.
+  'SchoolSubscription.staffCoverageRoles',
   // PlatformSetting.subscriptionConfig is added by the SAME pending
   // migration (the commercial-model config storage).
   'PlatformSetting.subscriptionConfig',
@@ -73,6 +75,7 @@ const PENDING_BARE_COLUMNS_BY_MODEL: Record<string, Set<string>> = {
     'planId',
     'priceSnapshot',
     'staffCoverage',
+    'staffCoverageRoles',
   ]),
   PlatformSetting: new Set(['subscriptionConfig']),
 }
@@ -180,11 +183,15 @@ export const SUBSCRIPTION_LEGACY_SELECT = {
 } as const
 
 /** Legacy fields + billingModel (the per-student gate input) +
- *  staffCoverage (the per-seat staff gate input, 2026-10-30). */
+ *  staffCoverage (the per-seat staff gate input, 2026-10-30) + the
+ *  declarative staff role-coverage set and the linked plan's declaration
+ *  (the gate input resolution: tenant override → plan → default). */
 export const SUBSCRIPTION_SESSION_SELECT = {
   ...SUBSCRIPTION_LEGACY_SELECT,
   billingModel: true,
   staffCoverage: true,
+  staffCoverageRoles: true,
+  planDef: { select: { coveredRoles: true } },
 } as const
 
 /** Legacy fields + the directory chip columns. */

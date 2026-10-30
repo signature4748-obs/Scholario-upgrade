@@ -383,7 +383,10 @@ function TermsDialog({
         currency: reg?.currencySnapshot ?? 'INR',
         licensedStudents: reg?.licensedStudents != null ? String(reg.licensedStudents) : '',
         periodStart: reg?.periodStart ? reg.periodStart.slice(0, 10) : '',
-        staffCoverage: 'TENANT',
+        // Seed the CURRENT staff policy — an unrelated price edit must
+        // never silently revert PER_SEAT back to TENANT (access-policy
+        // changes are explicit operator decisions, audited).
+        staffCoverage: reg?.staffCoverage ?? 'TENANT',
         reason: '',
       })
       setError(null)
@@ -669,6 +672,19 @@ function TermsDialog({
                 <SelectItem value="PER_SEAT">Per-seat — each teacher needs an entitlement</SelectItem>
               </SelectContent>
             </Select>
+            {/* STAFF ROLE COVERAGE (PHASE 5C) — the effective covered set
+                comes from the linked plan's declaration (editable on the
+                plan in Plans & Pricing); shown here so the operator always
+                sees WHO the per-seat policy applies to. */}
+            {form.staffCoverage === 'PER_SEAT' && (
+              <p className="mt-1.5 text-[11px] text-slate-500">
+                Applies to:{' '}
+                <span className="font-medium text-slate-700">
+                  {(selectedPlan?.coveredRoles ?? ['TEACHER']).join(', ')}
+                </span>{' '}
+                — the linked plan&apos;s covered roles (edit in Plans &amp; Pricing). Principals are never seat-gated.
+              </p>
+            )}
           </div>
 
           {!isStudentBased && (

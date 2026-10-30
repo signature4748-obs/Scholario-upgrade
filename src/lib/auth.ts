@@ -10,6 +10,7 @@ import {
 // Lightweight password hashing using Node's scrypt (no external deps)
 import { scryptSync, timingSafeEqual } from 'crypto'
 import { AppError } from './security/errors'
+import { resolveStaffCoveredRoles } from './subscription/staff'
 
 export function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex')
@@ -340,6 +341,12 @@ export type AuthUser = {
        *  policy (TENANT default | PER_SEAT); the per-seat staff gate
        *  input for TEACHER sessions. Server-loaded; never client input. */
       staffCoverage?: string | null
+      /** STAFF ROLE COVERAGE (PHASE 5C) — the tenant's EFFECTIVE covered
+       *  role set, resolved server-side at session load (tenant override
+       *  → the linked plan's declaration → ["TEACHER"] default) and
+       *  normalized against the seat-eligible canonical set. The per-seat
+       *  gate input: only roles IN this set are ever seat-gated. */
+      staffCoverageRoles?: string[] | null
     } | null
   } | null
 }
@@ -423,6 +430,10 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
                 staffCoverage:
                   (u.school.subscription as { staffCoverage?: string | null }).staffCoverage ??
                   'TENANT',
+                staffCoverageRoles: resolveStaffCoveredRoles({
+                  tenantRoles: (u.school.subscription as { staffCoverageRoles?: unknown }).staffCoverageRoles,
+                  planRoles: (u.school.subscription as { planDef?: { coveredRoles?: unknown } | null }).planDef?.coveredRoles,
+                }),
               }
             : null,
         }

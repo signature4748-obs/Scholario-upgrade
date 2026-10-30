@@ -25,7 +25,7 @@ import {
   Settings2, ShieldCheck,
 } from 'lucide-react'
 import { platformApi, type PlatformApiError } from '../platform-client'
-import { errMessage, money, type PlanRow } from './subscription-shared'
+import { errMessage, money, type PlanRow, STAFF_SEAT_ROLES } from './subscription-shared'
 import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -296,6 +296,11 @@ export function PlansModule() {
                   </div>
                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
                     <span>{p.scope === 'STUDENT' || p.scope === 'STAFF' ? money(p.pricePerStudent, p.currency) : p.interval === 'MONTHLY' ? `${money(p.priceMonthly, p.currency)}/mo` : `${money(p.priceAnnual, p.currency)}/yr`}</span>
+                    {p.scope === 'STAFF' && (
+                      <Badge variant="outline" className="border-slate-300 text-[10px] text-slate-600">
+                        covers {(p.coveredRoles ?? ['TEACHER']).join(', ')}
+                      </Badge>
+                    )}
                     <span>{scopeLabel(p.scope)} · {p.interval.toLowerCase()}</span>
                     <span>grace {p.graceDays}d</span>
                   </div>
@@ -365,6 +370,7 @@ function PlanCreateDialog({ onClose, onCreated }: { onClose: () => void; onCreat
     code: '', name: '', description: '', scope: 'STUDENT', interval: 'ANNUAL',
     price: '', currency: 'INR', graceDays: '14', allowOnline: true, allowOffline: true,
     availableForNew: true, availableForRenewal: true, sortOrder: '0',
+    coveredRoles: ['TEACHER'] as string[],
   })
 
   const submit = async () => {
@@ -392,6 +398,9 @@ function PlanCreateDialog({ onClose, onCreated }: { onClose: () => void; onCreat
           availableForNew: form.availableForNew,
           availableForRenewal: form.availableForRenewal,
           sortOrder: Number(form.sortOrder || 0),
+          // STAFF plans MUST declare the roles their seats cover (PHASE
+          // 5C) — the server normalizes against the seat-eligible set.
+          ...(form.scope === 'STAFF' && form.coveredRoles.length > 0 ? { coveredRoles: form.coveredRoles } : {}),
         }),
       })
       toast.success(`Plan ${form.code.toUpperCase()} created`)
@@ -451,6 +460,28 @@ function PlanCreateDialog({ onClose, onCreated }: { onClose: () => void; onCreat
             <div><Label className="text-xs" htmlFor="plan-grace">Grace days</Label><Input id="plan-grace" className="border-slate-300 bg-white" type="number" min="0" max="90" value={form.graceDays} onChange={(e) => setForm((f) => ({ ...f, graceDays: e.target.value }))} /></div>
           </div>
           <div><Label className="text-xs" htmlFor="plan-description">Description</Label><Textarea id="plan-description" className="border-slate-300 bg-white" rows={2} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
+          {form.scope === 'STAFF' && (
+            <div className="rounded-lg border border-slate-200 p-2.5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Covered staff roles</p>
+              <p className="mt-0.5 text-[11px] text-slate-500">The roles these seats license. Teachers only today (principals administer without a seat); the set is enforced server-side on every claim and assignment.</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {STAFF_SEAT_ROLES.map((role) => {
+                  const active = form.coveredRoles.includes(role)
+                  return (
+                    <button
+                      key={role}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setForm((f) => ({ ...f, coveredRoles: active ? f.coveredRoles.filter((r) => r !== role) : [...f.coveredRoles, role] }))}
+                      className={`rounded-full border px-2.5 py-1 text-xs font-medium ${active ? 'border-teal-600 bg-teal-50 text-teal-700' : 'border-slate-300 bg-white text-slate-500'}`}
+                    >
+                      {role}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow online payment</span><Switch aria-label="Allow online payment" checked={form.allowOnline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOnline: v }))} /></div>
             <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5"><span className="text-sm text-slate-700">Allow offline payment</span><Switch aria-label="Allow offline payment" checked={form.allowOffline} onCheckedChange={(v) => setForm((f) => ({ ...f, allowOffline: v }))} /></div>

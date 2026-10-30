@@ -9,6 +9,7 @@ import { resolvePlanForPurchase, planPrice } from '@/lib/subscription/plans'
 import { loadSubscriptionConfig } from '@/lib/subscription/config'
 import { recordDeferredSchoolPaymentInTx } from '@/lib/platform/billing'
 import { issueActivationCodeBatch, BATCH_CODE_LIMITS } from '@/lib/subscription/codes'
+import { resolveStaffCoveredRoles } from '@/lib/subscription/staff'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -73,7 +74,14 @@ export async function POST(req: NextRequest) {
       const body = await parseJsonBody(req, batchSchema)
       const ip = clientIpFromHeaders(req.headers)
 
-      const school = await db.school.findUnique({ where: { id: body.schoolId }, select: { id: true, name: true } })
+      const school = await db.school.findUnique({
+        where: { id: body.schoolId },
+        select: {
+          id: true,
+          name: true,
+          subscription: { select: { staffCoverageRoles: true } },
+        },
+      })
       if (!school) {
         throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'School not found' })
       }
@@ -93,6 +101,17 @@ export async function POST(req: NextRequest) {
         kind: 'assignment',
         // Operator-recorded batches are offline/hand-verified by definition.
         requireOffline: true,
+      })
+
+      // STAFF ROLE COVERAGE (PHASE 5C) — the tenant's EFFECTIVE covered
+      // role set (tenant override → the batch plan's declaration →
+      // default). A staff batch can only ever bind roles the plan covers;
+      // the check runs again per assigned member below and again at claim
+      // time (the plan snapshot on the code + the then-current tenant
+      // policy agree or the claim is rejected).
+      const coveredRoles = resolveStaffCoveredRoles({
+        tenantRoles: school.subscription?.staffCoverageRoles,
+        planRoles: plan.coveredRoles,
       })
 
       const amountPerCode = body.backing === 'COMPLIMENTARY'
@@ -137,16 +156,18 @@ export async function POST(req: NextRequest) {
             })
           }
         } else {
-          // STAFF: canonical TEACHER rows of THIS tenant only — never a
-          // principal, never a student, never another tenant's user.
+          // STAFF: server-verified members of THIS tenant whose canonical
+          // role is in the tenant's EFFECTIVE covered role set — never a
+          // principal, never a student, never another tenant's user, and
+          // never a role the plan does not cover.
           const staff = await db.user.findMany({
-            where: { id: { in: body.assignedIds! }, schoolId: school.id, role: 'TEACHER' },
+            where: { id: { in: body.assignedIds! }, schoolId: school.id, role: { in: coveredRoles } },
             select: { id: true },
           })
           if (staff.length !== body.assignedIds!.length) {
             throw new AppError('VALIDATION_FAILED', {
-              publicMessage: 'One or more assigned members are not teacher accounts of this school — nothing was generated.',
-              internalDetail: 'codes batch: assigned staff outside tenant / not TEACHER',
+              publicMessage: 'One or more assigned members are not covered staff accounts of this school — nothing was generated.',
+              internalDetail: `codes batch: assigned staff outside tenant / role not in [${coveredRoles.join(',')}]`,
             })
           }
         }
@@ -218,6 +239,7 @@ export async function POST(req: NextRequest) {
                   recordedById: ctx.admin.id,
                   source: 'MANUAL',
                   deferEntitlement: true,
+                  coveredRoles,
                   tx,
                 })
                 paymentRefs.push(`staffPayment:${payment.paymentId}`)
@@ -282,6 +304,7 @@ export async function POST(req: NextRequest) {
           generated: result.issued.generated,
           scope: body.scope,
           planCode: plan.code,
+          coveredRoles,
           backing: body.backing,
           assignment: body.assignment,
           claimWindowDays,

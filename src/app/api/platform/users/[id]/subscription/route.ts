@@ -11,6 +11,7 @@ import {
   recordStaffPayment,
   applyStaffEntitlementLifecycle,
   resolveStaffUser,
+  resolveStaffCoveredRoles,
 } from '@/lib/subscription/staff'
 import { issueActivationCode } from '@/lib/subscription/codes'
 import { z } from 'zod'
@@ -170,8 +171,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'User not found' })
       }
       const staffSchoolId: string = staffUser.schoolId
-      // Server-verified eligibility: canonical TEACHER of THIS school.
-      await resolveStaffUser(staffUser.id, staffSchoolId)
+      // Server-verified ELIGIBILITY FIRST (before the plan lookup — the
+      // identity check is the cheap, most-specific rejection): the target
+      // must hold a role in the tenant's EFFECTIVE covered set (tenant
+      // override → plan declaration → default; the plan's declaration can
+      // only ever re-state the seat-eligible set, so resolving without it
+      // here is equivalent for the gate). A principal or student identity
+      // can never be assigned a staff entitlement.
+      const tenantPolicy = await db.schoolSubscription.findUnique({
+        where: { schoolId: staffSchoolId },
+        select: { staffCoverageRoles: true },
+      })
+      const eligibilityRoles = resolveStaffCoveredRoles({
+        tenantRoles: tenantPolicy?.staffCoverageRoles,
+      })
+      await resolveStaffUser(staffUser.id, staffSchoolId, eligibilityRoles)
 
       const config = await loadSubscriptionConfig()
       const plan = await resolvePlanForPurchase({
@@ -179,6 +193,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         expectedScope: 'STAFF',
         kind: 'assignment',
         requireOffline: true,
+      })
+      // STAFF ROLE COVERAGE (PHASE 5C) — the full effective set (tenant
+      // override → the plan's declaration → default) guards the writes.
+      const coveredRoles = resolveStaffCoveredRoles({
+        tenantRoles: tenantPolicy?.staffCoverageRoles,
+        planRoles: plan.coveredRoles,
       })
 
       const paymentDate =
@@ -213,6 +233,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           recordedById: ctx.admin.id,
           source: body.mode === 'COMPLIMENTARY' ? 'COMPLIMENTARY' : 'MANUAL',
           deferEntitlement: true,
+          coveredRoles,
         })
         const issued = await issueActivationCode({
           scope: 'STAFF_ENTITLEMENT',
@@ -280,6 +301,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         notes: body.notes ?? null,
         recordedById: ctx.admin.id,
         source: body.mode === 'COMPLIMENTARY' ? 'COMPLIMENTARY' : 'MANUAL',
+        coveredRoles,
       })
 
       await platformAuditEvent({

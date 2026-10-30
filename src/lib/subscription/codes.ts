@@ -38,7 +38,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { db } from '@/lib/db'
 import type { Prisma } from '@prisma/client'
 import { activateEntitlementInTx } from './student'
-import { activateStaffEntitlementInTx } from './staff'
+import { activateStaffEntitlementInTx, DEFAULT_STAFF_COVERED_ROLES } from './staff'
 
 /** Prisma interactive-transaction client (the tx parameter type). */
 type Tx = Prisma.TransactionClient
@@ -666,10 +666,14 @@ export interface StaffClaimContext {
   userId: string
   schoolId: string
   /** Server-verified canonical role of the authenticated user. A staff
-   *  code can only EVER be claimed by a TEACHER — a student session or a
-   *  principal session claiming a staff code is a SCOPE_MISMATCH by
-   *  identity, not by submitted field. */
+   *  code can only EVER be claimed by a role in the tenant's EFFECTIVE
+   *  covered set — a student session or a principal session claiming a
+   *  staff code is a SCOPE_MISMATCH by identity, not by submitted field. */
   role: string
+  /** The tenant's EFFECTIVE covered role set (resolveStaffCoveredRoles).
+   *  Defaults to the legacy default (["TEACHER"]) when the caller has not
+   *  resolved the tenant policy. */
+  coveredRoles?: readonly string[]
   ip?: string | null
 }
 
@@ -728,7 +732,7 @@ export async function claimStaffActivationCode(
 
     if (code.scope !== 'STAFF_ENTITLEMENT') return reject('SCOPE_MISMATCH')
     if (code.schoolId !== ctx.schoolId) return reject('SCHOOL_MISMATCH')
-    if (ctx.role !== 'TEACHER') return reject('SCOPE_MISMATCH')
+    if (!(ctx.coveredRoles ?? DEFAULT_STAFF_COVERED_ROLES).includes(ctx.role)) return reject('SCOPE_MISMATCH')
     if (code.assignedUserId && code.assignedUserId !== ctx.userId) return reject('STUDENT_MISMATCH')
     if (code.status === 'CLAIMED') return reject('ALREADY_CLAIMED')
     if (code.status === 'REVOKED') return reject('REVOKED')

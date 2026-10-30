@@ -6,7 +6,9 @@ import { platformAuditEvent } from '@/lib/platform/audit'
 import { parseJsonBody, strictBody } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
 import { resolvePlanForPurchase, planPrice } from '@/lib/subscription/plans'
+import { normalizeStaffCoveredRoles } from '@/lib/subscription/staff'
 import { BILLING_MODELS } from '@/lib/subscription/config'
+import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -38,6 +40,13 @@ const termsSchema = strictBody({
    *  without seats lock on their next business request until seats are
    *  assigned/codes claimed — communicate the policy change first. */
   staffCoverage: z.enum(['TENANT', 'PER_SEAT']).optional(),
+  /** STAFF ROLE COVERAGE (PHASE 5C) — the tenant override of WHICH staff
+   *  roles the staff-licensing policy covers. An array is stored
+   *  NORMALIZED (values outside the seat-eligible canonical set are
+   *  dropped server-side; a fully-invalid/empty array falls back to the
+   *  legacy default — the response returns the effective set). null
+   *  clears the override (the linked plan's declaration applies again). */
+  staffCoverageRoles: z.array(z.string().max(40)).max(10).nullable().optional(),
   /** Audited reason — required (this is commercial-terms surgery). */
   reason: z.string().min(4).max(400),
 })
@@ -93,6 +102,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           periodStart: true,
           status: true,
           periodEnd: true,
+          staffCoverage: true,
+          staffCoverageRoles: true,
         },
       })
 
@@ -163,6 +174,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const data: {
         billingModel: string
         staffCoverage?: string
+        staffCoverageRoles?: string[]
         planId?: string | null
         planCode?: string | null
         interval?: string | null
@@ -171,6 +183,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         licensedStudents?: number | null
         periodStart?: Date
       } = { billingModel: finalModel }
+      // STAFF ROLE COVERAGE — null clears the override (the plan
+      // declaration applies again); an array is normalized server-side so
+      // the invariant can never be widened by a bad write. JSON null is
+      // written through Prisma.DbNull (the JSON column's NULL input).
+      let clearCoverageRoles = false
+      if (body.staffCoverageRoles !== undefined) {
+        if (body.staffCoverageRoles === null) clearCoverageRoles = true
+        else data.staffCoverageRoles = normalizeStaffCoveredRoles(body.staffCoverageRoles)
+      } else if (plan && plan.coveredRoles != null) {
+        // Linking a plan whose declaration differs: adopt the plan's
+        // normalized declaration as the snapshot unless an explicit
+        // override rides the same request.
+        data.staffCoverageRoles = normalizeStaffCoveredRoles(plan.coveredRoles)
+      }
       if (body.staffCoverage !== undefined) data.staffCoverage = finalStaffCoverage
       if (plan) {
         data.planId = plan.id
@@ -192,8 +218,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           status: current?.status ?? 'ACTIVE',
           plan: 'STANDARD',
           ...data,
+          ...(clearCoverageRoles ? { staffCoverageRoles: Prisma.DbNull } : {}),
         },
-        update: data,
+        update: clearCoverageRoles ? { ...data, staffCoverageRoles: Prisma.DbNull } : data,
       })
 
       // Before → after diff for the audit row (never the price alone —
@@ -202,6 +229,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         planCode: current?.planCode ?? null,
         billingModel: current?.billingModel ?? 'SCHOOL_WIDE',
         staffCoverage: (current as { staffCoverage?: string } | null)?.staffCoverage ?? 'TENANT',
+        staffCoverageRoles: current?.staffCoverageRoles ?? null,
         interval: current?.interval ?? null,
         priceSnapshot: current?.priceSnapshot == null ? null : Number(current.priceSnapshot),
         currencySnapshot: current?.currencySnapshot ?? null,
@@ -212,6 +240,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         planCode: updated.planCode,
         billingModel: updated.billingModel,
         staffCoverage: updated.staffCoverage,
+        staffCoverageRoles: updated.staffCoverageRoles ?? null,
         interval: updated.interval,
         priceSnapshot: updated.priceSnapshot == null ? null : Number(updated.priceSnapshot),
         currencySnapshot: updated.currencySnapshot,

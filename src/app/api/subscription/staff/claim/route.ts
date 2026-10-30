@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { AppError } from '@/lib/security/errors'
+import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { auditEvent } from '@/lib/security/audit'
 import { enforceRateLimit, clientIpFromHeaders, RATE_LIMITS } from '@/lib/security/rate-limit'
@@ -39,12 +40,23 @@ export async function POST(req: NextRequest) {
       if (!user.schoolId) {
         throw new AppError('FORBIDDEN', { internalDetail: 'staff claim: no school binding' })
       }
-      if (user.role !== 'TEACHER') {
-        // Server-verified identity — a staff code is claimable by TEACHER
-        // accounts only (never a student, never a principal).
+      // Server-verified identity against the tenant's EFFECTIVE staff role
+      // coverage (tenant override → linked plan's declaration → default).
+      // A role outside the covered set can never redeem a staff code —
+      // never a student, never a principal, regardless of the code's scope.
+      const { resolveStaffCoveredRoles } = await import('@/lib/subscription/staff')
+      const tenantSub = await db.schoolSubscription.findUnique({
+        where: { schoolId: user.schoolId },
+        select: { staffCoverageRoles: true, planDef: { select: { coveredRoles: true } } },
+      })
+      const coveredRoles = resolveStaffCoveredRoles({
+        tenantRoles: tenantSub?.staffCoverageRoles,
+        planRoles: tenantSub?.planDef?.coveredRoles,
+      })
+      if (!coveredRoles.includes(user.role)) {
         throw new AppError('SUBSCRIPTION_REQUIRED', {
-          publicMessage: 'Staff activation codes can be redeemed by teacher accounts only.',
-          internalDetail: `staff claim: role ${user.role} attempted`,
+          publicMessage: 'Staff activation codes can be redeemed by the staff roles this school\u2019s plan covers only.',
+          internalDetail: `staff claim: role ${user.role} not in covered set [${coveredRoles.join(',')}]`,
         })
       }
       enforceRateLimit(`rl:subclaim:${user.id}`, RATE_LIMITS.subscriptionCodeClaim)
@@ -54,6 +66,7 @@ export async function POST(req: NextRequest) {
         userId: user.id,
         schoolId: user.schoolId,
         role: user.role,
+        coveredRoles,
         ip,
       })
 
