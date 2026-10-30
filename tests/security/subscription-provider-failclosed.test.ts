@@ -34,6 +34,7 @@ import { randomBytes } from 'crypto'
 
 import { db } from '../helpers/db'
 import { AppError } from '@/lib/security/errors'
+import { __resetPaymentProviderCacheForTests } from '@/lib/payments/provider'
 import {
   createSubscriptionOrder,
   verifyAndSettleOrder,
@@ -69,6 +70,10 @@ beforeAll(async () => {
     savedEnv[k] = process.env[k]
     delete process.env[k]
   }
+  // bun test shares module instances across files: the gateway suite
+  // freezes the env-provider cache while ARMED. The scrub below is only
+  // honest if the factory re-reads the env — reset the cache.
+  __resetPaymentProviderCacheForTests()
   const gw = await db.platformGatewayConfig.findUnique({ where: { id: 'singleton' } }).catch(() => null)
   if (gw) {
     parkedGateway = { id: gw.id, status: gw.status }
@@ -97,6 +102,8 @@ afterAll(async () => {
     if (v === undefined) delete process.env[k]
     else process.env[k] = v
   }
+  // Re-arm the shared cache for whichever suite runs next.
+  __resetPaymentProviderCacheForTests()
 })
 
 /** Re-park immediately before each assertion: a concurrent suite may

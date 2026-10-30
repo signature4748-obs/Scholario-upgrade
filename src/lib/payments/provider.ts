@@ -45,6 +45,19 @@ export interface ProviderOrderResult {
   mode: 'live' | 'test' | 'sandbox'
 }
 
+/**
+ * TEST-ONLY — reset the per-process env-provider cache. bun test shares
+ * module instances across files: whichever suite calls getPaymentProvider()
+ * first freezes the cache for the whole run, which breaks suites that
+ * deliberately scrub the provider env (the fail-closed contract). The
+ * fail-closed suite resets it after scrubbing and after restoring. Never
+ * call from application code — production cache semantics (env read once
+ * per process) are intentional.
+ */
+export function __resetPaymentProviderCacheForTests(): void {
+  cached = null
+}
+
 /** Shape mirrors the Razorpay Checkout handler payload. */
 export interface CheckoutConfirmation {
   paymentId: string
