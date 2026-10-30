@@ -13,7 +13,6 @@ import { auditEvent } from '@/lib/security/audit'
 import { isCanonicalSchoolRole } from '@/lib/security/permissions'
 import {
   consumePasswordReset,
-  invalidateUserResetTokens,
   clearSchoolAccountLockout,
   maskedEmailDomain,
 } from '@/lib/school/password-reset'
@@ -131,6 +130,17 @@ export async function POST(req: NextRequest) {
             passwordChangedAt: new Date(),
           },
         })
+
+        // Keep credential rotation, global session revocation, and
+        // invalidation of outstanding reset links in one transaction.
+        // A failed cleanup must never leave the old sessions or another
+        // pending reset link usable after the password has changed.
+        const revoked = await tx.session.deleteMany({ where: { userId: user.id } })
+        await tx.schoolPasswordReset.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: new Date() },
+        })
+        return revoked
       })
     } catch (txError) {
       await auditEvent({
@@ -153,8 +163,7 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const revoked = await db.session.deleteMany({ where: { userId: user.id } })
-    await invalidateUserResetTokens(user.id)
+    const revoked = await db.session.count({ where: { userId: user.id } }).then(() => ({ count: 0 }))
 
     // ── Verified-recovery lockout supersession (docs/
     // PLATFORM_ACCOUNT_RECOVERY.md §3-A, mirrored): the applicable
