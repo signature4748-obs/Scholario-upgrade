@@ -13,6 +13,7 @@ import { evaluateStudentEntitlement } from './entitlement/student'
 import { evaluateStaffEntitlement, requiresStaffEntitlement } from './entitlement/staff'
 import { STAFF_SEAT_ELIGIBLE_ROLES, DEFAULT_STAFF_COVERED_ROLES } from './subscription/staff'
 import { isCanonicalSchoolRole } from './security/permissions'
+import { assertRoleFeatureAllowed } from './security/role-features'
 
 export type Ctx = { user: AuthUser }
 
@@ -360,7 +361,8 @@ export async function withUser(
     // Runs after the role gate so the error surface matches the existing
     // FORBIDDEN ordering; fail-closed via the shared resolver.
     if (opts?.feature) {
-      const { assertRoleFeatureAllowed } = await import('@/lib/security/role-features')
+      // Static import (see authz.ts): never defer this compile into the
+      // first authorized request path.
       await assertRoleFeatureAllowed(user.schoolId ?? '', user.role, opts.feature)
     }
     // Correlate the request with the authenticated identity (ids only —

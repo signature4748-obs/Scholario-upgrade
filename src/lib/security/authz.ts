@@ -40,6 +40,7 @@ import { db } from '@/lib/db'
 import { withUser } from '@/lib/api'
 import { AppError } from './errors'
 import { can } from './permissions'
+import { assertRoleFeatureAllowed } from './role-features'
 import { auditEvent } from './audit'
 import { log } from '@/lib/observability/logger'
 
@@ -181,7 +182,11 @@ export async function authorize(user: AuthUser | null, policy: AuthzPolicy = {})
         internalDetail: `authorize: feature gate '${policy.feature}' requires a school-tenant context (tenant=${tenantMode})`,
       })
     }
-    const { assertRoleFeatureAllowed } = await import('./role-features')
+    // Static import (NOT a dynamic import): a deferred import here would
+    // push the module's first compile into the first authorized request
+    // path (dev lazy-chunk compilation) — invisible to unauthenticated
+    // warm-up traffic and slow enough to blow test budgets. The module is
+    // server-only and cycle-free; the gate below stays fail-closed.
     await assertRoleFeatureAllowed(schoolId, role, policy.feature)
   }
 
