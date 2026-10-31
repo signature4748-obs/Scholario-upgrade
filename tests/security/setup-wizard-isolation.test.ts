@@ -29,33 +29,59 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { db } from '../helpers/db'
 import { hashSessionToken } from '@/lib/auth'
+import { PLATFORM_PERMISSION_KEYS } from '@/lib/platform/permissions'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
 const T = 45_000
 
 const GV_PRINCIPAL = 'principal.b@greenvalley.test'
 
-let rootToken = ''
+let fullToken = ''
 let readOnlyToken = ''
 let readOnlyAdminId = ''
 let gvId = ''
 let phantomId = `ghost${randomBytes(8).toString('hex')}`
 const cleanup: Array<() => Promise<unknown>> = []
 
+/**
+ * DEDICATED full-permission platform admin fixture — see the API suite
+ * note: platform mutations are rate-limited PER ADMIN, so this suite
+ * never draws from the shared root bucket the other suites rely on.
+ */
+async function dedicatedFullAdmin(label: string): Promise<string> {
+  const marker = randomBytes(4).toString('hex')
+  const { hashPassword } = await import('@/lib/auth')
+  const admin = await db.platformAdmin.create({
+    data: {
+      email: `${label}-${marker}@provision.test`,
+      passwordHash: hashPassword('Dedicated!8c-pass'),
+      name: label,
+      isRoot: false,
+      totpSecret: 'JBSWY3DPEHPK3PXP',
+    },
+  })
+  for (const key of PLATFORM_PERMISSION_KEYS) {
+    await db.platformPermission.create({ data: { adminId: admin.id, key, granted: true } })
+  }
+  const raw = randomBytes(32).toString('hex')
+  await db.platformAdminSession.create({
+    data: { adminId: admin.id, tokenHash: hashSessionToken(raw), expiresAt: new Date(Date.now() + 3600_000) },
+  })
+  cleanup.push(async () => {
+    await db.platformAdminSession.deleteMany({ where: { adminId: admin.id } }).catch(() => {})
+    await db.platformPermission.deleteMany({ where: { adminId: admin.id } }).catch(() => {})
+    await db.platformAdmin.delete({ where: { id: admin.id } }).catch(() => {})
+  })
+  return raw
+}
+
 beforeAll(async () => {
   const gv = await db.school.findUnique({ where: { slug: 'green-valley' } })
   if (!gv) throw new Error('green-valley school missing — run the canonical corpus seeds')
   gvId = gv.id
 
-  // Root platform session fixture.
-  const admin = await db.platformAdmin.findUnique({ where: { email: 'admin@scholario.cloud' } })
-  if (!admin) throw new Error('root platform admin missing — run the canonical seeds')
-  const raw = randomBytes(32).toString('hex')
-  await db.platformAdminSession.create({
-    data: { adminId: admin.id, tokenHash: hashSessionToken(raw), expiresAt: new Date(Date.now() + 3600_000) },
-  })
-  rootToken = raw
-  cleanup.push(() => db.platformAdminSession.deleteMany({ where: { tokenHash: hashSessionToken(raw) } }))
+  // Dedicated FULL-permission admin (own rate-limit bucket).
+  fullToken = await dedicatedFullAdmin('wizard-iso-admin')
 
   // A NON-root platform admin holding ONLY schools.read.
   const marker = randomBytes(4).toString('hex')
@@ -191,13 +217,13 @@ describe('PHASE 2 wizard · permission enforcement (no client-only gating)', () 
 
 describe('PHASE 2 wizard · tenant scoping (fail-safe 404, no client schoolId)', () => {
   test('unknown school id → 404 on the read', async () => {
-    const res = await platform(WIZARD_READ(phantomId), rootToken)
+    const res = await platform(WIZARD_READ(phantomId), fullToken)
     expect(res.status).toBe(404)
   }, T)
 
   test('unknown school id → 404 on every write (no existence oracle, no writes)', async () => {
     for (const w of WIZARD_WRITES) {
-      const res = await platform(w.path(phantomId), rootToken, {
+      const res = await platform(w.path(phantomId), fullToken, {
         method: w.method,
         body: JSON.stringify(w.body ?? {}),
       })
@@ -220,26 +246,26 @@ describe('PHASE 2 wizard · secure upload', () => {
     form.append('file', new Blob([Buffer.from('<html>not an image</html>')], { type: 'image/png' }), 'fake.png')
     const res = await fetch(`${BASE}/api/platform/schools/${gvId}/branding-logo`, {
       method: 'POST',
-      headers: { 'x-platform-token': rootToken },
+      headers: { 'x-platform-token': fullToken },
       body: form,
     })
     expect(res.status).toBe(415)
   }, T)
 
-  test('a missing file is a typed 400', async () => {
+  test('a missing file is a typed validation error (422 — the repo taxonomy has no bare 400)', async () => {
     const form = new FormData()
     const res = await fetch(`${BASE}/api/platform/schools/${gvId}/branding-logo`, {
       method: 'POST',
-      headers: { 'x-platform-token': rootToken },
+      headers: { 'x-platform-token': fullToken },
       body: form,
     })
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(422)
   }, T)
 })
 
 describe('PHASE 2 wizard · lifecycle safety', () => {
   test('strict flag accepts ONLY {requireComplete: boolean} — junk body is a typed 422', async () => {
-    const junk = await platform(`/api/platform/schools/${gvId}/activate`, rootToken, {
+    const junk = await platform(`/api/platform/schools/${gvId}/activate`, fullToken, {
       method: 'POST',
       body: JSON.stringify({ requireComplete: 'yes', evil: true }),
     })

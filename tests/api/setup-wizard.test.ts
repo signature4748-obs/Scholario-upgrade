@@ -27,6 +27,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { randomBytes } from 'crypto'
 import { db } from '../helpers/db'
 import { hashSessionToken } from '@/lib/auth'
+import { PLATFORM_PERMISSION_KEYS } from '@/lib/platform/permissions'
 
 const BASE = process.env.API_TEST_BASE ?? 'http://localhost:3000'
 const T = 45_000
@@ -35,6 +36,44 @@ let rootToken = ''
 let schoolId = ''
 let principalEmail = ''
 const cleanup: Array<() => Promise<unknown>> = []
+
+/**
+ * DEDICATED full-permission platform admin fixture.
+ *
+ * WHY NOT THE ROOT ADMIN: platform mutations are rate-limited PER ADMIN
+ * (`rl:platform-mut:<adminId>`, 60/min). This suite performs ~25
+ * mutations; drawing them from the SHARED root bucket starves the
+ * regression suites that legitimately rely on the same identity later
+ * in the CI job (observed as 429s on provisioning/activate).
+ * A dedicated admin = a dedicated bucket, plus it exercises the grants
+ * table instead of the isRoot bypass.
+ */
+async function dedicatedFullAdmin(label: string): Promise<string> {
+  const marker = randomBytes(4).toString('hex')
+  const { hashPassword } = await import('@/lib/auth')
+  const admin = await db.platformAdmin.create({
+    data: {
+      email: `${label}-${marker}@provision.test`,
+      passwordHash: hashPassword('Dedicated!8c-pass'),
+      name: label,
+      isRoot: false,
+      totpSecret: 'JBSWY3DPEHPK3PXP',
+    },
+  })
+  for (const key of PLATFORM_PERMISSION_KEYS) {
+    await db.platformPermission.create({ data: { adminId: admin.id, key, granted: true } })
+  }
+  const raw = randomBytes(32).toString('hex')
+  await db.platformAdminSession.create({
+    data: { adminId: admin.id, tokenHash: hashSessionToken(raw), expiresAt: new Date(Date.now() + 3600_000) },
+  })
+  cleanup.push(async () => {
+    await db.platformAdminSession.deleteMany({ where: { adminId: admin.id } }).catch(() => {})
+    await db.platformPermission.deleteMany({ where: { adminId: admin.id } }).catch(() => {})
+    await db.platformAdmin.delete({ where: { id: admin.id } }).catch(() => {})
+  })
+  return raw
+}
 
 function platform(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${BASE}${path}`, {
@@ -73,15 +112,8 @@ function stepMap(steps: Array<{ id: string; status: string }>): Map<string, stri
 }
 
 beforeAll(async () => {
-  // Root platform session fixture (the readiness-parity convention).
-  const admin = await db.platformAdmin.findUnique({ where: { email: 'admin@scholario.cloud' } })
-  if (!admin) throw new Error('root platform admin missing — run the canonical seeds')
-  const raw = randomBytes(32).toString('hex')
-  await db.platformAdminSession.create({
-    data: { adminId: admin.id, tokenHash: hashSessionToken(raw), expiresAt: new Date(Date.now() + 3600_000) },
-  })
-  rootToken = raw
-  cleanup.push(() => db.platformAdminSession.deleteMany({ where: { tokenHash: hashSessionToken(raw) } }))
+  // Dedicated full-permission admin (own rate-limit bucket — see above).
+  rootToken = await dedicatedFullAdmin('wizard-api-admin')
 
   // Provision the wizard's target school.
   const marker = randomBytes(4).toString('hex')
@@ -484,9 +516,11 @@ describe('PHASE 2 · setup wizard — activation', () => {
         body: JSON.stringify({ requireComplete: true }),
       })
       expect(res.status).toBe(200)
-      const body = (await res.json()) as { data: { status: string; activation: { ok: boolean; wizardChecklistOk: boolean } } }
+      const body = (await res.json()) as { data: { status: string; activation: { ok: boolean; strict: boolean; missing: Array<{ id: string }> } } }
       expect(body.data.status).toBe('ACTIVE')
-      expect(body.data.activation.wizardChecklistOk).toBe(true)
+      expect(body.data.activation.strict).toBe(true)
+      expect(body.data.activation.ok).toBe(true)
+      expect(body.data.activation.missing).toEqual([])
       expect((await db.school.findUnique({ where: { id: schoolId } }))?.status).toBe('ACTIVE')
       const audit = await db.platformAuditLog.findFirst({
         where: { schoolId, action: 'platform.school.activated' },

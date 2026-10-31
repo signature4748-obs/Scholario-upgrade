@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { AppError } from '@/lib/security/errors'
 import { withPlatform } from '@/lib/platform/authz'
-import { parseFlags, effectiveModuleFlags } from '@/lib/platform/module-flags'
+import { parseFlags, effectiveModuleFlags, PLATFORM_MODULE_FLAGS_SELECT } from '@/lib/platform/module-flags'
 import { computeSetupReadiness } from '@/lib/school/setup-readiness'
 import { mergeWebsiteContent } from '@/lib/website-content'
 import { principalInviteDeliveryState } from '@/lib/platform/principal-invite'
@@ -102,7 +102,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       db.feeStructure.count({ where: { schoolId: school.id } }),
       db.examTypeConfig.count({ where: { schoolId: school.id } }),
       db.gradeScale.count({ where: { schoolId: school.id } }),
-      db.platformSetting.findUnique({ where: { id: 'global' }, select: { modules: true } }),
+      db.platformSetting.findUnique({ where: { id: 'global' }, select: PLATFORM_MODULE_FLAGS_SELECT }),
       db.teacher.count({ where: { schoolId: school.id } }),
     ])
 
