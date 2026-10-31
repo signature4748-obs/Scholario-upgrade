@@ -116,11 +116,22 @@ export async function POST(req: NextRequest) {
 
     // ── Apply: new hash (+ email adoption when a verified candidate is
     // bound) + global session revocation (the security effect of a
-    // reset) + burn of every OTHER outstanding token. The presented
-    // token itself was already consumed ATOMICALLY by
-    // consumePasswordReset — a replay races updateMany and loses.
+    // reset) + burn of every OTHER outstanding token — ALL in ONE
+    // interactive transaction. Every security-critical write below runs
+    // on the SAME `tx` client (the helpers accept it explicitly), so
+    // the three operations commit together or roll back together: a
+    // cleanup failure can never leave the password changed while old
+    // sessions stay valid or another outstanding reset link survives.
+    // The presented token itself was already consumed ATOMICALLY by
+    // consumePasswordReset — a replay races updateMany and loses. That
+    // claim deliberately sits OUTSIDE this transaction (fail-closed
+    // contract: a presented token stays spent even if the apply fails).
     const candidateEmail = consumed.newEmail?.trim().toLowerCase() || null
     const finalEmail = candidateEmail ?? admin.email
+
+    // Session-revocation count for the completion audit; assigned inside
+    // the transaction (the success path always overwrites the initial 0).
+    let revoked = 0
 
     try {
       await db.$transaction(async (tx) => {
@@ -142,6 +153,12 @@ export async function POST(req: NextRequest) {
             data: { passwordHash: hashPassword(body.newPassword) },
           })
         }
+
+        // SAME-TRANSACTION SECURITY CLEANUP — session revocation and the
+        // outstanding-token burn share ONE commit with the password
+        // update above (all-or-nothing).
+        revoked = await revokeAllPlatformSessions(admin.id, tx)
+        await invalidateAdminResetTokens(admin.id, tx)
       })
     } catch (txError) {
       await platformAuditEvent({
@@ -173,8 +190,8 @@ export async function POST(req: NextRequest) {
     }
 
     const emailUpdated = Boolean(candidateEmail && candidateEmail !== admin.email)
-    const revoked = await revokeAllPlatformSessions(admin.id)
-    await invalidateAdminResetTokens(admin.id)
+    // Session revocation + outstanding-token burn already committed in
+    // the apply transaction above (`revoked` is the committed count).
 
     // ── Verified-recovery lockout supersession: the applicable per-
     // account lockout state is cleared for BOTH the previous and the

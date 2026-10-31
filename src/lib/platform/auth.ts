@@ -32,6 +32,7 @@
  */
 
 import { db } from '@/lib/db'
+import type { Prisma } from '@prisma/client'
 import { createHash, randomBytes } from 'crypto'
 import { cookies, headers } from 'next/headers'
 import { AppError, } from '@/lib/security/errors'
@@ -228,8 +229,22 @@ export async function revokePlatformSession(sessionId: string): Promise<void> {
   })
 }
 
-export async function revokeAllPlatformSessions(adminId: string): Promise<number> {
-  const res = await db.platformAdminSession.updateMany({
+/**
+ * Revoke EVERY live session for an admin (soft row — revocation history
+ * for the audit viewer; PlatformAdminSession is never deleted, unlike
+ * the school Session table).
+ *
+ * Runs on the GLOBAL client by default. Callers that already hold an
+ * interactive transaction (`tx`) pass it so the revocation participates
+ * in THEIR atomic unit — the platform reset route requires this: the
+ * password update, the session revocation and the outstanding-token
+ * burn must commit together or roll back together.
+ */
+export async function revokeAllPlatformSessions(
+  adminId: string,
+  tx: Prisma.TransactionClient = db,
+): Promise<number> {
+  const res = await tx.platformAdminSession.updateMany({
     where: { adminId, revokedAt: null },
     data: { revokedAt: new Date() },
   })

@@ -20,6 +20,7 @@
  */
 
 import { db } from '@/lib/db'
+import type { Prisma } from '@prisma/client'
 import { randomBytes } from 'crypto'
 import { sendEmail } from '@/lib/email'
 import {
@@ -162,9 +163,20 @@ export async function consumePasswordReset(rawToken: string): Promise<ConsumeRes
   return { ok: false, failure: 'EXPIRED' }
 }
 
-/** Invalidate every pending token for an admin (post password-change). */
-export async function invalidateAdminResetTokens(adminId: string): Promise<void> {
-  await db.platformPasswordReset.updateMany({
+/**
+ * Invalidate every pending token for an admin (post password-change).
+ *
+ * Runs on the GLOBAL client by default. Callers that already hold an
+ * interactive transaction (`tx`) pass it so the burn participates in
+ * THEIR atomic unit — the platform reset route requires this: the
+ * password update, the session revocation and the token burn must
+ * commit together or roll back together.
+ */
+export async function invalidateAdminResetTokens(
+  adminId: string,
+  tx: Prisma.TransactionClient = db,
+): Promise<void> {
+  await tx.platformPasswordReset.updateMany({
     where: { adminId, usedAt: null },
     data: { usedAt: new Date() },
   })
