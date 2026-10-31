@@ -9,22 +9,23 @@
 // "Access School" support-session launcher. Every destructive call
 // is wrapped in useStepUpGate; the server re-authorizes anyway.
 //
-// §7 (operator IA) — the former 12-tab workspace is consolidated
-// into 6 operator groups: Overview · Configuration · Access & users
-// · Subscription · Support & audit · Advanced. PURE REGROUPING: every
-// capability, permission check, step-up gate and audit hook survives;
-// merged children render as titled sub-sections (headings + anchors,
-// never tab-in-tab). Every pre-§7 deep link still resolves —
-// LEGACY_TAB_REDIRECT maps the old ?tab= keys (and the child modules'
-// own cross-tab calls, which still use their legacy keys) onto the
-// new groups, landing on the exact sub-section.
+// PHASE 1 — SUPER ADMIN CONTROL CENTER: the workspace now presents
+// THREE primary destinations — Overview · Setup · Manage (tab
+// resolution data lives in ./school-detail-tabs, unit-tested).
+// PURE REGROUPING: every capability, permission check, step-up gate
+// and audit hook survives; merged children render as titled
+// sub-sections (headings + anchors, never tab-in-tab). Every
+// historical deep link still resolves — LEGACY_TAB_REDIRECT maps the
+// §7 operator-group keys AND the older 12-tab ?tab= keys (plus the
+// child modules' own cross-tab calls, which still use their legacy
+// keys) onto the new destinations, landing on the exact sub-section.
 //
-// PHASE 10 (two-project topology) — the Access & users group leads
+// PHASE 10 (two-project topology) — the Manage destination leads
 // with the ACCESS card: the tenant's canonical doors (login URL /
 // public URL from SCHOOL_APP_BASE_URL — never guessed, copy resolves
 // relative URLs against the current origin), the founding principal's
 // credential/last-sign-in truth, and the tenant-domain status summary
-// (Configuration → Custom domains stays the management surface).
+// (Setup → Custom domains stays the management surface).
 // ============================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -75,6 +76,11 @@ import { SchoolUsersTab } from './school-users'
 // surface: compact header + support sessions + live school-user
 // sessions + the authoritative audit history.
 import { SupportAuditTab } from './support-audit'
+import {
+  availableControlCenterGroups,
+  resolveTabValue,
+  SUBSECTION_IDS,
+} from './school-detail-tabs'
 import { SubscriptionPendingBanner, isSubscriptionSchemaPending } from './pending-banner'
 import { saveSupportToken } from '@/lib/platform-session-token'
 import { Button } from '@/components/ui/button'
@@ -1191,69 +1197,13 @@ function StatCard({
 
 // ── Module ────────────────────────────────────────────────────────────────
 
-// ── §7 operator groups + legacy tab redirect map ───────────────────────────
-// The 12-tab IA consolidated into 6 operator groups. LEGACY_TAB_REDIRECT
-// keeps every pre-§7 deep link alive: bookmarks and shared URLs carrying
-// an old ?tab= value, plus the child modules' own cross-tab calls
-// (school-subscription → 'gateway'; school-setup → 'metadata' | 'users' |
-// 'identity' | 'plan' | 'domains'). Each entry resolves to its §7 group
-// plus the sub-section anchor to land on.
-
-interface TabTarget {
-  group: string
-  anchor?: string
-}
-
-const SUBSECTION_IDS = {
-  setup: 'section-setup',
-  metadata: 'section-metadata',
-  identity: 'section-identity',
-  modules: 'section-modules',
-  domains: 'section-domains',
-  access: 'section-access',
-  users: 'section-users',
-  subscription: 'section-subscription',
-  gateway: 'section-gateway',
-  support: 'section-support',
-  audit: 'section-audit',
-  danger: 'section-danger',
-} as const
-
-// Old 12-tab keys → { group, anchor }. The three genuinely-new group
-// keys ('configuration', 'access', 'advanced') resolve to themselves;
-// 'overview', 'subscription' and 'support' already existed and map to
-// themselves (no anchor — they land at the group top).
-const LEGACY_TAB_REDIRECT: Record<string, TabTarget> = {
-  overview: { group: 'overview' },
-  setup: { group: 'configuration', anchor: SUBSECTION_IDS.setup },
-  metadata: { group: 'configuration', anchor: SUBSECTION_IDS.metadata },
-  identity: { group: 'configuration', anchor: SUBSECTION_IDS.identity },
-  plan: { group: 'configuration', anchor: SUBSECTION_IDS.modules },
-  domains: { group: 'configuration', anchor: SUBSECTION_IDS.domains },
-  users: { group: 'access', anchor: SUBSECTION_IDS.users },
-  subscription: { group: 'subscription' },
-  gateway: { group: 'subscription', anchor: SUBSECTION_IDS.gateway },
-  // 'support' maps to its group WITHOUT an anchor (§7 scroll fix): the
-  // group key 'support' IS the tab label — clicking the Support tab
-  // must land at the TOP of the group, not re-anchor to the old
-  // sub-section id (the anchor collision made the tab pin mid-page
-  // while legacy ?tab=support deep-links kept working through
-  // 'audit'/'danger' style mappings above).
-  support: { group: 'support' },
-  audit: { group: 'support', anchor: SUBSECTION_IDS.audit },
-  danger: { group: 'advanced', anchor: SUBSECTION_IDS.danger },
-  configuration: { group: 'configuration' },
-  access: { group: 'access' },
-  advanced: { group: 'advanced' },
-}
-
-/** Resolve any ?tab= / onNavigateTab value — a legacy 12-tab key or a
- * §7 group key. Unknown values return null (callers fail safe to
- * Overview, exactly as the pre-§7 workspace did). */
-function resolveTabValue(raw: string | null): TabTarget | null {
-  if (!raw) return null
-  return LEGACY_TAB_REDIRECT[raw] ?? null
-}
+// ── Control-center destinations + legacy redirect map ─────────────────────
+// The Phase 1 IA (Overview · Setup · Manage) and its full legacy
+// redirect data live in ./school-detail-tabs (pure data module —
+// unit-tested in tests/unit/school-control-center-tabs.test.ts):
+// destination keys, sub-section anchor ids, LEGACY_TAB_REDIRECT for
+// every §7 group key and pre-§7 12-tab key, and the permission-based
+// destination visibility.
 
 /** A titled sub-section inside a merged group (§7: section headings +
  * whitespace — never tab-in-tab). The `id` doubles as the deep-link
@@ -1313,7 +1263,7 @@ function NextActionsCard({
     actions.push({
       key: 'activate',
       label: 'Activate this school',
-      detail: 'Provisioning is complete — sign-in stays blocked until activation (Advanced).',
+      detail: 'Provisioning is complete — sign-in stays blocked until activation (Manage → Danger zone).',
       tab: 'advanced',
       icon: <Power className="h-4 w-4" aria-hidden="true" />,
       iconClass: 'bg-teal-50 text-teal-700',
@@ -1323,7 +1273,7 @@ function NextActionsCard({
     actions.push({
       key: 'reactivate',
       label: 'Reactivate this school',
-      detail: 'The workspace stays locked for every user until reactivation (Advanced).',
+      detail: 'The workspace stays locked for every user until reactivation (Manage → Danger zone).',
       tab: 'advanced',
       icon: <Power className="h-4 w-4" aria-hidden="true" />,
       iconClass: 'bg-teal-50 text-teal-700',
@@ -1333,7 +1283,7 @@ function NextActionsCard({
     actions.push({
       key: 'credential',
       label: 'Confirm the principal credential',
-      detail: 'The one-time credential was not delivered or replaced — re-issue it from Access & users.',
+      detail: 'The one-time credential was not delivered or replaced — re-issue it from Manage → Access & sign-in.',
       tab: 'access',
       icon: <User className="h-4 w-4" aria-hidden="true" />,
       iconClass: 'bg-amber-50 text-amber-700',
@@ -1343,7 +1293,7 @@ function NextActionsCard({
     actions.push({
       key: 'setup',
       label: 'Complete the required setup',
-      detail: 'Required onboarding sections are incomplete (Configuration → Setup & readiness).',
+      detail: 'Required onboarding sections are incomplete (Setup → Setup & readiness).',
       tab: 'setup',
       icon: <ClipboardList className="h-4 w-4" aria-hidden="true" />,
       iconClass: 'bg-amber-50 text-amber-700',
@@ -1443,6 +1393,118 @@ function SessionsCard({
   )
 }
 
+/** Overview → setup & modules (Phase 1): the DB-derived required-setup
+ * progress (provisioning.readiness — derived from the same
+ * setup-readiness document the Setup destination renders) and the
+ * effective module availability (school override ?? platform master
+ * ?? enabled — the same resolution the Setup toggles display).
+ * Read-only summary; the actions keep their single home in Setup. */
+function SetupModulesCard({
+  readiness,
+  flags,
+  onNavigate,
+}: {
+  readiness:
+    | {
+        requiredDone: number
+        requiredTotal: number
+        requiredComplete: boolean
+        usable: boolean
+      }
+    | null
+    | undefined
+  flags: Record<string, boolean>
+  onNavigate: (tab: string) => void
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {/* Setup completion — real readiness facts only; an unavailable
+          summary shows honestly as unavailable (never fabricated). */}
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5 sm:px-5">
+          <h2 className="font-display text-sm font-bold text-slate-900">Setup completion</h2>
+          <button
+            type="button"
+            onClick={() => onNavigate('setup')}
+            className="inline-flex items-center gap-0.5 text-xs font-semibold text-teal-700 hover:text-teal-800"
+          >
+            Open Setup
+            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="px-4 py-3.5 sm:px-5">
+          {readiness ? (
+            <>
+              <div className="flex flex-wrap items-baseline gap-2">
+                <p className="font-display text-2xl font-bold text-slate-900 tabular-nums">
+                  {num.format(readiness.requiredDone)}/{num.format(readiness.requiredTotal)}
+                </p>
+                <span className="text-xs font-semibold text-slate-500">
+                  required sections complete
+                </span>
+                <span
+                  className={`ml-auto rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                    readiness.requiredComplete
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-amber-200 bg-amber-50 text-amber-700'
+                  }`}
+                >
+                  {readiness.requiredComplete ? 'Complete' : 'Incomplete'}
+                </span>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-500">
+                {readiness.usable
+                  ? 'Active and every required setup section is complete.'
+                  : 'Required onboarding sections are still incomplete — Setup deep-links each blocker.'}
+              </p>
+            </>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Setup status unavailable — open Setup to load the readiness document.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Modules — effective availability per the school's overrides;
+          the toggles keep their single home in Setup → Modules &
+          admissions. */}
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5 sm:px-5">
+          <h2 className="font-display text-sm font-bold text-slate-900">Modules</h2>
+          <button
+            type="button"
+            onClick={() => onNavigate('modules')}
+            className="inline-flex items-center gap-0.5 text-xs font-semibold text-teal-700 hover:text-teal-800"
+          >
+            Configure
+            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </div>
+        <ul className="grid grid-cols-1 gap-x-4 gap-y-1.5 px-4 py-3 sm:grid-cols-2 sm:px-5">
+          {FLAGGABLE_MODULES.map((module) => {
+            const override = typeof flags[module] === 'boolean' ? flags[module] : null
+            const enabled = override ?? true
+            return (
+              <li key={module} className="flex items-center justify-between gap-2 text-sm">
+                <span className="font-semibold capitalize text-slate-700">{module}</span>
+                <span
+                  className={`text-[11px] font-semibold ${
+                    override === null ? 'text-slate-500' : enabled ? 'text-emerald-700' : 'text-red-600'
+                  }`}
+                >
+                  {enabled ? 'On' : 'Off'}
+                  {override === null ? ' · platform default' : ' · school override'}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
 export function SchoolDetailModule() {
   const { can } = usePlatformSession()
   // Permission constants (stable across the render; the server
@@ -1463,23 +1525,21 @@ export function SchoolDetailModule() {
   const { gate, node: stepUpNode } = useStepUpGate()
   const searchParams = useSearchParams()
 
-  // ── §7 operator groups + legacy deep-link compatibility (mission §3B
-  // preserved): ?tab=<group> is the single source of truth for the
-  // active workspace section — navigation, refresh and browser
-  // back/forward all keep it. The 6 group keys are canonical; every
-  // pre-§7 12-tab key still resolves through LEGACY_TAB_REDIRECT
-  // (bookmarks, shared URLs, and the child modules' own deep-links —
-  // school-subscription → 'gateway', school-setup → 'metadata' /
-  // 'users' / 'identity' / 'plan' / 'domains'). Unknown or
-  // permission-withheld values fall back to Overview (fail-safe, the
-  // server still authorizes every route). ──
-  const availableGroups = React.useMemo(() => {
-    const groups = ['overview', 'configuration', 'access']
-    if (canBill) groups.push('subscription')
-    if (canSupport || canAudit) groups.push('support')
-    if (canManage) groups.push('advanced')
-    return groups
-  }, [canManage, canBill, canSupport, canAudit])
+  // ── Control-center destinations + legacy deep-link compatibility:
+  // ?tab=<destination> is the single source of truth for the active
+  // workspace destination — navigation, refresh and browser
+  // back/forward all keep it. The 3 Phase 1 destination keys are
+  // canonical; every §7 group key and pre-§7 12-tab key still
+  // resolves through LEGACY_TAB_REDIRECT (bookmarks, shared URLs,
+  // and the child modules' own deep-links — school-subscription →
+  // 'gateway', school-setup → 'metadata' / 'users' / 'identity' /
+  // 'plan' / 'domains'). Unknown or permission-withheld values fall
+  // back to Overview (fail-safe, the server still authorizes every
+  // route). ──
+  const availableGroups = React.useMemo(
+    () => availableControlCenterGroups({ canManage, canBill, canSupport, canAudit }),
+    [canManage, canBill, canSupport, canAudit],
+  )
 
   const urlTab = searchParams.get('tab')
   const [activeGroup, setActiveGroup] = useState<string>(() => {
@@ -1488,8 +1548,8 @@ export function SchoolDetailModule() {
     return resolved && availableGroups.includes(resolved.group) ? resolved.group : 'overview'
   })
   // Legacy deep-links may land on a specific sub-section (e.g.
-  // ?tab=domains → Configuration → Custom domains); the anchor is
-  // resolved after the target group's content has mounted.
+  // ?tab=domains → Setup → Custom domains); the anchor is
+  // resolved after the target destination's content has mounted.
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null)
   // The last canonical tab key THIS component wrote to the URL. Lets
   // the URL→state effect below distinguish its own writes
@@ -2120,10 +2180,11 @@ export function SchoolDetailModule() {
           onValueChange={(v) => navigateToTab(v)}
           className="space-y-4"
         >
-        {/* §7 — six operator groups. Compact single-row bar, horizontally
-            scrollable on mobile (no page-level horizontal scroll at
-            390px). Radix keeps aria-selected + roving keyboard focus on
-            the triggers (arrow-key navigation). */}
+        {/* Phase 1 — three control-center destinations. Compact single-row
+            bar, horizontally scrollable on mobile (no page-level
+            horizontal scroll at 390px). Radix keeps aria-selected +
+            roving keyboard focus on the triggers (arrow-key
+            navigation). */}
         <TabsList
           aria-label="School workspace sections"
           className="w-full bg-slate-100 border border-slate-200 h-auto p-1 gap-1 overflow-x-auto no-scrollbar justify-start"
@@ -2135,39 +2196,17 @@ export function SchoolDetailModule() {
             Overview
           </TabsTrigger>
           <TabsTrigger
-            value="configuration"
+            value="setup"
             className="flex-none px-3 py-1.5 min-h-[36px] data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600"
           >
-            Configuration
+            Setup
           </TabsTrigger>
-          <TabsTrigger
-            value="access"
-            className="flex-none px-3 py-1.5 min-h-[36px] data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600"
-          >
-            Access &amp; users
-          </TabsTrigger>
-          {canBill && (
+          {availableGroups.includes('manage') && (
             <TabsTrigger
-              value="subscription"
+              value="manage"
               className="flex-none px-3 py-1.5 min-h-[36px] data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600"
             >
-              Subscription
-            </TabsTrigger>
-          )}
-          {(canSupport || canAudit) && (
-            <TabsTrigger
-              value="support"
-              className="flex-none px-3 py-1.5 min-h-[36px] data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:border-teal-200 text-slate-600"
-            >
-              Support &amp; audit
-            </TabsTrigger>
-          )}
-          {canManage && (
-            <TabsTrigger
-              value="advanced"
-              className="flex-none px-3 py-1.5 min-h-[36px] data-[state=active]:bg-red-50 data-[state=active]:text-red-600 data-[state=active]:border-red-200 text-slate-600"
-            >
-              Advanced
+              Manage
             </TabsTrigger>
           )}
         </TabsList>
@@ -2179,6 +2218,16 @@ export function SchoolDetailModule() {
           <NextActionsCard
             provisioning={data.provisioning}
             canManage={canManage}
+            onNavigate={navigateToTab}
+          />
+
+          {/* Phase 1 — setup completion + effective module availability,
+              both read-only summaries of DB-backed facts (the readiness
+              document and the school's feature flags). The actions keep
+              their single home in Setup. */}
+          <SetupModulesCard
+            readiness={data.provisioning?.readiness}
+            flags={flags}
             onNavigate={navigateToTab}
           />
 
@@ -2255,10 +2304,12 @@ export function SchoolDetailModule() {
           </div>
         </TabsContent>
 
-        {/* ── §7 Configuration group — setup/readiness · profile &
-            metadata · identity & branding · modules · domains, merged
-            as titled sub-sections (never tab-in-tab) ── */}
-        <TabsContent value="configuration" className="space-y-8 sm:space-y-10">
+        {/* ── Setup destination — setup/readiness · profile & metadata ·
+            modules & admissions · identity & branding · custom domains,
+            merged as titled sub-sections (never tab-in-tab).
+            First-time configuration AND the identity governance that
+            protects it live here. ── */}
+        <TabsContent value="setup" className="space-y-8 sm:space-y-10">
           {/* Setup & readiness (PHASE 8C §12 — DB-computed progress;
               §7: actionable blockers deep-link to the fixing section —
               the child still passes its legacy tab keys, which
@@ -2670,15 +2721,17 @@ export function SchoolDetailModule() {
           </GroupSection>
         </TabsContent>
 
-        {/* ── §7 Access & users group — the tenant's doors, the founding
-            principal's credential truth, live sessions and the user
-            roster (the Access card moved here from Overview — pure
-            regrouping) ── */}
-        <TabsContent value="access" className="space-y-8 sm:space-y-10">
+        {/* ── Manage destination — ongoing operation and oversight, as
+            titled sub-sections: access & sign-in · users · subscription
+            & fee gateway · support & audit · danger zone. Sections
+            render only for viewers holding the capability each
+            requires (the server re-authorizes every action
+            regardless). ── */}
+        <TabsContent value="manage" className="space-y-8 sm:space-y-10">
           {/* Access (PHASE 10) — canonical doors + principal credential
               truth + domain status summary, so an admin never guesses
               how a tenant is reached (management lives in
-              Configuration → Custom domains). */}
+              Setup → Custom domains). */}
           <GroupSection
             id={SUBSECTION_IDS.access}
             title="Access & sign-in"
@@ -2720,20 +2773,19 @@ export function SchoolDetailModule() {
           >
             <SchoolUsersTab schoolId={id ?? ''} />
           </GroupSection>
-        </TabsContent>
 
-        {/* ── §7 Subscription group (billing.manage) — the authoritative
-            subscription & entitlement system (mission §5): snapshot,
-            plan & billing, activation codes, student entitlements,
-            ledger (the legacy plan marker moved here from the old Plan
-            card — single surface, no duplicates), plus the tenant fee
-            gateway (§3B). Honest schema-pending signal first: the
-            hardened GET surfaces may flag the pending subscription
-            migration — degraded data must never read as an empty
-            state. The child module renders its own load-error state
-            with retry, so no boundary wraps it. ── */}
-        {canBill && (
-          <TabsContent value="subscription" className="space-y-8 sm:space-y-10">
+          {/* ── Subscription (billing.manage) — the authoritative
+              subscription & entitlement system (mission §5): snapshot,
+              plan & billing, activation codes, student entitlements,
+              ledger (the legacy plan marker moved here from the old
+              Plan card — single surface, no duplicates), plus the
+              tenant fee gateway (§3B). Honest schema-pending signal
+              first: the hardened GET surfaces may flag the pending
+              subscription migration — degraded data must never read
+              as an empty state. The child module renders its own
+              load-error state with retry, so no boundary wraps it. ── */}
+          {canBill && (
+            <>
             {subscriptionPending && <SubscriptionPendingBanner compact />}
             <GroupSection
               id={SUBSECTION_IDS.subscription}
@@ -2749,8 +2801,8 @@ export function SchoolDetailModule() {
             >
               <SchoolPaymentGatewayTab schoolId={id} />
             </GroupSection>
-          </TabsContent>
-        )}
+            </>
+          )}
 
         {/* ── §7 Support & audit group (support.access / audit.read —
             §9) — 2026-10-28 redesign: ONE task-focused surface (compact
@@ -2758,8 +2810,8 @@ export function SchoolDetailModule() {
             authoritative audit history) instead of two stacked lists.
             Deep-link anchors preserved: #section-support /
             #section-audit (legacy ?tab=support|audit) ── */}
-        {(canSupport || canAudit) && (
-          <TabsContent value="support" className="space-y-8 sm:space-y-10">
+          {(canSupport || canAudit) && (
+            <>
             <SupportAuditTab
               schoolId={id ?? ''}
               schoolName={school.name}
@@ -2769,16 +2821,16 @@ export function SchoolDetailModule() {
               activeSupportSessions={data.activeSupportSessions}
               onOpenSupport={() => setAccessOpen(true)}
             />
-          </TabsContent>
-        )}
+            </>
+          )}
 
-        {/* ── §7 Advanced group (schools.manage) — the danger zone:
-            status control and irreversible deletion. The explicit
-            visual warning treatment is the existing red-bordered
-            container (preserved as-is); step-up gating, typed
-            confirmation and audit events unchanged. ── */}
-        {canManage && (
-          <TabsContent value="advanced" className="space-y-8 sm:space-y-10">
+          {/* ── Danger zone (schools.manage) — status control and
+              irreversible deletion. The explicit visual warning
+              treatment is the existing red-bordered container
+              (preserved as-is); step-up gating, typed confirmation
+              and audit events unchanged. ── */}
+          {canManage && (
+            <>
             <div
               id={SUBSECTION_IDS.danger}
               className="space-y-4 rounded-xl border-2 border-red-200 bg-red-50/60 p-4 sm:p-6"
@@ -2873,8 +2925,9 @@ export function SchoolDetailModule() {
                 </Button>
               </div>
             </div>
-          </TabsContent>
-        )}
+            </>
+          )}
+      </TabsContent>
       </Tabs>
 
       {/* Dialogs + the shared step-up TOTP prompt */}
