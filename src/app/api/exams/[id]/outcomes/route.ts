@@ -11,7 +11,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'exams.results.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.results.read', permission: 'exams.results.read' }, async (ctx) => {
     const { id } = await params
     const url = new URL(req.url)
     const classId = url.searchParams.get('classId')

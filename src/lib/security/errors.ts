@@ -89,6 +89,10 @@ export type AppErrorCode =
   | 'STEP_UP_REQUIRED' // 403 — destructive action needs recent MFA
   | 'SCHOOL_SUSPENDED' // 403 — school tenant suspended by the platform
   | 'FEATURE_DISABLED' // 403 — module disabled by platform/school flags
+  | 'FEATURE_DISABLED_FOR_ROLE' // 403 — PHASE 3: role-wise feature control — the school
+                             // disabled this feature for the caller's role (or the
+                             // role baseline refuses it). Distinct from
+                             // FEATURE_DISABLED so logs/UI can tell the layers apart.
   | 'SUBSCRIPTION_REQUIRED' // 403 — ACCOUNT-level subscription lock (Phase 10):
                              // the account authenticates and may read its
                              // identity surfaces, but protected module APIs
@@ -205,6 +209,7 @@ export const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   STEP_UP_REQUIRED: 403,
   SCHOOL_SUSPENDED: 403,
   FEATURE_DISABLED: 403,
+  FEATURE_DISABLED_FOR_ROLE: 403,
   SUBSCRIPTION_REQUIRED: 403,
   PASSWORD_CHANGE_REQUIRED: 403,
   AUTH_PROVIDER_UNREACHABLE: 503,
@@ -264,6 +269,7 @@ const DEFAULT_MESSAGE: Record<AppErrorCode, string> = {
   STEP_UP_REQUIRED: 'This action requires recent multi-factor verification',
   SCHOOL_SUSPENDED: "Your school's Scholario access is currently suspended",
   FEATURE_DISABLED: 'This module is currently disabled',
+  FEATURE_DISABLED_FOR_ROLE: 'Your school administrator has restricted this feature for your role',
   AUTH_PROVIDER_UNREACHABLE: 'The sign-in provider is temporarily unreachable. Please try again.',
   SUPABASE_AUTH_UNCONFIGURED: 'The sign-in provider is not configured on the server',
   NO_SCHOLARIO_ACCOUNT:

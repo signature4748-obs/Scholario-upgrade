@@ -115,7 +115,7 @@ export async function GET(req: NextRequest) {
     },
     // Audit §11 — attendance rosters are staff-only; students read their
     // own rows through /api/student/dashboard.
-    { roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
+    { feature: 'attendance.mark', roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
   )
 }
 
@@ -278,6 +278,6 @@ export async function POST(req: NextRequest) {
       })
       return { marked: valid.length, date }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
+    { feature: 'attendance.mark', roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
   )
 }

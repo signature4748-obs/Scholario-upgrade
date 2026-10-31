@@ -72,6 +72,8 @@ import { SchoolSubscriptionTab } from './school-subscription'
 import { SchoolIdentityRequestsTab } from './school-identity-requests'
 import { SchoolPaymentGatewayTab } from './school-payment-gateway'
 import { SchoolUsersTab } from './school-users'
+// PHASE 3 — Role-wise Feature Control (Manage tab section).
+import { RoleFeaturesSection } from './role-features'
 // 2026-10-28 Support & audit redesign — the two stacked modules
 // (school-support + school-audit) were replaced by ONE task-focused
 // surface: compact header + support sessions + live school-user
@@ -2794,6 +2796,19 @@ export function SchoolDetailModule() {
                 onChanged={() => void reload()}
               />
             )}
+          </GroupSection>
+
+          {/* PHASE 3 — Role-wise Feature Control (schools.manage):
+              per-school, per-role feature denials over the static RBAC
+              baseline. Server-side enforcement lives in
+              src/lib/security/role-features.ts — this section is the
+              single configuration home for it. */}
+          <GroupSection
+            id={SUBSECTION_IDS.roleFeatures}
+            title="Role-wise Feature Control"
+            description="Choose which features each school role can use — Principal, Teacher and Student. Restrictions always respect base permissions and module availability."
+          >
+            <RoleFeaturesSection schoolId={id} canManage={canManage} />
           </GroupSection>
 
           {/* Users & access (mission §9 — read-only roster) */}

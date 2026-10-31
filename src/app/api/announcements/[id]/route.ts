@@ -164,7 +164,7 @@ export async function PATCH(
         live: updated.status === 'PUBLISHED',
       }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'announcements.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }
 
@@ -199,6 +199,6 @@ export async function DELETE(
 
       return { deleted: true, id }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'announcements.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }

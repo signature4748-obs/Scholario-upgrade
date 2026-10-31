@@ -19,7 +19,7 @@ export const runtime = 'nodejs'
 ///     the book, so an unvalidated studentId was a cross-tenant FK write
 ///     (any school's student id could be linked to this school's book).
 export async function GET() {
-  return withAuthz({ permission: 'school.library.manage' }, async (ctx) => {
+  return withAuthz({ feature: 'school.library.manage', permission: 'school.library.manage' }, async (ctx) => {
     // PHASE 6 — platform module switch (school override ?? platform master).
     await assertModuleEnabled(ctx.schoolId, 'library')
     const schoolId = ctx.schoolId
@@ -39,7 +39,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ permission: 'school.library.manage' }, async (ctx) => {
+  return withAuthz({ feature: 'school.library.manage', permission: 'school.library.manage' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const body = await req.json().catch(() => ({}))
     const action = body.action

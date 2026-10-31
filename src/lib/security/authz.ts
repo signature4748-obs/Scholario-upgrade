@@ -117,6 +117,16 @@ export interface AuthzPolicy {
    *                routes that enforce ownership themselves).
    */
   tenant?: 'school' | 'any'
+  /**
+   * PHASE 3 — Role-wise Feature Control: a ROLE_FEATURE_CATALOG key.
+   * After the role/permission/tenant gates pass, the per-school override
+   * layer is consulted (src/lib/security/role-features.ts): a school may
+   * have explicitly disabled this feature for the caller's role → typed
+   * 403 FEATURE_DISABLED_FOR_ROLE. Remove-only: never grants beyond the
+   * RBAC baseline, never re-enables a disabled module. Requires the
+   * school-tenant context (meaningless with tenant:'any').
+   */
+  feature?: string
 }
 
 /** Resolve identity → tenant context (+ role/permission gates). */
@@ -159,6 +169,22 @@ export async function authorize(user: AuthUser | null, policy: AuthzPolicy = {})
   // schoolless identity (platform admin) no tenant is minted — school-
   // scoped operations above already refused them.
   const schoolId = user.schoolId ?? ''
+
+  // 5 — PHASE 3: Role-wise Feature Control gate (per-school override layer).
+  // Runs AFTER the role/permission/tenant gates: access is denied unless
+  // every layer permits. Fail-closed on unknown feature keys; requires a
+  // real tenant (a feature gate without a school context is a caller bug).
+  if (policy.feature) {
+    if (tenantMode !== 'school' || !schoolId) {
+      throw new AppError('FORBIDDEN', {
+        publicMessage: 'You do not have access to this resource',
+        internalDetail: `authorize: feature gate '${policy.feature}' requires a school-tenant context (tenant=${tenantMode})`,
+      })
+    }
+    const { assertRoleFeatureAllowed } = await import('./role-features')
+    await assertRoleFeatureAllowed(schoolId, role, policy.feature)
+  }
+
   return { user, role, schoolId, isPlatform, tenant: { schoolId } }
 }
 

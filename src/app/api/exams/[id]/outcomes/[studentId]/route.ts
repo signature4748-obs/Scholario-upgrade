@@ -12,7 +12,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; studentId: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const { id, studentId } = await params
     const body = await parseJsonBody(req, outcomeOverrideSchema)
     await overrideOutcome(id, studentId, ctx.schoolId, ctx.user, {

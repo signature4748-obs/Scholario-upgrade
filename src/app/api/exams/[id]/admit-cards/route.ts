@@ -13,7 +13,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.read', permission: 'exams.read' }, async (ctx) => {
     const { id } = await params
     const { classId, studentIds } = await parseJsonBody(req, admitCardsSchema)
 

@@ -90,6 +90,10 @@ describe('STATUS_BY_CODE · every code maps to its documented status', () => {
     PHONE_AMBIGUOUS: 403,
     AUTH_LINK_CONFLICT: 403,
     IDENTITY_UNVERIFIED: 403,
+    // PHASE 3 — Role-wise Feature Control: the school disabled this
+    // feature for the caller's role (or the baseline refuses it).
+    // Distinct from FEATURE_DISABLED so the two layers stay tellable.
+    FEATURE_DISABLED_FOR_ROLE: 403,
   }
 
   test('the table is exactly the documented taxonomy (no stray/missing codes)', () => {

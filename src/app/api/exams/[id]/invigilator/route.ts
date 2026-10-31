@@ -11,7 +11,7 @@ export async function GET(
   _req: NextRequest,
   { params: _params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.read', permission: 'exams.read' }, async (ctx) => {
     const teachers = await listTeachers(ctx.schoolId)
     return teachers
   })
@@ -25,7 +25,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const { id } = await params
     const body = await parseJsonBody(req, invigilatorAssignSchema)
     const teacherId = body.teacherId && body.teacherId !== '' ? body.teacherId : null

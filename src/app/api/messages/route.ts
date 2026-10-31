@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
       })
       return msg
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] }
+    { feature: 'messaging.send', roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] }
   )
 }
 

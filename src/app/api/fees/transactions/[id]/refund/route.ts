@@ -47,7 +47,7 @@ export const runtime = 'nodejs'
 /// Returns { ok, txnId, status: 'REFUNDED', refunded, fee: { id, paid,
 /// status }, receiptNo }.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const { id: txnId } = await params
     const schoolId = ctx.schoolId
     if (!txnId) throw new AppError('INVALID_INPUT', { publicMessage: 'Transaction id is required' })

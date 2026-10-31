@@ -6,7 +6,7 @@ export const runtime = 'nodejs'
 // 3-d audit: school-wide compliance metrics (submission rates, teacher
 // compliance, pending grievances) — oversight (P/M).
 export function GET() {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     return await getComplianceMetrics(schoolId)
   }) as Promise<Response>

@@ -73,7 +73,7 @@ export async function GET(_req: NextRequest) {
         to: to.toISOString().slice(0, 10),
       }
     },
-    { roles: ['STUDENT'] },
+    { feature: 'attendance.student.view', roles: ['STUDENT'] },
   )
 }
 

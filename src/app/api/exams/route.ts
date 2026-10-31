@@ -7,7 +7,7 @@ import { db } from '@/lib/db'
 export const runtime = 'nodejs'
 
 export async function GET() {
-  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.read', permission: 'exams.read' }, async (ctx) => {
     // PHASE 6 — platform module switch (school override ?? platform master).
     await assertModuleEnabled(ctx.schoolId, 'exams')
     const school = await db.school.findUnique({ where: { id: ctx.schoolId }, select: { academicYear: true } })
@@ -17,7 +17,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const body = await req.json().catch(() => ({}))
     const exam = await createExam(ctx.schoolId, ctx.user, body)
     return exam

@@ -195,6 +195,10 @@ model School {
   admissionApplications AdmissionApplication[]
   admissionSequences   AdmissionSequence[]
   feeDiscountRules     FeeDiscountRule[]
+
+  // PHASE 3 — Role-wise Feature Control: per-school role-feature denials
+  // (remove-only overrides on top of the static RBAC baseline).
+  roleFeatureOverrides RoleFeatureOverride[]
 }
 
 /// Per-user conversation state for DIRECT (Message-row) threads. The
@@ -4228,4 +4232,48 @@ model MonitoringCheck {
 
   @@index([checkKey, checkedAt])
   @@index([checkedAt])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// PHASE 3 — ROLE-WISE FEATURE CONTROL (Super Admin Transformation).
+//
+// One row = "this school explicitly DISABLED this feature for this
+// canonical school role". A missing row means INHERIT: the effective
+// decision stays with the static server-side RBAC baseline
+// (src/lib/security/permissions.ts) — exactly the pre-Phase-3 behavior
+// for every existing school (zero rows ⇒ zero behavior change).
+//
+// Remove-only by construction: a row can only DENY a feature the role
+// baseline already grants. No row can ever GRANT access the RBAC
+// baseline refuses, and it can never re-enable a school module that the
+// module-flag layers (PlatformSetting.modules → School.featureFlags)
+// have disabled — those layers stay upstream of this one (see
+// docs/super-admin-transformation/PHASE-3-ARCHITECTURE.md §5.2).
+//
+// A dedicated TABLE (not a School JSON blob) keeps each cell
+// independently auditable and concurrently writable (no whole-column
+// read-modify-write race) with the unique constraint as the race
+// backstop. `featureKey` is validated against the code-owned catalog
+// (ROLE_FEATURE_CATALOG) before any write — unknown keys fail closed.
+// ═════════════════════════════════════════════════════════════════════
+model RoleFeatureOverride {
+  id         String   @id @default(cuid())
+  schoolId   String
+  school     School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// Canonical school role: PRINCIPAL | TEACHER | STUDENT (validated
+  /// against CANONICAL_SCHOOL_ROLES server-side; no legacy role can
+  /// authenticate school-plane, so configuring one would be meaningless).
+  role       String
+  /// A ROLE_FEATURE_CATALOG key (e.g. 'exams.marks.write').
+  featureKey String
+  /// Rows exist only to deny; the explicit column documents intent.
+  denied     Boolean  @default(true)
+  /// Platform admin who last wrote this row (trace; the authoritative
+  /// actor/timestamp record is the platform audit log entry).
+  createdBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([schoolId, role, featureKey])
+  @@index([schoolId, role])
 }

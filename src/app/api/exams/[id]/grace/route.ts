@@ -11,7 +11,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const { id } = await params
     const body = await parseJsonBody(req, graceMarksSchema)
     const result = await applyGraceMarks(id, ctx.schoolId, ctx.user, {

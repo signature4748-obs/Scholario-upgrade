@@ -25,7 +25,9 @@ export async function GET(_req: NextRequest) {
   return withUser(
     async (user) => {
       const schoolId = schoolScoped(user)
-      const config = await getSchoolConfig(schoolId)
+      // PHASE 3 — roleFeatures is the CALLER's own role's effective map
+      // (session-derived role; never client input).
+      const config = await getSchoolConfig(schoolId, { viewerRole: user.role })
       if (!config) {
         return NextResponse.json(
           { success: false, error: 'School configuration not found.' },

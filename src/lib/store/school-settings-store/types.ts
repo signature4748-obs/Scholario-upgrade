@@ -285,6 +285,8 @@ export interface ServerSchoolConfigState {
   branding: ServerSchoolBranding | null
   /** Effective module availability (server flags ?? platform defaults). */
   moduleFlags: Record<string, boolean>
+  /** PHASE 3 — the caller's role's effective feature map (fail-open client courtesy). */
+  roleFeatures: Record<string, boolean>
   /** Raw settings-JSON slices (timetable, attendance, uniforms, …). */
   settings: Record<string, unknown>
   syncStatus: ServerSettingsSyncStatus

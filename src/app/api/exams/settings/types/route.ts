@@ -9,13 +9,13 @@ export const runtime = 'nodejs'
 // Exam type config — staff read (the exam-settings UI and the Fees module's
 // exam-type picker both consume this); mutations are Principal/Management.
 export async function GET() {
-  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.read', permission: 'exams.read' }, async (ctx) => {
     return await listExamTypes(ctx.schoolId)
   })
 }
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ permission: 'exams.settings.write' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.settings.write', permission: 'exams.settings.write' }, async (ctx) => {
     const body = await parseJsonBody(req, examTypeCreateSchema)
     return await createExamType(ctx.schoolId, { name: body.name, code: body.code })
   })

@@ -12,7 +12,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; itemId: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const { id, itemId } = await params
     const body = await parseJsonBody(req, scheduleItemUpdateSchema)
     const item = await updateScheduleItem(id, itemId, ctx.schoolId, ctx.user, {
@@ -32,7 +32,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string; itemId: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const { id, itemId } = await params
     await deleteScheduleItem(id, itemId, ctx.schoolId, ctx.user)
     return { deleted: true }

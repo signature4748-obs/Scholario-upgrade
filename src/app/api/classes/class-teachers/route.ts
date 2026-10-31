@@ -70,6 +70,6 @@ export async function GET() {
         })),
       }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'people.structure.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

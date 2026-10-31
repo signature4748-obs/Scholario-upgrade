@@ -2054,8 +2054,8 @@ function ModulesEditor({
         </li>
       </ul>
       <p className="text-[11px] text-slate-400">
-        Module availability is a product toggle (platform master → school override). Role-wise feature management and
-        individual permissions are separate, stronger systems — detailed role-wise control arrives in Phase 3.
+        Module availability is a product toggle (platform master → school override). Role-wise feature management is a
+        separate, stronger system — configure per-role feature access in Manage → Role-wise Feature Control.
       </p>
     </div>
   )

@@ -17,7 +17,7 @@ const headAmountSchema = z.coerce.number().finite().min(0).max(500000)
 /// Returns all fee structures for the school, optionally filtered.
 /// Includes heads + catalogue entries.
 export async function GET(req: NextRequest) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { searchParams } = new URL(req.url)
     const status = searchParams.get('status')
@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
 ///     MasterFeeHead (batch findMany → 404 on any foreign/missing id).
 ///   · heads[] capped at 60 (unbounded array write).
 export async function POST(req: NextRequest) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const schoolId = ctx.schoolId
     const body = await req.json().catch(() => ({}))
     const classId = String(body.classId || '')

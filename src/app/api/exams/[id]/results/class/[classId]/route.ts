@@ -12,7 +12,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string; classId: string }> }
 ) {
-  return withAuthz({ permission: 'exams.results.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.results.read', permission: 'exams.results.read' }, async (ctx) => {
     const { id, classId } = await params
     const result = await getResultsForClass(id, classId, ctx.schoolId)
     return result

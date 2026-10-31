@@ -8,7 +8,7 @@ export const runtime = 'nodejs'
 // complaints — oversight data, gated to PRINCIPAL/MANAGEMENT
 // ('school.homework.oversight').
 export function GET(req: NextRequest) {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { searchParams } = new URL(req.url)
     const status = searchParams.get('status') || undefined

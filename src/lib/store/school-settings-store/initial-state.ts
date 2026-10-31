@@ -78,6 +78,7 @@ export const initialState: StateShape = {
     identity: null,
     branding: null,
     moduleFlags: {},
+    roleFeatures: {},
     settings: {},
     syncStatus: 'idle',
     syncedAt: null,

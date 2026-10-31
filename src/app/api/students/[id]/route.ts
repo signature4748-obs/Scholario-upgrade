@@ -283,7 +283,7 @@ export async function GET(
         })),
       }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'people.students.read', roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }
 
@@ -358,6 +358,6 @@ export async function PATCH(
 
       throw new AppError('INVALID_INPUT', { publicMessage: 'action must be archive, restore or transfer' })
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'people.students.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }

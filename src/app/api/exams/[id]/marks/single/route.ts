@@ -11,7 +11,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'exams.marks.write' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.marks.write', permission: 'exams.marks.write' }, async (ctx) => {
     const { id } = await params
     const body = await parseJsonBody(req, setMarkSchema)
     const mark = await setMark(id, ctx.schoolId, ctx.user, {

@@ -14,7 +14,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const requestId = newRequestId()
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const { id } = await params
     const body = await parseJsonBody(req, marksWorkflowFilterSchema)
     const result = await verifyMarks(id, ctx.schoolId, ctx.user, {

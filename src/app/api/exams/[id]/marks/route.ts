@@ -16,7 +16,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'exams.marks.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.marks.read', permission: 'exams.marks.read' }, async (ctx) => {
     const { id } = await params
     const exam = await db.exam.findFirst({ where: { id, schoolId: ctx.schoolId }, select: { id: true } })
     if (!exam) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Exam not found', internalDetail: 'marks GET: exam missing or foreign tenant' })

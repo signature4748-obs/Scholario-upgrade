@@ -174,6 +174,6 @@ export async function GET(req: NextRequest) {
         },
       }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }

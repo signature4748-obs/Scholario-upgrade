@@ -8,13 +8,13 @@ export const runtime = 'nodejs'
 
 // Grade scales — staff read; mutations are Principal/Management.
 export async function GET() {
-  return withAuthz({ permission: 'exams.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.read', permission: 'exams.read' }, async (ctx) => {
     return await listGradeScales(ctx.schoolId)
   })
 }
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ permission: 'exams.settings.write' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.settings.write', permission: 'exams.settings.write' }, async (ctx) => {
     const body = await parseJsonBody(req, gradeScaleCreateSchema)
     return await createGradeScale(ctx.schoolId, {
       grade: body.grade,

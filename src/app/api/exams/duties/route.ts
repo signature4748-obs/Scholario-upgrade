@@ -11,7 +11,7 @@ export const runtime = 'nodejs'
  * notification bell through the :3003 event stream).
  */
 export async function GET() {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const roster = await listDutyRoster(ctx.schoolId)
     return roster
   })

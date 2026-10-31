@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
       })
       return { ...head, amount: num(head.amount) }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }
 
@@ -114,6 +114,6 @@ export async function PATCH(req: NextRequest) {
       })
       return { ...updated, amount: num(updated.amount) }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

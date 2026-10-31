@@ -134,7 +134,7 @@ export async function GET() {
         })),
       }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }
 
@@ -420,6 +420,6 @@ export async function POST(req: NextRequest) {
 
       throw new Error('Unknown action — expected verify | reject | record-direct.')
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

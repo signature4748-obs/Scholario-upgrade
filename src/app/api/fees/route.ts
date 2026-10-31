@@ -22,7 +22,7 @@ export const runtime = 'nodejs'
 /// orders,receipts} — no client consumes this GET, so the gate breaks no
 /// legit flow).
 export async function GET(req: NextRequest) {
-  return withAuthz({ permission: 'school.finance.read' }, async (ctx) => {
+  return withAuthz({ feature: 'school.finance.read', permission: 'school.finance.read' }, async (ctx) => {
     // PHASE 6 — platform module switch (school override ?? platform master).
     await assertModuleEnabled(ctx.schoolId, 'fees')
     const { searchParams } = new URL(req.url)
@@ -85,7 +85,7 @@ const feePostSchema = z
   .strict()
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const schoolId = ctx.schoolId
     const body = await parseJsonBody(req, feePostSchema)
 

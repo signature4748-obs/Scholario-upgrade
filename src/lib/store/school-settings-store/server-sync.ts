@@ -38,6 +38,8 @@ export interface SchoolSettingsConfig {
   branding: ServerSchoolBranding
   settings: Record<string, unknown>
   moduleFlags: Record<string, boolean>
+  /** PHASE 3 — the caller's role's effective feature map (optional for back-compat). */
+  roleFeatures?: Record<string, boolean>
 }
 
 // ── unknown-JSON readers (never throw, never fabricate) ─────────────
@@ -197,6 +199,7 @@ export function applySchoolConfig(config: SchoolSettingsConfig): void {
       identity: config.identity,
       branding: config.branding,
       moduleFlags: config.moduleFlags ?? {},
+      roleFeatures: config.roleFeatures ?? {},
       settings: config.settings ?? {},
       syncStatus: 'synced',
       syncedAt: new Date().toISOString(),

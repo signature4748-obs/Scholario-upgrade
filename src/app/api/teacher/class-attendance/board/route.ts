@@ -189,6 +189,6 @@ export async function GET(request: Request) {
         history: { days: historyDays },
       }
     },
-    { roles: ['TEACHER'] }
+    { feature: 'attendance.mark', roles: ['TEACHER'] }
   )
 }
