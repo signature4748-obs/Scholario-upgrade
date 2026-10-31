@@ -32,6 +32,9 @@ export type ControlCenterGroup = (typeof CONTROL_CENTER_GROUPS)[number]
  * for legacy ?tab= values that pointed at the section. */
 export const SUBSECTION_IDS = {
   setup: 'section-setup',
+  // PHASE 2 — the guided wizard owns section-setup; the DB-computed
+  // readiness list remains reachable one anchor below it.
+  setupReadiness: 'section-setup-readiness',
   metadata: 'section-metadata',
   identity: 'section-identity',
   modules: 'section-modules',

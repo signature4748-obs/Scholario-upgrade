@@ -67,6 +67,7 @@ import { usePlatformSession, platformApi, type PlatformApiError } from '../platf
 import { useStepUpGate } from '../step-up-gate'
 import { SchoolDomainsTab } from './school-domains'
 import { SchoolSetupTab } from './school-setup'
+import { SchoolSetupWizard } from './school-setup-wizard'
 import { SchoolSubscriptionTab } from './school-subscription'
 import { SchoolIdentityRequestsTab } from './school-identity-requests'
 import { SchoolPaymentGatewayTab } from './school-payment-gateway'
@@ -1268,6 +1269,19 @@ function NextActionsCard({
       icon: <Power className="h-4 w-4" aria-hidden="true" />,
       iconClass: 'bg-teal-50 text-teal-700',
     })
+    // PHASE 2 — route the operator through the guided wizard first when
+    // required setup is still incomplete (the wizard's review screen
+    // re-validates server-side before its activation).
+    if (provisioning.readiness && !provisioning.readiness.requiredComplete) {
+      actions.push({
+        key: 'setup-wizard',
+        label: 'Continue guided setup',
+        detail: `Required setup is incomplete (${provisioning.readiness.requiredDone}/${provisioning.readiness.requiredTotal}) — the Setup wizard walks you through what remains.`,
+        tab: 'setup',
+        icon: <ClipboardList className="h-4 w-4" aria-hidden="true" />,
+        iconClass: 'bg-teal-50 text-teal-700',
+      })
+    }
   }
   if (state === 'SUSPENDED' && canManage) {
     actions.push({
@@ -2304,20 +2318,37 @@ export function SchoolDetailModule() {
           </div>
         </TabsContent>
 
-        {/* ── Setup destination — setup/readiness · profile & metadata ·
-            modules & admissions · identity & branding · custom domains,
-            merged as titled sub-sections (never tab-in-tab).
-            First-time configuration AND the identity governance that
-            protects it live here. ── */}
+        {/* ── Setup destination — PHASE 2 guided wizard · DB-computed
+            readiness · profile & metadata · modules & admissions ·
+            identity & branding · custom domains, merged as titled
+            sub-sections (never tab-in-tab). The wizard is the first-time
+            guided path; each governance editor below remains the single
+            ongoing home for its domain. ── */}
         <TabsContent value="setup" className="space-y-8 sm:space-y-10">
+          {/* Guided Setup wizard (PHASE 2) — persistent, server-validated
+              onboarding. Every save re-reads the DB-derived state; the
+              wizard reports into the workspace via onChanged. */}
+          <GroupSection
+            id={SUBSECTION_IDS.setup}
+            title="Set up your school"
+            description="A guided walkthrough — identity, branding, academics, principal and the optional initial sections."
+          >
+            <SchoolSetupWizard
+              schoolId={id}
+              canManage={canManage}
+              onNavigateTab={navigateToTab}
+              onChanged={() => void reload()}
+            />
+          </GroupSection>
+
           {/* Setup & readiness (PHASE 8C §12 — DB-computed progress;
               §7: actionable blockers deep-link to the fixing section —
               the child still passes its legacy tab keys, which
               navigateToTab resolves onto this group's anchors). */}
           <GroupSection
-            id={SUBSECTION_IDS.setup}
-            title="Setup & readiness"
-            description="DB-computed onboarding progress — incomplete sections deep-link to their fix."
+            id={SUBSECTION_IDS.setupReadiness}
+            title="Setup progress & readiness"
+            description="The DB-computed readiness document — every section links to where it can be acted on."
           >
             <SchoolSetupTab
               schoolId={id}

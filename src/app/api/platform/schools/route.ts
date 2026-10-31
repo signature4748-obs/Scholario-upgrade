@@ -15,6 +15,7 @@ import {
   safeText,
 } from '@/lib/security/validation'
 import { clientIpFromHeaders } from '@/lib/security/rate-limit'
+import { subjectCodeOf } from '@/lib/platform/subject-code'
 import { hostnameRejectionReason, normalizeHostname } from '@/lib/tenant/hostname'
 import { schoolLoginUrl, schoolPublicUrl } from '@/lib/plane'
 import { evaluateTenantEntitlement } from '@/lib/entitlement/entitlement'
@@ -683,27 +684,6 @@ const provisionSchema = strictBody({
     }
   }
 })
-
-/**
- * Derive a stable subject CODE from a name (school-unique constraint on
- * Subject.(schoolId, code)): uppercase alnum, collapsed separators, 12
- * chars max, numeric suffix on in-batch collisions. Never empty.
- */
-function subjectCodeOf(name: string, used: Set<string>): string {
-  const base =
-    name
-      .toUpperCase()
-      .replace(/[^A-Z0-9]+/g, '')
-      .slice(0, 12) || 'SUB'
-  let code = base
-  let n = 2
-  while (used.has(code)) {
-    code = `${base.slice(0, 10)}${n}`
-    n += 1
-  }
-  used.add(code)
-  return code
-}
 
 /**
  * POST /api/platform/schools — provision a NEW school (status PENDING).

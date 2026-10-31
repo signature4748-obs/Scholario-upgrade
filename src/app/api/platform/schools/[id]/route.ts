@@ -233,8 +233,38 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   })
 }
 
+const patchSettingsSchema = z
+  .object({
+    state: safeText(60).optional(),
+    district: safeText(60).optional(),
+    pincode: z
+      .string()
+      .trim()
+      .max(12)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9 -]*$/)
+      .optional(),
+    country: safeText(60).optional(),
+    timezone: z
+      .string()
+      .trim()
+      .max(60)
+      .regex(/^[A-Za-z0-9_+\-/]+$/)
+      .optional(),
+  })
+  .strict()
+  .optional()
+
+// PHASE 2 — the schema now also carries the wizard's identity fields
+// (display name, tagline, public website, established year) and the
+// settings-JSON location slice (state/district/pincode/country/timezone
+// — the SAME keys provisioning writes). Everything is additive; the
+// pre-existing fields are untouched.
 const patchSchema = strictBody({
   name: safeText(80).optional(),
+  shortName: safeText(40).optional(),
+  tagline: safeText(120).optional(),
+  website: z.string().trim().max(200).optional(),
+  established: safeText(20).optional(),
   domain: safeText(120).optional(),
   address: safeText(200).optional(),
   city: safeText(60).optional(),
@@ -244,6 +274,7 @@ const patchSchema = strictBody({
   themeColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
   accentColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
   academicYear: safeText(20).optional(),
+  settings: patchSettingsSchema,
 })
 
 /**
@@ -274,15 +305,59 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         })
       }
 
+      // PHASE 2 — the settings fragment merges into the stored settings
+      // JSON (same read-modify-write discipline as the other settings
+      // writers; existing keys are preserved, never overwritten).
+      const { settings: settingsPatch, ...columnPatch } = body
+      let settingsData: string | undefined
+      if (settingsPatch && Object.keys(settingsPatch).length > 0) {
+        let parsed: Record<string, unknown> = {}
+        try {
+          const parsedRaw = JSON.parse(school.settings || '{}') as unknown
+          if (parsedRaw && typeof parsedRaw === 'object' && !Array.isArray(parsedRaw)) {
+            parsed = parsedRaw as Record<string, unknown>
+          }
+        } catch {
+          parsed = {}
+        }
+        for (const [key, value] of Object.entries(settingsPatch)) {
+          if (value !== undefined) parsed[key] = value
+        }
+        settingsData = JSON.stringify(parsed)
+      }
+
       const changes: Record<string, string> = {}
-      for (const [key, value] of Object.entries(body)) {
+      for (const [key, value] of Object.entries(columnPatch)) {
         if (value === undefined) continue
         if (String(school[key as keyof typeof school] ?? '') !== String(value)) {
           changes[key] = `${String(school[key as keyof typeof school] ?? '')} → ${String(value)}`
         }
       }
+      if (settingsPatch) {
+        let oldSettings: Record<string, unknown> = {}
+        try {
+          const parsedRaw = JSON.parse(school.settings || '{}') as unknown
+          if (parsedRaw && typeof parsedRaw === 'object' && !Array.isArray(parsedRaw)) {
+            oldSettings = parsedRaw as Record<string, unknown>
+          }
+        } catch {
+          oldSettings = {}
+        }
+        for (const [key, value] of Object.entries(settingsPatch)) {
+          if (value === undefined) continue
+          if (String(oldSettings[key] ?? '') !== String(value)) {
+            changes[`settings.${key}`] = `${String(oldSettings[key] ?? '')} → ${String(value)}`
+          }
+        }
+      }
 
-      await db.school.update({ where: { id }, data: body })
+      await db.school.update({
+        where: { id },
+        data: {
+          ...columnPatch,
+          ...(settingsData !== undefined ? { settings: settingsData } : {}),
+        },
+      })
 
       await platformAuditEvent({
         adminId: ctx.admin.id,
