@@ -13,7 +13,7 @@ export const runtime = 'nodejs'
 // STUDENT/PARENT callers are refused outright and DRAFT rows can never
 // reach a student account.
 export function GET(req: NextRequest) {
-  return withAuthz({ permission: 'school.homework.read' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.read', permission: 'school.homework.read' }, async (ctx) => {
     // PHASE 6 — platform module switch (school override ?? platform master).
     await assertModuleEnabled(ctx.schoolId, 'homework')
     const schoolId = ctx.schoolId
@@ -45,7 +45,7 @@ export function GET(req: NextRequest) {
 }
 
 export function POST(req: NextRequest) {
-  return withAuthz({ permission: 'school.homework.write' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.write', permission: 'school.homework.write' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const body = await req.json().catch(() => ({}))
     const homework = await createHomework(schoolId, ctx.user, body)

@@ -8,7 +8,7 @@ export function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { id } = await params
     // Tenant IDOR guard (3-d audit) lives inside removeNoHomeworkDate:

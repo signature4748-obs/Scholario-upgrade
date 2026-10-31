@@ -47,7 +47,7 @@ const rulePatchSchema = z.object({
 })
 
 export async function GET() {
-  return withAuthz({ roles: ['PRINCIPAL'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL'] }, async (ctx) => {
     await assertAdmissionsIssuanceEnabled(ctx.schoolId)
     const rules = await db.feeDiscountRule.findMany({
       where: { schoolId: ctx.schoolId },
@@ -59,7 +59,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ roles: ['PRINCIPAL'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL'] }, async (ctx) => {
     const schoolId = ctx.schoolId
     await assertAdmissionsIssuanceEnabled(schoolId)
 
@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  return withAuthz({ roles: ['PRINCIPAL'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL'] }, async (ctx) => {
     const schoolId = ctx.schoolId
     await assertAdmissionsIssuanceEnabled(schoolId)
 

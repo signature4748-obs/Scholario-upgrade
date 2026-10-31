@@ -6,7 +6,7 @@ export const runtime = 'nodejs'
 
 // 3-d audit: school-wide class-load matrix — oversight (P/M).
 export function GET(req: NextRequest) {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { searchParams } = new URL(req.url)
     const date = searchParams.get('date') || undefined

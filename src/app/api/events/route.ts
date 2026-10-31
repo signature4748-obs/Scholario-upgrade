@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ permission: 'school.events.write' }, async (ctx) => {
+  return withAuthz({ feature: 'school.events.write', permission: 'school.events.write' }, async (ctx) => {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
     const title = typeof body.title === 'string' ? body.title.trim() : ''
     if (!title) throw new AppError('INVALID_INPUT', { publicMessage: 'Event title is required' })
@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  return withAuthz({ permission: 'school.events.write' }, async (ctx) => {
+  return withAuthz({ feature: 'school.events.write', permission: 'school.events.write' }, async (ctx) => {
     const { searchParams } = new URL(req.url)
     const id = (searchParams.get('id') || '').trim()
     if (!id || !idSchema.safeParse(id).success) {

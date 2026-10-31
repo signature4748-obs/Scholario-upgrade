@@ -71,6 +71,6 @@ export async function POST(request: Request) {
       })
       return { ...result, canonical: true }
     },
-    { roles: ['TEACHER'] }
+    { feature: 'attendance.mark', roles: ['TEACHER'] }
   )
 }

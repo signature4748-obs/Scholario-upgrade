@@ -144,6 +144,6 @@ export async function POST(
         throw e
       }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

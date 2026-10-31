@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
       })
       return subjects
     },
-    { roles: ['PRINCIPAL', 'TEACHER'] }
+    { feature: 'subjects.manage', roles: ['PRINCIPAL', 'TEACHER'] }
   )
 }
 
@@ -77,6 +77,6 @@ export async function POST(req: NextRequest) {
     },
     // Audit 3-a fix #5 — master-data write is P/M (matrix:
     // 'school.masterdata.write'); TEACHER removed.
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'subjects.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

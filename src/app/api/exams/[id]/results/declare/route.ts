@@ -9,7 +9,7 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const { id } = await params
     const result = await declareResults(id, ctx.schoolId, ctx.user)
     return result

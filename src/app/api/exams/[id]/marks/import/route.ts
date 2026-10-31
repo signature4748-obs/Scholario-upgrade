@@ -13,7 +13,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] }, async (ctx) => {
+  return withAuthz({ feature: 'exams.marks.write', roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] }, async (ctx) => {
     const { id } = await params
     const body = await parseJsonBody(req, importMarksSchema)
     const result = await importMarksCsv(

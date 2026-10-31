@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     },
     // Audit §11 — class registry is staff-only (teacher surfaces use
     // /api/teacher/* payloads scoped to their own classes).
-    { roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
+    { feature: 'people.structure.read', roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
   )
 }
 
@@ -63,6 +63,6 @@ export async function POST(req: NextRequest) {
       })
       return cls
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'people.structure.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

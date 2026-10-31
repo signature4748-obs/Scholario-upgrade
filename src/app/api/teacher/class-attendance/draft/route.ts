@@ -124,7 +124,7 @@ export async function PUT(request: Request) {
       })
       return { saved: entries.length }
     },
-    { roles: ['TEACHER'] }
+    { feature: 'attendance.mark', roles: ['TEACHER'] }
   )
 }
 
@@ -178,6 +178,6 @@ export async function POST(request: Request) {
         endOfDayMinutes: settings.endOfDayMinutes,
       }
     },
-    { roles: ['TEACHER'] }
+    { feature: 'attendance.mark', roles: ['TEACHER'] }
   )
 }

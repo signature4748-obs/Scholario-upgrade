@@ -169,7 +169,7 @@ export async function POST(req: NextRequest) {
         live: status === 'PUBLISHED',
       }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'announcements.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }
 

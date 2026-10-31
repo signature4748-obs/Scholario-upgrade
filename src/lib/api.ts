@@ -13,6 +13,7 @@ import { evaluateStudentEntitlement } from './entitlement/student'
 import { evaluateStaffEntitlement, requiresStaffEntitlement } from './entitlement/staff'
 import { STAFF_SEAT_ELIGIBLE_ROLES, DEFAULT_STAFF_COVERED_ROLES } from './subscription/staff'
 import { isCanonicalSchoolRole } from './security/permissions'
+import { assertRoleFeatureAllowed } from './security/role-features'
 
 export type Ctx = { user: AuthUser }
 
@@ -145,7 +146,19 @@ export async function api(handler: () => Promise<unknown>): Promise<Response> {
 
 export async function withUser(
   handler: (user: AuthUser) => Promise<unknown>,
-  opts?: { roles?: string[]; allowLockedSubscription?: boolean },
+  opts?: {
+    roles?: string[]
+    allowLockedSubscription?: boolean
+    /**
+     * PHASE 3 — Role-wise Feature Control: a ROLE_FEATURE_CATALOG key.
+     * Checked AFTER the role gate for school-plane callers; a school that
+     * explicitly disabled this feature for the caller's role gets a typed
+     * 403 FEATURE_DISABLED_FOR_ROLE. Same resolver the authorize() policy
+     * gate uses (src/lib/security/role-features.ts) — one layer, two
+     * entry points, so withUser-only routes can declare feature gates too.
+     */
+    feature?: string
+  },
 ) {
   return api(async () => {
     const user = await getCurrentUser()
@@ -343,6 +356,14 @@ export async function withUser(
       throw new AppError('FORBIDDEN', {
         internalDetail: `withUser: role ${user.role} not in ${opts.roles.join('|')}`,
       })
+    }
+    // PHASE 3 — Role-wise Feature Control gate (per-school override layer).
+    // Runs after the role gate so the error surface matches the existing
+    // FORBIDDEN ordering; fail-closed via the shared resolver.
+    if (opts?.feature) {
+      // Static import (see authz.ts): never defer this compile into the
+      // first authorized request path.
+      await assertRoleFeatureAllowed(user.schoolId ?? '', user.role, opts.feature)
     }
     // Correlate the request with the authenticated identity (ids only —
     // never email/phone/PII).

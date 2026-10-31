@@ -38,7 +38,7 @@ const quoteBodySchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ roles: ['PRINCIPAL'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL'] }, async (ctx) => {
     const schoolId = ctx.schoolId
 
     // 1 — the new workflow is feature-flagged OFF by default.

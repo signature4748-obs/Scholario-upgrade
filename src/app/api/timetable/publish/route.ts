@@ -458,6 +458,6 @@ export async function POST(req: NextRequest) {
         subjectConfigsEnsured: csaCreated,
       }
     },
-    { roles: ['PRINCIPAL'] },
+    { feature: 'timetable.publish', roles: ['PRINCIPAL'] },
   )
 }

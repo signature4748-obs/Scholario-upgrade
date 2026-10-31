@@ -328,6 +328,6 @@ export async function PATCH(
         publicMessage: 'action must be update, terminate, reactivate, reset-credential or set-status',
       })
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'people.staff.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }

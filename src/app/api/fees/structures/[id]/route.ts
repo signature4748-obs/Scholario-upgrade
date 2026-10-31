@@ -17,7 +17,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { id } = await params
     const structure = await db.feeStructure.findFirst({
@@ -47,7 +47,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { id } = await params
     const body = await req.json().catch(() => ({}))
@@ -161,7 +161,7 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
+  return withAuthz({ feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { id } = await params
     const { searchParams } = new URL(req.url)

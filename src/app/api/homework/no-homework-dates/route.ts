@@ -6,14 +6,14 @@ export const runtime = 'nodejs'
 // No-homework calendar dates are a school management control —
 // 'school.homework.oversight' (P/M) on read and write.
 export function GET() {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     return await listNoHomeworkDates(schoolId)
   }) as Promise<Response>
 }
 
 export function POST(req: Request) {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const body = await req.json().catch(() => ({}))
     if (!body.date) throw new Error('Date required')

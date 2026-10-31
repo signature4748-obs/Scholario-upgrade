@@ -12,7 +12,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'exams.settings.write' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.settings.write', permission: 'exams.settings.write' }, async (ctx) => {
     const { id } = await params
     const body = await parseJsonBody(req, examTypeUpdateSchema)
     return await updateExamType(ctx.schoolId, id, {
@@ -27,7 +27,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'exams.settings.write' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.settings.write', permission: 'exams.settings.write' }, async (ctx) => {
     const { id } = await params
     await deleteExamType(ctx.schoolId, id)
     return { deleted: true }

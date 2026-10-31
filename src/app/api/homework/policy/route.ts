@@ -6,14 +6,14 @@ export const runtime = 'nodejs'
 // Homework policy (per-grade daily minutes caps) is a management control —
 // 'school.homework.oversight' (P/M) on BOTH read and write.
 export function GET() {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     return await listPolicies(schoolId)
   }) as Promise<Response>
 }
 
 export function PATCH(req: Request) {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const body = await req.json().catch(() => ({}))
     if (!body.id) throw new Error('Policy id required')

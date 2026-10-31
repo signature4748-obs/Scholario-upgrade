@@ -21,7 +21,7 @@ export async function GET() {
     },
     // Audit §11 — staff contact details are admin-only (the student role
     // has no surface that reads this route).
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'people.staff.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }
 
@@ -91,6 +91,6 @@ export async function POST(req: NextRequest) {
       // Additive one-time credential field (only when server-generated).
       return { ...t, ...(generated ? { tempPassword: password } : {}) }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'people.staff.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

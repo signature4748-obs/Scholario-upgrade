@@ -11,7 +11,7 @@ export const runtime = 'nodejs'
 /// Returns paginated, filtered fee transactions.
 export async function GET(req: NextRequest) {
   return withAuthz(
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
     async (ctx) => {
       const schoolId = ctx.schoolId
       const { searchParams } = new URL(req.url)
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
 ///     outstanding, status } }) so callers reconcile against server truth.
 export async function POST(req: NextRequest) {
   return withAuthz(
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
     async (ctx) => {
       const schoolId = ctx.schoolId
       const body = await req.json().catch(() => ({}))

@@ -12,6 +12,21 @@ import { useAuth } from '@/lib/store/auth-store'
 // filters them before the groups reach the shell. TEACHER holds every
 // tagged capability — identical visible nav, foundation wired.
 import { filterNavForRole } from '@/lib/nav/role-nav'
+// PHASE 3 — Role-wise Feature Control (nav courtesy; server gates authoritative).
+import { useRoleFeatures } from '@/lib/hooks/use-effective-role-features'
+
+/**
+ * PHASE 3 — teacher nav item key → ROLE_FEATURE_CATALOG key. EXPLICIT
+ * mapping; unmapped items are never feature-gated. Fail-open until the
+ * school-settings sync delivers the role's effective map.
+ */
+const TEACHER_NAV_FEATURE_KEYS: Record<string, string> = {
+  attendance: 'attendance.mark',
+  marks: 'exams.marks.read',
+  students: 'people.students.read',
+  communication: 'messaging.send',
+}
+
 import { useTeacherRole } from './teacher-panel/use-teacher-role'
 import {
   buildTeacherNavGroups,
@@ -194,8 +209,19 @@ export function TeacherPanel() {
   // ARCH-RESET-2c — permission-aware filter over the registry output
   // (self-service / role-gated items carry no permission key and always
   // pass; the filter only removes items a role genuinely lacks).
+  // PHASE 3 — the role-feature gate runs FIRST (nav courtesy; the same
+  // decision is enforced server-side on every gated route).
+  const { isFeatureEnabled } = useRoleFeatures()
+  const featureFiltered = buildTeacherNavGroups({ isRelieved, classTeacherOf, hubUnread })
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((item) => {
+        const featureKey = TEACHER_NAV_FEATURE_KEYS[item.key]
+        return !featureKey || isFeatureEnabled(featureKey)
+      }),
+    }))
   const navGroups = filterNavForRole(
-    buildTeacherNavGroups({ isRelieved, classTeacherOf, hubUnread }),
+    featureFiltered,
     authUser?.role,
   )
 

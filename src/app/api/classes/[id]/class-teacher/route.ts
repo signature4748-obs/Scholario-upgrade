@@ -97,6 +97,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
       return { classId: cls.id, label, classTeacherId: target?.userId ?? null }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'people.structure.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

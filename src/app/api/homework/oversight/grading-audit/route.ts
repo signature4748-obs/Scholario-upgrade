@@ -7,7 +7,7 @@ export const runtime = 'nodejs'
 // 3-d audit: per-student marks/grades/feedback audit — oversight data
 // (P/M), previously readable by any student/parent account.
 export function GET(req: NextRequest) {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { searchParams } = new URL(req.url)
     const homeworkId = searchParams.get('homeworkId') || undefined

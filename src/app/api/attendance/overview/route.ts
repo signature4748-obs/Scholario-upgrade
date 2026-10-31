@@ -342,6 +342,6 @@ export async function GET(req: NextRequest) {
       }
     },
     // Same role surface as /api/attendance (Audit §11 — staff-only rosters).
-    { roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
+    { feature: 'attendance.mark', roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
   )
 }

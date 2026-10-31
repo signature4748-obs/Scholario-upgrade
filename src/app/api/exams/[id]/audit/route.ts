@@ -12,7 +12,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'exams.audit.read' }, async (ctx) => {
+  return withAuthz({ feature: 'exams.audit.read', permission: 'exams.audit.read' }, async (ctx) => {
     const { id } = await params
     const exam = await db.exam.findFirst({ where: { id, schoolId: ctx.schoolId }, select: { id: true } })
     if (!exam) throw new AppError('RESOURCE_NOT_FOUND', { publicMessage: 'Exam not found', internalDetail: 'audit GET: exam missing or foreign tenant' })

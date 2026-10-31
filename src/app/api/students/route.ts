@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
     },
     // Audit §11 — the roster (guardian contacts, addresses, routes) is
     // staff-only; the student role uses /api/student/* surfaces.
-    { roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
+    { feature: 'people.students.read', roles: ['PRINCIPAL', 'MANAGEMENT', 'TEACHER'] },
   )
 }
 
@@ -150,6 +150,6 @@ export async function POST(req: NextRequest) {
       // API-only), so the additive field breaks nothing.
       return { ...s, ...(generated ? { tempPassword: password } : {}) }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] }
+    { feature: 'people.students.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] }
   )
 }

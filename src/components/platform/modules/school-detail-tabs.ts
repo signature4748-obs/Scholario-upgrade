@@ -43,6 +43,7 @@ export const SUBSECTION_IDS = {
   users: 'section-users',
   subscription: 'section-subscription',
   gateway: 'section-gateway',
+  roleFeatures: 'section-role-features',
   support: 'section-support',
   audit: 'section-audit',
   danger: 'section-danger',
@@ -82,6 +83,7 @@ export const LEGACY_TAB_REDIRECT: Record<string, TabTarget> = {
   domains: { group: 'setup', anchor: SUBSECTION_IDS.domains },
   users: { group: 'manage', anchor: SUBSECTION_IDS.users },
   gateway: { group: 'manage', anchor: SUBSECTION_IDS.gateway },
+  'role-features': { group: 'manage', anchor: SUBSECTION_IDS.roleFeatures },
   audit: { group: 'manage', anchor: SUBSECTION_IDS.audit },
   danger: { group: 'manage', anchor: SUBSECTION_IDS.danger },
 }

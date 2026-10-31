@@ -58,7 +58,7 @@ const questionPostSchema = z
   .strict()
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ permission: 'school.questionbank.write' }, async (ctx) => {
+  return withAuthz({ feature: 'school.questionbank.write', permission: 'school.questionbank.write' }, async (ctx) => {
     const body = await parseJsonBody(req, questionPostSchema)
 
     // FK-in-tenant (audit 3-b LOW): subjectId/classId, when given, must
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  return withAuthz({ permission: 'school.questionbank.write' }, async (ctx) => {
+  return withAuthz({ feature: 'school.questionbank.write', permission: 'school.questionbank.write' }, async (ctx) => {
     const { id } = await parseQuery(req, z.object({ id: idSchema }).strict())
     // Tenant guard (audit 3-b CRITICAL): the delete is scoped to the
     // caller's school — a foreign-tenant id deletes nothing and 404s.

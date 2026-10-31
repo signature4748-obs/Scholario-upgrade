@@ -15,7 +15,7 @@ export function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'school.homework.read' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.read', permission: 'school.homework.read' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { id } = await params
     const { searchParams } = new URL(req.url)
@@ -39,7 +39,7 @@ export function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'school.homework.write' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.write', permission: 'school.homework.write' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { id } = await params
     const body = await req.json().catch(() => ({}))
@@ -55,7 +55,7 @@ export function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  return withAuthz({ permission: 'school.homework.oversight' }, async (ctx) => {
+  return withAuthz({ feature: 'school.homework.oversight', permission: 'school.homework.oversight' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { id } = await params
     await deleteHomework(id, schoolId, ctx.user)

@@ -75,6 +75,6 @@ export async function GET() {
       for (const c of classes) c.subjects.sort((a, b) => a.name.localeCompare(b.name))
       return { classes }
     },
-    { roles: ['TEACHER'] }
+    { feature: 'attendance.mark', roles: ['TEACHER'] }
   )
 }

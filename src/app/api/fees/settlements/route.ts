@@ -13,7 +13,7 @@ export const runtime = 'nodejs'
 /// surface fetches this route — the finance dashboard renders the
 /// fee-store's settlement mock; the gate breaks no legit flow.)
 export async function GET(req: NextRequest) {
-  return withAuthz({ permission: 'school.finance.read' }, async (ctx) => {
+  return withAuthz({ feature: 'school.finance.read', permission: 'school.finance.read' }, async (ctx) => {
     const schoolId = ctx.schoolId
     const { searchParams } = new URL(req.url)
     const status = searchParams.get('status')

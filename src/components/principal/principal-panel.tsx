@@ -29,6 +29,9 @@ import { PRINCIPAL_NAV_MODULE_KEYS } from '@/lib/tenant/registry'
 // flaggable module's nav item when it is disabled platform-side.
 // Fail-open while the flags are still loading (matches the server design).
 import { useEffectiveModuleFlags } from '@/lib/hooks/use-effective-module-flags'
+// PHASE 3 — Role-wise Feature Control (nav courtesy layer; the server
+// gates in withUser/authorize remain the authority).
+import { useRoleFeatures } from '@/lib/hooks/use-effective-role-features'
 import type { UnifiedTab } from './modules/students-classes'
 
 // Every module is a separate lazily-loaded chunk: navigating compiles just
@@ -83,6 +86,28 @@ const moduleRegistry: Record<string, React.ComponentType<any>> = {
 // src/lib/security/permissions.ts). The principal holds every one of these
 // capabilities, so behavior is unchanged; the tags wire the foundation for
 // any future role that consumes this panel with a narrower matrix slice.
+
+/**
+ * PHASE 3 — nav item key → ROLE_FEATURE_CATALOG key. EXPLICIT mapping —
+ * only items whose surface is genuinely governed by a cataloged feature;
+ * unmapped items are never feature-gated. The feature gate is the THIRD
+ * nav stage (after the permission filter and the module-flag filter) and
+ * is a UI courtesy: the same decision is enforced server-side on every
+ * gated route (FEATURE_DISABLED_FOR_ROLE).
+ */
+const PRINCIPAL_NAV_FEATURE_KEYS: Record<string, string> = {
+  teachers: 'people.staff.manage',
+  students: 'people.students.read',
+  attendance: 'attendance.mark',
+  exams: 'exams.read',
+  fees: 'school.finance.read',
+  communication: 'announcements.manage',
+  messaging: 'messaging.send',
+  calendar: 'school.events.write',
+  library: 'school.library.manage',
+  transport: 'school.transport.read',
+}
+
 const navGroups: NavGroup[] = [
   {
     label: 'Overview',
@@ -172,6 +197,9 @@ export function PrincipalPanel() {
   const authUser = useAuth((s) => s.user)
   const { isModuleEnabled } = useFeatureGate()
   const { isServerModuleEnabled } = useEffectiveModuleFlags()
+  // PHASE 3 — Role-wise Feature Control (nav courtesy; server gates are
+  // the authority): hide nav items the school disabled for THIS role.
+  const { isFeatureEnabled } = useRoleFeatures()
   const pendingAdmissions = useAdmissionStore((s) =>
     s.applications.filter((a) =>
       a.status === 'Submitted' || a.status === 'Under Review' || a.status === 'Need Correction'
@@ -196,7 +224,14 @@ export function PrincipalPanel() {
           ...g,
           items: g.items.filter((item) => {
             const moduleKey = PRINCIPAL_NAV_MODULE_KEYS[item.key]
-            return !moduleKey || (isModuleEnabled(moduleKey) && isServerModuleEnabled(moduleKey))
+            if (moduleKey && !(isModuleEnabled(moduleKey) && isServerModuleEnabled(moduleKey))) {
+              return false
+            }
+            // PHASE 3 — the role-feature gate (fail-open until synced;
+            // hidden only when the school explicitly disabled the feature
+            // for this role — the server API enforces the same decision).
+            const featureKey = PRINCIPAL_NAV_FEATURE_KEYS[item.key]
+            return !featureKey || isFeatureEnabled(featureKey)
           }),
         }))
         .map((g) => {
@@ -209,7 +244,7 @@ export function PrincipalPanel() {
           return g
         }),
       authUser?.role
-    ), [alertCount, pendingAdmissions, isModuleEnabled, isServerModuleEnabled, authUser?.role])
+    ), [alertCount, pendingAdmissions, isModuleEnabled, isServerModuleEnabled, isFeatureEnabled, authUser?.role])
 
   // Remember the open module for this tab (see initialActiveModule) — a
   // lazy-chunk recovery reload then re-opens exactly where the principal

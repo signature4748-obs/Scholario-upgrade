@@ -16,7 +16,7 @@ export const runtime = 'nodejs'
 /// alternative was unnecessary; the full P/M gate breaks no legit flow.
 /// The retired mock/bus-tracking.ts corpus was deleted in PIH-4c.)
 export async function GET() {
-  return withAuthz({ permission: 'school.transport.read' }, async (ctx) => {
+  return withAuthz({ feature: 'school.transport.read', permission: 'school.transport.read' }, async (ctx) => {
     // PHASE 6 — platform module switch (school override ?? platform master).
     await assertModuleEnabled(ctx.schoolId, 'transport')
     const schoolId = ctx.schoolId

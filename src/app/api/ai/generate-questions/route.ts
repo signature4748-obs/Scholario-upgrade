@@ -46,7 +46,7 @@ const aiBodySchema = z
   .strict()
 
 export async function POST(req: NextRequest) {
-  return withAuthz({ permission: 'school.questionbank.write' }, async (ctx) => {
+  return withAuthz({ feature: 'school.questionbank.write', permission: 'school.questionbank.write' }, async (ctx) => {
     // Phase 1 — AI generation is expensive: strict per-user rate limit
     // (12/hour) blunts abuse and runaway cost.
     enforceRateLimit(`rl:ai:${ctx.user.id}`, RATE_LIMITS.ai)

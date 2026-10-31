@@ -185,6 +185,6 @@ export async function POST(req: NextRequest) {
         note: sent.length === 0 ? 'All selected students were reminded recently — nothing sent.' : undefined,
       }
     },
-    { roles: ['PRINCIPAL', 'MANAGEMENT'] },
+    { feature: 'fees.manage', roles: ['PRINCIPAL', 'MANAGEMENT'] },
   )
 }

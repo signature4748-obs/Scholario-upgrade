@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import type { School } from '@prisma/client'
 import { effectiveModuleFlags } from '@/lib/platform/module-flags'
+import { effectiveFeaturesForRole } from '@/lib/security/role-features'
 
 /**
  * school-config — SERVER-side canonical school configuration.
@@ -48,6 +49,14 @@ export interface SchoolConfigDTO {
   settings: Record<string, unknown>
   /** Effective module availability (server flags ?? platform defaults). */
   moduleFlags: Record<string, boolean>
+  /**
+   * PHASE 3 — Role-wise Feature Control: the CALLER's own role's effective
+   * feature map (baseline ∧ not role-denied). Nav/UI courtesy only — the
+   * server-side gates (withUser opts.feature / authorize policy.feature)
+   * remain the authority. Keys are ROLE_FEATURE_CATALOG keys; absent keys
+   * fail open client-side exactly like moduleFlags do.
+   */
+  roleFeatures: Record<string, boolean>
 }
 
 function identityOf(s: School): SchoolIdentityDTO {
@@ -90,15 +99,22 @@ function parseSettings(raw: string): Record<string, unknown> {
   return {}
 }
 
-export async function getSchoolConfig(schoolId: string): Promise<SchoolConfigDTO | null> {
+export async function getSchoolConfig(
+  schoolId: string,
+  opts: { viewerRole?: string } = {},
+): Promise<SchoolConfigDTO | null> {
   const s = await db.school.findUnique({ where: { id: schoolId } })
   if (!s) return null
   const moduleFlags = await effectiveModuleFlags(schoolId)
+  const roleFeatures = opts.viewerRole
+    ? await effectiveFeaturesForRole(schoolId, opts.viewerRole)
+    : {}
   return {
     identity: identityOf(s),
     branding: brandingOf(s),
     settings: parseSettings(s.settings),
     moduleFlags,
+    roleFeatures,
   }
 }
 

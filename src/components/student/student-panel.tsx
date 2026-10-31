@@ -23,6 +23,17 @@ import { useCurrentUser } from '@/lib/store/current-user-store'
 // wired through the same single filter as the principal/teacher panels so
 // any future tag lands consistently across all three role shells.
 import { filterNavForRole } from '@/lib/nav/role-nav'
+// PHASE 3 — Role-wise Feature Control (nav courtesy; server gates authoritative).
+import { useRoleFeatures } from '@/lib/hooks/use-effective-role-features'
+
+/**
+ * PHASE 3 — student nav item key → ROLE_FEATURE_CATALOG key. EXPLICIT
+ * mapping; unmapped items are never feature-gated. Fail-open until the
+ * school-settings sync delivers the role's effective map.
+ */
+const STUDENT_NAV_FEATURE_KEYS: Record<string, string> = {
+  attendance: 'attendance.student.view',
+}
 import { useAuth } from '@/lib/store/auth-store'
 
 // Every module is a separate lazily-loaded chunk: navigating compiles just
@@ -267,6 +278,8 @@ export function StudentPanel() {
 
   // ARCH-RESET-2c — permission-aware filter (no-op for the self-scoped
   // student groups today: none carry a permission key; foundation wired).
+  // PHASE 3 — role-feature gate first (fail-open; server-authoritative).
+  const { isFeatureEnabled } = useRoleFeatures()
   const groups: NavGroup[] = filterNavForRole([
     // Home first, then the (conditional) Class Leadership responsibility —
     // it earns prominence while active and vanishes the moment it ends.
@@ -279,7 +292,12 @@ export function StudentPanel() {
       ...g,
       items: withLiveBadges(
         // 'bus' is assignment-conditional (see useTransportAssignment above).
-        g.items.filter((item) => item.key !== 'bus' || hasTransport),
+        // PHASE 3 — feature-gated items hidden when the school disabled
+        // the feature for the student role (server enforces the same).
+        g.items.filter((item) =>
+          (item.key !== 'bus' || hasTransport) &&
+          (!STUDENT_NAV_FEATURE_KEYS[item.key] || isFeatureEnabled(STUDENT_NAV_FEATURE_KEYS[item.key]))
+        ),
         unreadNotifs,
         unreadMsgs,
       ),
