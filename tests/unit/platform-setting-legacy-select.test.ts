@@ -60,6 +60,10 @@ const LEGACY_SELECT_CONTRACT: Array<{ file: string; why: string }> = [
     file: 'src/app/api/platform/schools/[id]/admissions-issuance/route.ts',
     why: 'flag-source resolution consumes only `modules`',
   },
+  {
+    file: 'src/app/api/platform/schools/[id]/setup-wizard/route.ts',
+    why: 'PHASE 2 setup wizard reads the module master via PLATFORM_MODULE_FLAGS_SELECT (only `modules`)',
+  },
 ]
 
 /** The one sanctioned full-row read: this module reads the pending
